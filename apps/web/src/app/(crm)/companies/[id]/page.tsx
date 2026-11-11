@@ -113,6 +113,8 @@ export default async function Page({
                 }{' '}
                 · {date(contact.found_at)}
                 {contact.meta?.ai && ` · ${uk.scanner.ai}`}
+                {contact.meta?.alsoOnWebsite &&
+                  ` · ${uk.scanner.alsoOnWebsite}`}
               </p>
               {normalizeWebsite(contact.source_url)?.website && (
                 <a
@@ -199,9 +201,13 @@ export default async function Page({
                   :{' '}
                   {fact.kind === 'site_status'
                     ? (fact.value.reason ?? uk.tasks.status.done)
-                    : typeof fact.value === 'string'
-                      ? fact.value
-                      : JSON.stringify(fact.value)}
+                    : fact.kind === 'captcha'
+                      ? (uk.scanner.captchas[
+                          fact.value as keyof typeof uk.scanner.captchas
+                        ] ?? String(fact.value))
+                      : typeof fact.value === 'string'
+                        ? fact.value
+                        : JSON.stringify(fact.value)}
                 </p>
               )}
               <p className="text-sm text-muted-foreground">

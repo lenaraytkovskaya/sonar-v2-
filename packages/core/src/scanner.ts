@@ -290,7 +290,8 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
       value.replace(/^tel:/i, '').split(';')[0]!,
       context.country,
     );
-    if (phone) add({ kind: 'phone', value: phone, rank });
+    if (phone && !placeholderPhone(phone))
+      add({ kind: 'phone', value: phone, rank });
   };
   const schemas: unknown[] = [];
   const visit = (value: unknown) => {
@@ -500,7 +501,8 @@ export function normalizeAiSiteResult(
   );
   parsed.data.phones.forEach((raw) => {
     const value = normalizePhone(raw, context.country);
-    if (value) add({ kind: 'phone', value, rank: 50 });
+    if (value && !placeholderPhone(value))
+      add({ kind: 'phone', value, rank: 50 });
   });
   parsed.data.messengers.forEach((raw) => {
     const contact = linkedContact(raw, context.url);
@@ -517,4 +519,14 @@ export function normalizeAiSiteResult(
     ),
   ].map((value) => ({ kind: 'edrpou', value }));
   return { contacts, facts };
+}
+// Template sites ship demo numbers such as +380671234567 or +380000000000.
+export function placeholderPhone(e164: string): boolean {
+  const digits = e164.replace(/\D/g, '');
+  const tail = digits.slice(-7);
+  return (
+    /^(\d)\1{6}$/.test(tail) ||
+    '0123456789'.includes(tail) ||
+    '9876543210'.includes(tail)
+  );
 }

@@ -77,6 +77,7 @@ export const uk = {
   },
   scanner: {
     title: 'Сканер сайтів',
+    alsoOnWebsite: 'також на сайті',
     scan: 'Сканувати сайт',
     noWebsite: 'Компанія не має сайту для сканування.',
     facts: 'Факти із сайту',
@@ -116,6 +117,13 @@ export const uk = {
       captcha: 'Капча',
       schema_org: 'Структуровані дані',
       site_status: 'Стан сайту',
+    },
+    captchas: {
+      none: 'немає',
+      recaptcha_v2: 'reCAPTCHA v2',
+      recaptcha_v3: 'reCAPTCHA v3',
+      hcaptcha: 'hCaptcha',
+      turnstile: 'Cloudflare Turnstile',
     },
     settings: {
       'scanner.max_pages': 'Максимум сторінок на сайт',

@@ -116,7 +116,7 @@ it('orders contact links and sitemap before ordinary links, then stops with emai
       'application/xml',
     ),
     'https://shop.com/contacts':
-      '<a href="mailto:hello@shop.com">Email</a><a href="tel:+380671234567">Call</a><a href="https://t.me/shop">Telegram</a>',
+      '<a href="mailto:hello@shop.com">Email</a><a href="tel:+380673142758">Call</a><a href="https://t.me/shop">Telegram</a>',
   });
   const persist = vi.fn();
   const pages = await scanSite(http, 'UA', persist);
