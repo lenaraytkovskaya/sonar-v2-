@@ -24,7 +24,12 @@ export function parseAnalysis(
   contacts: { kind: string }[],
   about: string,
 ): AnalysisResult {
-  const result = analysisResultSchema.parse(JSON.parse(text));
+  // Models often wrap JSON in a markdown fence; accept that and nothing else.
+  const json = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  const result = analysisResultSchema.parse(JSON.parse(json));
   if (
     result.best_channel &&
     !contacts.some((c) => c.kind === result.best_channel)

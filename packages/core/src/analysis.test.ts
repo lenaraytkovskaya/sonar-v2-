@@ -42,3 +42,16 @@ it('rejects a channel not actually found and allows null when no contact exists'
       .best_channel,
   ).toBeNull();
 });
+it('accepts a markdown json fence around the object', () => {
+  const body = {
+    summary: 'СТО у Києві.',
+    language: 'uk',
+    best_channel: null,
+    first_message: '',
+    fit: 50,
+    fit_reason: 'Невідомо.',
+  };
+  expect(
+    parseAnalysis('```json\n' + JSON.stringify(body) + '\n```', [], ''),
+  ).toEqual(body);
+});
