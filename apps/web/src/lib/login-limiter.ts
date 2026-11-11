@@ -5,7 +5,8 @@ export class LoginLimiter {
   private nextSweep = 0;
   constructor(
     private now = Date.now,
-    private limit = 5,
+    private emailLimit = 5,
+    private ipLimit = 20,
     private windowMs = 15 * 60 * 1000,
   ) {}
   begin(email: string, ip: string): ((success: boolean) => void) | null {
@@ -22,7 +23,9 @@ export class LoginLimiter {
     const lists = keys.map((key) =>
       (this.attempts.get(key) ?? []).filter((value) => value.until > now),
     );
-    if (lists.some((values) => values.length >= this.limit)) return null;
+    const limits = [this.emailLimit, this.ipLimit];
+    if (lists.some((values, index) => values.length >= limits[index]!))
+      return null;
     const attempt = { token: Symbol(), until: now + this.windowMs };
     keys.forEach((key, index) =>
       this.attempts.set(key, [...lists[index]!, attempt]),
@@ -45,8 +48,10 @@ export class LoginLimiter {
     };
   }
 }
-// The reverse proxy must append/overwrite the real peer address. Ignore spoofable leftmost hops.
+// Trusted ingress must overwrite CF-Connecting-IP and append/overwrite the peer address.
 export function loginClientIp(headers: Pick<Headers, 'get'>) {
+  const cloudflare = headers.get('cf-connecting-ip')?.trim() ?? '';
+  if (isIP(cloudflare)) return cloudflare;
   const forwarded = headers.get('x-forwarded-for')?.split(',').at(-1)?.trim();
   const address = forwarded || headers.get('x-real-ip')?.trim() || '';
   return isIP(address) ? address : 'unknown';
