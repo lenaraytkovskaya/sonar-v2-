@@ -411,7 +411,7 @@ export function CampaignPanel() {
               setSource('ai');
             }}
           />
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-3 xl:break-before-column">
             <label>
               {uk.campaign.batch_size}
               <select
