@@ -85,6 +85,13 @@
       "when": 1794436000000,
       "tag": "0011_scanner_page_size",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794440000000,
+      "tag": "0012_registry_match",
+      "breakpoints": true
     }
   ]
 }

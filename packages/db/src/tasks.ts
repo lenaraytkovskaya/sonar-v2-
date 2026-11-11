@@ -132,6 +132,43 @@ export async function enqueueSiteScan(
     return { ...task, created: !!created };
   });
 }
+// Registry lookups are cheap and local; one per company per day is enough.
+export async function enqueueRegistryMatch(
+  companyId: string,
+  userId: string | null,
+) {
+  return transaction(async (client) => {
+    const day = new Date().toISOString().slice(0, 10);
+    const key = `registry.match:${companyId}:${day}`;
+    const created = await enqueueTask(
+      'registry.match',
+      key,
+      { companyId },
+      client,
+    );
+    if (created) {
+      await client.query(
+        "update tasks set subject_type='company',subject_id=$2 where id=$1",
+        [created, companyId],
+      );
+      await logActivity(
+        'registry.match.queued',
+        'company',
+        companyId,
+        userId,
+        { taskId: created },
+        client,
+      );
+    }
+    const {
+      rows: [task],
+    } = await client.query(
+      'select id,status from tasks where idempotency_key=$1',
+      [key],
+    );
+    return { ...task, created: !!created };
+  });
+}
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const {
