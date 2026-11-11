@@ -19,6 +19,8 @@ export const companyFiltersSchema = z
     hasWebsite: z.boolean().optional(),
     hasPhone: z.boolean().optional(),
     minRating: z.number().finite().min(0).max(5).optional(),
+    minScore: z.number().finite().min(0).max(100).optional(),
+    sort: z.enum(['score', 'newest']).optional(),
   })
   .strict();
 export type CompanyFilters = z.infer<typeof companyFiltersSchema>;
@@ -32,11 +34,13 @@ export function filtersFromParams(params: URLSearchParams) {
     'hasWebsite',
     'hasPhone',
     'minRating',
+    'minScore',
+    'sort',
   ]) {
     const value = params.get(key);
     if (value === null || value === '') continue;
     raw[key] =
-      key === 'minRating'
+      key === 'minRating' || key === 'minScore'
         ? Number(value)
         : ['hasWebsite', 'hasPhone'].includes(key)
           ? value === 'true'

@@ -132,6 +132,7 @@ export const campaigns = pgTable(
     channels: jsonb('channels').notNull(),
     sendMode: sendMode('send_mode').notNull().default('approval'),
     scoringWeights: jsonb('scoring_weights').notNull(),
+    scoringRevision: integer('scoring_revision').notNull().default(0),
     status: campaignStatus('status').notNull().default('draft'),
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -306,5 +307,26 @@ export const companyFacts = pgTable(
       t.source,
       sql`md5(${t.value}::text)`,
     ),
+  ],
+);
+
+export const companyScores = pgTable(
+  'company_scores',
+  {
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'cascade' }),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    score: numeric('score').notNull(),
+    breakdown: jsonb('breakdown').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique('company_score_unique').on(t.companyId, t.campaignId),
+    check('company_score_range', sql`${t.score} >= 0 and ${t.score} <= 100`),
   ],
 );

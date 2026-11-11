@@ -31,6 +31,10 @@
     "./companies": {
       "types": "./dist/companies.d.ts",
       "default": "./dist/companies.js"
+    },
+    "./scoring": {
+      "types": "./dist/scoring.d.ts",
+      "default": "./dist/scoring.js"
     }
   },
   "files": [

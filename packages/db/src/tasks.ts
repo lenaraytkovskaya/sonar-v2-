@@ -1,3 +1,4 @@
+import { enqueueCompanyScores } from './scoring.js';
 import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
 import type { PoolClient } from 'pg';
@@ -272,6 +273,7 @@ export async function executeTask(
 export async function runTask(
   type: string,
   handler: (payload: object, taskId: string) => Promise<TaskOutcome>,
+  afterTerminal?: (payload: object) => Promise<void>,
 ) {
   await boss.work<
     { taskId: string },
@@ -298,6 +300,8 @@ export async function runTask(
     finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
           [task.id, status, result ?? null, code ?? null, reason ?? null],
         );
+        if (['done', 'skipped', 'failed', 'paused'].includes(status))
+          await afterTerminal?.(task.payload);
       },
       job.retryCount < job.retryLimit,
     );
@@ -326,7 +330,7 @@ export async function dismissTask(id: string, userId: string) {
   });
 }
 
-// Enrichment chain: site.scan -> registry.match -> company ready.
+// Enrichment chain: site.scan -> registry.match -> company.score -> company ready.
 // Each stage is its own task; a failed stage never blocks the next one.
 export async function enqueueEnrichment(
   companyId: string,
@@ -350,10 +354,7 @@ export async function continueEnrichment(companyId: string) {
   return match;
 }
 export async function finishEnrichment(companyId: string) {
-  await sonarPool.query(
-    "update companies set status='ready',updated_at=now() where id=$1 and status='enriching'",
-    [companyId],
-  );
+  await enqueueCompanyScores(companyId);
 }
 export async function enqueueBatchEnrichment(
   batchId: string,

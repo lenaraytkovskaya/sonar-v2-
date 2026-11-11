@@ -29,11 +29,9 @@ it('skips non-Ukrainian companies without touching the registry', async () => {
   expect(lookup).not.toHaveBeenCalled();
 });
 it('skips when the website gave no valid code', async () => {
-  query
-    .mockResolvedValueOnce(company(null))
-    .mockResolvedValueOnce({
-      rows: [{ value: { code: '1234', valid: false } }],
-    });
+  query.mockResolvedValueOnce(company(null)).mockResolvedValueOnce({
+    rows: [{ value: { code: '1234', valid: false } }],
+  });
   const lookup = vi.fn();
   await expect(
     runRegistryMatch({ companyId: 'c' }, 't', lookup),
