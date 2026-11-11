@@ -35,6 +35,8 @@ export async function login(
     if (!user || !valid) return uk.login.invalid;
     const session = await getSession();
     session.user = { id: user.id, name: user.name };
+    const { logActivity } = await import('@sonar/db/tasks');
+    await logActivity('user.login', 'user', user.id, user.id);
     await session.save();
   } catch {
     return uk.login.unavailable;
@@ -43,6 +45,10 @@ export async function login(
 }
 export async function logout() {
   const session = await getSession();
+  if (session.user) {
+    const { logActivity } = await import('@sonar/db/tasks');
+    await logActivity('user.logout', 'user', session.user.id, session.user.id);
+  }
   session.destroy();
   redirect('/login');
 }

@@ -1,4 +1,31 @@
 export const uk = {
+  tasks: {
+    active: 'Зараз у роботі',
+    failures: 'Помилки та паузи',
+    registry: 'Перевірка реєстру ЄДР',
+    approximate: 'приблизно',
+    estimateUnavailable: 'оцінка недоступна',
+    registryTables: {
+      edr_legal_entities: 'Юридичні особи',
+      edr_fops: 'ФОП',
+      edr_founders: 'Засновники',
+      edr_public_organizations: 'Громадські організації',
+      edr_branches: 'Філії',
+    },
+    empty: 'Немає активних завдань.',
+    noFailures: 'Немає помилок або пауз.',
+    retry: 'Повторити',
+    missing: 'Завдання не знайдено.',
+    error: 'Не вдалося оновити завдання. Спробуйте ще раз.',
+    status: {
+      queued: 'У черзі',
+      running: 'Виконується',
+      done: 'Готово',
+      skipped: 'Пропущено',
+      failed: 'Помилка',
+      paused: 'Призупинено',
+    },
+  },
   appName: 'Sonar',
   unauthorized: 'Увійдіть, щоб продовжити.',
   cli: {

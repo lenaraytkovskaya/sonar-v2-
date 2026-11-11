@@ -31,7 +31,7 @@ docker compose -f docker/compose.yml -f docker/compose.dev.yml up --build -d
 ```
 
 Відкрийте http://localhost:58000 та http://localhost:58000/api/health (`db: true`).
-Worker застосовує міграції при старті. Локальний том `sonar-v2-dev-postgres` ізольований;
+Одноразовий сервіс `migrate` застосовує міграції перед запуском web і worker. Локальний том `sonar-v2-dev-postgres` ізольований;
 схема `registry` створюється без даних лише при першому запуску порожнього тому.
 WAHA використовує закріплений AMD64-образ (емуляція Docker Desktop на ARM Mac).
 Для запуску без контейнерів: експортуйте URL доступного локального Postgres та виконайте
@@ -58,3 +58,13 @@ systemctl enable --now /opt/sonar-v2/deploy/sonar-deploy.timer
 Postgres доступний лише на `127.0.0.1:55432`; ззовні — тільки через Tailscale
 (`tailscale serve --bg --tcp 55432 tcp://127.0.0.1:55432`) під роллю лише для читання `viewer`.
 WAHA не публікує портів.
+
+Створення користувача на сервері (інтерактивно, пароль не потрапляє в аргументи):
+
+```sh
+docker compose --env-file .env -f docker/compose.yml run --rm cli pnpm user:create
+```
+
+`cli` має профіль `tools` і використовує build-stage з pnpm та вихідним CLI.
+`/api/health` повертає `db` і `registry`; HTTP 503 означає недоступну базу Sonar.
+Недоступний реєстр не блокує CRM (HTTP 200 при `db: true`), але завдання показує причину помилки.

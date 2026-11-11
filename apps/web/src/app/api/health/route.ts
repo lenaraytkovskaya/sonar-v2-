@@ -1,10 +1,17 @@
 export const dynamic = 'force-dynamic';
 export async function GET() {
+  let db = false,
+    registry = false;
   try {
-    const { sonarPool } = await import('@sonar/db');
-    await sonarPool.query('select 1');
-    return Response.json({ ok: true, db: true });
+    const { sonarPool, registryPool } = await import('@sonar/db');
+    const ping = (pool: typeof sonarPool) =>
+      pool.query('select 1').then(
+        () => true,
+        () => false,
+      );
+    [db, registry] = await Promise.all([ping(sonarPool), ping(registryPool)]);
   } catch {
-    return Response.json({ ok: true, db: false });
+    /* Unconfigured database is unhealthy. */
   }
+  return Response.json({ ok: db, db, registry }, { status: db ? 200 : 503 });
 }
