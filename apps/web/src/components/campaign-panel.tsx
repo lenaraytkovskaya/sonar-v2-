@@ -31,7 +31,7 @@ const initial: CampaignInput = {
   budget_usd: 0.5,
   channels: { email: true, telegram: false, whatsapp: false, forms: false },
   send_mode: 'approval',
-  scoring_weights: { website: 30, phone: 30, rating: 40 },
+  scoring_weights: {},
   status: 'draft',
   field_profile: 'contacts',
 };
@@ -87,14 +87,23 @@ function Chips({
     </fieldset>
   );
 }
-export function CampaignPanel() {
+export function CampaignPanel({
+  defaultWeights,
+}: {
+  defaultWeights: CampaignInput['scoring_weights'];
+}) {
+  const initialForm = { ...initial, scoring_weights: defaultWeights };
+  const withWeights = (row: CampaignInput): CampaignInput => ({
+    ...row,
+    scoring_weights: { ...defaultWeights, ...row.scoring_weights },
+  });
   const { batches: batchProgress } = useTasks();
   const [rows, setRows] = useState<Row[]>([]),
     [presets, setPresets] = useState<
       { id: string; name: string; data: CampaignInput }[]
     >([]),
     [id, setId] = useState<string | null>(null),
-    [form, setForm] = useState(initial),
+    [form, setForm] = useState(initialForm),
     [description, setDescription] = useState(''),
     [preview, setPreview] = useState<CampaignSuggestion | null>(null),
     [source, setSource] = useState('form'),
@@ -132,7 +141,7 @@ export function CampaignPanel() {
         setForm(
           campaignSchema
             .strip()
-            .parse({ ...row, budget_usd: Number(row.budget_usd) }),
+            .parse(withWeights({ ...row, budget_usd: Number(row.budget_usd) })),
         );
       }
     }
@@ -144,7 +153,7 @@ export function CampaignPanel() {
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
   }, [batchProgress]);
-  const act = async (kind: 'save' | 'start' | 'pause') => {
+  const act = async (kind: 'save' | 'start' | 'pause' | 'score') => {
     setPending(true);
     setMessage('');
     try {
@@ -182,8 +191,23 @@ export function CampaignPanel() {
           return;
         }
       }
+      if (kind === 'score') {
+        const scored = await fetch(`/api/campaigns/${row.id}/score`, {
+          method: 'POST',
+        });
+        if (!scored.ok) {
+          const result = await scored.json().catch(() => null);
+          throw Error(result?.error ?? uk.ai.error);
+        }
+      }
       await load();
-      setMessage(kind === 'start' ? uk.campaign.queued : uk.ai.saved);
+      setMessage(
+        kind === 'start'
+          ? uk.campaign.queued
+          : kind === 'score'
+            ? uk.campaign.scoreQueued
+            : uk.ai.saved,
+      );
     } catch (e) {
       setMessage(
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
@@ -218,7 +242,7 @@ export function CampaignPanel() {
           <Button
             onClick={() => {
               setId(null);
-              setForm(initial);
+              setForm(initialForm);
               setPreview(null);
             }}
           >
@@ -232,9 +256,12 @@ export function CampaignPanel() {
               onClick={() => {
                 setId(row.id);
                 setForm(
-                  campaignSchema
-                    .strip()
-                    .parse({ ...row, budget_usd: Number(row.budget_usd) }),
+                  campaignSchema.strip().parse(
+                    withWeights({
+                      ...row,
+                      budget_usd: Number(row.budget_usd),
+                    }),
+                  ),
                 );
                 setPreview(null);
                 setSource('form');
@@ -257,7 +284,7 @@ export function CampaignPanel() {
                 const preset = presets.find((p) => p.id === e.target.value);
                 if (preset) {
                   setId(null);
-                  setForm(preset.data);
+                  setForm(withWeights(preset.data));
                   setPreview(null);
                 }
               }}
@@ -496,7 +523,11 @@ export function CampaignPanel() {
                 {uk.campaign.weights[key as keyof typeof uk.campaign.weights] ??
                   key}
                 <input
-                  aria-label={key}
+                  aria-label={
+                    uk.campaign.weights[
+                      key as keyof typeof uk.campaign.weights
+                    ] ?? key
+                  }
                   type="range"
                   min="0"
                   max="100"
@@ -512,6 +543,32 @@ export function CampaignPanel() {
               </label>
             ))}
           </fieldset>
+          <AiAssist
+            text={JSON.stringify(form.scoring_weights)}
+            onApply={(text) => {
+              try {
+                const scoring_weights = JSON.parse(text);
+                const parsed = campaignSchema.safeParse({
+                  ...form,
+                  scoring_weights,
+                });
+                if (
+                  !parsed.success ||
+                  Object.keys(scoring_weights).some(
+                    (key) => !(key in defaultWeights),
+                  ) ||
+                  Object.keys(defaultWeights).some(
+                    (key) => !(key in scoring_weights),
+                  )
+                )
+                  throw Error();
+                update('scoring_weights', parsed.data.scoring_weights);
+                setSource('ai');
+              } catch {
+                setMessage(uk.ai.invalid);
+              }
+            }}
+          />
           <label className="block">
             {uk.google.profile}
             <select
@@ -546,6 +603,15 @@ export function CampaignPanel() {
               onClick={() => void act('start')}
             >
               {exhausted ? uk.google.exhausted : uk.campaign.start}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={
+                pending || !id || !campaignSchema.safeParse(form).success
+              }
+              onClick={() => void act('score')}
+            >
+              {uk.campaign.recalculate}
             </Button>
             <Button
               variant="outline"

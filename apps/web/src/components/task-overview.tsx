@@ -115,6 +115,7 @@ export function TaskOverview() {
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
       'site.scan': uk.scanner.title,
+      'company.score': uk.company.score,
     })[type] ?? type;
   const active = [
     ...new Set(

@@ -75,19 +75,22 @@ it.skipIf(!enabled)(
       );
       expect(contacts).toHaveLength(3);
       expect(
-        contacts.every(
-          (contact) =>
-            contact.source === 'website' && contact.source_url === contactUrl,
-        ),
+        contacts
+          .filter((contact) => contact.kind !== 'phone')
+          .every(
+            (contact) =>
+              contact.source === 'website' && contact.source_url === contactUrl,
+          ),
       ).toBe(true);
       expect(
         contacts.find((contact) => contact.kind === 'phone'),
       ).toMatchObject({
         normalized: '+380442223344',
+        source: 'google',
+        source_url: 'https://maps.google.com/?cid=stub',
         rank: 100,
         meta: {
-          previousSource: 'google',
-          previousSourceUrl: 'https://maps.google.com/?cid=stub',
+          alsoOnWebsite: contactUrl,
         },
       });
       const { rows: facts } = await sonarPool.query(
@@ -150,7 +153,10 @@ it.skipIf(!enabled)(
         "select source_url,rank from contacts where company_id=$1 and kind='phone'",
         [scan.companyId],
       );
-      expect(ranked).toMatchObject({ source_url: contactUrl, rank: 100 });
+      expect(ranked).toMatchObject({
+        source_url: 'https://maps.google.com/?cid=stub',
+        rank: 100,
+      });
       const blocked = await create('blocked');
       expect(
         await runSiteScan({ companyId: blocked.companyId }, blocked.taskId),

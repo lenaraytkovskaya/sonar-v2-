@@ -23,3 +23,4 @@ export * from './company.js';
 
 export * from './scanner.js';
 export * from './registry.js';
+export * from './scoring.js';

@@ -5,7 +5,7 @@ import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, PageHeader } from './shared';
+import { Card, PageHeader, Score } from './shared';
 import { runAiJob } from '@/lib/ai-job';
 type Row = {
   id: string;
@@ -13,6 +13,7 @@ type Row = {
   city: string | null;
   primary_type: string | null;
   rating: string | null;
+  score: number | null;
   website: string | null;
   status: keyof typeof uk.company.statuses;
   created_at: string;
@@ -26,9 +27,17 @@ function params(filters: CompanyFilters) {
       .map(([k, v]) => [k, String(v)]),
   );
 }
-export function CompanyList() {
-  const [draft, setDraft] = useState<CompanyFilters>({}),
-    [filters, setFilters] = useState<CompanyFilters>({}),
+export function CompanyList({
+  initialCampaignId,
+}: {
+  initialCampaignId?: string;
+}) {
+  const [draft, setDraft] = useState<CompanyFilters>({
+      campaignId: initialCampaignId,
+    }),
+    [filters, setFilters] = useState<CompanyFilters>({
+      campaignId: initialCampaignId,
+    }),
     [page, setPage] = useState(1),
     [data, setData] = useState<{
       companies: Row[];
@@ -137,6 +146,8 @@ export function CompanyList() {
                     hasWebsite: uk.company.hasWebsite,
                     hasPhone: uk.company.hasPhone,
                     minRating: uk.company.minRating,
+                    minScore: uk.company.minScore,
+                    sort: uk.company.sort,
                   }[key as keyof CompanyFilters]
                 }
                 :{' '}
@@ -196,6 +207,35 @@ export function CompanyList() {
                 )
               }
             />
+          </label>
+          <label>
+            {uk.company.minScore}
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={draft.minScore ?? ''}
+              onChange={(e) =>
+                update(
+                  'minScore',
+                  e.target.value === '' ? undefined : e.target.valueAsNumber,
+                )
+              }
+            />
+          </label>
+          <label>
+            {uk.company.sort}
+            <select
+              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+              value={draft.sort ?? (draft.campaignId ? 'score' : 'newest')}
+              onChange={(e) =>
+                update('sort', e.target.value as CompanyFilters['sort'])
+              }
+            >
+              <option value="score">{uk.company.scoreDescending}</option>
+              <option value="newest">{uk.company.newest}</option>
+            </select>
           </label>
           <label>
             {uk.company.campaign}
@@ -312,6 +352,7 @@ export function CompanyList() {
             <tr>
               {[
                 uk.company.name,
+                uk.company.score,
                 uk.company.contacts,
                 uk.company.campaign,
                 uk.company.status,
@@ -329,7 +370,13 @@ export function CompanyList() {
                 <td className="min-w-52 p-4">
                   <Link
                     className="font-semibold text-accent"
-                    href={'/companies/' + c.id}
+                    href={
+                      '/companies/' +
+                      c.id +
+                      (filters.campaignId
+                        ? '?campaignId=' + filters.campaignId
+                        : '')
+                    }
                   >
                     {c.name}
                   </Link>
@@ -339,6 +386,9 @@ export function CompanyList() {
                   <p>
                     {uk.company.rating}: {c.rating ?? '—'}
                   </p>
+                </td>
+                <td className="p-4">
+                  <Score value={c.score} />
                 </td>
                 <td className="p-4">
                   {c.website && (

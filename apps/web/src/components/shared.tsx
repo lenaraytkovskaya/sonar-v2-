@@ -3,6 +3,28 @@ import { uk } from '@/i18n/uk';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 export { Card } from '@/components/ui/card';
+export function Score({ value }: { value: number | null }) {
+  return value === null ? (
+    <span className="text-muted-foreground">—</span>
+  ) : (
+    <div className="min-w-24 space-y-1">
+      <span className="font-semibold">{value.toFixed(1)}</span>
+      <div
+        role="progressbar"
+        aria-label={uk.company.score}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        className="h-2 overflow-hidden rounded-full bg-chip"
+      >
+        <div
+          className="h-full rounded-full bg-accent"
+          style={{ width: `${value}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 export function StatusPill({ status }: { status: keyof typeof uk.status }) {
   return (
     <span

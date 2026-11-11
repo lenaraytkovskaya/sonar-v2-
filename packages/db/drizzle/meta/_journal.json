@@ -92,6 +92,13 @@
       "when": 1794440000000,
       "tag": "0012_registry_match",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794441000000,
+      "tag": "0013_company_scoring",
+      "breakpoints": true
     }
   ]
 }

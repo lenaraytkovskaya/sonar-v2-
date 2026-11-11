@@ -1,4 +1,8 @@
-import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
+import {
+  companyFiltersSchema,
+  type CompanyFilters,
+  type ScoreBreakdown,
+} from '@sonar/core';
 import type { PoolClient } from 'pg';
 import { sonarPool } from './index.js';
 export function companyWhere(input: CompanyFilters) {
@@ -9,9 +13,11 @@ export function companyWhere(input: CompanyFilters) {
     values.push(v);
     return `$${values.length}`;
   };
-  if (f.campaignId)
+  const campaignParam = f.campaignId ? param(f.campaignId) : null;
+  const scoreSql = `(select max(s.score)::float8 from company_scores s where s.company_id=c.id${campaignParam ? ` and s.campaign_id=${campaignParam}` : ''})`;
+  if (campaignParam)
     conditions.push(
-      `exists(select 1 from campaign_companies cc where cc.company_id=c.id and cc.campaign_id=${param(f.campaignId)})`,
+      `exists(select 1 from campaign_companies cc where cc.company_id=c.id and cc.campaign_id=${campaignParam})`,
     );
   if (f.city) conditions.push(`lower(c.city)=lower(${param(f.city)})`);
   if (f.status) conditions.push(`c.status=${param(f.status)}`);
@@ -23,6 +29,8 @@ export function companyWhere(input: CompanyFilters) {
     );
   if (f.minRating !== undefined)
     conditions.push(`c.rating>=${param(f.minRating)}`);
+  if (f.minScore !== undefined)
+    conditions.push(`${scoreSql}>=${param(f.minScore)}`);
   if (f.q) {
     const p = param('%' + f.q.replace(/[\\%_]/g, '\\$&') + '%');
     const digits = f.q.replace(/\D/g, '');
@@ -36,6 +44,7 @@ export function companyWhere(input: CompanyFilters) {
   return {
     sql: conditions.length ? 'where ' + conditions.join(' and ') : '',
     values,
+    scoreSql,
   };
 }
 export type CompanyRow = {
@@ -44,12 +53,20 @@ export type CompanyRow = {
   city: string | null;
   primary_type: string | null;
   rating: string | null;
+  score: number | null;
   website: string | null;
   domain: string | null;
   status: string;
   created_at: string;
   phones: string[];
   campaigns: { id: string; name: string }[];
+};
+export type CompanyScoreRow = {
+  campaign_id: string;
+  campaign_name: string;
+  score: number;
+  breakdown: ScoreBreakdown;
+  computed_at: Date;
 };
 export async function listCompanies(
   filters: CompanyFilters,
@@ -65,7 +82,11 @@ export async function listCompanies(
     pageSize > 1000
   )
     throw Error('Invalid pagination');
-  const { sql, values } = companyWhere(filters);
+  const parsedFilters = companyFiltersSchema.parse(filters);
+  const { sql, values, scoreSql } = companyWhere(parsedFilters);
+  const sort =
+    parsedFilters.sort ?? (parsedFilters.campaignId ? 'score' : 'newest');
+  const order = `${sort === 'score' ? 'score desc nulls last,' : ''}c.created_at desc,c.id`;
   const {
     rows: [count],
   } = await connection.query(
@@ -73,10 +94,10 @@ export async function listCompanies(
     values,
   );
   const { rows } = await connection.query<CompanyRow>(
-    `select c.id,c.name,c.city,c.primary_type,c.rating,c.website,c.domain,c.status,c.created_at,
+    `select c.id,c.name,c.city,c.primary_type,c.rating,${scoreSql} as score,c.website,c.domain,c.status,c.created_at,
  array(select p.normalized from contacts p where p.company_id=c.id and p.kind='phone' order by p.rank desc,p.normalized) as phones,
  coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'name',a.name) order by a.name) from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=c.id),'[]') as campaigns
- from companies c ${sql} order by c.created_at desc,c.id limit $${values.length + 1} offset $${values.length + 2}`,
+ from companies c ${sql} order by ${order} limit $${values.length + 1} offset $${values.length + 2}`,
     [...values, pageSize, (page - 1) * pageSize],
   );
   return { companies: rows, total: count.total as number, page, pageSize };
@@ -92,6 +113,7 @@ export async function getCompany(id: string) {
     { rows: history },
     { rows: facts },
     { rows: scans },
+    { rows: scores },
   ] = await Promise.all([
     sonarPool.query(
       'select * from contacts where company_id=$1 order by rank desc,found_at desc',
@@ -113,8 +135,12 @@ export async function getCompany(id: string) {
       "select id,status,reason_uk,result,created_at from tasks where type='site.scan' and subject_type='company' and subject_id=$1 order by created_at desc limit 20",
       [id],
     ),
+    sonarPool.query<CompanyScoreRow>(
+      'select s.campaign_id,c.name as campaign_name,s.score::float8 as score,s.breakdown,s.computed_at from company_scores s join campaigns c on c.id=s.campaign_id where s.company_id=$1 order by s.score desc,s.campaign_id',
+      [id],
+    ),
   ]);
-  return { company, contacts, campaigns, history, facts, scans };
+  return { company, contacts, campaigns, history, facts, scans, scores };
 }
 
 // One snapshot keeps CSV pagination stable while discovery adds companies.

@@ -187,12 +187,13 @@ export async function runRegistryMatch(
 }
 export async function registerRegistryTasks() {
   await boss.createQueue('registry.match');
-  await runTask('registry.match', async (payload, id) => {
-    const { companyId } = payload as { companyId: string };
-    try {
-      return await runRegistryMatch({ companyId }, id);
-    } finally {
-      await finishEnrichment(companyId);
-    }
-  });
+  await runTask(
+    'registry.match',
+    async (payload, id) => {
+      return runRegistryMatch(payload as { companyId: string }, id);
+    },
+    async (payload) => {
+      await finishEnrichment((payload as { companyId: string }).companyId);
+    },
+  );
 }

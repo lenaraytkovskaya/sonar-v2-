@@ -6,19 +6,32 @@ import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { SiteScan } from '@/components/site-scan';
 import { RegistryMatch } from '@/components/registry-match';
-import { ScanSummary } from '@/components/shared';
+import { ScanSummary, Score } from '@/components/shared';
 export default async function Page({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ campaignId?: string }>;
 }) {
   const { id } = await params;
+  const { campaignId } = await searchParams;
+  const selectedCampaign = validId(campaignId) ? campaignId : undefined;
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
   const data = await getCompany(id);
   if (!data) notFound();
-  const { company: c, contacts, campaigns, history, facts, scans } = data;
-  const date = (value: string) => new Date(value).toLocaleString('uk-UA');
+  const {
+    company: c,
+    contacts,
+    campaigns,
+    history,
+    facts,
+    scans,
+    scores,
+  } = data;
+  const date = (value: string | Date) =>
+    new Date(value).toLocaleString('uk-UA');
   const siteFacts = facts.filter((fact) => fact.source !== 'registry');
   const registryFacts = facts.filter(
     (fact) => fact.source === 'registry' && fact.kind !== 'registry_entity',
@@ -33,7 +46,10 @@ export default async function Page({
     <>
       <Link
         className="mb-4 inline-flex min-h-11 items-center text-accent"
-        href="/companies"
+        href={
+          '/companies' +
+          (selectedCampaign ? '?campaignId=' + selectedCampaign : '')
+        }
       >
         ← {uk.company.back}
       </Link>
@@ -282,12 +298,145 @@ export default async function Page({
             </p>
           )}
         </Card>
-        {[uk.company.score].map((label) => (
-          <Card className="p-5" key={label}>
-            <h2 className="font-heading text-xl font-bold">{label}</h2>
-            <p className="mt-3 text-muted-foreground">{uk.company.later}</p>
-          </Card>
-        ))}
+        <Card className="min-w-0 space-y-5 p-5 lg:col-span-2">
+          <h2 className="font-heading text-xl font-bold">{uk.company.score}</h2>
+          {!scores.length && (
+            <p className="text-muted-foreground">{uk.scoring.empty}</p>
+          )}
+          {[...scores]
+            .sort(
+              (a, b) =>
+                Number(b.campaign_id === selectedCampaign) -
+                Number(a.campaign_id === selectedCampaign),
+            )
+            .map((row) => (
+              <section
+                key={row.campaign_id}
+                className="space-y-4 border-t border-border pt-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <Link
+                    className="text-accent"
+                    href={'/campaigns?campaign=' + row.campaign_id}
+                  >
+                    {row.campaign_name}
+                  </Link>
+                  <Score value={row.score} />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {uk.scoring.computed}: {date(row.computed_at)}
+                </p>
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr>
+                          {[
+                            uk.company.score,
+                            uk.scoring.value,
+                            uk.scoring.weight,
+                            uk.scoring.contribution,
+                          ].map((label) => (
+                            <th key={label} className="p-2">
+                              {label}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {row.breakdown.features.map((feature) => (
+                          <tr
+                            key={feature.feature}
+                            className="border-t border-border"
+                          >
+                            <th scope="row" className="p-2 font-normal">
+                              {
+                                uk.campaign.weights[
+                                  feature.feature as keyof typeof uk.campaign.weights
+                                ]
+                              }
+                            </th>
+                            <td className="p-2">
+                              {(feature.value * 100).toFixed(0)}%
+                            </td>
+                            <td className="p-2">{feature.weight}</td>
+                            <td className="p-2">
+                              {feature.contribution.toFixed(1)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="min-w-0 space-y-3">
+                    <h3 className="font-semibold">{uk.scoring.top}</h3>
+                    {(
+                      Object.keys(
+                        uk.scoring.categories,
+                      ) as (keyof typeof uk.scoring.categories)[]
+                    ).map((category) => {
+                      const contact = row.breakdown.top[category];
+                      const source = normalizeWebsite(
+                        contact?.source_url ?? undefined,
+                      )?.website;
+                      const href =
+                        contact?.kind === 'email'
+                          ? 'mailto:' + contact.normalized
+                          : contact?.kind === 'phone'
+                            ? 'tel:' + contact.normalized
+                            : normalizeWebsite(contact?.value)?.website;
+                      return (
+                        <div key={category} className="min-w-0 break-words">
+                          <p className="font-medium">
+                            {uk.scoring.categories[category]}
+                          </p>
+                          {!contact ? (
+                            <p className="text-muted-foreground">
+                              {uk.company.noData}
+                            </p>
+                          ) : (
+                            <>
+                              {href ? (
+                                <a
+                                  className="text-accent"
+                                  href={href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {contact.normalized}
+                                </a>
+                              ) : (
+                                <p>{contact.normalized}</p>
+                              )}
+                              <p className="text-sm text-muted-foreground">
+                                {uk.company.source}:{' '}
+                                {
+                                  uk.company.sources[
+                                    contact.source as keyof typeof uk.company.sources
+                                  ]
+                                }{' '}
+                                · {date(contact.found_at)}
+                              </p>
+                              {source && (
+                                <a
+                                  className="text-accent"
+                                  href={source}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {uk.company.source}
+                                </a>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+            ))}
+        </Card>
       </div>
     </>
   );

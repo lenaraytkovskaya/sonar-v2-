@@ -1,3 +1,4 @@
+import { enqueueCampaignScores } from './scoring.js';
 import { campaignSchema, type CampaignInput } from '@sonar/core';
 import { sonarPool } from './index.js';
 import { logActivity } from './tasks.js';
@@ -11,6 +12,14 @@ export async function saveCampaign(
   const client = await sonarPool.connect();
   try {
     await client.query('begin');
+    const previous = id
+      ? (
+          await client.query(
+            'select scoring_weights from campaigns where id=$1 for update',
+            [id],
+          )
+        ).rows[0]
+      : null;
     const values = [
       data.name,
       data.country_code,
@@ -28,7 +37,7 @@ export async function saveCampaign(
     ];
     const { rows } = id
       ? await client.query(
-          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_weights=$11,status=$12,field_profile=$13,updated_at=now() where id=$14 returning *`,
+          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_revision=scoring_revision+case when scoring_weights<>$11::jsonb then 1 else 0 end,scoring_weights=$11,status=$12,field_profile=$13,updated_at=now() where id=$14 returning *`,
           [...values, id],
         )
       : await client.query(
@@ -44,6 +53,12 @@ export async function saveCampaign(
       { source, status: data.status },
       client,
     );
+    if (
+      previous &&
+      JSON.stringify(Object.entries(previous.scoring_weights).sort()) !==
+        JSON.stringify(Object.entries(data.scoring_weights).sort())
+    )
+      await enqueueCampaignScores(rows[0].id, userId, client);
     await client.query('commit');
     return rows[0];
   } catch (error) {
