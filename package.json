@@ -12,7 +12,8 @@
     "typecheck": "pnpm --filter \"./packages/*\" build && pnpm -r typecheck",
     "test": "vitest run",
     "db:generate": "pnpm --filter @sonar/db db:generate",
-    "db:migrate": "pnpm --filter @sonar/db db:migrate"
+    "db:migrate": "pnpm --filter @sonar/db db:migrate",
+    "user:create": "pnpm --filter @sonar/web user:create"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
