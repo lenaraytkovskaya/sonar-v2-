@@ -20,3 +20,5 @@ export * from './google.js';
 
 export type { CountryCode } from 'libphonenumber-js/max';
 export * from './company.js';
+
+export * from './scanner.js';

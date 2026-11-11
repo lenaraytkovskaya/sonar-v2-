@@ -11,6 +11,7 @@ import {
   check,
   boolean,
   unique,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -268,6 +269,7 @@ export const contacts = pgTable(
     normalized: text('normalized').notNull(),
     source: contactSource('source').notNull(),
     sourceUrl: text('source_url'),
+    meta: jsonb('meta').notNull().default({}),
     verified: boolean('verified').notNull().default(false),
     rank: integer('rank').notNull().default(0),
     foundAt: timestamp('found_at', { withTimezone: true })
@@ -275,4 +277,34 @@ export const contacts = pgTable(
       .defaultNow(),
   },
   (t) => [unique('contact_unique').on(t.companyId, t.kind, t.normalized)],
+);
+
+export const companyFacts = pgTable(
+  'company_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    kind: text('kind').notNull(),
+    value: jsonb('value').notNull(),
+    source: text('source').notNull(),
+    sourceUrl: text('source_url'),
+    foundAt: timestamp('found_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+  },
+  (t) => [
+    check(
+      'company_fact_source',
+      sql`${t.source} in ('google','website','registry','prozorro','manual','ai')`,
+    ),
+    uniqueIndex('company_fact_unique').on(
+      t.companyId,
+      t.kind,
+      t.source,
+      sql`md5(${t.value}::text)`,
+    ),
+  ],
 );

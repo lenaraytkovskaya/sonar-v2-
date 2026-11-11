@@ -61,3 +61,49 @@ export function EmptyState({
     </Card>
   );
 }
+
+export type ScanResult = {
+  pages?: number;
+  contacts?: number;
+  aiUsed?: boolean;
+  costUsd?: number;
+  durationMs?: number;
+  aiStatus?: string;
+};
+export function ScanSummary({ result }: { result: ScanResult | null }) {
+  return result ? (
+    <span className="block text-sm text-muted-foreground">
+      {uk.scanner.pages}: {result.pages ?? 0} · {uk.scanner.contacts}:{' '}
+      {result.contacts ?? 0}
+      {result.aiUsed !== undefined && (
+        <> · {result.aiUsed ? uk.scanner.aiUsed : uk.scanner.aiNotUsed}</>
+      )}
+      {result.aiStatus &&
+        uk.scanner.aiStatuses[
+          result.aiStatus as keyof typeof uk.scanner.aiStatuses
+        ] && (
+          <span>
+            {' '}
+            ·{' '}
+            {
+              uk.scanner.aiStatuses[
+                result.aiStatus as keyof typeof uk.scanner.aiStatuses
+              ]
+            }
+          </span>
+        )}
+      {result.costUsd !== undefined && (
+        <>
+          {' '}
+          · {uk.scanner.cost}: {Number(result.costUsd).toFixed(4)}
+        </>
+      )}
+      {result.durationMs !== undefined && (
+        <>
+          {' '}
+          · {uk.scanner.duration}: {(result.durationMs / 1000).toFixed(1)}
+        </>
+      )}
+    </span>
+  ) : null;
+}

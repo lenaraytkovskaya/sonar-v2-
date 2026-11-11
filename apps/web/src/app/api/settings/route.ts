@@ -1,3 +1,4 @@
+import { scannerKeys, validScannerSettings } from '@/lib/scanner-settings';
 import { profilesSchema } from '@sonar/core';
 import { apiUser } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
@@ -16,6 +17,7 @@ export async function GET(request: Request) {
         'company.about',
         'google.field_profiles',
         'retention.google_days',
+        ...scannerKeys,
       ],
     ],
   );
@@ -30,6 +32,7 @@ export async function POST(request: Request) {
   const data = await request.json().catch(() => null);
   if (
     !data ||
+    (data.scanner !== undefined && !validScannerSettings(data.scanner)) ||
     typeof data.about !== 'string' ||
     data.about.length > 20000 ||
     !Number.isFinite(data.budget) ||
@@ -60,6 +63,7 @@ export async function POST(request: Request) {
   try {
     await client.query('begin');
     for (const [key, value] of Object.entries({
+      ...(data.scanner ?? {}),
       'company.about': data.about,
       'budget.monthly_usd': data.budget,
       'ai.model.cheap': data.cheap,

@@ -7,8 +7,8 @@ export async function GET(request: Request) {
   const { sonarPool } = await import('@sonar/db');
   const params = new URL(request.url).searchParams;
   const { rows } = await sonarPool.query(
-    `select id,type,status,reason_uk,attempts,result,created_at from tasks
- where ($1::text is null or status::text=$1) and ($2::text is null or type=$2) order by created_at desc limit 200`,
+    `select t.id,t.type,t.status,t.reason_uk,t.attempts,t.result,t.created_at,t.subject_id,c.name as company_name from tasks t left join companies c on t.subject_type='company' and t.subject_id=c.id::text
+ where ($1::text is null or t.status::text=$1) and ($2::text is null or t.type=$2) order by t.created_at desc limit 200`,
     [params.get('status') || null, params.get('type') || null],
   );
   const { rows: counts } = await sonarPool.query(

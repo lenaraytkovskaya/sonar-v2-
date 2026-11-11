@@ -86,22 +86,35 @@ export async function getCompany(id: string) {
     rows: [company],
   } = await sonarPool.query('select * from companies where id=$1', [id]);
   if (!company) return null;
-  const [{ rows: contacts }, { rows: campaigns }, { rows: history }] =
-    await Promise.all([
-      sonarPool.query(
-        'select * from contacts where company_id=$1 order by rank desc,found_at desc',
-        [id],
-      ),
-      sonarPool.query(
-        'select c.id,c.name,b.id as batch_id,b.number,b.status,cc.added_at from campaign_companies cc join campaigns c on c.id=cc.campaign_id join batches b on b.id=cc.batch_id where cc.company_id=$1 order by cc.added_at desc',
-        [id],
-      ),
-      sonarPool.query(
-        "select a.id,a.action,a.created_at,a.details,u.name as user_name from activity_log a left join users u on u.id=a.user_id where a.entity_type='company' and a.entity_id=$1 order by a.created_at desc",
-        [id],
-      ),
-    ]);
-  return { company, contacts, campaigns, history };
+  const [
+    { rows: contacts },
+    { rows: campaigns },
+    { rows: history },
+    { rows: facts },
+    { rows: scans },
+  ] = await Promise.all([
+    sonarPool.query(
+      'select * from contacts where company_id=$1 order by rank desc,found_at desc',
+      [id],
+    ),
+    sonarPool.query(
+      'select c.id,c.name,b.id as batch_id,b.number,b.status,cc.added_at from campaign_companies cc join campaigns c on c.id=cc.campaign_id join batches b on b.id=cc.batch_id where cc.company_id=$1 order by cc.added_at desc',
+      [id],
+    ),
+    sonarPool.query(
+      "select a.id,a.action,a.created_at,a.details,u.name as user_name from activity_log a left join users u on u.id=a.user_id where a.entity_type='company' and a.entity_id=$1 order by a.created_at desc",
+      [id],
+    ),
+    sonarPool.query(
+      'select * from company_facts where company_id=$1 order by found_at desc',
+      [id],
+    ),
+    sonarPool.query(
+      "select id,status,reason_uk,result,created_at from tasks where type='site.scan' and subject_type='company' and subject_id=$1 order by created_at desc limit 20",
+      [id],
+    ),
+  ]);
+  return { company, contacts, campaigns, history, facts, scans };
 }
 
 // One snapshot keeps CSV pagination stable while discovery adds companies.
