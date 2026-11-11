@@ -399,13 +399,37 @@ export async function runSiteScan(
     let contacts = 0;
     let pageCount = 0;
     const foundContacts = new Set<string>();
+    const contactPage = /(?:contact|kontakt|контакт|feedback|zvorotn|зворотн)/i;
+    let formSaved = false,
+      formIsContactPage = false;
     const persist = async (
       page: Pick<Page, 'url' | 'contacts' | 'facts'>,
       ai = false,
     ) => {
-      for (const contact of page.contacts)
+      for (const contact of page.contacts) {
+        // One contact form per site: prefer a contact page, otherwise keep the first one found.
+        if (contact.kind === 'form') {
+          let path = page.url;
+          try {
+            path = decodeURI(page.url);
+          } catch {
+            /* Keep the raw URL when it is not valid percent-encoding. */
+          }
+          const onContactPage = contactPage.test(path);
+          if (formSaved && !(onContactPage && !formIsContactPage)) continue;
+          await client.query(
+            "delete from contacts where company_id=$1 and kind='form' and source='website'",
+            [companyId],
+          );
+          foundContacts.forEach(
+            (key) => key.startsWith('form:') && foundContacts.delete(key),
+          );
+          formSaved = true;
+          formIsContactPage = onContactPage;
+        }
+        foundContacts.add(`${contact.kind}:${contact.value}`);
         await client.query(
-          `insert into contacts(company_id,kind,value,normalized,source,source_url,rank,meta) values($1,$2,$3,$3,'website',$4,$5,$6) on conflict(company_id,kind,normalized) do update set found_at=now(),source='website',source_url=case when contacts.source='website' and contacts.rank>excluded.rank then contacts.source_url else excluded.source_url end,rank=greatest(contacts.rank,excluded.rank),meta=contacts.meta||(case when contacts.source='website' and contacts.rank>excluded.rank then '{}'::jsonb else excluded.meta end)||case when contacts.source<>'website' then jsonb_build_object('previousSource',contacts.source,'previousSourceUrl',contacts.source_url) else '{}'::jsonb end`,
+          `insert into contacts(company_id,kind,value,normalized,source,source_url,rank,meta) values($1,$2,$3,$3,'website',$4,$5,$6) on conflict(company_id,kind,normalized) do update set found_at=case when contacts.source='website' then now() else contacts.found_at end,source_url=case when contacts.source<>'website' or contacts.rank>excluded.rank then contacts.source_url else excluded.source_url end,rank=greatest(contacts.rank,excluded.rank),meta=contacts.meta||(case when contacts.source='website' and contacts.rank<=excluded.rank then excluded.meta else '{}'::jsonb end)||case when contacts.source<>'website' then jsonb_build_object('alsoOnWebsite',excluded.source_url) else '{}'::jsonb end`,
           [
             companyId,
             contact.kind,
@@ -415,10 +439,9 @@ export async function runSiteScan(
             { ...contact.meta, ai },
           ],
         );
+      }
       for (const fact of page.facts)
         await saveFact(fact.kind, fact.value, page.url, ai ? 'ai' : 'website');
-      for (const contact of page.contacts)
-        foundContacts.add(`${contact.kind}:${contact.value}`);
       contacts = foundContacts.size;
     };
     const saveFact = async (

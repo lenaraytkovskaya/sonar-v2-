@@ -45,7 +45,7 @@ describe('website extraction from authored HTML fixtures', () => {
   it('normalizes Ukrainian phones and separates registration codes and dates', () => {
     expect(values('02-ukraine', 'phone')).toEqual([
       '+380442223344',
-      '+380671234567',
+      '+380673142758',
     ]);
     expect(page('02-ukraine').facts).toEqual(
       expect.arrayContaining([
@@ -56,8 +56,8 @@ describe('website extraction from authored HTML fixtures', () => {
     );
   });
   it.each([
-    ['03-poland', 'PL', '+48221234567', '+48500100200'],
-    ['04-germany', 'DE', '+4930123456', '+4915123456789'],
+    ['03-poland', 'PL', '+48225183764', '+48500100200'],
+    ['04-germany', 'DE', '+49307215948', '+4915172038465'],
   ] as const)(
     'uses the company country for %s',
     (file, country, local, international) => {
@@ -295,7 +295,7 @@ describe('AI fallback normalization with a stub result', () => {
     const result = normalizeAiSiteResult(
       JSON.stringify({
         emails: ['HELP@GARAGE.UA', 'HELP@GARAGE.UA', 'a@example.com'],
-        phones: ['0671234567', '123'],
+        phones: ['0673142758', '123'],
         messengers: ['https://t.me/garage', 'https://facebook.com/garage'],
         edrpou: '12345678',
       }),
@@ -319,5 +319,15 @@ describe('AI fallback normalization with a stub result', () => {
     { emails: [1], phones: [], messengers: [], edrpou: null },
   ])('ignores invalid AI output without throwing', (value) => {
     expect(normalizeAiSiteResult(value, context)).toBeNull();
+  });
+});
+describe('placeholder phones', () => {
+  it('drops template numbers and keeps real ones', async () => {
+    const { placeholderPhone } = await import('./scanner.js');
+    expect(placeholderPhone('+380671234567')).toBe(true);
+    expect(placeholderPhone('+380500000000')).toBe(true);
+    expect(placeholderPhone('+380449876543')).toBe(true);
+    expect(placeholderPhone('+380636020707')).toBe(false);
+    expect(placeholderPhone('+380443387518')).toBe(false);
   });
 });

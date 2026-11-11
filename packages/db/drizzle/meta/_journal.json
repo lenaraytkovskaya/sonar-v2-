@@ -78,6 +78,13 @@
       "when": 1794432000000,
       "tag": "0010_site_scanner",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794436000000,
+      "tag": "0011_scanner_page_size",
+      "breakpoints": true
     }
   ]
 }
