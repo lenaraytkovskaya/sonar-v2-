@@ -23,6 +23,7 @@ export function SettingsPanel() {
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
     [about, setAbout] = useState(''),
+    [analysisPrompt, setAnalysisPrompt] = useState(''),
     [message, setMessage] = useState(''),
     [pending, setPending] = useState(false);
   const load = async (modelsOnly = false) => {
@@ -35,6 +36,7 @@ export function SettingsPanel() {
     setStrong(data['ai.model.strong'] ?? '');
     setBudget(data['budget.monthly_usd'] ?? 50);
     setAbout(data['company.about'] ?? '');
+    setAnalysisPrompt(data['analysis.prompt'] ?? '');
     setProfiles(data['google.field_profiles'] ?? []);
     setGoogleDays(data['retention.google_days'] ?? 365);
     setScanner(
@@ -71,6 +73,7 @@ export function SettingsPanel() {
           strong,
           budget,
           about,
+          analysisPrompt,
           googleProfiles: profiles,
           googleDays,
           scanner,
@@ -138,6 +141,18 @@ export function SettingsPanel() {
             />
           </label>
           <AiAssist text={about} onApply={setAbout} />
+        </Card>
+        <Card className="space-y-3 p-6">
+          <label className="block space-y-2">
+            <span>{uk.analysis.prompt}</span>
+            <textarea
+              value={analysisPrompt}
+              maxLength={20000}
+              onChange={(e) => setAnalysisPrompt(e.target.value)}
+              className="min-h-44 w-full rounded-lg border border-border bg-raised p-3"
+            />
+          </label>
+          <AiAssist text={analysisPrompt} onApply={setAnalysisPrompt} />
         </Card>
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-xl font-bold">{uk.google.title}</h2>

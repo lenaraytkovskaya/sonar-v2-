@@ -199,7 +199,7 @@ it.skipIf(!enabled)(
           ])
         ).rows,
       ).toEqual([]);
-      expect(mock).toHaveBeenCalledTimes(8);
+      expect(mock).toHaveBeenCalledTimes(9);
     } finally {
       mock.mockRestore();
       for (const table of ['company_facts', 'contacts'])

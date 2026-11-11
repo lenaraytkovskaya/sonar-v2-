@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { normalizeWebsite } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
+import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
 import { RegistryMatch } from '@/components/registry-match';
 import { ScanSummary, Score } from '@/components/shared';
@@ -29,10 +30,13 @@ export default async function Page({
     facts,
     scans,
     scores,
+    analyses,
   } = data;
   const date = (value: string | Date) =>
     new Date(value).toLocaleString('uk-UA');
-  const siteFacts = facts.filter((fact) => fact.source !== 'registry');
+  const siteFacts = facts.filter(
+    (fact) => fact.source !== 'registry' && fact.kind !== 'page_text',
+  );
   const registryFacts = facts.filter(
     (fact) => fact.source === 'registry' && fact.kind !== 'registry_entity',
   );
@@ -297,6 +301,33 @@ export default async function Page({
               {uk.company.sources.registry} · {date(registryFacts[0].found_at)}
             </p>
           )}
+        </Card>
+        <Card className="min-w-0 space-y-5 break-words p-5 lg:col-span-2">
+          <h2 className="font-heading text-xl font-bold">
+            {uk.analysis.title}
+          </h2>
+          {!campaigns.length && <p>{uk.company.noData}</p>}
+          {[...campaigns]
+            .sort(
+              (a, b) =>
+                Number(b.id === selectedCampaign) -
+                Number(a.id === selectedCampaign),
+            )
+            .map((campaign) => (
+              <section
+                key={campaign.id}
+                className="space-y-3 border-t border-border pt-4"
+              >
+                <h3 className="font-semibold">{campaign.name}</h3>
+                <CompanyAnalysis
+                  companyId={id}
+                  campaignId={campaign.id}
+                  analysis={analyses.find(
+                    (row) => row.campaign_id === campaign.id,
+                  )}
+                />
+              </section>
+            ))}
         </Card>
         <Card className="min-w-0 space-y-5 p-5 lg:col-span-2">
           <h2 className="font-heading text-xl font-bold">{uk.company.score}</h2>

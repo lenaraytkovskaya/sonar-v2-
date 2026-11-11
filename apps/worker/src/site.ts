@@ -155,6 +155,7 @@ export async function scanSite(
     pages.push(found);
     await onPage(found, pages.length);
     if (
+      pages.length >= Math.min(3, http.settings.maxPages) &&
       shouldStopSiteScan(
         pages.flatMap((entry) => entry.contacts),
         pages.length,
@@ -397,6 +398,10 @@ export async function runSiteScan(
       { taskId },
       client,
     );
+    await client.query(
+      "delete from company_facts where company_id=$1 and kind='page_text' and source='website'",
+      [companyId],
+    );
     let contacts = 0;
     let pageCount = 0;
     const foundContacts = new Set<string>();
@@ -469,6 +474,8 @@ export async function runSiteScan(
         country,
         async (page, count) => {
           await persist(page);
+          if (count <= 3 && page.text)
+            await saveFact('page_text', page.text.slice(0, 4000), page.url);
           pageCount = count;
           await client.query(
             "update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1",

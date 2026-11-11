@@ -1,3 +1,4 @@
+import { registerAnalysisTasks } from './analysis.js';
 import { registerScoringTasks } from './scoring.js';
 import { registerSiteTasks } from './site.js';
 import { registerRegistryTasks } from './registry.js';
@@ -17,6 +18,7 @@ let stopping = false;
 const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
+  await registerAnalysisTasks();
   await registerScoringTasks();
   await registerAiTasks();
   await registerGoogleTasks();

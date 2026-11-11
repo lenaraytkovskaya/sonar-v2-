@@ -35,6 +35,10 @@
     "./scoring": {
       "types": "./dist/scoring.d.ts",
       "default": "./dist/scoring.js"
+    },
+    "./analysis": {
+      "types": "./dist/analysis.d.ts",
+      "default": "./dist/analysis.js"
     }
   },
   "files": [

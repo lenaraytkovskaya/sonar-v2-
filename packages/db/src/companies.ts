@@ -2,6 +2,7 @@ import {
   companyFiltersSchema,
   type CompanyFilters,
   type ScoreBreakdown,
+  type AnalysisResult,
 } from '@sonar/core';
 import type { PoolClient } from 'pg';
 import { sonarPool } from './index.js';
@@ -68,6 +69,16 @@ export type CompanyScoreRow = {
   breakdown: ScoreBreakdown;
   computed_at: Date;
 };
+export type CompanyAnalysisRow = {
+  id: string;
+  campaign_id: string;
+  campaign_name: string;
+  version: string;
+  model: string;
+  cost_usd: string;
+  result: AnalysisResult;
+  created_at: Date;
+};
 export async function listCompanies(
   filters: CompanyFilters,
   page = 1,
@@ -114,6 +125,7 @@ export async function getCompany(id: string) {
     { rows: facts },
     { rows: scans },
     { rows: scores },
+    { rows: analyses },
   ] = await Promise.all([
     sonarPool.query(
       'select * from contacts where company_id=$1 order by rank desc,found_at desc',
@@ -139,8 +151,21 @@ export async function getCompany(id: string) {
       'select s.campaign_id,c.name as campaign_name,s.score::float8 as score,s.breakdown,s.computed_at from company_scores s join campaigns c on c.id=s.campaign_id where s.company_id=$1 order by s.score desc,s.campaign_id',
       [id],
     ),
+    sonarPool.query<CompanyAnalysisRow>(
+      'select distinct on (a.campaign_id) a.*,c.name as campaign_name from analyses a join campaigns c on c.id=a.campaign_id where a.company_id=$1 order by a.campaign_id,a.created_at desc,a.id desc',
+      [id],
+    ),
   ]);
-  return { company, contacts, campaigns, history, facts, scans, scores };
+  return {
+    company,
+    contacts,
+    campaigns,
+    history,
+    facts,
+    scans,
+    scores,
+    analyses,
+  };
 }
 
 // One snapshot keeps CSV pagination stable while discovery adds companies.
