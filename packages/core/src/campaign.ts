@@ -50,9 +50,88 @@ export const campaignSuggestionSchema = campaignSchema
   .extend({
     cities: z.array(text).min(1).max(100),
     queries: z.array(text).min(5).max(10),
+    // Older completed tasks do not contain this flag.
+    needs_about: z.boolean().default(false),
+  })
+  .refine((v) => !v.needs_about || v.offer === '', {
+    path: ['offer'],
+    message: 'An offer requires company.about',
   });
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type CampaignSuggestion = z.infer<typeof campaignSuggestionSchema>;
 export function parseCampaignSuggestion(raw: string) {
   return campaignSuggestionSchema.parse(JSON.parse(raw));
+}
+
+// Conservative, whole-word inflections: never match arbitrary city-name prefixes.
+function cityWordPattern(word: string): string {
+  const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (/^ки[їє]в$/iu.test(word))
+    return 'ки[їє]в(?:а|у|і|ом|ськ(?:ий|а|е|і|ої|ій|ого|ому|их|ими))?';
+  if (!/^[а-яіїєґ]{4,}$/iu.test(word)) return escape(word);
+  if (/(?:ий|ій)$/iu.test(word))
+    return (
+      escape(word.slice(0, -2)) + '(?:ий|ій|ого|ому|им|ім|а|ої|у|е|і|их|ими)'
+    );
+  if (/[ая]$/iu.test(word))
+    return escape(word.slice(0, -1)) + '(?:а|я|и|і|ї|у|ю|ою|ею|ої|ій)';
+  if (/[иі]$/iu.test(word))
+    return (
+      escape(word.slice(0, -1)) +
+      '(?:и|і|ів|ам|ах|ами|ськ(?:ий|а|е|і|ої|ій|ого|ому|их|ими))'
+    );
+  const stem = escape(word.replace(/ь$/u, ''));
+  return stem + '(?:ь|а|я|у|ю|і|ем|ом|ськ(?:ий|а|е|і|ої|ій|ого|ому|их|ими))?';
+}
+
+export function cleanCampaignQueries(
+  queries: string[],
+  cities: string[],
+): string[] {
+  const patterns = cities
+    .filter((city) => city.trim())
+    .map((city) => {
+      const name = city
+        .trim()
+        .split(/[\s-]+/u)
+        .map(cityWordPattern)
+        .join('[\\s-]+');
+      return new RegExp(
+        `(?<![\\p{L}\\p{N}])(?:(?:у|в|із|зі|з|по|місто|м\\.)\\s+)?${name}(?:\\s+(?:област[ьі]|регіон[уі]?))?(?![\\p{L}\\p{N}])`,
+        'giu',
+      );
+    });
+  const seen = new Set<string>();
+  return queries
+    .map((query) => {
+      const original = query;
+      for (const pattern of patterns) query = query.replace(pattern, ' ');
+      if (query !== original)
+        query = query.replace(
+          /(?:^\s*(?:і|й|та|and)(?!\p{L})|(?<!\p{L})(?:і|й|та|and)\s*$)/giu,
+          '',
+        );
+      return query
+        .replace(/^[\s,;:–—-]+|[\s,;:–—-]+$/gu, '')
+        .replace(/\s+/gu, ' ');
+    })
+    .filter((query) => {
+      const key = query.toLocaleLowerCase();
+      if (!query || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function applyCampaignSuggestion(
+  form: CampaignInput,
+  suggestion: CampaignSuggestion,
+): CampaignInput {
+  const { needs_about, ...fields } = suggestion;
+  return {
+    ...form,
+    ...fields,
+    offer: needs_about ? '' : fields.offer,
+    queries: cleanCampaignQueries(fields.queries, fields.cities),
+  };
 }
