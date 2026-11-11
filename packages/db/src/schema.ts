@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   text,
@@ -6,6 +7,8 @@ import {
   jsonb,
   integer,
   pgEnum,
+  numeric,
+  check,
 } from 'drizzle-orm/pg-core';
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -62,3 +65,41 @@ export const activityLog = pgTable('activity_log', {
     .notNull()
     .defaultNow(),
 });
+
+export const services = pgTable(
+  'services',
+  {
+    code: text('code').primaryKey(),
+    name: text('name').notNull(),
+    plan: text('plan'),
+    monthlyLimitUsd: numeric('monthly_limit_usd', { precision: 20, scale: 10 }),
+    note: text('note'),
+  },
+  (table) => [
+    check('service_limit_nonnegative', sql`${table.monthlyLimitUsd} >= 0`),
+  ],
+);
+export const spendEvents = pgTable(
+  'spend_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    serviceCode: text('service_code')
+      .notNull()
+      .references(() => services.code),
+    units: numeric('units', { precision: 20, scale: 4 }).notNull(),
+    costUsd: numeric('cost_usd', { precision: 20, scale: 10 }).notNull(),
+    taskId: uuid('task_id')
+      .unique()
+      .references(() => tasks.id),
+    meta: jsonb('meta').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      'spend_nonnegative',
+      sql`${table.costUsd} >= 0 and ${table.units} >= 0`,
+    ),
+  ],
+);

@@ -15,6 +15,10 @@
     "./tasks": {
       "types": "./dist/tasks.d.ts",
       "default": "./dist/tasks.js"
+    },
+    "./budget": {
+      "types": "./dist/budget.d.ts",
+      "default": "./dist/budget.js"
     }
   },
   "files": [
@@ -29,6 +33,7 @@
     "db:migrate": "tsx src/migrate-cli.ts"
   },
   "dependencies": {
+    "@sonar/core": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1",
     "pg-boss": "^12.38.2"

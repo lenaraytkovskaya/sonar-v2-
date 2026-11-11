@@ -1,4 +1,4 @@
-import { Placeholder } from '@/components/placeholder';
+import { SettingsPanel } from '@/components/settings-panel';
 export default function Page() {
-  return <Placeholder page="settings" />;
+  return <SettingsPanel />;
 }

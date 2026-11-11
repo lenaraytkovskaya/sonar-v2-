@@ -149,7 +149,7 @@ export async function executeTask(
 }
 export async function runTask(
   type: string,
-  handler: (payload: object) => Promise<TaskOutcome>,
+  handler: (payload: object, taskId: string) => Promise<TaskOutcome>,
 ) {
   await boss.work<
     { taskId: string },
@@ -166,11 +166,11 @@ export async function runTask(
     await executeTask(
       async () => {
         if (task.type !== type) throw new Error('Unknown task type');
-        return handler(task.payload);
+        return handler(task.payload, task.id);
       },
       async (status, result, code, reason) => {
         await sonarPool.query(
-          `update tasks set status=$2::text::task_status, result=$3, reason_code=$4, reason_uk=$5,
+          `update tasks set status=$2::text::task_status, result=coalesce($3::jsonb,result), reason_code=$4, reason_uk=$5,
     attempts=attempts+case when $2::text='running' then 1 else 0 end,
     started_at=case when $2::text='running' then now() else started_at end,
     finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
