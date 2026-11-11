@@ -9,17 +9,22 @@ import {
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
+import { ScanSummary, type ScanResult } from './shared';
 type Task = {
   id: string;
   type: string;
+  subject_id?: string;
+  company_name?: string;
   status: string;
   reason_uk: string | null;
   repetitions: number;
-  result: {
-    billingPending?: boolean;
-    approximate?: boolean;
-    counts?: Record<string, string | null>;
-  } | null;
+  result:
+    | (ScanResult & {
+        billingPending?: boolean;
+        approximate?: boolean;
+        counts?: Record<string, string | null>;
+      })
+    | null;
 };
 type Batch = {
   id: string;
@@ -106,6 +111,7 @@ export function TaskOverview() {
       'ai.assist': uk.tasks.aiAssist,
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
+      'site.scan': uk.scanner.title,
     })[type] ?? type;
   const active = [
     ...new Set(
@@ -203,10 +209,19 @@ export function TaskOverview() {
           {tasks.slice(0, 5).map((task) => (
             <li
               key={task.id}
-              className="flex flex-wrap justify-between gap-2 text-sm"
+              className="flex min-w-0 flex-wrap justify-between gap-2 break-words text-sm"
             >
               <span>
                 {name(task.type)}
+                {task.company_name && ` · ${task.company_name}`}
+                {task.reason_uk && (
+                  <span className="block text-muted-foreground">
+                    {task.reason_uk}
+                  </span>
+                )}
+                {task.type === 'site.scan' && (
+                  <ScanSummary result={task.result} />
+                )}
                 {task.type === 'system.registry_ping' &&
                   task.result?.approximate && (
                     <span className="block text-muted-foreground">

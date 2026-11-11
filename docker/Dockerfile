@@ -16,7 +16,12 @@ USER node
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]
 
-FROM node:22-slim AS worker
+FROM node:22-slim AS browser
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY --from=build /worker/node_modules/playwright/package.json /tmp/playwright.json
+RUN PLAYWRIGHT_VERSION=$(node -p "require('/tmp/playwright.json').version") && npx --yes "playwright@$PLAYWRIGHT_VERSION" install --with-deps --only-shell chromium && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/playwright.json && chmod -R a+rX /ms-playwright
+
+FROM browser AS worker
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /worker ./

@@ -8,10 +8,17 @@ import { Button } from './ui/button';
 import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
 import { ModelPicker } from './model-picker';
+import {
+  scannerFields,
+  scannerKeys,
+  validScannerSettings,
+  type ScannerSettings,
+} from '@/lib/scanner-settings';
 export function SettingsPanel() {
   const [models, setModels] = useState<TextModel[]>([]),
     [profiles, setProfiles] = useState<GoogleProfile[]>([]),
     [googleDays, setGoogleDays] = useState(365),
+    [scanner, setScanner] = useState<ScannerSettings>({}),
     [cheap, setCheap] = useState(''),
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
@@ -30,6 +37,13 @@ export function SettingsPanel() {
     setAbout(data['company.about'] ?? '');
     setProfiles(data['google.field_profiles'] ?? []);
     setGoogleDays(data['retention.google_days'] ?? 365);
+    setScanner(
+      Object.fromEntries(
+        scannerKeys
+          .filter((key) => data[key] !== undefined)
+          .map((key) => [key, data[key]]),
+      ),
+    );
   };
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
@@ -59,6 +73,7 @@ export function SettingsPanel() {
           about,
           googleProfiles: profiles,
           googleDays,
+          scanner,
         }),
       });
       if (!response.ok) throw Error(uk.ai.invalid);
@@ -161,6 +176,73 @@ export function SettingsPanel() {
               onChange={(e) => setGoogleDays(e.target.valueAsNumber)}
             />
           </label>
+        </Card>
+        <Card className="space-y-4 p-6">
+          <h2 className="font-heading text-xl font-bold">{uk.scanner.title}</h2>
+          {Object.entries(scannerFields).map(([key, range]) => (
+            <label className="block space-y-2" key={key}>
+              <span>
+                {uk.scanner.settings[key as keyof typeof uk.scanner.settings]}
+              </span>
+              <Input
+                type="number"
+                min={range.min}
+                max={range.max}
+                step={range.integer ? 1 : 0.001}
+                value={typeof scanner[key] === 'number' ? scanner[key] : ''}
+                onChange={(e) =>
+                  setScanner({ ...scanner, [key]: e.target.valueAsNumber })
+                }
+              />
+            </label>
+          ))}
+          <label className="block space-y-2">
+            <span>{uk.scanner.settings['scanner.user_agent']}</span>
+            <Input
+              value={String(scanner['scanner.user_agent'] ?? '')}
+              maxLength={500}
+              onChange={(e) =>
+                setScanner({ ...scanner, 'scanner.user_agent': e.target.value })
+              }
+            />
+          </label>
+          <label className="flex min-h-11 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={scanner['scanner.ai_fallback'] === true}
+              onChange={(e) =>
+                setScanner({
+                  ...scanner,
+                  'scanner.ai_fallback': e.target.checked,
+                })
+              }
+            />
+            {uk.scanner.settings['scanner.ai_fallback']}
+          </label>
+          <label className="block space-y-2">
+            <span>{uk.scanner.settings['scanner.ai_prompt']}</span>
+            <textarea
+              className="min-h-32 w-full rounded-lg border border-border bg-raised p-3"
+              value={String(scanner['scanner.ai_prompt'] ?? '')}
+              maxLength={20000}
+              onChange={(e) =>
+                setScanner({ ...scanner, 'scanner.ai_prompt': e.target.value })
+              }
+            />
+          </label>
+          <p className="text-sm text-muted-foreground">{uk.scanner.assist}</p>
+          <AiAssist
+            text={JSON.stringify(scanner, null, 2)}
+            onApply={(text) => {
+              try {
+                const value = JSON.parse(text);
+                if (!validScannerSettings(value)) throw Error();
+                setScanner(value);
+              } catch {
+                setMessage(uk.ai.invalid);
+              }
+            }}
+          />
         </Card>
         {message && <p role="status">{message}</p>}
         <Button disabled={pending} onClick={() => void save()}>

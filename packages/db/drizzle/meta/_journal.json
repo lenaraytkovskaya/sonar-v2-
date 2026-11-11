@@ -71,6 +71,13 @@
       "when": 1794431000000,
       "tag": "0009_campaign_suggestions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794432000000,
+      "tag": "0010_site_scanner",
+      "breakpoints": true
     }
   ]
 }

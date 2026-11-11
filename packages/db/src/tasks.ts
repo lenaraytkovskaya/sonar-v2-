@@ -94,6 +94,44 @@ export async function enqueueTask(
   };
   return existingClient ? save(existingClient) : transaction(save);
 }
+export async function enqueueSiteScan(
+  companyId: string,
+  userId: string | null,
+) {
+  return transaction(async (client) => {
+    const {
+      rows: [company],
+    } = await client.query(
+      'select website from companies where id=$1 for share',
+      [companyId],
+    );
+    if (!company?.website) return null;
+    const day = new Date().toISOString().slice(0, 10);
+    const key = `site.scan:${companyId}:${day}`;
+    const created = await enqueueTask('site.scan', key, { companyId }, client);
+    if (created) {
+      await client.query(
+        "update tasks set subject_type='company',subject_id=$2 where id=$1",
+        [created, companyId],
+      );
+      await logActivity(
+        'site.scan.queued',
+        'company',
+        companyId,
+        userId,
+        { taskId: created },
+        client,
+      );
+    }
+    const {
+      rows: [task],
+    } = await client.query(
+      'select id,status from tasks where idempotency_key=$1',
+      [key],
+    );
+    return { ...task, created: !!created };
+  });
+}
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const {
