@@ -20,9 +20,21 @@ export type TextModel = {
   completionUsd: number;
   requestUsd: number;
 };
+export function compareModelPrice(a: TextModel, b: TextModel) {
+  return (
+    a.promptUsd + a.completionUsd - b.promptUsd - b.completionUsd ||
+    a.requestUsd - b.requestUsd ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
 export class OpenRouterError extends Error {
   constructor(
-    public code: 'request_failed' | 'invalid_response' | 'usage_missing',
+    public code:
+      | 'request_failed'
+      | 'invalid_response'
+      | 'usage_missing'
+      | 'api_key_missing'
+      | 'network_unavailable',
   ) {
     super(code);
   }
@@ -45,7 +57,7 @@ export function createOpenRouterClient(
   fetcher: typeof fetch = fetch,
 ) {
   async function request(path: string, body?: object) {
-    if (!apiKey) throw new OpenRouterError('request_failed');
+    if (!apiKey) throw new OpenRouterError('api_key_missing');
     const response = await fetcher(`https://openrouter.ai/api/v1/${path}`, {
       method: body ? 'POST' : 'GET',
       headers: {
@@ -54,6 +66,8 @@ export function createOpenRouterClient(
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(30000),
+    }).catch(() => {
+      throw new OpenRouterError('network_unavailable');
     });
     if (!response.ok) throw new PaidHttpError(response.status);
     return record(await response.json());
@@ -90,11 +104,7 @@ export function createOpenRouterClient(
             return [];
           }
         })
-        .sort(
-          (a, b) =>
-            a.promptUsd + a.completionUsd - b.promptUsd - b.completionUsd ||
-            a.requestUsd - b.requestUsd,
-        );
+        .sort(compareModelPrice);
     },
     async complete(
       model: string,

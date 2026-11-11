@@ -1,6 +1,7 @@
 import {
   BudgetExceeded,
   PaidHttpError,
+  OpenRouterError,
   parseCampaignSuggestion,
   parseCompanyFilters,
   createOpenRouterClient,
@@ -136,9 +137,13 @@ export async function registerAiTasks() {
         [JSON.stringify(models)],
       );
       return { status: 'done', result: { count: models.length } };
-    } catch {
+    } catch (error) {
       throw new TaskFailure(
-        'models_unavailable',
+        error instanceof PaidHttpError
+          ? `http_${error.status}`
+          : error instanceof OpenRouterError
+            ? error.code
+            : 'models_unavailable',
         'Не вдалося завантажити моделі. Перевірте ключ OpenRouter.',
       );
     }
