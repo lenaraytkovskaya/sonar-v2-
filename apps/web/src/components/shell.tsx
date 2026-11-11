@@ -19,7 +19,7 @@ import {
   LogOut,
   ChevronDown,
 } from 'lucide-react';
-import { FailureBadge } from '@/components/task-overview';
+import { FailureBadge, TasksProvider } from '@/components/task-overview';
 import { uk } from '@/i18n/uk';
 import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
@@ -102,103 +102,105 @@ export function Shell({
     </nav>
   );
   return (
-    <div className="min-h-dvh md:grid md:grid-cols-[240px_minmax(0,1fr)]">
-      <a
-        href="#content"
-        className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface focus:p-3"
-      >
-        {uk.skip}
-      </a>
-      <aside className="sticky top-0 hidden h-dvh flex-col gap-8 border-r border-border bg-surface p-5 md:flex">
-        <Link href="/" className="px-2">
-          <Logo />
-        </Link>
-        {navigation}
-        <ThemeSelect />
-      </aside>
-      <div className="min-w-0">
-        <header className="flex min-h-20 items-center justify-between gap-3 border-b border-border bg-surface px-5 md:justify-end md:px-10">
-          <div className="flex items-center gap-3 md:hidden">
-            <Dialog.Root open={open} onOpenChange={setOpen}>
-              <Dialog.Trigger asChild>
+    <TasksProvider>
+      <div className="min-h-dvh md:grid md:grid-cols-[240px_minmax(0,1fr)]">
+        <a
+          href="#content"
+          className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface focus:p-3"
+        >
+          {uk.skip}
+        </a>
+        <aside className="sticky top-0 hidden h-dvh flex-col gap-8 border-r border-border bg-surface p-5 md:flex">
+          <Link href="/" className="px-2">
+            <Logo />
+          </Link>
+          {navigation}
+          <ThemeSelect />
+        </aside>
+        <div className="min-w-0">
+          <header className="flex min-h-20 items-center justify-between gap-3 border-b border-border bg-surface px-5 md:justify-end md:px-10">
+            <div className="flex items-center gap-3 md:hidden">
+              <Dialog.Root open={open} onOpenChange={setOpen}>
+                <Dialog.Trigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="px-2"
+                    aria-label={uk.openMenu}
+                  >
+                    <Menu />
+                  </Button>
+                </Dialog.Trigger>
+                <Dialog.Portal>
+                  <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+                  <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col gap-6 border-r border-border bg-surface p-5">
+                    <div className="flex items-center justify-between">
+                      <Dialog.Title>
+                        <Logo />
+                      </Dialog.Title>
+                      <Dialog.Close asChild>
+                        <Button
+                          variant="ghost"
+                          className="px-2"
+                          aria-label={uk.closeMenu}
+                        >
+                          <X />
+                        </Button>
+                      </Dialog.Close>
+                    </div>
+                    <Dialog.Description className="sr-only">
+                      {uk.navigation}
+                    </Dialog.Description>
+                    {navigation}
+                    <ThemeSelect />
+                  </Dialog.Content>
+                </Dialog.Portal>
+              </Dialog.Root>
+              <Logo />
+            </div>
+            <Dropdown.Root>
+              <Dropdown.Trigger asChild>
                 <Button
                   variant="ghost"
-                  className="px-2"
-                  aria-label={uk.openMenu}
+                  aria-label={uk.userMenu}
+                  className="max-w-40 md:max-w-64"
                 >
-                  <Menu />
+                  <span className="truncate">{name}</span>
+                  <ChevronDown />
                 </Button>
-              </Dialog.Trigger>
-              <Dialog.Portal>
-                <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
-                <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col gap-6 border-r border-border bg-surface p-5">
-                  <div className="flex items-center justify-between">
-                    <Dialog.Title>
-                      <Logo />
-                    </Dialog.Title>
-                    <Dialog.Close asChild>
-                      <Button
-                        variant="ghost"
-                        className="px-2"
-                        aria-label={uk.closeMenu}
-                      >
-                        <X />
-                      </Button>
-                    </Dialog.Close>
-                  </div>
-                  <Dialog.Description className="sr-only">
-                    {uk.navigation}
-                  </Dialog.Description>
-                  {navigation}
-                  <ThemeSelect />
-                </Dialog.Content>
-              </Dialog.Portal>
-            </Dialog.Root>
-            <Logo />
-          </div>
-          <Dropdown.Root>
-            <Dropdown.Trigger asChild>
-              <Button
-                variant="ghost"
-                aria-label={uk.userMenu}
-                className="max-w-40 md:max-w-64"
-              >
-                <span className="truncate">{name}</span>
-                <ChevronDown />
-              </Button>
-            </Dropdown.Trigger>
-            <Dropdown.Portal>
-              <Dropdown.Content
-                align="end"
-                sideOffset={8}
-                className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-              >
-                <form action={logout}>
-                  <Dropdown.Item
-                    asChild
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <button
-                      type="submit"
-                      className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+              </Dropdown.Trigger>
+              <Dropdown.Portal>
+                <Dropdown.Content
+                  align="end"
+                  sideOffset={8}
+                  className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
+                >
+                  <form action={logout}>
+                    <Dropdown.Item
+                      asChild
+                      onSelect={(event) => event.preventDefault()}
                     >
-                      <LogOut aria-hidden="true" className="size-4" />
-                      {uk.logout}
-                    </button>
-                  </Dropdown.Item>
-                </form>
-              </Dropdown.Content>
-            </Dropdown.Portal>
-          </Dropdown.Root>
-        </header>
-        <main
-          id="content"
-          tabIndex={-1}
-          className="mx-auto max-w-7xl p-5 py-8 md:p-10"
-        >
-          {children}
-        </main>
+                      <button
+                        type="submit"
+                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+                      >
+                        <LogOut aria-hidden="true" className="size-4" />
+                        {uk.logout}
+                      </button>
+                    </Dropdown.Item>
+                  </form>
+                </Dropdown.Content>
+              </Dropdown.Portal>
+            </Dropdown.Root>
+          </header>
+          <main
+            id="content"
+            tabIndex={-1}
+            className="mx-auto max-w-7xl p-5 py-8 md:p-10"
+          >
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </TasksProvider>
   );
 }

@@ -14,5 +14,12 @@ export async function GET(request: Request) {
   const { rows: counts } = await sonarPool.query(
     'select type,status,count(*)::int as count from tasks group by type,status',
   );
-  return Response.json({ tasks: rows, counts });
+  const { rows: failures } = await sonarPool.query(`
+    select * from (
+      select distinct on (type) id,type,status,reason_uk,created_at,
+        count(*) over (partition by type)::int as repetitions
+      from tasks where status in ('failed','paused') and dismissed_at is null
+      order by type,created_at desc,id desc
+    ) latest order by created_at desc`);
+  return Response.json({ tasks: rows, counts, failures });
 }

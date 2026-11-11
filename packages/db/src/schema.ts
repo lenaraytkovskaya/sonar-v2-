@@ -53,6 +53,7 @@ export const tasks = pgTable('tasks', {
     .defaultNow(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
 });
 export const activityLog = pgTable('activity_log', {
   id: uuid('id').primaryKey().defaultRandom(),
