@@ -6,6 +6,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: sonar
+      # Same layout as the existing server volume (data lives in the pgdata subfolder).
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres:/var/lib/postgresql/data
     # Loopback only. Reached from outside via `tailscale serve` (server) or an SSH tunnel (dev).
