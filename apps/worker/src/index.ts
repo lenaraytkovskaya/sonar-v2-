@@ -1,4 +1,5 @@
 import { sonarPool, registryPool } from '@sonar/db';
+import { readRegistryEstimates } from './registry-ping.js';
 import {
   boss,
   queueName,
@@ -14,19 +15,7 @@ const started = (async () => {
   await boss.createQueue('sonar.registry.schedule');
   await runTask('system.registry_ping', async () => {
     try {
-      const result: Record<string, string> = {};
-      for (const table of [
-        'edr_legal_entities',
-        'edr_fops',
-        'edr_founders',
-        'edr_public_organizations',
-        'edr_branches',
-      ]) {
-        const { rows } = await registryPool.query(
-          `select count(*)::text as count from ${table}`,
-        );
-        result[table] = rows[0].count;
-      }
+      const result = await readRegistryEstimates(registryPool);
       return { status: 'done', result };
     } catch {
       throw new TaskFailure(

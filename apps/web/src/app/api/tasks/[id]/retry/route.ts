@@ -1,20 +1,13 @@
 import { getSession } from '@/lib/auth';
 import { uk } from '@/i18n/uk';
+import { isAllowedRequestOrigin } from '@/lib/request-origin';
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const user = (await getSession()).user;
   if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
-  const origin = request.headers.get('origin');
-  const host = request.headers.get('host');
-  let sameOrigin = false;
-  try {
-    sameOrigin = !!origin && new URL(origin).host === host;
-  } catch {
-    /* Reject malformed origins. */
-  }
-  if (!sameOrigin)
+  if (!isAllowedRequestOrigin(request.headers, process.env.APP_URL))
     return Response.json({ error: uk.unauthorized }, { status: 403 });
   const { id } = await context.params;
   if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))

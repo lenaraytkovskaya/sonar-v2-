@@ -8,6 +8,10 @@ type Task = {
   type: string;
   status: string;
   reason_uk: string | null;
+  result: {
+    approximate?: boolean;
+    counts?: Record<string, string | null>;
+  } | null;
 };
 type Count = { type: string; status: string; count: number };
 export function useTasks() {
@@ -123,7 +127,21 @@ export function TaskOverview() {
               key={task.id}
               className="flex flex-wrap justify-between gap-2 text-sm"
             >
-              <span>{name(task.type)}</span>
+              <span>
+                {name(task.type)}
+                {task.type === 'system.registry_ping' &&
+                  task.result?.approximate && (
+                    <span className="block text-muted-foreground">
+                      {uk.tasks.approximate}:{' '}
+                      {Object.entries(task.result.counts ?? {})
+                        .map(
+                          ([table, count]) =>
+                            `${uk.tasks.registryTables[table as keyof typeof uk.tasks.registryTables] ?? table}: ${count ?? uk.tasks.estimateUnavailable}`,
+                        )
+                        .join(' / ')}
+                    </span>
+                  )}
+              </span>
               <span>
                 {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
               </span>

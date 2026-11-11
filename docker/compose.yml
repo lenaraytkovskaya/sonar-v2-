@@ -40,6 +40,7 @@ services:
     build: { context: .., dockerfile: docker/Dockerfile, target: web }
     environment:
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET (at least 32 characters)}
+      APP_URL: ${APP_URL:?Set APP_URL}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
     ports: ['127.0.0.1:58000:3000']
