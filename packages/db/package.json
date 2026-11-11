@@ -19,6 +19,10 @@
     "./budget": {
       "types": "./dist/budget.d.ts",
       "default": "./dist/budget.js"
+    },
+    "./campaigns": {
+      "types": "./dist/campaigns.d.ts",
+      "default": "./dist/campaigns.js"
     }
   },
   "files": [

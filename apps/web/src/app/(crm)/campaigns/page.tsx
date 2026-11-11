@@ -1,4 +1,4 @@
-import { Placeholder } from '@/components/placeholder';
+import { CampaignPanel } from '@/components/campaign-panel';
 export default function Page() {
-  return <Placeholder page="campaigns" />;
+  return <CampaignPanel />;
 }

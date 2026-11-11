@@ -22,9 +22,14 @@ export async function POST(request: Request) {
   if (
     !data ||
     !validId(data.requestId) ||
-    !['improve', 'shorter', 'warmer', 'translate', 'custom'].includes(
-      data.action,
-    ) ||
+    ![
+      'improve',
+      'shorter',
+      'warmer',
+      'translate',
+      'custom',
+      'campaign',
+    ].includes(data.action) ||
     typeof data.text !== 'string' ||
     !data.text.trim() ||
     data.text.length > 20000 ||
