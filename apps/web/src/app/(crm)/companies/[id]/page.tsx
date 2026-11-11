@@ -48,7 +48,7 @@ export default async function Page({
           .join(' · ')}
       />
       <SiteScan companyId={id} hasWebsite={!!c.website} />
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid items-start gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         <Card className="min-w-0 space-y-3 break-words p-5">
           <h2 className="font-heading text-xl font-bold">
             {uk.company.googleData}

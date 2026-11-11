@@ -161,7 +161,7 @@ export function CompanyList() {
             </Button>
           </div>
         )}
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-3 2xl:grid-cols-6">
           <label>
             {uk.company.search}
             <Input

@@ -87,7 +87,7 @@ export function SettingsPanel() {
   return (
     <>
       <PageHeader {...uk.pages.settings} />
-      <div className="space-y-6">
+      <div className="grid items-start gap-6 xl:grid-cols-2">
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-xl font-bold">{uk.ai.title}</h2>
           <p className="text-sm text-muted-foreground">{uk.ai.price}</p>
@@ -244,10 +244,12 @@ export function SettingsPanel() {
             }}
           />
         </Card>
-        {message && <p role="status">{message}</p>}
-        <Button disabled={pending} onClick={() => void save()}>
-          {uk.ai.save}
-        </Button>
+        <div className="sticky bottom-0 flex flex-wrap items-center gap-4 border-t border-border bg-background py-4 xl:col-span-2">
+          <Button disabled={pending} onClick={() => void save()}>
+            {uk.ai.save}
+          </Button>
+          {message && <p role="status">{message}</p>}
+        </div>
       </div>
     </>
   );

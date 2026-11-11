@@ -213,7 +213,7 @@ export function CampaignPanel() {
   return (
     <>
       <PageHeader {...uk.pages.campaigns} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <Card className="min-w-0 space-y-3 p-4">
           <Button
             onClick={() => {
@@ -247,7 +247,7 @@ export function CampaignPanel() {
             </button>
           ))}
         </Card>
-        <Card className="min-w-0 space-y-5 p-5">
+        <Card className="min-w-0 space-y-5 p-5 xl:columns-2 xl:gap-10 [&>*]:break-inside-avoid">
           <label className="block">
             {uk.campaign.presets}
             <select
