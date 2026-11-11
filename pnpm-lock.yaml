@@ -47,6 +47,9 @@ importers:
       '@radix-ui/react-slot':
         specifier: ^1.5.0
         version: 1.5.0(@types/react@19.3.0)(react@19.1.10)
+      '@sonar/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@sonar/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -96,6 +99,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@sonar/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@sonar/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -108,6 +114,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@sonar/core':
+        specifier: workspace:*
+        version: link:../core
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@opentelemetry/api@1.10.0)(@types/pg@8.23.1)(pg@8.23.1)
