@@ -43,14 +43,18 @@ WAHA використовує закріплений AMD64-образ (емул�
 ніколи не запускайте два PostgreSQL на одному томі. База `sonar` має існувати, а користувач
 `REGISTRY_DATABASE_URL` — мати лише SELECT у `registry`. Ініціалізація dev на сервері заборонена.
 
+Розгортання — тільки через git. На сервері код лежить у `/opt/sonar-v2` і ніколи не редагується вручну.
+systemd-таймер `sonar-deploy` щохвилини запускає `scripts/deploy.sh`: якщо `origin/main` змінився —
+`git merge --ff-only`, `docker compose up --build -d`, перевірка `/api/health`. Журнал: `/var/log/sonar-deploy.log`.
+
+Одноразове встановлення таймера:
+
 ```sh
-cp .env.example .env # заповніть чинні реквізити БД та WAHA_API_KEY
-export COMPOSE_ENV_FILES=.env
-docker compose -f docker/compose.yml config --quiet
-docker compose -f docker/compose.yml up --build -d
-curl --fail http://127.0.0.1:58000/api/health
+systemctl link /opt/sonar-v2/deploy/sonar-deploy.service
+systemctl enable --now /opt/sonar-v2/deploy/sonar-deploy.timer
 ```
 
-Основний Compose використовує виключно зовнішній том `sonar-server_postgres`;
-Postgres та WAHA не публікують портів. Не видаляйте серверні томи.
-Ці команди документовані; розгортання сервера не входить до задачі 1.1.
+Основний Compose використовує виключно зовнішній том `sonar-server_postgres`. Не видаляйте серверні томи.
+Postgres доступний лише на `127.0.0.1:55432`; ззовні — тільки через Tailscale
+(`tailscale serve --bg --tcp 55432 tcp://127.0.0.1:55432`) під роллю лише для читання `viewer`.
+WAHA не публікує портів.
