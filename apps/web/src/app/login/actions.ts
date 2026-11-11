@@ -1,6 +1,8 @@
 'use server';
 import { randomBytes } from 'node:crypto';
 import { hash, verify } from 'argon2';
+import { headers } from 'next/headers';
+import { loginLimiter, loginClientIp } from '@/lib/login-limiter';
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { safeReturnTo } from '@/lib/session';
@@ -14,9 +16,15 @@ export async function login(
     .trim()
     .toLowerCase();
   const password = String(form.get('password') ?? '');
-  if (!email || email.length > 254 || !password || password.length > 1024)
-    return uk.login.invalid;
+  const finish = loginLimiter.begin(
+    email.slice(0, 254),
+    loginClientIp(await headers()),
+  );
+  if (!finish) return uk.login.limited;
+  let success = false;
   try {
+    if (!email || email.length > 254 || !password || password.length > 1024)
+      return uk.login.invalid;
     const { sonarPool } = await import('@sonar/db');
     const { rows } = await sonarPool.query<{
       id: string;
@@ -38,8 +46,11 @@ export async function login(
     const { logActivity } = await import('@sonar/db/tasks');
     await logActivity('user.login', 'user', user.id, user.id);
     await session.save();
+    success = true;
   } catch {
     return uk.login.unavailable;
+  } finally {
+    finish(success);
   }
   redirect(safeReturnTo(form.get('next')));
 }
