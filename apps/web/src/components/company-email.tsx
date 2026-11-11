@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import type { getCompanyMessaging } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
 import { Card } from './shared';
@@ -31,6 +32,7 @@ export function CompanyEmail({
       ?.id ??
     initial.campaignId ??
     '';
+  const [channel, setChannel] = useState<'email' | 'form'>('email');
   const [campaignId, setCampaignId] = useState(firstCampaign),
     [accountId, setAccountId] = useState(
       initial.accounts.find((account) => account.enabled)?.id ?? '',
@@ -94,7 +96,7 @@ export function CompanyEmail({
     }
   };
   const send = () => {
-    const fields = { campaignId, accountId, toAddress, subject, body };
+    const fields = { campaignId, accountId, toAddress, subject, body, channel };
     const fingerprint = JSON.stringify(fields);
     if (draftKey.current.fingerprint !== fingerprint)
       draftKey.current = { fingerprint, key: crypto.randomUUID() };
@@ -103,19 +105,28 @@ export function CompanyEmail({
   const approval =
     data.campaigns.find((campaign) => campaign.id === campaignId)?.sendMode ===
     'approval';
+  const accounts = channel === 'form' ? data.formAccounts : data.accounts;
+  const recipients = channel === 'form' ? data.formUrls : data.emails;
   const ready =
-    data.emails.length > 0 &&
-    data.accounts.some((account) => account.enabled) &&
+    recipients.length > 0 &&
+    accounts.some((account) => account.enabled) &&
     data.campaigns.length > 0;
+  const canWrite =
+    data.campaigns.length > 0 &&
+    ((data.emails.length > 0 &&
+      data.accounts.some((account) => account.enabled)) ||
+      (data.formUrls.length > 0 &&
+        data.formAccounts.some((account) => account.enabled)));
+  const sender = data.formAccounts.find((account) => account.id === accountId);
   const selectClass =
     'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
   return (
     <Card className="min-w-0 space-y-4 p-5 lg:col-span-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-heading text-xl font-bold">{uk.email.title}</h2>
+        <h2 className="font-heading text-xl font-bold">{uk.forms.messaging}</h2>
         <div className="flex flex-wrap gap-3">
           <Button
-            disabled={data.blocked || pending || !ready}
+            disabled={data.blocked || pending || !canWrite}
             onClick={() => setOpen(!open)}
           >
             {uk.email.write}
@@ -132,7 +143,11 @@ export function CompanyEmail({
       {data.blocked ? (
         <p role="status">{uk.email.blocked}</p>
       ) : (
-        !ready && <p>{uk.email.noSetup}</p>
+        !canWrite && (
+          <p>
+            {uk.email.noSetup} {uk.forms.noSetup}
+          </p>
+        )
       )}
       {open && !data.blocked && (
         <form
@@ -142,6 +157,31 @@ export function CompanyEmail({
             send();
           }}
         >
+          <label className="block space-y-2">
+            {uk.forms.channel}
+            <select
+              className={selectClass}
+              value={channel}
+              onChange={(event) => {
+                const next = event.target.value as 'email' | 'form';
+                setChannel(next);
+                setAccountId(
+                  (next === 'form' ? data.formAccounts : data.accounts).find(
+                    (account) => account.enabled,
+                  )?.id ?? '',
+                );
+                setToAddress(
+                  (next === 'form' ? data.formUrls : data.emails)[0] ?? '',
+                );
+              }}
+            >
+              <option value="email">{uk.email.title}</option>
+              <option value="form">{uk.forms.title}</option>
+            </select>
+          </label>
+          {!ready && (
+            <p>{channel === 'form' ? uk.forms.noSetup : uk.email.noSetup}</p>
+          )}
           <div className="grid gap-4 md:grid-cols-3">
             <label className="space-y-2">
               {uk.company.campaign}
@@ -169,7 +209,7 @@ export function CompanyEmail({
                 value={accountId}
                 onChange={(event) => setAccountId(event.target.value)}
               >
-                {data.accounts
+                {accounts
                   .filter((account) => account.enabled)
                   .map((account) => (
                     <option key={account.id} value={account.id}>
@@ -186,7 +226,7 @@ export function CompanyEmail({
                 value={toAddress}
                 onChange={(event) => setToAddress(event.target.value)}
               >
-                {data.emails.map((email) => (
+                {recipients.map((email) => (
                   <option key={email} value={email}>
                     {email}
                   </option>
@@ -194,17 +234,19 @@ export function CompanyEmail({
               </select>
             </label>
           </div>
-          <div>
-            <label htmlFor="email-subject">{uk.email.subject}</label>
-            <Input
-              id="email-subject"
-              required
-              maxLength={998}
-              value={subject}
-              onChange={(event) => setSubject(event.target.value)}
-            />
-            <AiAssist text={subject} onApply={setSubject} />
-          </div>
+          {channel === 'email' && (
+            <div>
+              <label htmlFor="email-subject">{uk.email.subject}</label>
+              <Input
+                id="email-subject"
+                required
+                maxLength={998}
+                value={subject}
+                onChange={(event) => setSubject(event.target.value)}
+              />
+              <AiAssist text={subject} onApply={setSubject} />
+            </div>
+          )}
           <div>
             <label htmlFor="email-body">{uk.email.body}</label>
             <textarea
@@ -218,8 +260,27 @@ export function CompanyEmail({
             />
             <AiAssist text={body} onApply={setBody} />
           </div>
+          {channel === 'form' && sender && (
+            <section className="space-y-2 rounded-lg border border-border bg-raised p-4">
+              <h3 className="font-semibold">{uk.forms.preview}</h3>
+              <p>
+                {uk.forms.senderName}: {sender.senderName}
+              </p>
+              <p>
+                {uk.email.address}: {sender.fromAddress}
+              </p>
+              <p>
+                {uk.forms.senderPhone}: {sender.senderPhone}
+              </p>
+              <p className="whitespace-pre-wrap break-words">{body}</p>
+            </section>
+          )}
           <p className="text-sm text-muted-foreground">
-            {approval ? uk.email.approvalHint : uk.email.sendHint}
+            {approval
+              ? uk.email.approvalHint
+              : channel === 'form'
+                ? uk.forms.sendHint
+                : uk.email.sendHint}
           </p>
           <Button type="submit" disabled={pending || !ready}>
             {pending
@@ -239,7 +300,8 @@ export function CompanyEmail({
           className="space-y-2 border-t border-border pt-4"
         >
           <p className="break-words font-medium">
-            {message.subject} · {message.toAddress}
+            {message.channel === 'form' ? uk.forms.title : message.subject} ·{' '}
+            {message.toAddress}
           </p>
           <p className="text-sm text-muted-foreground">
             {uk.email.statuses[message.status]} ·{' '}
@@ -254,6 +316,34 @@ export function CompanyEmail({
             </p>
           )}
           <p className="whitespace-pre-wrap break-words">{message.body}</p>
+          {message.channel === 'form' && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['before', 'after'] as const).map(
+                (phase) =>
+                  message[
+                    phase === 'before' ? 'screenshotBefore' : 'screenshotAfter'
+                  ] && (
+                    <a
+                      key={phase}
+                      className="min-w-0 space-y-2 rounded-lg border border-border p-3 text-accent"
+                      href={`/api/form-messages/${message.id}/screenshots/${phase}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <span className="block">{uk.forms[phase]}</span>
+                      <Image
+                        src={`/api/form-messages/${message.id}/screenshots/${phase}`}
+                        alt={uk.forms[phase]}
+                        width={1280}
+                        height={960}
+                        unoptimized
+                        className="max-h-64 w-full rounded object-contain object-left"
+                      />
+                    </a>
+                  ),
+              )}
+            </div>
+          )}
           {message.reasonUk && <p className="text-err">{message.reasonUk}</p>}
           {message.status === 'draft' && (
             <Button

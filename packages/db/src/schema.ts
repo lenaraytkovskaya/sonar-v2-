@@ -12,7 +12,9 @@ import {
   boolean,
   unique,
   uniqueIndex,
+  customType,
 } from 'drizzle-orm/pg-core';
+const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: text('email').notNull().unique(),
@@ -76,11 +78,13 @@ export const services = pgTable(
     code: text('code').primaryKey(),
     name: text('name').notNull(),
     plan: text('plan'),
+    unitPriceUsd: numeric('unit_price_usd', { precision: 20, scale: 10 }),
     monthlyLimitUsd: numeric('monthly_limit_usd', { precision: 20, scale: 10 }),
     note: text('note'),
   },
   (table) => [
     check('service_limit_nonnegative', sql`${table.monthlyLimitUsd} >= 0`),
+    check('service_price_nonnegative', sql`${table.unitPriceUsd} >= 0`),
   ],
 );
 export const spendEvents = pgTable(
@@ -449,6 +453,8 @@ export const messages = pgTable(
     body: text('body').notNull(),
     status: text('status').notNull().default('draft'),
     idempotencyKey: text('idempotency_key').notNull().unique(),
+    screenshotBefore: bytea('screenshot_before'),
+    screenshotAfter: bytea('screenshot_after'),
     requestSnapshot: jsonb('request_snapshot'),
     firstAttemptAt: timestamp('first_attempt_at', { withTimezone: true }),
     quotaDay: text('quota_day'),
@@ -470,7 +476,7 @@ export const messages = pgTable(
     ),
     check(
       'message_status',
-      sql`${t.status} in ('draft','awaiting_approval','queued','sent','delivered','read','failed')`,
+      sql`${t.status} in ('draft','awaiting_approval','awaiting_manual','queued','sent','delivered','read','failed')`,
     ),
   ],
 );

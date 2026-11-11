@@ -23,7 +23,29 @@ export type SiteResponse = {
   body: Uint8Array;
   contentType: string;
   location?: string;
+  headers?: Record<string, string | string[]>;
 };
+export type SiteRequest = {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: Buffer;
+};
+export function siteRequestHeaders(
+  settings: SiteSettings,
+  headers: Record<string, string> = {},
+) {
+  return {
+    accept: 'text/html,application/xml,text/plain,*/*;q=0.1',
+    ...Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name.toLowerCase(),
+        value,
+      ]),
+    ),
+    'user-agent': settings.userAgent,
+    'accept-encoding': 'identity',
+  };
+}
 export function publicAddress(address: string): boolean {
   const ip = address.toLowerCase().replace(/^\[|\]$/g, '');
   if (isIP(ip) === 4) {
@@ -51,6 +73,7 @@ export function publicAddress(address: string): boolean {
 export async function requestSite(
   url: URL,
   settings: SiteSettings,
+  init: SiteRequest = {},
 ): Promise<SiteResponse> {
   const host = url.hostname.replace(/^\[|\]$/g, '');
   let dnsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -85,11 +108,8 @@ export async function requestSite(
     const req = transport(
       url,
       {
-        headers: {
-          'User-Agent': settings.userAgent,
-          Accept: 'text/html,application/xml,text/plain,*/*;q=0.1',
-          'Accept-Encoding': 'identity',
-        },
+        method: init.method ?? 'GET',
+        headers: siteRequestHeaders(settings, init.headers),
         lookup: (_hostname, options, callback) => {
           const address = addresses[0]!;
           if (options.all) callback(null, addresses);
@@ -135,6 +155,12 @@ export async function requestSite(
             body: Buffer.concat(chunks),
             contentType: String(res.headers['content-type'] ?? ''),
             location: res.headers.location,
+            headers: Object.fromEntries(
+              Object.entries(res.headers).filter(
+                (entry): entry is [string, string | string[]] =>
+                  entry[1] !== undefined,
+              ),
+            ),
           }),
         );
       },
@@ -151,7 +177,7 @@ export async function requestSite(
     );
     req.on('error', reject);
     req.on('close', () => clearTimeout(timer));
-    req.end();
+    req.end(init.body);
   });
 }
 export class SiteHttp {
@@ -184,6 +210,37 @@ export class SiteHttp {
       );
     url.hash = '';
     return url;
+  }
+  async assertAllowed(value: string): Promise<URL> {
+    const url = this.validate(value);
+    if (
+      !robotsAllows(
+        await this.rules(url.origin),
+        url.href,
+        this.settings.userAgent,
+      )
+    )
+      throw new SiteUnavailable(
+        'robots_denied',
+        'Сайт забороняє сканування (robots.txt)',
+      );
+    return url;
+  }
+  // Browser redirects are checked separately by the route for each destination.
+  async exchange(value: string, init: SiteRequest = {}): Promise<SiteResponse> {
+    const url = await this.assertAllowed(value);
+    if (!['GET', 'POST'].includes(init.method ?? 'GET'))
+      throw new SiteUnavailable(
+        'unsafe_method',
+        'Сайт використовує непідтримуваний метод форми.',
+      );
+    return this.request(url, this.settings, init).catch((error) => {
+      if (error instanceof SiteUnavailable) throw error;
+      throw new SiteUnavailable(
+        'network_unavailable',
+        'Сайт недоступний: не вдалося встановити з’єднання.',
+      );
+    });
   }
   async read(value: string, checkRobots = true): Promise<SiteResponse> {
     let url = this.validate(value);

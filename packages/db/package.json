@@ -43,6 +43,10 @@
     "./email": {
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"
+    },
+    "./forms": {
+      "types": "./dist/forms.d.ts",
+      "default": "./dist/forms.js"
     }
   },
   "files": [
