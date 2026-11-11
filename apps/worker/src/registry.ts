@@ -8,7 +8,13 @@ import {
   type RegistryEntityType,
 } from '@sonar/core';
 import { sonarPool, registryPool } from '@sonar/db';
-import { boss, runTask, logActivity, type TaskOutcome } from '@sonar/db/tasks';
+import {
+  boss,
+  runTask,
+  logActivity,
+  finishEnrichment,
+  type TaskOutcome,
+} from '@sonar/db/tasks';
 type Query = Pick<typeof registryPool, 'query'>;
 
 // Read-only, indexed lookups only: edrpou btree indexes and (entity_type, entity_id) unique keys.
@@ -181,7 +187,12 @@ export async function runRegistryMatch(
 }
 export async function registerRegistryTasks() {
   await boss.createQueue('registry.match');
-  await runTask('registry.match', (payload, id) =>
-    runRegistryMatch(payload as { companyId: string }, id),
-  );
+  await runTask('registry.match', async (payload, id) => {
+    const { companyId } = payload as { companyId: string };
+    try {
+      return await runRegistryMatch({ companyId }, id);
+    } finally {
+      await finishEnrichment(companyId);
+    }
+  });
 }

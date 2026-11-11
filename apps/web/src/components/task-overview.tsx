@@ -37,6 +37,9 @@ type Batch = {
   reason_uk: string | null;
   fixture: boolean;
   campaign_name: string;
+  companies: number;
+  enriching: number;
+  enriched: number;
 };
 type Count = { type: string; status: string; count: number };
 function useTaskPolling() {
@@ -170,6 +173,21 @@ export function TaskOverview() {
             {batch.fixture ? uk.google.fixture : uk.google.estimated}
           </p>
           {batch.reason_uk && <p>{batch.reason_uk}</p>}
+          {batch.companies > 0 && (
+            <>
+              <p>
+                {uk.enrich.progress}: {batch.enriched} / {batch.companies}
+                {batch.enriching > 0 &&
+                  ` · ${uk.enrich.running}: ${batch.enriching}`}
+              </p>
+              <progress
+                className="w-full"
+                aria-label={uk.enrich.progress}
+                value={batch.enriched}
+                max={batch.companies}
+              />
+            </>
+          )}
         </Card>
       ))}
       <Card className="mb-6 p-6">

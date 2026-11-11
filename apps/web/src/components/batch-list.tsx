@@ -1,7 +1,44 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useTasks } from './task-overview';
+import { Button } from './ui/button';
 import { uk } from '@/i18n/uk';
+function EnrichButton({ batchId }: { batchId: string }) {
+  const [state, setState] = useState<'idle' | 'pending' | 'done' | 'error'>(
+    'idle',
+  );
+  const [count, setCount] = useState(0);
+  const run = async () => {
+    setState('pending');
+    try {
+      const response = await fetch(`/api/batches/${batchId}/enrich`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw Error();
+      setCount((await response.json()).companies);
+      setState('done');
+    } catch {
+      setState('error');
+    }
+  };
+  return (
+    <div className="space-y-1">
+      <Button disabled={state === 'pending'} onClick={() => void run()}>
+        {uk.enrich.batch}
+      </Button>
+      {state === 'done' && (
+        <p className="text-sm text-muted-foreground">
+          {uk.enrich.queued}: {count}
+        </p>
+      )}
+      {state === 'error' && (
+        <p role="alert" className="text-sm text-err">
+          {uk.tasks.error}
+        </p>
+      )}
+    </div>
+  );
+}
 type Batch = {
   id: string;
   number: number;
@@ -53,6 +90,7 @@ export function BatchList({ campaignId }: { campaignId: string }) {
                 uk.company.known,
                 uk.company.requests,
                 uk.company.cost,
+                uk.enrich.progress,
               ].map((label) => (
                 <th className="p-2" key={label}>
                   {label}
@@ -74,6 +112,9 @@ export function BatchList({ campaignId }: { campaignId: string }) {
                 <td className="p-2">{b.found_known}</td>
                 <td className="p-2">{b.requests}</td>
                 <td className="p-2">{Number(b.cost_usd).toFixed(3)}</td>
+                <td className="p-2">
+                  {b.status === 'done' && <EnrichButton batchId={b.id} />}
+                </td>
               </tr>
             ))}
           </tbody>

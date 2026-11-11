@@ -325,3 +325,47 @@ export async function dismissTask(id: string, userId: string) {
     return rows.length > 0;
   });
 }
+
+// Enrichment chain: site.scan -> registry.match -> company ready.
+// Each stage is its own task; a failed stage never blocks the next one.
+export async function enqueueEnrichment(
+  companyId: string,
+  userId: string | null,
+) {
+  await sonarPool.query(
+    "update companies set status='enriching',updated_at=now() where id=$1 and status in ('new','ready','enriching')",
+    [companyId],
+  );
+  const scan = await enqueueSiteScan(companyId, userId);
+  if (!scan) return continueEnrichment(companyId);
+  // A scan finished earlier today will not run again; move straight on.
+  if (!scan.created && !['queued', 'running'].includes(scan.status))
+    return continueEnrichment(companyId);
+  return scan;
+}
+export async function continueEnrichment(companyId: string) {
+  const match = await enqueueRegistryMatch(companyId, null);
+  if (!match.created && !['queued', 'running'].includes(match.status))
+    await finishEnrichment(companyId);
+  return match;
+}
+export async function finishEnrichment(companyId: string) {
+  await sonarPool.query(
+    "update companies set status='ready',updated_at=now() where id=$1 and status='enriching'",
+    [companyId],
+  );
+}
+export async function enqueueBatchEnrichment(
+  batchId: string,
+  userId: string | null,
+) {
+  const { rows } = await sonarPool.query(
+    "select cc.company_id from campaign_companies cc join companies c on c.id=cc.company_id where cc.batch_id=$1 and c.status in ('new','ready','enriching') order by cc.added_at",
+    [batchId],
+  );
+  for (const row of rows) await enqueueEnrichment(row.company_id, userId);
+  await logActivity('batch.enrich', 'batch', batchId, userId, {
+    companies: rows.length,
+  });
+  return rows.length;
+}

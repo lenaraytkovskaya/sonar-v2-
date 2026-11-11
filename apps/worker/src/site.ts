@@ -20,6 +20,7 @@ import {
   runTask,
   logActivity,
   TaskFailure,
+  continueEnrichment,
   type TaskOutcome,
 } from '@sonar/db/tasks';
 import { SiteHttp, SiteUnavailable } from './site-http.js';
@@ -589,7 +590,21 @@ export async function runSiteScan(
 }
 export async function registerSiteTasks() {
   await boss.createQueue('site.scan');
-  await runTask('site.scan', (payload, id) =>
-    runSiteScan(payload as { companyId: string }, id),
-  );
+  await runTask('site.scan', async (payload, id) => {
+    const { companyId } = payload as { companyId: string };
+    try {
+      return await runSiteScan({ companyId }, id);
+    } finally {
+      // The registry step uses codes found on the site, so it always follows the scan.
+      await continueEnrichment(companyId).catch((error) =>
+        console.warn(
+          JSON.stringify({
+            companyId,
+            chain: 'registry',
+            error: String(error),
+          }),
+        ),
+      );
+    }
+  });
 }
