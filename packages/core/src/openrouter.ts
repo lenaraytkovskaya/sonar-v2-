@@ -5,6 +5,7 @@ export type PaidResponse = {
   text: string;
   costUsd: number;
   units: number;
+  costBasis?: 'provider_reported' | 'estimated_tariff';
 };
 export type TextModel = {
   id: string;

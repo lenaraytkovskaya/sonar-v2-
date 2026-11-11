@@ -20,14 +20,28 @@ type Task = {
     counts?: Record<string, string | null>;
   } | null;
 };
+type Batch = {
+  id: string;
+  size: number;
+  status: string;
+  found_new: number;
+  found_known: number;
+  requests: number;
+  cost_usd: string;
+  reason_uk: string | null;
+  fixture: boolean;
+  campaign_name: string;
+};
 type Count = { type: string; status: string; count: number };
 function useTaskPolling() {
   const [data, setData] = useState<{
+    batches: Batch[];
     tasks: Task[];
     failures: Task[];
     counts: Count[];
   }>({
     tasks: [],
+    batches: [],
     failures: [],
     counts: [],
   });
@@ -80,7 +94,7 @@ export function FailureBadge() {
   ) : null;
 }
 export function TaskOverview() {
-  const { tasks, failures, counts, error } = useTasks();
+  const { tasks, failures, counts, error, batches } = useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const name = (type: string) =>
@@ -88,6 +102,8 @@ export function TaskOverview() {
       'system.registry_ping': uk.tasks.registry,
       'ai.models': uk.tasks.aiModels,
       'ai.assist': uk.tasks.aiAssist,
+      'google.batch': uk.google.title,
+      'google.request': uk.google.title,
     })[type] ?? type;
   const active = [
     ...new Set(
@@ -116,6 +132,29 @@ export function TaskOverview() {
           {uk.tasks.error}
         </p>
       )}
+      {batches.map((batch) => (
+        <Card key={batch.id} className="mb-4 space-y-2 p-5">
+          <h2 className="font-heading text-lg font-bold">
+            {uk.google.title}: {batch.found_new + batch.found_known} /{' '}
+            {batch.size}
+          </h2>
+          <p>
+            {batch.campaign_name} ·{' '}
+            {uk.tasks.status[batch.status as keyof typeof uk.tasks.status]} · $
+            {Number(batch.cost_usd).toFixed(3)}
+          </p>
+          <progress
+            className="w-full"
+            aria-label={uk.google.title}
+            value={batch.found_new + batch.found_known}
+            max={batch.size}
+          />
+          <p className="text-sm text-muted-foreground">
+            {batch.fixture ? uk.google.fixture : uk.google.estimated}
+          </p>
+          {batch.reason_uk && <p>{batch.reason_uk}</p>}
+        </Card>
+      ))}
       <Card className="mb-6 p-6">
         <h2 className="mb-4 font-heading text-xl font-bold">
           {uk.tasks.active}

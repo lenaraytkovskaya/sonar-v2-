@@ -81,20 +81,22 @@ export async function enqueueTask(
   type: string,
   key: string,
   payload: object = {},
+  existingClient?: PoolClient,
 ) {
-  return transaction(async (client) => {
+  const save = async (client: PoolClient) => {
     const { rows } = await client.query(
       'insert into tasks(type,idempotency_key,payload) values($1,$2,$3) on conflict(idempotency_key) do nothing returning id',
       [type, key, payload],
     );
     if (rows[0]) await dispatch(client, rows[0].id, type);
     return rows[0]?.id ?? null;
-  });
+  };
+  return existingClient ? save(existingClient) : transaction(save);
 }
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const { rows } = await client.query(
-      "update tasks set status='queued', reason_code=null, reason_uk=null, finished_at=null where id=$1 and status in ('failed','paused','skipped') returning type",
+      "update tasks set status='queued', reason_code=null, reason_uk=null, finished_at=null where id=$1 and type<>'google.request' and status in ('failed','paused','skipped') returning type",
       [id],
     );
     if (!rows[0]) return false;

@@ -80,6 +80,51 @@ it.skipIf(!enabled)(
       });
       await runAiAssist({ action: 'shorter', text: 'Текст' }, task, client);
       expect(client.complete).toHaveBeenCalledTimes(1);
+      client.complete.mockResolvedValueOnce({
+        id: 'campaign-stub',
+        model: 'test/model',
+        text: JSON.stringify({
+          name: 'Авто',
+          country_code: 'UA',
+          language_code: 'uk',
+          cities: ['Київ'],
+          queries: [
+            'СТО',
+            'автосервіс',
+            'ремонт авто',
+            'діагностика',
+            'шиномонтаж',
+          ],
+          offer: 'Послуги',
+        }),
+        costUsd: 0.001,
+        units: 40,
+      });
+      expect(
+        await runAiAssist(
+          { action: 'campaign', text: 'автосервіси Києва' },
+          await id(),
+          client,
+        ),
+      ).toMatchObject({
+        status: 'done',
+        result: { suggestion: { country_code: 'UA' } },
+      });
+      client.complete.mockResolvedValueOnce({
+        id: 'invalid-stub',
+        model: 'test/model',
+        text: '{"broken":true}',
+        costUsd: 0.001,
+        units: 40,
+      });
+      await expect(
+        runAiAssist(
+          { action: 'campaign', text: 'автосервіси Києва' },
+          await id(),
+          client,
+        ),
+      ).rejects.toMatchObject({ code: 'ai_schema_invalid' });
+
       expect(
         Number(
           (

@@ -1,5 +1,10 @@
 import type { PoolClient } from 'pg';
-import { checkBudget, moneyUnits, type PaidResponse } from '@sonar/core';
+import {
+  BudgetExceeded,
+  checkBudget,
+  moneyUnits,
+  type PaidResponse,
+} from '@sonar/core';
 import { sonarPool } from './index.js';
 export class BillingUncertain extends Error {
   constructor() {
@@ -77,6 +82,30 @@ export async function runBudgetedRequest(
     if (!task) throw new Error('Unknown task');
     if (task.result?.billingPending) throw new BillingUncertain();
     checkBudget(await usage(client, service), estimateUsd);
+    if (service === 'google_places') {
+      const {
+        rows: [campaign],
+      } = await client.query(
+        `select c.id,c.budget_usd from tasks t join batches b on b.id=t.batch_id join campaigns c on c.id=b.campaign_id where t.id=$1`,
+        [taskId],
+      );
+      if (!campaign) throw Error('Google request requires campaign batch');
+      const {
+        rows: [spent],
+      } = await client.query(
+        `select coalesce(sum(cost),0) as cost from (
+        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id join batches b on b.id=t.batch_id where b.campaign_id=$1
+        union all select (t.result->>'billingEstimate')::numeric from tasks t join batches b on b.id=t.batch_id where b.campaign_id=$1 and t.result->>'billingPending'='true'
+      ) usage`,
+        [campaign.id],
+      );
+      if (
+        moneyUnits(Number(campaign.budget_usd)) === 0n ||
+        moneyUnits(Number(spent.cost)) + moneyUnits(estimateUsd) >
+          moneyUnits(Number(campaign.budget_usd))
+      )
+        throw new BudgetExceeded('campaign');
+    }
     await client.query(
       `update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1`,
       [

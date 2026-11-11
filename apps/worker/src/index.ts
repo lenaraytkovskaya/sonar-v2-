@@ -1,3 +1,4 @@
+import { registerGoogleTasks } from './google.js';
 import { registerAiTasks } from './ai.js';
 import { sonarPool, registryPool } from '@sonar/db';
 import { readRegistryEstimates } from './registry-ping.js';
@@ -14,6 +15,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerAiTasks();
+  await registerGoogleTasks();
   await boss.createQueue('sonar.registry.schedule');
   await runTask('system.registry_ping', async () => {
     try {

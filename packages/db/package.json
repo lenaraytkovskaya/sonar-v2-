@@ -23,6 +23,10 @@
     "./campaigns": {
       "types": "./dist/campaigns.d.ts",
       "default": "./dist/campaigns.js"
+    },
+    "./batches": {
+      "types": "./dist/batches.d.ts",
+      "default": "./dist/batches.js"
     }
   },
   "files": [

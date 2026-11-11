@@ -36,6 +36,13 @@
       "when": 1794420269485,
       "tag": "0004_nosy_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794420336176,
+      "tag": "0005_loose_storm",
+      "breakpoints": true
     }
   ]
 }
