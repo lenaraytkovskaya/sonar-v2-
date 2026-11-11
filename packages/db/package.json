@@ -11,6 +11,10 @@
     "./migrate": {
       "types": "./dist/migrate.d.ts",
       "default": "./dist/migrate.js"
+    },
+    "./tasks": {
+      "types": "./dist/tasks.d.ts",
+      "default": "./dist/tasks.js"
     }
   },
   "files": [
@@ -26,7 +30,8 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "pg-boss": "^12.38.2"
   },
   "devDependencies": {
     "@types/pg": "^8.15.6",

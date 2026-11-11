@@ -1,0 +1,183 @@
+import { PgBoss, type Db } from 'pg-boss';
+import type { PoolClient } from 'pg';
+import { sonarPool } from './index.js';
+export const queueName = 'system.registry_ping';
+// Producers use an existing schema; only the worker starts pg-boss maintenance.
+export const boss = new PgBoss({
+  connectionString: process.env.DATABASE_URL,
+  migrate: false,
+});
+boss.on('error', (error) => console.error('queue error', error.message));
+const producer = new PgBoss({
+  connectionString: process.env.DATABASE_URL,
+  migrate: false,
+  supervise: false,
+  schedule: false,
+});
+producer.on('error', (error) =>
+  console.error('queue producer error', error.message),
+);
+let producerStarted: Promise<unknown> | undefined;
+export async function closeTaskQueue() {
+  await Promise.all([
+    boss.stop({ graceful: true, timeout: 20000 }),
+    producer.stop({ graceful: true, timeout: 20000 }),
+  ]);
+}
+
+const dbFor = (client: PoolClient): Db => ({
+  executeSql: (sql, values) => client.query(sql, values),
+});
+export async function logActivity(
+  action: string,
+  entityType: string,
+  entityId: string | null,
+  userId: string | null = null,
+  details: object = {},
+  client: Pick<PoolClient, 'query'> = sonarPool,
+) {
+  await client.query(
+    'insert into activity_log(action,entity_type,entity_id,user_id,details) values($1,$2,$3,$4,$5)',
+    [action, entityType, entityId, userId, details],
+  );
+}
+async function transaction<T>(fn: (client: PoolClient) => Promise<T>) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query('begin');
+    const value = await fn(client);
+    await client.query('commit');
+    return value;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function dispatch(client: PoolClient, id: string, type: string) {
+  const { rows } = await client.query(
+    'select value from settings where key=$1',
+    [`tasks.${type}`],
+  );
+  const config = rows[0]?.value;
+  if (!config) throw new Error(`Missing task settings: ${type}`);
+  await (producerStarted ??= producer.start().catch((error) => {
+    producerStarted = undefined;
+    throw error;
+  }));
+  await producer.send(
+    type,
+    { taskId: id },
+    {
+      db: dbFor(client),
+      retryLimit: config.retryLimit,
+      retryDelay: config.retryDelay,
+      expireInSeconds: config.expireInSeconds,
+    },
+  );
+}
+export async function enqueueTask(
+  type: string,
+  key: string,
+  payload: object = {},
+) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'insert into tasks(type,idempotency_key,payload) values($1,$2,$3) on conflict(idempotency_key) do nothing returning id',
+      [type, key, payload],
+    );
+    if (rows[0]) await dispatch(client, rows[0].id, type);
+    return rows[0]?.id ?? null;
+  });
+}
+export async function retryTask(id: string, userId: string) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      "update tasks set status='queued', reason_code=null, reason_uk=null, finished_at=null where id=$1 and status in ('failed','paused','skipped') returning type",
+      [id],
+    );
+    if (!rows[0]) return false;
+    await dispatch(client, id, rows[0].type);
+    await logActivity('task.retry', 'task', id, userId, {}, client);
+    return true;
+  });
+}
+export class TaskFailure extends Error {
+  constructor(
+    public code: string,
+    public reasonUk: string,
+  ) {
+    super(code);
+  }
+}
+export type TaskOutcome =
+  | { status: 'done'; result: object }
+  | { status: 'skipped' | 'paused'; reasonCode: string; reasonUk: string };
+export async function executeTask(
+  handler: () => Promise<TaskOutcome>,
+  save: (
+    state: string,
+    result?: object,
+    code?: string,
+    reason?: string,
+  ) => Promise<void>,
+  retry: boolean,
+) {
+  await save('running');
+  try {
+    const outcome = await handler();
+    if (outcome.status === 'done') await save('done', outcome.result);
+    else
+      await save(
+        outcome.status,
+        undefined,
+        outcome.reasonCode,
+        outcome.reasonUk,
+      );
+  } catch (error) {
+    await save(
+      retry ? 'queued' : 'failed',
+      undefined,
+      error instanceof TaskFailure ? error.code : 'operation_failed',
+      error instanceof TaskFailure
+        ? error.reasonUk
+        : 'Не вдалося виконати завдання. Перевірте підключення та повторіть.',
+    );
+    throw error;
+  }
+}
+export async function runTask(
+  type: string,
+  handler: (payload: object) => Promise<TaskOutcome>,
+) {
+  await boss.work<
+    { taskId: string },
+    unknown,
+    { includeMetadata: true; batchSize: number }
+  >(type, { includeMetadata: true, batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const { rows } = await sonarPool.query(
+      "select * from tasks where id=$1 and status in ('queued','running')",
+      [job.data.taskId],
+    );
+    const task = rows[0];
+    if (!task) return;
+    await executeTask(
+      async () => {
+        if (task.type !== type) throw new Error('Unknown task type');
+        return handler(task.payload);
+      },
+      async (status, result, code, reason) => {
+        await sonarPool.query(
+          `update tasks set status=$2::text::task_status, result=$3, reason_code=$4, reason_uk=$5,
+    attempts=attempts+case when $2::text='running' then 1 else 0 end,
+    started_at=case when $2::text='running' then now() else started_at end,
+    finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
+          [task.id, status, result ?? null, code ?? null, reason ?? null],
+        );
+      },
+      job.retryCount < job.retryLimit,
+    );
+  });
+}

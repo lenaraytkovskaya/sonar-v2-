@@ -19,6 +19,7 @@ import {
   LogOut,
   ChevronDown,
 } from 'lucide-react';
+import { FailureBadge } from '@/components/task-overview';
 import { uk } from '@/i18n/uk';
 import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
@@ -94,6 +95,7 @@ export function Shell({
           >
             <Icon aria-hidden="true" className="size-5" />
             {uk.pages[key].title}
+            {key === 'overview' && <FailureBadge />}
           </Link>
         );
       })}

@@ -1,4 +1,4 @@
-import { Placeholder } from '@/components/placeholder';
+import { TaskOverview } from '@/components/task-overview';
 export default function Page() {
-  return <Placeholder page="overview" />;
+  return <TaskOverview />;
 }
