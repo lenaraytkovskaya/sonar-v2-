@@ -15,6 +15,7 @@ export async function GET(request: Request) {
         'ai.model.strong',
         'budget.monthly_usd',
         'company.about',
+        'analysis.prompt',
         'google.field_profiles',
         'retention.google_days',
         ...scannerKeys,
@@ -32,6 +33,10 @@ export async function POST(request: Request) {
   const data = await request.json().catch(() => null);
   if (
     !data ||
+    (data.analysisPrompt !== undefined &&
+      (typeof data.analysisPrompt !== 'string' ||
+        !data.analysisPrompt.trim() ||
+        data.analysisPrompt.length > 20000)) ||
     (data.scanner !== undefined && !validScannerSettings(data.scanner)) ||
     typeof data.about !== 'string' ||
     data.about.length > 20000 ||
@@ -62,8 +67,21 @@ export async function POST(request: Request) {
   const client = await sonarPool.connect();
   try {
     await client.query('begin');
+    if (data.analysisPrompt !== undefined) {
+      await client.query(
+        "select value from settings where key='analysis.prompt' for update",
+      );
+      await client.query(
+        `update settings set value=to_jsonb(gen_random_uuid()::text),updated_at=now()
+         where key='analysis.version' and exists(select 1 from settings where key='analysis.prompt' and value is distinct from $1::jsonb)`,
+        [JSON.stringify(data.analysisPrompt)],
+      );
+    }
     for (const [key, value] of Object.entries({
       ...(data.scanner ?? {}),
+      ...(data.analysisPrompt !== undefined
+        ? { 'analysis.prompt': data.analysisPrompt }
+        : {}),
       'company.about': data.about,
       'budget.monthly_usd': data.budget,
       'ai.model.cheap': data.cheap,

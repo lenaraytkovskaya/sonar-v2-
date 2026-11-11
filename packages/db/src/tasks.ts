@@ -90,8 +90,20 @@ export async function enqueueTask(
       'insert into tasks(type,idempotency_key,payload) values($1,$2,$3) on conflict(idempotency_key) do nothing returning id',
       [type, key, payload],
     );
-    if (rows[0]) await dispatch(client, rows[0].id, type);
-    return rows[0]?.id ?? null;
+    let id = rows[0]?.id;
+    if (!id && type === 'company.analyze') {
+      const { rows: resumed } = await client.query(
+        `update tasks t set status='queued',reason_code=null,reason_uk=null,finished_at=null
+        where idempotency_key=$1 and type='company.analyze' and status='skipped' and reason_code='score_below_threshold'
+        and coalesce(result->>'billingPending','false')<>'true' and not exists(select 1 from spend_events where task_id=t.id)
+        and exists(select 1 from company_scores s where s.company_id=(t.payload->>'companyId')::uuid and s.campaign_id=(t.payload->>'campaignId')::uuid
+          and s.score >= (select (value::text)::numeric from settings where key='analysis.min_score')) returning id`,
+        [key],
+      );
+      id = resumed[0]?.id;
+    }
+    if (id) await dispatch(client, id, type);
+    return id ?? null;
   };
   return existingClient ? save(existingClient) : transaction(save);
 }

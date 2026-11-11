@@ -1,3 +1,4 @@
+import { enqueueCompanyAnalysis } from './analysis.js';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { scoreCompany, registryTerminated } from '@sonar/core';
@@ -176,6 +177,13 @@ export async function computeCompanyScore(
       [taskId, { score: result.score, version: data.version }],
     );
     await markReady(client, companyId);
+    const {
+      rows: [threshold],
+    } = await client.query(
+      "select value from settings where key='analysis.min_score'",
+    );
+    if (result.score >= Number(threshold?.value))
+      await enqueueCompanyAnalysis(companyId, campaignId, null, client);
     return { score: result.score, version: data.version };
   });
 }

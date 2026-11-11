@@ -105,7 +105,7 @@ it('rejects cross-domain redirects, credentials and non-http urls', async () => 
     SiteUnavailable,
   );
 });
-it('orders contact links and sitemap before ordinary links, then stops with email phone messenger', async () => {
+it('collects three pages for analysis before stopping with email phone messenger', async () => {
   const { http, request } = website({
     [home]:
       '<a href="/news">News</a><a href="/contacts">Contact</a><a href="https://other.com/contact">Other</a>',
@@ -115,6 +115,7 @@ it('orders contact links and sitemap before ordinary links, then stops with emai
       200,
       'application/xml',
     ),
+    'https://shop.com/about': '<p>About the company and its services</p>',
     'https://shop.com/contacts':
       '<a href="mailto:hello@shop.com">Email</a><a href="tel:+380673142758">Call</a><a href="https://t.me/shop">Telegram</a>',
   });
@@ -123,11 +124,12 @@ it('orders contact links and sitemap before ordinary links, then stops with emai
   expect(pages.map((page) => page.url)).toEqual([
     home,
     'https://shop.com/contacts',
+    'https://shop.com/about',
   ]);
   expect(request.mock.calls.map(([url]) => url.href)).not.toContain(
     'https://shop.com/news',
   );
-  expect(persist).toHaveBeenCalledTimes(2);
+  expect(persist).toHaveBeenCalledTimes(3);
 });
 it('uses browser only for an empty SPA main page and respects max pages', async () => {
   const { request } = website({

@@ -90,24 +90,29 @@ export async function runBudgetedRequest(
     }
     const {
       rows: [task],
-    } = await client.query('select result from tasks where id=$1', [taskId]);
+    } = await client.query('select result,type from tasks where id=$1', [
+      taskId,
+    ]);
     if (!task) throw new Error('Unknown task');
     if (task.result?.billingPending) throw new BillingUncertain();
     checkBudget(await usage(client, service), estimateUsd);
-    if (service === 'google_places') {
+    if (
+      service === 'google_places' ||
+      (service === 'openrouter' && task.type === 'company.analyze')
+    ) {
       const {
         rows: [campaign],
       } = await client.query(
-        `select c.id,c.budget_usd from tasks t join batches b on b.id=t.batch_id join campaigns c on c.id=b.campaign_id where t.id=$1`,
+        `select c.id,c.budget_usd from tasks t left join batches b on b.id=t.batch_id join campaigns c on c.id=coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid) where t.id=$1`,
         [taskId],
       );
-      if (!campaign) throw Error('Google request requires campaign batch');
+      if (!campaign) throw Error('Paid request requires campaign');
       const {
         rows: [spent],
       } = await client.query(
         `select coalesce(sum(cost),0) as cost from (
-        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id join batches b on b.id=t.batch_id where b.campaign_id=$1
-        union all select (t.result->>'billingEstimate')::numeric from tasks t join batches b on b.id=t.batch_id where b.campaign_id=$1 and t.result->>'billingPending'='true'
+        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id left join batches b on b.id=t.batch_id where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid)=$1
+        union all select (t.result->>'billingEstimate')::numeric from tasks t left join batches b on b.id=t.batch_id where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid)=$1 and t.result->>'billingPending'='true'
       ) usage`,
         [campaign.id],
       );

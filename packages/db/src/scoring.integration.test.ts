@@ -61,7 +61,7 @@ async function fixture(
       )
     ).rows.map((row) => row.id);
     await db.sonarPool.query(
-      "delete from pgboss.job where name='company.score' and data->>'taskId'=any($1::text[])",
+      "delete from pgboss.job where name in ('company.score','company.analyze') and data->>'taskId'=any($1::text[])",
       [scoreTasks],
     );
     await db.sonarPool.query('delete from tasks where subject_id=$1', [
@@ -116,6 +116,7 @@ describe.skipIf(!enabled)(
       admin = new PgBoss(process.env.DATABASE_URL!);
       await admin.start();
       await admin.createQueue('company.score');
+      await admin.createQueue('company.analyze');
     });
 
     it('deduplicates unchanged snapshots, versions contact changes and upserts scores atomically with ready', async () => {

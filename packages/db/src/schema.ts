@@ -330,3 +330,31 @@ export const companyScores = pgTable(
     check('company_score_range', sql`${t.score} >= 0 and ${t.score} <= 100`),
   ],
 );
+
+export const analyses = pgTable(
+  'analyses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'cascade' }),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    version: text('version').notNull(),
+    model: text('model').notNull(),
+    costUsd: numeric('cost_usd', { precision: 20, scale: 10 }).notNull(),
+    result: jsonb('result').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique('analysis_company_campaign_version').on(
+      t.companyId,
+      t.campaignId,
+      t.version,
+    ),
+    check('analysis_cost_nonnegative', sql`${t.costUsd} >= 0`),
+  ],
+);
