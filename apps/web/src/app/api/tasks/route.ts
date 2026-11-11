@@ -21,5 +21,8 @@ export async function GET(request: Request) {
       from tasks where status in ('failed','paused') and dismissed_at is null
       order by type,created_at desc,id desc
     ) latest order by created_at desc`);
-  return Response.json({ tasks: rows, counts, failures });
+  const { rows: batches } = await sonarPool.query(
+    `select b.id,b.size,b.status,b.found_new,b.found_known,b.requests,b.cost_usd,b.reason_uk,b.fixture,c.name as campaign_name from batches b join campaigns c on c.id=b.campaign_id order by b.started_at desc nulls last,b.number desc limit 20`,
+  );
+  return Response.json({ tasks: rows, counts, failures, batches });
 }

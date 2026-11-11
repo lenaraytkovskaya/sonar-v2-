@@ -50,6 +50,7 @@ services:
   worker:
     build: { context: .., dockerfile: docker/Dockerfile, target: worker }
     environment:
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MONTHLY_BUDGET_USD: ${MONTHLY_BUDGET_USD:-50}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}

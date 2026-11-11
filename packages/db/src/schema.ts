@@ -9,6 +9,8 @@ import {
   pgEnum,
   numeric,
   check,
+  boolean,
+  unique,
 } from 'drizzle-orm/pg-core';
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -117,6 +119,7 @@ export const campaigns = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    fieldProfile: text('field_profile').notNull().default('contacts'),
     countryCode: text('country_code').notNull(),
     languageCode: text('language_code').notNull(),
     cities: text('cities').array().notNull(),
@@ -146,3 +149,129 @@ export const campaignPresets = pgTable('campaign_presets', {
   name: text('name').notNull().unique(),
   data: jsonb('data').notNull(),
 });
+
+export const batchStatus = pgEnum('batch_status', [
+  'queued',
+  'running',
+  'done',
+  'paused',
+  'failed',
+]);
+export const companyStatus = pgEnum('company_status', [
+  'new',
+  'enriching',
+  'ready',
+  'contacted',
+  'replied',
+  'interested',
+  'deal',
+  'refused',
+  'do_not_contact',
+]);
+export const contactKind = pgEnum('contact_kind', [
+  'email',
+  'phone',
+  'telegram',
+  'whatsapp',
+  'viber',
+  'form',
+  'social',
+  'website',
+]);
+export const contactSource = pgEnum('contact_source', [
+  'google',
+  'website',
+  'registry',
+  'prozorro',
+  'manual',
+]);
+export const batches = pgTable(
+  'batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id),
+    number: integer('number').notNull(),
+    size: integer('size').notNull(),
+    status: batchStatus('status').notNull().default('queued'),
+    foundNew: integer('found_new').notNull().default(0),
+    foundKnown: integer('found_known').notNull().default(0),
+    requests: integer('requests').notNull().default(0),
+    costUsd: numeric('cost_usd', { precision: 20, scale: 10 })
+      .notNull()
+      .default('0'),
+    reasonUk: text('reason_uk'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    cursor: jsonb('cursor').notNull().default({ pair: 0, page: 0 }),
+    config: jsonb('config').notNull(),
+    requestKey: uuid('request_key').notNull().unique(),
+    fixture: boolean('fixture').notNull().default(false),
+  },
+  (t) => [unique('batch_number_unique').on(t.campaignId, t.number)],
+);
+export const companies = pgTable('companies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  placeId: text('place_id').notNull().unique(),
+  name: text('name').notNull(),
+  primaryType: text('primary_type'),
+  types: text('types').array().notNull().default([]),
+  address: text('address'),
+  city: text('city'),
+  countryCode: text('country_code'),
+  lat: numeric('lat', { precision: 12, scale: 8 }),
+  lng: numeric('lng', { precision: 12, scale: 8 }),
+  website: text('website'),
+  domain: text('domain'),
+  googleMapsUri: text('google_maps_uri'),
+  rating: numeric('rating', { precision: 3, scale: 2 }),
+  ratingsCount: integer('ratings_count'),
+  businessStatus: text('business_status'),
+  status: companyStatus('status').notNull().default('new'),
+  googleExpiresAt: timestamp('google_expires_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+export const campaignCompanies = pgTable(
+  'campaign_companies',
+  {
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => batches.id),
+    addedAt: timestamp('added_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique('campaign_company_unique').on(t.campaignId, t.companyId)],
+);
+export const contacts = pgTable(
+  'contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    kind: contactKind('kind').notNull(),
+    value: text('value').notNull(),
+    normalized: text('normalized').notNull(),
+    source: contactSource('source').notNull(),
+    sourceUrl: text('source_url'),
+    verified: boolean('verified').notNull().default(false),
+    rank: integer('rank').notNull().default(0),
+    foundAt: timestamp('found_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique('contact_unique').on(t.companyId, t.kind, t.normalized)],
+);

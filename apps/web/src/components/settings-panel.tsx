@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import type { TextModel } from '@sonar/core';
+import type { TextModel, GoogleProfile } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from './shared';
 import { Input } from './ui/input';
@@ -9,6 +9,8 @@ import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
 export function SettingsPanel() {
   const [models, setModels] = useState<TextModel[]>([]),
+    [profiles, setProfiles] = useState<GoogleProfile[]>([]),
+    [googleDays, setGoogleDays] = useState(365),
     [cheap, setCheap] = useState(''),
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
@@ -25,6 +27,8 @@ export function SettingsPanel() {
     setStrong(data['ai.model.strong'] ?? '');
     setBudget(data['budget.monthly_usd'] ?? 50);
     setAbout(data['company.about'] ?? '');
+    setProfiles(data['google.field_profiles'] ?? []);
+    setGoogleDays(data['retention.google_days'] ?? 365);
   };
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
@@ -47,7 +51,14 @@ export function SettingsPanel() {
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cheap, strong, budget, about }),
+        body: JSON.stringify({
+          cheap,
+          strong,
+          budget,
+          about,
+          googleProfiles: profiles,
+          googleDays,
+        }),
       });
       if (!response.ok) throw Error(uk.ai.invalid);
       setMessage(uk.ai.saved);
@@ -120,6 +131,44 @@ export function SettingsPanel() {
             />
           </label>
           <AiAssist text={about} onApply={setAbout} />
+        </Card>
+        <Card className="space-y-4 p-6">
+          <h2 className="font-heading text-xl font-bold">{uk.google.title}</h2>
+          <p>{uk.google.estimated}</p>
+          {profiles.map((p, index) => (
+            <label className="block" key={p.id}>
+              {p.name} · {p.sku}
+              <Input
+                aria-label={`${p.name}: ${uk.google.price}`}
+                type="number"
+                min="0"
+                step="0.001"
+                value={p.priceUsd}
+                onChange={(e) =>
+                  setProfiles(
+                    profiles.map((v, i) =>
+                      i === index
+                        ? { ...v, priceUsd: e.target.valueAsNumber }
+                        : v,
+                    ),
+                  )
+                }
+              />
+              <span className="break-all text-xs text-muted-foreground">
+                {p.fields.join(', ')}
+              </span>
+            </label>
+          ))}
+          <label className="block">
+            {uk.google.retention}
+            <Input
+              type="number"
+              min="1"
+              max="3650"
+              value={googleDays}
+              onChange={(e) => setGoogleDays(e.target.valueAsNumber)}
+            />
+          </label>
         </Card>
         {message && <p role="status">{message}</p>}
         <Button disabled={pending} onClick={() => void save()}>

@@ -24,14 +24,15 @@ export async function saveCampaign(
       data.send_mode,
       data.scoring_weights,
       data.status,
+      data.field_profile,
     ];
     const { rows } = id
       ? await client.query(
-          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_weights=$11,status=$12,updated_at=now() where id=$13 returning *`,
+          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_weights=$11,status=$12,field_profile=$13,updated_at=now() where id=$14 returning *`,
           [...values, id],
         )
       : await client.query(
-          `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,send_mode,scoring_weights,status,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+          `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,send_mode,scoring_weights,status,field_profile,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning *`,
           [...values, userId],
         );
     if (!rows[0]) throw Error('Campaign missing');

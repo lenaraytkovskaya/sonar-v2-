@@ -26,6 +26,7 @@ const initial: CampaignInput = {
   send_mode: 'approval',
   scoring_weights: { website: 30, phone: 30, rating: 40 },
   status: 'draft',
+  field_profile: 'contacts',
 };
 function Chips({
   label,
@@ -135,6 +136,8 @@ export function CampaignPanel() {
       if (kind === 'start') {
         const start = await fetch(`/api/campaigns/${row.id}/start`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: crypto.randomUUID() }),
         });
         if (!start.ok) throw Error(uk.ai.error);
       }
@@ -410,6 +413,19 @@ export function CampaignPanel() {
               </label>
             ))}
           </fieldset>
+          <label className="block">
+            {uk.google.profile}
+            <select
+              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+              value={form.field_profile}
+              onChange={(e) =>
+                update('field_profile', e.target.value as 'contacts' | 'basic')
+              }
+            >
+              <option value="contacts">{uk.google.contacts}</option>
+              <option value="basic">{uk.google.basic}</option>
+            </select>
+          </label>
           <p className="text-sm text-muted-foreground">
             {uk.campaign.saveFirst}
           </p>

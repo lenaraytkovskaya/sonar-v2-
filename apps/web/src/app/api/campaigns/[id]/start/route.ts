@@ -9,18 +9,15 @@ export async function POST(
   const { id } = await context.params;
   if (!validId(id))
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { sonarPool } = await import('@sonar/db');
-  const {
-    rows: [campaign],
-  } = await sonarPool.query('select * from campaigns where id=$1', [id]);
-  if (!campaign?.cities.length || !campaign?.queries.length)
+  const body = await request.json().catch(() => null);
+  if (!validId(body?.requestId))
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { enqueueTask, logActivity } = await import('@sonar/db/tasks');
-  const taskId = await enqueueTask(
-    'google.batch',
-    `google:${id}:${crypto.randomUUID()}`,
-    { campaignId: id },
-  );
-  await logActivity('campaign.start', 'campaign', id, user.id, { taskId });
-  return Response.json({ id: taskId }, { status: 202 });
+  const { createBatch } = await import('@sonar/db/batches');
+  try {
+    return Response.json(await createBatch(id, user.id, body.requestId), {
+      status: 202,
+    });
+  } catch {
+    return Response.json({ error: uk.ai.invalid }, { status: 400 });
+  }
 }

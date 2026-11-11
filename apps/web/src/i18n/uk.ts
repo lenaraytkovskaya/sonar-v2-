@@ -1,4 +1,14 @@
 export const uk = {
+  google: {
+    profile: 'Профіль Google',
+    contacts: 'Контакти (сайт і телефон)',
+    basic: 'Базовий (без сайта й телефону)',
+    title: 'Пошук у Google Maps',
+    price: 'Ціна одного запиту, USD',
+    estimated: 'Оцінка за тарифом, не рахунок Google',
+    retention: 'Зберігання даних Google, днів',
+    fixture: 'Фікстура Google — без API та білінгу',
+  },
   campaign: {
     create: 'Нова кампанія',
     name: 'Назва',

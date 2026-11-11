@@ -16,6 +16,7 @@ it.skipIf(!enabled)(
     try {
       const data = {
         name: 'Test campaign',
+        field_profile: 'contacts' as const,
         country_code: 'PL',
         language_code: 'pl',
         cities: ['Warszawa'],

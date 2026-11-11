@@ -5,11 +5,13 @@ export type BudgetUsage = {
   serviceSpentUsd: number;
 };
 export class BudgetExceeded extends Error {
-  constructor(public scope: 'monthly' | 'service') {
+  constructor(public scope: 'monthly' | 'service' | 'campaign') {
     super(
       scope === 'monthly'
         ? 'Вичерпано місячний бюджет. Збільште ліміт у налаштуваннях.'
-        : 'Вичерпано бюджет сервісу. Збільште його ліміт.',
+        : scope === 'campaign'
+          ? 'Вичерпано бюджет кампанії. Збільште ліміт або призупиніть пошук.'
+          : 'Вичерпано бюджет сервісу. Збільште його ліміт.',
     );
   }
 }
