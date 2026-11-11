@@ -176,7 +176,11 @@ export async function runCompanyAnalysis(
         };
       throw new TaskFailure(
         error.code,
-        'OpenRouter не повернув коректний аналіз. Витрати збережено; перевірте модель і ліміт токенів.',
+        error.finishReason === 'length'
+          ? 'Відповідь ІІ обрізана: збільште analysis.max_tokens. Витрати збережено.'
+          : error.code === 'empty_content'
+            ? 'ІІ не повернув текст аналізу. Витрати збережено; спробуйте іншу модель.'
+            : `OpenRouter не повернув коректний аналіз (${error.code}). Витрати збережено.`,
       );
     }
     throw error;
