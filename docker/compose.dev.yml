@@ -1,0 +1,10 @@
+name: sonar-v2-dev
+services:
+  postgres:
+    volumes:
+      - ./init-dev.sh:/docker-entrypoint-initdb.d/10-registry.sh:ro
+      - ../docs/registry-schema.sql:/registry-schema.sql:ro
+volumes:
+  postgres:
+    external: false
+    name: sonar-v2-dev-postgres

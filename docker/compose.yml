@@ -1,0 +1,47 @@
+name: sonar-v2
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: sonar
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d sonar']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  web:
+    build: { context: .., dockerfile: docker/Dockerfile, target: web }
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
+    ports: ['127.0.0.1:58000:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+  worker:
+    build: { context: .., dockerfile: docker/Dockerfile, target: worker }
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
+    depends_on:
+      postgres: { condition: service_healthy }
+    stop_grace_period: 30s
+  waha:
+    image: devlikeapro/waha:noweb-2026.10.1
+    platform: linux/amd64
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?Set WAHA_API_KEY}
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+      WHATSAPP_RESTART_ALL_SESSIONS: 'false'
+      WAHA_DASHBOARD_ENABLED: 'false'
+      WHATSAPP_SWAGGER_ENABLED: 'false'
+    volumes:
+      - waha:/app/.sessions
+volumes:
+  postgres:
+    external: true
+    name: sonar-server_postgres
+  waha:

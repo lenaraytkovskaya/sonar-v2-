@@ -1,0 +1,10 @@
+node_modules
+.next
+dist
+pnpm-lock.yaml
+docs
+AGENTS.md
+wiki
+.agents
+.codex
+*.tsbuildinfo
