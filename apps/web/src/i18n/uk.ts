@@ -3,6 +3,8 @@ export const uk = {
     active: 'Зараз у роботі',
     failures: 'Помилки та паузи',
     registry: 'Перевірка реєстру ЄДР',
+    aiModels: 'Оновлення моделей ІІ',
+    aiAssist: 'Редагування тексту ІІ',
     approximate: 'приблизно',
     estimateUnavailable: 'оцінка недоступна',
     registryTables: {

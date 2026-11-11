@@ -60,7 +60,11 @@ export function TaskOverview() {
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const name = (type: string) =>
-    type === 'system.registry_ping' ? uk.tasks.registry : type;
+    ({
+      'system.registry_ping': uk.tasks.registry,
+      'ai.models': uk.tasks.aiModels,
+      'ai.assist': uk.tasks.aiAssist,
+    })[type] ?? type;
   const active = [
     ...new Set(
       counts
