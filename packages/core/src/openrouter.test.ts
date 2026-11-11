@@ -30,14 +30,16 @@ describe('OpenRouter adapter', () => {
     const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     expect(body.model).toBe('chosen/model');
     expect(body.max_tokens).toBe(100);
+    expect(body.reasoning).toEqual({ exclude: true });
+    expect(body).not.toHaveProperty('usage');
   });
-  it('never guesses missing actual cost', async () => {
+  it('reports missing cost with received-response billing evidence', async () => {
     await expect(
       createOpenRouterClient(
         'test',
         stub({ ...reply, usage: { total_tokens: 123 } }),
       ).complete('model', [], 100),
-    ).rejects.toMatchObject({ code: 'usage_missing' });
+    ).rejects.toMatchObject({ code: 'usage_missing', billing: { units: 123 } });
   });
   it.each([-1, 'nope', null])('rejects invalid cost %s', async (cost) => {
     await expect(
@@ -46,6 +48,53 @@ describe('OpenRouter adapter', () => {
         stub({ ...reply, usage: { ...reply.usage, cost } }),
       ).complete('model', [], 100),
     ).rejects.toThrow();
+  });
+  it.each([
+    [
+      { finish_reason: 'length', message: { content: '{"partial":' } },
+      'finish_reason',
+    ],
+    [
+      { message: { content: '', reasoning: 'private reasoning' } },
+      'empty_content',
+    ],
+    [{ message: { content: null }, finish_reason: 'stop' }, 'empty_content'],
+  ])(
+    'classifies unsuccessful HTTP 200 without retaining content',
+    async (choice, code) => {
+      const error = await createOpenRouterClient(
+        'test',
+        stub({ ...reply, choices: [choice] }),
+      )
+        .complete('model', [], 100)
+        .catch((error: unknown) => error);
+      expect(error).toMatchObject({
+        code,
+        billing: { costUsd: 0.0042, units: 123 },
+      });
+      expect(JSON.stringify(error)).not.toContain('private reasoning');
+      expect(JSON.stringify(error)).not.toContain('partial');
+    },
+  );
+  it('settles malformed JSON but preserves network uncertainty', async () => {
+    await expect(
+      createOpenRouterClient(
+        'test',
+        vi.fn().mockResolvedValue(new Response('{broken')),
+      ).complete('model', [], 100),
+    ).rejects.toMatchObject({
+      code: 'invalid_response',
+      billing: { units: 0 },
+    });
+    await expect(
+      createOpenRouterClient(
+        'test',
+        vi.fn().mockRejectedValue(new DOMException('secret', 'TimeoutError')),
+      ).complete('model', [], 100),
+    ).rejects.toMatchObject({
+      code: 'network_unavailable',
+      billing: undefined,
+    });
   });
   it('rejects provider errors without exposing the response body', async () => {
     await expect(

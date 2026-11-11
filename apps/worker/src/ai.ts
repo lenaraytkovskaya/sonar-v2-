@@ -55,7 +55,10 @@ export async function runAiAssist(
       content: `${instruction} ${input.instruction ?? ''}\nContext: ${input.context ?? config['company.about'] ?? ''}\nText: ${input.text}`,
     },
   ];
-  const maxTokens = Number(config['ai.max_tokens']);
+  const limitAction = ['campaign', 'company_filters'].includes(input.action)
+    ? input.action
+    : 'rewrite';
+  const maxTokens = Number(config['ai.max_tokens']?.[limitAction]);
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 10000)
     throw new TaskFailure('ai_config_invalid', 'Перевірте налаштування ІІ.');
   const estimate =
@@ -104,6 +107,36 @@ export async function runAiAssist(
     };
   } catch (error) {
     if (error instanceof TaskFailure) throw error;
+    if (error instanceof OpenRouterError) {
+      const diagnostic = {
+        code: error.code,
+        ...(error.finishReason ? { finishReason: error.finishReason } : {}),
+      };
+      await sonarPool.query(
+        `update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1`,
+        [id, JSON.stringify({ error: diagnostic })],
+      );
+      console.warn(
+        JSON.stringify({ taskId: id, service: 'openrouter', ...diagnostic }),
+      );
+      if (error.code === 'network_unavailable')
+        return {
+          status: 'paused',
+          reasonCode: error.code,
+          reasonUk:
+            'З’єднання з OpenRouter перервано. Результат оплати невідомий; звірте витрати перед повтором.',
+        };
+      throw new TaskFailure(
+        error.code,
+        error.finishReason === 'length'
+          ? 'Відповідь ІІ обрізана, збільште ліміт токенів'
+          : error.code === 'empty_content'
+            ? 'ІІ не повернув текст відповіді: ліміт міг бути витрачений на міркування. Збільште ліміт токенів.'
+            : error.code === 'usage_missing'
+              ? 'OpenRouter не повернув коректну вартість. Витрати записано за резервом; звірте їх у провайдера.'
+              : 'OpenRouter повернув некоректну відповідь. Витрати записано; уточніть запит або перевірте модель.',
+      );
+    }
     if (error instanceof PaidHttpError)
       throw new TaskFailure(
         `http_${error.status}`,

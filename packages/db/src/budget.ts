@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   BudgetExceeded,
   PaidHttpError,
+  OpenRouterError,
   checkBudget,
   moneyUnits,
   type PaidResponse,
@@ -76,6 +77,12 @@ export async function runBudgetedRequest(
         throw new Error('Task already billed to another service');
       await client.query('commit');
       transaction = false;
+      if (previous.meta.error?.code)
+        throw new OpenRouterError(
+          previous.meta.error.code,
+          undefined,
+          previous.meta.error.finishReason,
+        );
       if (previous.meta.error)
         throw new PaidHttpError(previous.meta.error.status);
       if (!previous.meta.response) throw new BillingUncertain();
@@ -129,12 +136,29 @@ export async function runBudgetedRequest(
     try {
       response = await operation();
     } catch (error) {
-      if (error instanceof PaidHttpError) {
+      const received = error instanceof OpenRouterError && error.billing;
+      if (error instanceof PaidHttpError || received) {
+        const cost = received ? (received.costUsd ?? estimateUsd) : 0;
+        const meta =
+          error instanceof OpenRouterError
+            ? {
+                error: {
+                  code: error.code,
+                  ...(error.finishReason
+                    ? { finishReason: error.finishReason }
+                    : {}),
+                },
+                costBasis:
+                  received && received.costUsd !== undefined
+                    ? 'provider_reported'
+                    : 'estimated',
+              }
+            : { error: { status: error.status } };
         await client.query('begin');
         transaction = true;
         await client.query(
-          'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,0,0,$2,$3)',
-          [service, taskId, { error: { status: error.status } }],
+          'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,$2,$3,$4,$5)',
+          [service, received ? received.units : 0, cost, taskId, meta],
         );
         await client.query(
           `update tasks set result=result||'{"billingPending":false}'::jsonb where id=$1`,
@@ -144,6 +168,7 @@ export async function runBudgetedRequest(
         transaction = false;
         throw error;
       }
+      if (error instanceof OpenRouterError) throw error;
       throw new BillingUncertain();
     }
     moneyUnits(response.costUsd);
