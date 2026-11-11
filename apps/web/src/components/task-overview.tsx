@@ -152,44 +152,48 @@ export function TaskOverview() {
           {uk.tasks.error}
         </p>
       )}
-      {batches.map((batch) => (
-        <Card key={batch.id} className="mb-4 space-y-2 p-5">
-          <h2 className="font-heading text-lg font-bold">
-            {uk.google.title}: {batch.found_new + batch.found_known} /{' '}
-            {batch.size}
-          </h2>
-          <p>
-            {batch.campaign_name} ·{' '}
-            {uk.tasks.status[batch.status as keyof typeof uk.tasks.status]} · $
-            {Number(batch.cost_usd).toFixed(3)}
-          </p>
-          <progress
-            className="w-full"
-            aria-label={uk.google.title}
-            value={batch.found_new + batch.found_known}
-            max={batch.size}
-          />
-          <p className="text-sm text-muted-foreground">
-            {batch.fixture ? uk.google.fixture : uk.google.estimated}
-          </p>
-          {batch.reason_uk && <p>{batch.reason_uk}</p>}
-          {batch.companies > 0 && (
-            <>
+      {batches.length > 0 && (
+        <div className="mb-6 grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {batches.slice(0, 6).map((batch) => (
+            <Card key={batch.id} className="space-y-2 p-5">
+              <h2 className="font-heading text-lg font-bold">
+                {uk.google.title}: {batch.found_new + batch.found_known} /{' '}
+                {batch.size}
+              </h2>
               <p>
-                {uk.enrich.progress}: {batch.enriched} / {batch.companies}
-                {batch.enriching > 0 &&
-                  ` · ${uk.enrich.running}: ${batch.enriching}`}
+                {batch.campaign_name} ·{' '}
+                {uk.tasks.status[batch.status as keyof typeof uk.tasks.status]}{' '}
+                · ${Number(batch.cost_usd).toFixed(3)}
               </p>
               <progress
                 className="w-full"
-                aria-label={uk.enrich.progress}
-                value={batch.enriched}
-                max={batch.companies}
+                aria-label={uk.google.title}
+                value={batch.found_new + batch.found_known}
+                max={batch.size}
               />
-            </>
-          )}
-        </Card>
-      ))}
+              <p className="text-sm text-muted-foreground">
+                {batch.fixture ? uk.google.fixture : uk.google.estimated}
+              </p>
+              {batch.reason_uk && <p>{batch.reason_uk}</p>}
+              {batch.companies > 0 && (
+                <>
+                  <p>
+                    {uk.enrich.progress}: {batch.enriched} / {batch.companies}
+                    {batch.enriching > 0 &&
+                      ` · ${uk.enrich.running}: ${batch.enriching}`}
+                  </p>
+                  <progress
+                    className="w-full"
+                    aria-label={uk.enrich.progress}
+                    value={batch.enriched}
+                    max={batch.companies}
+                  />
+                </>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
       <Card className="mb-6 p-6">
         <h2 className="mb-4 font-heading text-xl font-bold">
           {uk.tasks.active}

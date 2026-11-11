@@ -195,7 +195,7 @@ export function Shell({
           <main
             id="content"
             tabIndex={-1}
-            className="mx-auto max-w-7xl p-5 py-8 md:p-10"
+            className="w-full p-5 py-8 md:p-8 2xl:px-12"
           >
             {children}
           </main>
