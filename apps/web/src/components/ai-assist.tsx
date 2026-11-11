@@ -36,7 +36,7 @@ export function AiAssist({
   };
   return (
     <div className="mt-3">
-      <Button variant="outline" onClick={() => setOpen(!open)}>
+      <Button type="button" variant="outline" onClick={() => setOpen(!open)}>
         {uk.ai.assist}
       </Button>
       {open && (
@@ -62,7 +62,11 @@ export function AiAssist({
               onChange={(e) => setInstruction(e.target.value)}
             />
           )}
-          <Button disabled={pending || !text.trim()} onClick={() => void run()}>
+          <Button
+            type="button"
+            disabled={pending || !text.trim()}
+            onClick={() => void run()}
+          >
             {pending ? uk.ai.pending : uk.ai.run}
           </Button>
           {error && (
@@ -78,6 +82,7 @@ export function AiAssist({
               </p>
               <div className="flex gap-3">
                 <Button
+                  type="button"
                   onClick={() => {
                     onApply(preview);
                     setPreview('');
@@ -86,7 +91,11 @@ export function AiAssist({
                 >
                   {uk.ai.apply}
                 </Button>
-                <Button variant="outline" onClick={() => setPreview('')}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setPreview('')}
+                >
                   {uk.ai.cancel}
                 </Button>
               </div>

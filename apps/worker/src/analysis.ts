@@ -7,6 +7,7 @@ import {
   type TextModel,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
+import { draftFromAnalysis } from '@sonar/db/email';
 import { analysisSnapshot } from '@sonar/db/analysis';
 import {
   BillingUncertain,
@@ -119,22 +120,35 @@ export async function runCompanyAnalysis(
         'ІІ повернув некоректний аналіз. Витрати збережено; повтор використовує ту саму відповідь.',
       );
     }
-    const {
-      rows: [saved],
-    } = await sonarPool.query(
-      `insert into analyses(company_id,campaign_id,version,model,cost_usd,result) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,version) do update set result=analyses.result returning id`,
-      [
-        input.companyId,
-        input.campaignId,
-        input.version,
-        response.model,
-        response.costUsd,
-        result,
-      ],
-    );
+    const tx = await sonarPool.connect();
+    let savedId: string;
+    try {
+      await tx.query('begin');
+      const {
+        rows: [saved],
+      } = await tx.query(
+        `insert into analyses(company_id,campaign_id,version,model,cost_usd,result) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,version) do update set result=analyses.result returning id`,
+        [
+          input.companyId,
+          input.campaignId,
+          input.version,
+          response.model,
+          response.costUsd,
+          result,
+        ],
+      );
+      await draftFromAnalysis(input.companyId, input.campaignId, saved.id, tx);
+      await tx.query('commit');
+      savedId = saved.id;
+    } catch (error) {
+      await tx.query('rollback');
+      throw error;
+    } finally {
+      tx.release();
+    }
     return {
       status: 'done',
-      result: { analysisId: saved.id, ...result, costUsd: response.costUsd },
+      result: { analysisId: savedId, ...result, costUsd: response.costUsd },
     };
   } catch (error) {
     if (error instanceof TaskFailure) throw error;

@@ -358,3 +358,119 @@ export const analyses = pgTable(
     check('analysis_cost_nonnegative', sql`${t.costUsd} >= 0`),
   ],
 );
+
+export const channelAccounts = pgTable(
+  'channel_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    channel: text('channel').notNull().default('email'),
+    name: text('name').notNull(),
+    address: text('address').notNull(),
+    ownerId: uuid('owner_id').references(() => users.id),
+    status: text('status').notNull().default('active'),
+    settings: jsonb('settings').notNull().default({}),
+    dailyLimit: integer('daily_limit').notNull(),
+    sentDay: text('sent_day'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextSendAt: timestamp('next_send_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check('account_daily_limit', sql`${t.dailyLimit} > 0`),
+    check(
+      'account_channel',
+      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+    ),
+  ],
+);
+export const doNotContact = pgTable(
+  'do_not_contact',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id').references(() => companies.id),
+    kind: text('kind').notNull(),
+    valueNormalized: text('value_normalized').notNull(),
+    reason: text('reason').notNull(),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique('do_not_contact_target').on(t.kind, t.valueNormalized),
+    check(
+      'block_kind',
+      sql`${t.kind} in ('company','email','domain','phone','telegram','whatsapp','viber','form')`,
+    ),
+  ],
+);
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id),
+    contactId: uuid('contact_id').references(() => contacts.id),
+    status: text('status').notNull().default('open'),
+    channel: text('channel').notNull().default('email'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique('conversation_company_campaign_channel').on(
+      t.companyId,
+      t.campaignId,
+      t.channel,
+    ),
+  ],
+);
+export const messages = pgTable(
+  'messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => channelAccounts.id),
+    direction: text('direction').notNull().default('out'),
+    channel: text('channel').notNull().default('email'),
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
+    toValue: text('to_value').notNull(),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    status: text('status').notNull().default('draft'),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    requestSnapshot: jsonb('request_snapshot'),
+    firstAttemptAt: timestamp('first_attempt_at', { withTimezone: true }),
+    quotaDay: text('quota_day'),
+    providerId: text('provider_id'),
+    approvedBy: uuid('approved_by').references(() => users.id),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id),
+    reasonUk: text('reason_uk'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('message_direction', sql`${t.direction} in ('out','in')`),
+    check(
+      'message_channel',
+      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+    ),
+    check(
+      'message_status',
+      sql`${t.status} in ('draft','awaiting_approval','queued','sent','delivered','read','failed')`,
+    ),
+  ],
+);
