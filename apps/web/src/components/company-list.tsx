@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader, Score } from './shared';
 import { runAiJob } from '@/lib/ai-job';
+import { ManualEntry } from './manual-entry';
 type Row = {
   id: string;
   name: string;
@@ -113,6 +114,10 @@ export function CompanyList({
   return (
     <>
       <PageHeader {...uk.pages.companies} />
+      <ManualEntry
+        campaigns={campaigns}
+        initialCampaignId={initialCampaignId}
+      />
       <Card className="mb-6 space-y-4 p-5">
         <label className="block">
           {uk.company.natural}

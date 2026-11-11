@@ -384,8 +384,8 @@ export async function runSiteScan(
         'scanner_config_invalid',
         'Перевірте налаштування сканера сайтів.',
       );
-    const country = (company.campaign_country ??
-      company.country_code) as CountryCode;
+    const country = (company.country_code ??
+      company.campaign_country) as CountryCode;
     await client.query(
       "update companies set status='enriching',updated_at=now() where id=$1 and status in ('new','enriching')",
       [companyId],

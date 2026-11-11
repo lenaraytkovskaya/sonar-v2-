@@ -1,0 +1,1 @@
+ALTER TABLE "campaign_companies" ALTER COLUMN "batch_id" DROP NOT NULL;

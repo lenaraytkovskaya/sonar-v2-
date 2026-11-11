@@ -1,5 +1,6 @@
 import { apiUser } from '@/lib/api-access';
-import { filtersFromParams } from '@sonar/core';
+import { filtersFromParams, manualCompanySchema } from '@sonar/core';
+import { manualEntryResponse } from '@/lib/manual-entry-response';
 import { uk } from '@/i18n/uk';
 export async function GET(request: Request) {
   if (!(await apiUser(request)))
@@ -14,5 +15,25 @@ export async function GET(request: Request) {
     return Response.json(await listCompanies(filters, page));
   } catch {
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
+  }
+}
+export async function POST(request: Request) {
+  const user = await apiUser(request, true);
+  if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
+  const parsed = manualCompanySchema.safeParse(
+    await request.json().catch(() => null),
+  );
+  if (!parsed.success)
+    return Response.json(
+      { error: uk.manual.errors.invalidCompany },
+      { status: 400 },
+    );
+  const { createManualCompany } = await import('@sonar/db/companies');
+  try {
+    return Response.json(await createManualCompany(parsed.data, user.id), {
+      status: 201,
+    });
+  } catch (error) {
+    return manualEntryResponse(error);
   }
 }
