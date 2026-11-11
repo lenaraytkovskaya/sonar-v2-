@@ -48,6 +48,18 @@ it.skipIf(!enabled)(
           units: 42,
         })),
       };
+      vi.stubEnv('OPENROUTER_API_KEY', '');
+      const noKeyTask = await id();
+      expect(
+        await runAiAssist({ action: 'improve', text: 'Текст' }, noKeyTask),
+      ).toMatchObject({ status: 'paused', reasonCode: 'api_key_missing' });
+      expect(
+        (
+          await sonarPool.query('select result from tasks where id=$1', [
+            noKeyTask,
+          ])
+        ).rows[0].result?.billingPending,
+      ).toBeFalsy();
       expect(
         await runAiAssist(
           { action: 'improve', text: 'Текст' },
@@ -79,6 +91,7 @@ it.skipIf(!enabled)(
         ),
       ).toBe(0.00123);
     } finally {
+      vi.unstubAllEnvs();
       await sonarPool.query(
         'delete from spend_events where task_id=any($1::uuid[])',
         [ids],

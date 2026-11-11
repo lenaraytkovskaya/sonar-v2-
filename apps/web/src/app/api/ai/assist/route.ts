@@ -29,7 +29,10 @@ export async function POST(request: Request) {
     !data.text.trim() ||
     data.text.length > 20000 ||
     (data.instruction !== undefined &&
-      (typeof data.instruction !== 'string' || data.instruction.length > 1000))
+      (typeof data.instruction !== 'string' ||
+        data.instruction.length > 1000)) ||
+    (data.context !== undefined &&
+      (typeof data.context !== 'string' || data.context.length > 20000))
   )
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   const { enqueueTask } = await import('@sonar/db/tasks');
@@ -38,6 +41,7 @@ export async function POST(request: Request) {
     action: data.action,
     text: data.text,
     instruction: data.instruction ?? '',
+    context: data.context,
     userId: user.id,
   });
   const { sonarPool } = await import('@sonar/db');

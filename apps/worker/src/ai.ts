@@ -15,8 +15,15 @@ type Input = {
 export async function runAiAssist(
   input: Input,
   id: string,
-  client = createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? ''),
+  client?: ReturnType<typeof createOpenRouterClient>,
 ): Promise<TaskOutcome> {
+  if (!client && !process.env.OPENROUTER_API_KEY)
+    return {
+      status: 'paused',
+      reasonCode: 'api_key_missing',
+      reasonUk: 'Додайте ключ OpenRouter, щоб скористатися ІІ-помічником.',
+    };
+  client ??= createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? '');
   const { rows } = await sonarPool.query(
     "select key,value from settings where key like 'ai.%' or key='company.about'",
   );

@@ -20,6 +20,7 @@ export function AiAssist({
   const run = async () => {
     setPending(true);
     setError('');
+    setPreview('');
     try {
       const result = await runAiJob('/api/ai/assist', {
         action,
