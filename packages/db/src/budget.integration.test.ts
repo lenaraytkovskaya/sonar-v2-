@@ -67,6 +67,38 @@ it.skipIf(!enabled)(
       ]);
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
       expect(op).toHaveBeenCalledTimes(1);
+      const {
+        rows: [baseline],
+      } = await sonarPool.query(
+        'select coalesce(sum(cost_usd),0) as cost from spend_events',
+      );
+      await sonarPool.query(
+        "update settings set value=$1 where key='budget.monthly_usd'",
+        [JSON.stringify(Number(baseline.cost) + 0.3)],
+      );
+      const concurrent = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return {
+          id: randomUUID(),
+          model: 'test',
+          text: 'result',
+          costUsd: 0.1,
+          units: 1,
+        };
+      });
+      const tenIds = await Promise.all(Array.from({ length: 10 }, () => id()));
+      const tenResults = await Promise.allSettled(
+        tenIds.map((task) =>
+          runBudgetedRequest('openrouter', 0.1, task, concurrent),
+        ),
+      );
+      expect(tenResults.filter((r) => r.status === 'fulfilled')).toHaveLength(
+        3,
+      );
+      expect(concurrent).toHaveBeenCalledTimes(3);
+      await sonarPool.query(
+        "update settings set value='2' where key='budget.monthly_usd'",
+      );
       const uncertainId = await id();
       await expect(
         runBudgetedRequest('openrouter', 0.1, uncertainId, async () => {
@@ -78,6 +110,10 @@ it.skipIf(!enabled)(
         runBudgetedRequest('openrouter', 0.1, uncertainId, duplicate),
       ).rejects.toThrow('невідомий');
       expect(duplicate).not.toHaveBeenCalled();
+      await sonarPool.query(
+        "update settings set value=$1 where key='budget.monthly_usd'",
+        [JSON.stringify(Number(baseline.cost) + 0.5)],
+      );
       const exceedsReserved = vi.fn(paid);
       await expect(
         runBudgetedRequest('openrouter', 0.3, await id(), exceedsReserved),

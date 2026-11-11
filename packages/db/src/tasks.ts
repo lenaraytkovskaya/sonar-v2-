@@ -181,3 +181,25 @@ export async function runTask(
     );
   });
 }
+
+export async function dismissTask(id: string, userId: string) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `update tasks set dismissed_at=now()
+      where type=(select type from tasks where id=$1) and status in ('failed','paused')
+      and dismissed_at is null and created_at <= (select created_at from tasks where id=$1)
+      returning id`,
+      [id],
+    );
+    if (rows.length)
+      await logActivity(
+        'task.dismiss',
+        'task',
+        id,
+        userId,
+        { count: rows.length },
+        client,
+      );
+    return rows.length > 0;
+  });
+}

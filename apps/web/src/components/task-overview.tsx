@@ -1,5 +1,11 @@
 'use client';
-import { useEffect, useState } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from 'react';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
@@ -8,15 +14,21 @@ type Task = {
   type: string;
   status: string;
   reason_uk: string | null;
+  repetitions: number;
   result: {
     approximate?: boolean;
     counts?: Record<string, string | null>;
   } | null;
 };
 type Count = { type: string; status: string; count: number };
-export function useTasks() {
-  const [data, setData] = useState<{ tasks: Task[]; counts: Count[] }>({
+function useTaskPolling() {
+  const [data, setData] = useState<{
+    tasks: Task[];
+    failures: Task[];
+    counts: Count[];
+  }>({
     tasks: [],
+    failures: [],
     counts: [],
   });
   const [error, setError] = useState(false);
@@ -41,11 +53,23 @@ export function useTasks() {
   }, []);
   return { ...data, error };
 }
+const TasksContext = createContext<ReturnType<typeof useTaskPolling> | null>(
+  null,
+);
+export function TasksProvider({ children }: { children: ReactNode }) {
+  const value = useTaskPolling();
+  return (
+    <TasksContext.Provider value={value}>{children}</TasksContext.Provider>
+  );
+}
+export function useTasks() {
+  const context = useContext(TasksContext);
+  if (!context) throw Error('TasksProvider missing');
+  return context;
+}
 export function FailureBadge() {
-  const { counts } = useTasks();
-  const count = counts
-    .filter((x) => x.status === 'failed')
-    .reduce((sum, x) => sum + x.count, 0);
+  const { failures } = useTasks();
+  const count = failures.length;
   return count ? (
     <span
       className="ml-auto rounded-full bg-err-bg px-2 text-err"
@@ -56,7 +80,7 @@ export function FailureBadge() {
   ) : null;
 }
 export function TaskOverview() {
-  const { tasks, counts, error } = useTasks();
+  const { tasks, failures, counts, error } = useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const name = (type: string) =>
@@ -72,10 +96,10 @@ export function TaskOverview() {
         .map((x) => x.type),
     ),
   ];
-  const retry = async (id: string) => {
+  const retry = async (id: string, action = 'retry') => {
     setPending(id);
     try {
-      const r = await fetch(`/api/tasks/${id}/retry`, { method: 'POST' });
+      const r = await fetch(`/api/tasks/${id}/${action}`, { method: 'POST' });
       if (!r.ok) throw Error();
       setRetryError(false);
     } catch {
@@ -157,26 +181,32 @@ export function TaskOverview() {
         <h2 className="mb-4 font-heading text-xl font-bold">
           {uk.tasks.failures}
         </h2>
-        {tasks
-          .filter((x) => ['failed', 'paused'].includes(x.status))
-          .map((task) => (
-            <div
-              key={task.id}
-              className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4"
-            >
-              <div className="min-w-0 break-words">
-                <p>{name(task.type)}</p>
-                <p className="text-sm text-err">{task.reason_uk}</p>
-              </div>
-              <Button
-                disabled={pending === task.id}
-                onClick={() => void retry(task.id)}
-              >
-                {uk.tasks.retry}
-              </Button>
+        {failures.map((task) => (
+          <div
+            key={task.id}
+            className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4"
+          >
+            <div className="min-w-0 break-words">
+              <p>{name(task.type)}</p>
+              <p className="text-sm text-err">
+                {task.reason_uk} · {uk.tasks.repetitions}: {task.repetitions}
+              </p>
             </div>
-          ))}
-        {!tasks.some((x) => ['failed', 'paused'].includes(x.status)) && (
+            <Button
+              disabled={pending === task.id}
+              onClick={() => void retry(task.id, 'dismiss')}
+            >
+              {uk.tasks.dismiss}
+            </Button>
+            <Button
+              disabled={pending === task.id}
+              onClick={() => void retry(task.id)}
+            >
+              {uk.tasks.retry}
+            </Button>
+          </div>
+        ))}
+        {failures.length === 0 && (
           <p className="text-muted-foreground">{uk.tasks.noFailures}</p>
         )}
       </Card>

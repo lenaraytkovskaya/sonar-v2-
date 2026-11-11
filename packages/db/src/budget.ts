@@ -44,8 +44,8 @@ async function usage(client: PoolClient, service: string) {
     serviceSpentUsd: Number(spent.service),
   };
 }
-// A session lock spans the durable reservation, external request and actual cost commit.
-// A crash releases the lock but keeps the reservation; retries must reconcile first.
+// The transaction lock protects only checking and reserving. Durable reservations
+// count toward usage while external requests run concurrently, including after a crash.
 export async function runBudgetedRequest(
   service: string,
   estimateUsd: number,
@@ -53,13 +53,11 @@ export async function runBudgetedRequest(
   operation: () => Promise<PaidResponse>,
 ): Promise<PaidResponse> {
   const client = await sonarPool.connect();
-  let locked = false,
-    transaction = false;
+  let transaction = false;
   try {
-    await client.query('select pg_advisory_lock(719401)');
-    locked = true;
     await client.query('begin');
     transaction = true;
+    await client.query('select pg_advisory_xact_lock(719401)');
     const {
       rows: [previous],
     } = await client.query(
@@ -114,13 +112,6 @@ export async function runBudgetedRequest(
     if (transaction) await client.query('rollback');
     throw error;
   } finally {
-    let broken = false;
-    if (locked)
-      try {
-        await client.query('select pg_advisory_unlock(719401)');
-      } catch {
-        broken = true;
-      }
-    client.release(broken);
+    client.release();
   }
 }
