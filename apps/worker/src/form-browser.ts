@@ -57,15 +57,10 @@ export async function sendWebsiteForm(
     evidence = '';
   let bytes = 0,
     count = 0;
-  let messageField = '';
-  const messageKey = (key: string) =>
-    key === messageField ||
-    /message|comment|body|text|content|повідом|сообщ/i.test(key);
+  // A request is the submission only if it carries our exact message text, under any field name.
   function containsMessage(url: string, data: string) {
     const matches = (pairs: Iterable<[string, string]>) =>
-      Array.from(pairs).some(
-        ([key, value]) => messageKey(key) && value === input.body,
-      );
+      Array.from(pairs).some(([, value]) => value === input.body);
     if (
       matches(new URL(url).searchParams) ||
       matches(new URLSearchParams(data))
@@ -76,8 +71,7 @@ export async function sendWebsiteForm(
         !!value &&
         typeof value === 'object' &&
         Object.entries(value).some(
-          ([key, child]) =>
-            (messageKey(key) && child === input.body) || visit(child),
+          ([, child]) => child === input.body || visit(child),
         );
       if (visit(JSON.parse(data))) return true;
     } catch {
@@ -89,7 +83,7 @@ export async function sendWebsiteForm(
         data.matchAll(
           /name="([^"]+)"[^\r\n]*\r\n(?:[^\r\n]+\r\n)*\r\n([\s\S]*?)\r\n--/g,
         ),
-      ).some((match) => messageKey(match[1]!) && match[2] === input.body)
+      ).some((match) => match[2] === input.body)
     );
   }
   let submitResponse:
@@ -306,11 +300,6 @@ export async function sendWebsiteForm(
       );
     await http.assertAllowed(found.action);
     const form = page.locator('form').nth(found.index);
-    messageField =
-      (await form
-        .locator('input,textarea')
-        .nth(found.fields.body!)
-        .getAttribute('name')) ?? '';
     filling = true;
     for (const [kind, index] of Object.entries(found.fields)) {
       const value =
