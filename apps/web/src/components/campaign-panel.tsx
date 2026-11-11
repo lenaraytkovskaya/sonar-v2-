@@ -11,6 +11,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader } from './shared';
 import { AiAssist } from './ai-assist';
+import { BatchList } from './batch-list';
 import { runAiJob } from '@/lib/ai-job';
 type Row = CampaignInput & { id: string };
 const initial: CampaignInput = {
@@ -99,15 +100,25 @@ export function CampaignPanel() {
     setPreview(null);
     setForm({ ...form, [key]: value });
   };
-  const load = async () => {
+  const load = async (selectFromUrl = false) => {
     const r = await fetch('/api/campaigns');
     if (!r.ok) throw Error(uk.ai.error);
     const d = await r.json();
     setRows(d.campaigns);
+    const selected = new URLSearchParams(window.location.search).get(
+      'campaign',
+    );
+    if (selectFromUrl && selected) {
+      const row = d.campaigns.find((c: Row) => c.id === selected);
+      if (row) {
+        setId(row.id);
+        setForm({ ...row, budget_usd: Number(row.budget_usd) });
+      }
+    }
     setPresets(d.presets);
   };
   useEffect(() => {
-    void load().catch(() => setMessage(uk.ai.error));
+    void load(true).catch(() => setMessage(uk.ai.error));
   }, []);
   const act = async (kind: 'save' | 'start' | 'pause') => {
     setPending(true);
@@ -172,8 +183,8 @@ export function CampaignPanel() {
   return (
     <>
       <PageHeader {...uk.pages.campaigns} />
-      <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <Card className="space-y-3 p-4">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <Card className="min-w-0 space-y-3 p-4">
           <Button
             onClick={() => {
               setId(null);
@@ -202,7 +213,7 @@ export function CampaignPanel() {
             </button>
           ))}
         </Card>
-        <Card className="space-y-5 p-5">
+        <Card className="min-w-0 space-y-5 p-5">
           <label className="block">
             {uk.campaign.presets}
             <select
@@ -456,6 +467,7 @@ export function CampaignPanel() {
             </Button>
           </div>
           {message && <p role="status">{message}</p>}
+          {id && <BatchList key={id} campaignId={id} />}
         </Card>
       </div>
     </>

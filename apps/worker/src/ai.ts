@@ -1,6 +1,7 @@
 import {
   BudgetExceeded,
   parseCampaignSuggestion,
+  parseCompanyFilters,
   createOpenRouterClient,
   type TextModel,
 } from '@sonar/core';
@@ -59,6 +60,22 @@ export async function runAiAssist(
     const response = await runBudgetedRequest('openrouter', estimate, id, () =>
       client.complete(model.id, messages, maxTokens),
     );
+    if (input.action === 'company_filters') {
+      try {
+        return {
+          status: 'done',
+          result: {
+            filters: parseCompanyFilters(response.text),
+            costUsd: response.costUsd,
+          },
+        };
+      } catch {
+        throw new TaskFailure(
+          'ai_schema_invalid',
+          'ІІ повернув некоректні фільтри. Спробуйте уточнити запит.',
+        );
+      }
+    }
     if (input.action === 'campaign') {
       try {
         return {

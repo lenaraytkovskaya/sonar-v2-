@@ -43,6 +43,13 @@
       "when": 1794420336176,
       "tag": "0005_loose_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794420529799,
+      "tag": "0006_company_filters",
+      "breakpoints": true
     }
   ]
 }

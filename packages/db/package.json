@@ -27,6 +27,10 @@
     "./batches": {
       "types": "./dist/batches.d.ts",
       "default": "./dist/batches.js"
+    },
+    "./companies": {
+      "types": "./dist/companies.d.ts",
+      "default": "./dist/companies.js"
     }
   },
   "files": [

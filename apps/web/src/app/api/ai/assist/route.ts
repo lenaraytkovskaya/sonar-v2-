@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       'translate',
       'custom',
       'campaign',
+      'company_filters',
     ].includes(data.action) ||
     typeof data.text !== 'string' ||
     !data.text.trim() ||
@@ -54,5 +55,9 @@ export async function POST(request: Request) {
     'select id from tasks where idempotency_key=$1',
     [key],
   );
+  const { logActivity } = await import('@sonar/db/tasks');
+  await logActivity('ai.request', 'task', rows[0].id, user.id, {
+    action: data.action,
+  });
   return Response.json({ id: rows[0].id }, { status: 202 });
 }

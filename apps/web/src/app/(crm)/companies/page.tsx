@@ -1,4 +1,4 @@
-import { Placeholder } from '@/components/placeholder';
+import { CompanyList } from '@/components/company-list';
 export default function Page() {
-  return <Placeholder page="companies" />;
+  return <CompanyList />;
 }
