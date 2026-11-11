@@ -173,6 +173,18 @@ export const uk = {
     cheap: 'Дешева модель',
     strong: 'Сильна модель',
     choose: 'Виберіть модель',
+    search: 'Пошук за назвою або ID…',
+    onlyCheap: 'Тільки дешеві',
+    cheapLimit: 'До $1 за 1M вихідних токенів включно',
+    noModels: 'Моделей не знайдено.',
+    perMillion: 'за 1M',
+    modelErrors: {
+      api_key_missing: 'Додайте ключ OpenRouter, щоб оновити моделі.',
+      http_401: 'Ключ OpenRouter недійсний. Перевірте та замініть його.',
+      http_429: 'OpenRouter обмежив частоту запитів. Спробуйте пізніше.',
+      network_unavailable:
+        'OpenRouter недоступний. Перевірте з’єднання та спробуйте пізніше.',
+    },
     refresh: 'Оновити моделі',
     budget: 'Місячний бюджет, USD',
     about: 'Про нас',

@@ -62,6 +62,35 @@ describe('OpenRouter adapter', () => {
     ).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it('reports a missing models key without making a request', async () => {
+    const fetcher = stub({ data: [] });
+    await expect(
+      createOpenRouterClient('', fetcher).models(),
+    ).rejects.toMatchObject({ code: 'api_key_missing' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([401, 429, 503])(
+    'keeps the models HTTP %s status without response secrets',
+    async (status) => {
+      await expect(
+        createOpenRouterClient(
+          'stub',
+          stub({ error: 'secret' }, status),
+        ).models(),
+      ).rejects.toMatchObject({ status, message: `HTTP ${status}` });
+    },
+  );
+  it('reports unavailable models on network failure', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError('private details'));
+    await expect(
+      createOpenRouterClient('stub', fetcher).models(),
+    ).rejects.toMatchObject({
+      code: 'network_unavailable',
+      message: 'network_unavailable',
+    });
+  });
   it('sorts text models by valid prompt/completion/request price', async () => {
     const model = (id: string, prompt: string, outputs = ['text']) => ({
       id,

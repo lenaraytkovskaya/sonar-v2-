@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   const { sonarPool } = await import('@sonar/db');
   const { rows } = await sonarPool.query(
-    "select status,result,reason_uk from tasks where id=$1 and payload->>'userId'=$2",
+    "select status,result,reason_code,reason_uk from tasks where id=$1 and payload->>'userId'=$2",
     [id, user.id],
   );
   return rows[0]

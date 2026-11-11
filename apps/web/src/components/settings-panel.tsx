@@ -7,6 +7,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
+import { ModelPicker } from './model-picker';
 export function SettingsPanel() {
   const [models, setModels] = useState<TextModel[]>([]),
     [profiles, setProfiles] = useState<GoogleProfile[]>([]),
@@ -68,28 +69,6 @@ export function SettingsPanel() {
       setPending(false);
     }
   };
-  const modelSelect = (
-    label: string,
-    value: string,
-    set: (value: string) => void,
-  ) => (
-    <label className="block space-y-2">
-      <span>{label}</span>
-      <select
-        value={value}
-        onChange={(e) => set(e.target.value)}
-        className="min-h-11 w-full min-w-0 rounded-lg border border-border bg-raised px-3"
-      >
-        <option value="">{uk.ai.choose}</option>
-        {models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name} · {(m.promptUsd * 1e6).toFixed(4)} /{' '}
-            {(m.completionUsd * 1e6).toFixed(4)}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
   return (
     <>
       <PageHeader {...uk.pages.settings} />
@@ -97,8 +76,20 @@ export function SettingsPanel() {
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-xl font-bold">{uk.ai.title}</h2>
           <p className="text-sm text-muted-foreground">{uk.ai.price}</p>
-          {modelSelect(uk.ai.cheap, cheap, setCheap)}
-          {modelSelect(uk.ai.strong, strong, setStrong)}
+          <ModelPicker
+            label={uk.ai.cheap}
+            models={models}
+            value={cheap}
+            onChange={setCheap}
+            defaultOnlyCheap
+          />
+          <ModelPicker
+            label={uk.ai.strong}
+            models={models}
+            value={strong}
+            onChange={setStrong}
+            defaultOnlyCheap={false}
+          />
           <Button
             variant="outline"
             disabled={pending}
