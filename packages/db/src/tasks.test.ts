@@ -18,7 +18,7 @@ describe('task transitions', () => {
     );
     expect(save.mock.calls).toEqual([['running'], ['done', { count: 3 }]]);
   });
-  it.each(['skipped', 'paused'] as const)(
+  it.each(['skipped', 'paused', 'failed'] as const)(
     'records %s and reason',
     async (status) => {
       const save = vi.fn(async () => {});
@@ -35,6 +35,25 @@ describe('task transitions', () => {
       );
     },
   );
+  it('keeps a deferred operation queued with an explanatory reason', async () => {
+    const save = vi.fn(async () => {});
+    await executeTask(
+      async () => ({
+        status: 'deferred',
+        runAt: new Date('2026-11-13T08:00:00Z'),
+        reasonCode: 'outside_send_hours',
+        reasonUk: 'Наступне робоче вікно',
+      }),
+      save,
+      false,
+    );
+    expect(save).toHaveBeenLastCalledWith(
+      'queued',
+      undefined,
+      'outside_send_hours',
+      'Наступне робоче вікно',
+    );
+  });
   it.each([true, false])(
     'requeues only when retries remain: %s',
     async (retry) => {

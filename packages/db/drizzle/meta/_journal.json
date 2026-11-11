@@ -106,6 +106,13 @@
       "when": 1794442000000,
       "tag": "0014_company_analysis",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794443000000,
+      "tag": "0015_needy_rocket_raccoon",
+      "breakpoints": true
     }
   ]
 }

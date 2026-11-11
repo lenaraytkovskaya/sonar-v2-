@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { normalizeWebsite } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
+import { CompanyEmail } from '@/components/company-email';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
 import { RegistryMatch } from '@/components/registry-match';
@@ -20,7 +21,11 @@ export default async function Page({
   const selectedCampaign = validId(campaignId) ? campaignId : undefined;
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
-  const data = await getCompany(id);
+  const { getCompanyMessaging } = await import('@sonar/db/email');
+  const [data, messaging] = await Promise.all([
+    getCompany(id),
+    getCompanyMessaging(id),
+  ]);
   if (!data) notFound();
   const {
     company: c,
@@ -68,6 +73,19 @@ export default async function Page({
           .join(' · ')}
       />
       <SiteScan companyId={id} hasWebsite={!!c.website} />
+      <div className="mb-5">
+        <CompanyEmail
+          companyId={id}
+          initial={messaging}
+          selectedCampaign={selectedCampaign}
+          drafts={Object.fromEntries(
+            analyses.map((analysis) => [
+              analysis.campaign_id,
+              analysis.result.first_message,
+            ]),
+          )}
+        />
+      </div>
       <div className="grid items-start gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         <Card className="min-w-0 space-y-3 break-words p-5">
           <h2 className="font-heading text-xl font-bold">

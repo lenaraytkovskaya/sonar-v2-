@@ -48,11 +48,13 @@ function useTaskPolling() {
     tasks: Task[];
     failures: Task[];
     counts: Count[];
+    sentToday: number;
   }>({
     tasks: [],
     batches: [],
     failures: [],
     counts: [],
+    sentToday: 0,
   });
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -103,7 +105,7 @@ export function FailureBadge() {
   ) : null;
 }
 export function TaskOverview() {
-  const { tasks, failures, counts, error, batches } = useTasks();
+  const { tasks, failures, counts, error, batches, sentToday } = useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState<string | null>(null);
@@ -117,6 +119,7 @@ export function TaskOverview() {
       'site.scan': uk.scanner.title,
       'company.score': uk.company.score,
       'company.analyze': uk.analysis.title,
+      'message.send': uk.email.title,
     })[type] ?? type;
   const active = [
     ...new Set(
@@ -149,6 +152,9 @@ export function TaskOverview() {
   return (
     <>
       <PageHeader {...uk.pages.overview} />
+      <Card className="mb-6 p-5">
+        {uk.email.sentToday}: <strong>{sentToday}</strong>
+      </Card>
       {(error || retryError) && (
         <p role="alert" className="mb-4 text-err">
           {uk.tasks.error}

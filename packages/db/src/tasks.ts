@@ -57,7 +57,12 @@ async function transaction<T>(fn: (client: PoolClient) => Promise<T>) {
     client.release();
   }
 }
-async function dispatch(client: PoolClient, id: string, type: string) {
+async function dispatch(
+  client: PoolClient,
+  id: string,
+  type: string,
+  startAfter?: Date,
+) {
   const { rows } = await client.query(
     'select value from settings where key=$1',
     [`tasks.${type}`],
@@ -73,6 +78,7 @@ async function dispatch(client: PoolClient, id: string, type: string) {
     { taskId: id },
     {
       db: dbFor(client),
+      startAfter,
       retryLimit: config.retryLimit,
       retryDelay: config.retryDelay,
       expireInSeconds: config.expireInSeconds,
@@ -98,6 +104,13 @@ export async function enqueueTask(
         and coalesce(result->>'billingPending','false')<>'true' and not exists(select 1 from spend_events where task_id=t.id)
         and exists(select 1 from company_scores s where s.company_id=(t.payload->>'companyId')::uuid and s.campaign_id=(t.payload->>'campaignId')::uuid
           and s.score >= (select (value::text)::numeric from settings where key='analysis.min_score')) returning id`,
+        [key],
+      );
+      id = resumed[0]?.id;
+    }
+    if (!id && type === 'message.send') {
+      const { rows: resumed } = await client.query(
+        "update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null where idempotency_key=$1 and type='message.send' and status in ('paused','skipped') and exists(select 1 from messages m where m.id=(tasks.payload->>'messageId')::uuid and m.status='queued') returning id",
         [key],
       );
       id = resumed[0]?.id;
@@ -248,7 +261,12 @@ export class TaskFailure extends Error {
 }
 export type TaskOutcome =
   | { status: 'done'; result: object }
-  | { status: 'skipped' | 'paused'; reasonCode: string; reasonUk: string };
+  | {
+      status: 'skipped' | 'paused' | 'failed';
+      reasonCode: string;
+      reasonUk: string;
+    }
+  | { status: 'deferred'; runAt: Date; reasonCode: string; reasonUk: string };
 export async function executeTask(
   handler: () => Promise<TaskOutcome>,
   save: (
@@ -265,7 +283,7 @@ export async function executeTask(
     if (outcome.status === 'done') await save('done', outcome.result);
     else
       await save(
-        outcome.status,
+        outcome.status === 'deferred' ? 'queued' : outcome.status,
         undefined,
         outcome.reasonCode,
         outcome.reasonUk,
@@ -302,7 +320,12 @@ export async function runTask(
     await executeTask(
       async () => {
         if (task.type !== type) throw new Error('Unknown task type');
-        return handler(task.payload, task.id);
+        const outcome = await handler(task.payload, task.id);
+        if (outcome.status === 'deferred')
+          await transaction((client) =>
+            dispatch(client, task.id, type, outcome.runAt),
+          );
+        return outcome;
       },
       async (status, result, code, reason) => {
         await sonarPool.query(

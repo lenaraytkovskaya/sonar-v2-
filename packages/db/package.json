@@ -39,6 +39,10 @@
     "./analysis": {
       "types": "./dist/analysis.d.ts",
       "default": "./dist/analysis.js"
+    },
+    "./email": {
+      "types": "./dist/email.d.ts",
+      "default": "./dist/email.js"
     }
   },
   "files": [

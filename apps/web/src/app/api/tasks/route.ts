@@ -24,5 +24,12 @@ export async function GET(request: Request) {
   const { rows: batches } = await sonarPool.query(
     `select b.id,b.size,b.status,b.found_new,b.found_known,b.requests,b.cost_usd,b.reason_uk,b.fixture,c.name as campaign_name,(select count(*)::int from campaign_companies cc where cc.batch_id=b.id) as companies,(select count(*)::int from campaign_companies cc join companies co on co.id=cc.company_id where cc.batch_id=b.id and co.status='enriching') as enriching,(select count(*)::int from campaign_companies cc join companies co on co.id=cc.company_id where cc.batch_id=b.id and co.status not in ('new','enriching')) as enriched from batches b join campaigns c on c.id=b.campaign_id order by b.started_at desc nulls last,b.number desc limit 20`,
   );
-  return Response.json({ tasks: rows, counts, failures, batches });
+  const { countSentToday } = await import('@sonar/db/email');
+  return Response.json({
+    tasks: rows,
+    counts,
+    failures,
+    batches,
+    sentToday: await countSentToday(),
+  });
 }

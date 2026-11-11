@@ -1,11 +1,15 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { BudgetExceeded } from '@sonar/core';
-const { query, snapshot, budgeted } = vi.hoisted(() => ({
+const { query, snapshot, budgeted, draft } = vi.hoisted(() => ({
   query: vi.fn(),
   snapshot: vi.fn(),
   budgeted: vi.fn(async (_s, _e, _id, run) => run()),
+  draft: vi.fn(async () => {}),
 }));
-vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
+vi.mock('@sonar/db', () => ({
+  sonarPool: { query, connect: async () => ({ query, release: vi.fn() }) },
+}));
+vi.mock('@sonar/db/email', () => ({ draftFromAnalysis: draft }));
 vi.mock('@sonar/db/analysis', () => ({ analysisSnapshot: snapshot }));
 vi.mock('@sonar/db/budget', async (original) => ({
   ...(await original<object>()),
@@ -96,6 +100,12 @@ it('only analyzes at the threshold, retains Polish first message, passes untrust
     expect.any(Number),
     'task',
     expect.any(Function),
+  );
+  expect(draft).toHaveBeenCalledWith(
+    'company',
+    'campaign',
+    'analysis',
+    expect.objectContaining({ query }),
   );
 });
 it('skips score below threshold without payment', async () => {
