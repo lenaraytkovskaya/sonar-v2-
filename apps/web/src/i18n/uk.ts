@@ -99,6 +99,7 @@ export const uk = {
     cities: 'Міста',
     queries: 'Пошукові запити',
     offer: 'Пропозиція',
+    needsAbout: 'Заповніть "Про нас" у налаштуваннях',
     batch_size: 'Розмір порції',
     budget_usd: 'Бюджет кампанії, USD',
     channels: 'Канали',

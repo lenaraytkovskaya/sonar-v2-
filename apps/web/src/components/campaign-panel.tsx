@@ -1,7 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   campaignSchema,
+  applyCampaignSuggestion,
   campaignSuggestionSchema,
   type CampaignInput,
   type CampaignSuggestion,
@@ -57,7 +59,7 @@ function Chips({
           <button
             type="button"
             aria-label={`${uk.campaign.remove}: ${v}`}
-            className="min-h-11 rounded-full bg-chip px-3"
+            className="min-h-11 max-w-full rounded-full bg-chip px-3 break-words"
             key={v}
             onClick={() => onChange(values.filter((x) => x !== v))}
           >
@@ -287,22 +289,76 @@ export function CampaignPanel() {
           </Button>
           {preview && (
             <div className="space-y-3 rounded-lg bg-raised p-4">
-              <p>{uk.ai.preview}</p>
-              <pre className="overflow-auto whitespace-pre-wrap text-sm">
-                {JSON.stringify(preview, null, 2)}
-              </pre>
-              <Button
-                onClick={() => {
-                  setForm({ ...form, ...preview });
-                  setSource('ai');
-                  setPreview(null);
-                }}
-              >
-                {uk.ai.apply}
-              </Button>
-              <Button variant="outline" onClick={() => setPreview(null)}>
-                {uk.ai.cancel}
-              </Button>
+              <h2 className="font-heading text-lg font-bold">
+                {uk.ai.preview}
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(['name', 'country_code', 'language_code'] as const).map(
+                  (key) => (
+                    <label key={key} className="min-w-0">
+                      {uk.campaign[key]}
+                      <Input
+                        value={preview[key]}
+                        maxLength={200}
+                        onChange={(e) =>
+                          setPreview({ ...preview, [key]: e.target.value })
+                        }
+                      />
+                    </label>
+                  ),
+                )}
+              </div>
+              <Chips
+                label={uk.campaign.cities}
+                values={preview.cities}
+                onChange={(cities) => setPreview({ ...preview, cities })}
+              />
+              <Chips
+                label={uk.campaign.queries}
+                values={preview.queries}
+                onChange={(queries) => setPreview({ ...preview, queries })}
+              />
+              <label className="block">
+                {uk.campaign.offer}
+                <textarea
+                  className="mt-2 min-h-32 w-full rounded-lg border border-border bg-surface p-3"
+                  value={preview.offer}
+                  maxLength={20000}
+                  disabled={preview.needs_about}
+                  onChange={(e) =>
+                    setPreview({ ...preview, offer: e.target.value })
+                  }
+                />
+              </label>
+              {preview.needs_about && (
+                <p>
+                  <Link
+                    className="inline-flex min-h-11 items-center text-accent underline"
+                    href="/settings#company-about"
+                  >
+                    {uk.campaign.needsAbout}
+                  </Link>
+                </p>
+              )}
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  disabled={
+                    !campaignSchema.safeParse(
+                      applyCampaignSuggestion(form, preview),
+                    ).success
+                  }
+                  onClick={() => {
+                    setForm(applyCampaignSuggestion(form, preview));
+                    setSource('ai');
+                    setPreview(null);
+                  }}
+                >
+                  {uk.ai.apply}
+                </Button>
+                <Button variant="outline" onClick={() => setPreview(null)}>
+                  {uk.ai.cancel}
+                </Button>
+              </div>
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2">

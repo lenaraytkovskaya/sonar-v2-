@@ -115,6 +115,7 @@ export function SettingsPanel() {
           <label className="block space-y-2">
             <span>{uk.ai.about}</span>
             <textarea
+              id="company-about"
               value={about}
               maxLength={20000}
               onChange={(e) => setAbout(e.target.value)}

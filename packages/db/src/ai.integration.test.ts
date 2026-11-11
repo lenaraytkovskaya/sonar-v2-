@@ -1,4 +1,5 @@
 import { afterAll, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
@@ -15,12 +16,49 @@ it.skipIf(!enabled)(
       ids.push(rows[0].id);
       return rows[0].id as string;
     };
-    const keys = ['ai.models', 'ai.model.cheap', 'budget.monthly_usd'];
+    const keys = [
+      'ai.models',
+      'ai.model.cheap',
+      'budget.monthly_usd',
+      'ai.actions',
+    ];
     const { rows: original } = await sonarPool.query(
       'select key,value from settings where key=any($1)',
       [keys],
     );
     try {
+      const oldActions = {
+        improve: 'Custom rewrite',
+        campaign: 'Legacy campaign',
+        custom_action: 'Preserve me',
+      };
+      await sonarPool.query(
+        "update settings set value=$1 where key='ai.actions'",
+        [JSON.stringify(oldActions)],
+      );
+      const migration = readFileSync(
+        new URL('../drizzle/0009_campaign_suggestions.sql', import.meta.url),
+        'utf8',
+      );
+      await sonarPool.query(migration);
+      await sonarPool.query(migration);
+      const migrated = (
+        await sonarPool.query(
+          "select value from settings where key='ai.actions'",
+        )
+      ).rows[0].value;
+      expect(migrated.improve).toBe(oldActions.improve);
+      expect(migrated.custom_action).toBe(oldActions.custom_action);
+      expect(migrated.campaign).toContain('center plus 8-15');
+      // Restore normal actions for the remaining handler cases.
+      await sonarPool.query(
+        "update settings set value=$1 where key='ai.actions'",
+        [
+          JSON.stringify(
+            original.find((row) => row.key === 'ai.actions')!.value,
+          ),
+        ],
+      );
       for (const [key, value] of Object.entries({
         'ai.models': [
           {

@@ -48,11 +48,19 @@ export async function runAiAssist(
   const instruction = config['ai.actions']?.[input.action];
   if (typeof instruction !== 'string')
     throw new TaskFailure('action_invalid', 'Невідома дія ІІ-помічника.');
+  const about =
+    typeof config['company.about'] === 'string'
+      ? config['company.about'].trim()
+      : '';
+  const context =
+    input.action === 'campaign'
+      ? JSON.stringify({ 'company.about': about, context: input.context ?? '' })
+      : (input.context ?? about);
   const messages = [
     { role: 'system' as const, content: String(config['ai.system_prompt']) },
     {
       role: 'user' as const,
-      content: `${instruction} ${input.instruction ?? ''}\nContext: ${input.context ?? config['company.about'] ?? ''}\nText: ${input.text}`,
+      content: `${instruction} ${input.instruction ?? ''}\nContext: ${context}\nText: ${input.text}`,
     },
   ];
   const limitAction = ['campaign', 'company_filters'].includes(input.action)
@@ -90,7 +98,14 @@ export async function runAiAssist(
         return {
           status: 'done',
           result: {
-            suggestion: parseCampaignSuggestion(response.text),
+            suggestion: (() => {
+              const suggestion = parseCampaignSuggestion(response.text);
+              // Sender facts come from settings, never from the recipient description.
+              return {
+                ...suggestion,
+                ...(!about ? { offer: '', needs_about: true } : {}),
+              };
+            })(),
             costUsd: response.costUsd,
           },
         };
