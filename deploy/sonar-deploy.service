@@ -1,0 +1,9 @@
+[Unit]
+Description=Sonar v2: deploy new commits from origin/main
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sonar-v2/scripts/deploy.sh
+TimeoutStartSec=20min
