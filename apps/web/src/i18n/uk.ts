@@ -75,6 +75,23 @@ export const uk = {
       website: 'Сайт',
     },
   },
+  registry: {
+    find: 'Знайти в ЄДР',
+    empty: 'Компанію ще не зіставлено з ЄДР. Потрібен код ЄДРПОУ на сайті.',
+    terminated: 'Увага: компанія припинена або в стані припинення.',
+    published: 'Версія даних',
+    kinds: {
+      edrpou: 'ЄДРПОУ',
+      legal_name: 'Повна назва',
+      short_name: 'Скорочена назва',
+      registry_status: 'Стан',
+      registration_date: 'Дата реєстрації',
+      termination_date: 'Дата припинення',
+      director: 'Керівник',
+      registered_address: 'Адреса реєстрації',
+      founders: 'Засновники',
+    },
+  },
   scanner: {
     title: 'Сканер сайтів',
     alsoOnWebsite: 'також на сайті',

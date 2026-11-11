@@ -5,6 +5,7 @@ import { normalizeWebsite } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { SiteScan } from '@/components/site-scan';
+import { RegistryMatch } from '@/components/registry-match';
 import { ScanSummary } from '@/components/shared';
 export default async function Page({
   params,
@@ -18,6 +19,15 @@ export default async function Page({
   if (!data) notFound();
   const { company: c, contacts, campaigns, history, facts, scans } = data;
   const date = (value: string) => new Date(value).toLocaleString('uk-UA');
+  const siteFacts = facts.filter((fact) => fact.source !== 'registry');
+  const registryFacts = facts.filter(
+    (fact) => fact.source === 'registry' && fact.kind !== 'registry_entity',
+  );
+  const terminated = registryFacts.some(
+    (fact) =>
+      fact.kind === 'registry_status' &&
+      /припин|ліквід|банкрут/i.test(String(fact.value)),
+  );
   const map = normalizeWebsite(c.google_maps_uri)?.website;
   return (
     <>
@@ -178,8 +188,8 @@ export default async function Page({
         </Card>
         <Card className="min-w-0 space-y-3 break-words p-5">
           <h2 className="font-heading text-xl font-bold">{uk.scanner.facts}</h2>
-          {!facts.length && <p>{uk.company.noData}</p>}
-          {facts.map((fact) => (
+          {!siteFacts.length && <p>{uk.company.noData}</p>}
+          {siteFacts.map((fact) => (
             <div
               key={fact.id}
               className="min-w-0 break-words border-b border-border pb-3"
@@ -233,7 +243,46 @@ export default async function Page({
             </div>
           ))}
         </Card>
-        {[uk.company.score, uk.company.registry].map((label) => (
+        <Card className="p-5">
+          <h2 className="font-heading text-xl font-bold">
+            {uk.company.registry}
+          </h2>
+          <RegistryMatch companyId={c.id} />
+          {!registryFacts.length && (
+            <p className="mt-3 text-muted-foreground">{uk.registry.empty}</p>
+          )}
+          {terminated && (
+            <p role="alert" className="mt-3 text-err">
+              {uk.registry.terminated}
+            </p>
+          )}
+          <dl className="mt-3 space-y-2">
+            {registryFacts.map((fact) => (
+              <div key={fact.id} className="min-w-0 break-words">
+                <dt className="text-sm text-muted-foreground">
+                  {uk.registry.kinds[
+                    fact.kind as keyof typeof uk.registry.kinds
+                  ] ?? fact.kind}
+                </dt>
+                <dd>
+                  {fact.kind === 'founders' && Array.isArray(fact.value)
+                    ? fact.value
+                        .map((f: { name: string | null; role: string }) =>
+                          [f.name, f.role].filter(Boolean).join(' · '),
+                        )
+                        .join('; ')
+                    : String(fact.value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {registryFacts[0] && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              {uk.company.sources.registry} · {date(registryFacts[0].found_at)}
+            </p>
+          )}
+        </Card>
+        {[uk.company.score].map((label) => (
           <Card className="p-5" key={label}>
             <h2 className="font-heading text-xl font-bold">{label}</h2>
             <p className="mt-3 text-muted-foreground">{uk.company.later}</p>

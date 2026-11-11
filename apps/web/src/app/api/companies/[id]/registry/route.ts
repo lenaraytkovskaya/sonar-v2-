@@ -1,0 +1,16 @@
+import { apiUser, validId } from '@/lib/api-access';
+import { uk } from '@/i18n/uk';
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const user = await apiUser(request, true);
+  if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
+  const { id } = await context.params;
+  if (!validId(id))
+    return Response.json({ error: uk.ai.invalid }, { status: 400 });
+  const { enqueueRegistryMatch } = await import('@sonar/db/tasks');
+  return Response.json(await enqueueRegistryMatch(id, user.id), {
+    status: 202,
+  });
+}
