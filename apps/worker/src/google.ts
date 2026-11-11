@@ -22,7 +22,13 @@ import {
   BillingUncertain,
   paidErrorReason,
 } from '@sonar/db/budget';
-import { boss, runTask, logActivity, type TaskOutcome } from '@sonar/db/tasks';
+import {
+  boss,
+  runTask,
+  logActivity,
+  enqueueBatchEnrichment,
+  type TaskOutcome,
+} from '@sonar/db/tasks';
 import type { CountryCode } from '@sonar/core';
 type Search = (
   input: GoogleSearch,
@@ -117,6 +123,12 @@ export async function runGoogleBatch(
           null,
           { campaignId: batch.campaign_id },
           client,
+        );
+        // New companies go straight into enrichment: site, then registry.
+        await enqueueBatchEnrichment(batchId, null).catch((error) =>
+          console.warn(
+            JSON.stringify({ batchId, chain: 'enrich', error: String(error) }),
+          ),
         );
         return {
           status: 'done',
