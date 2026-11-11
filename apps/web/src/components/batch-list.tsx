@@ -16,9 +16,11 @@ type Batch = {
 export function BatchList({ campaignId }: { campaignId: string }) {
   const { batches: progress } = useTasks();
   const [batches, setBatches] = useState<Batch[]>([]),
-    [error, setError] = useState(false);
+    [error, setError] = useState(false),
+    [loading, setLoading] = useState(true);
   useEffect(() => {
     const controller = new AbortController();
+    setLoading(true);
     fetch(`/api/campaigns/${campaignId}/batches`, { signal: controller.signal })
       .then(async (r) => {
         if (!r.ok) throw Error();
@@ -27,6 +29,9 @@ export function BatchList({ campaignId }: { campaignId: string }) {
       })
       .catch(() => {
         if (!controller.signal.aborted) setError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
   }, [campaignId, progress]);
@@ -34,7 +39,8 @@ export function BatchList({ campaignId }: { campaignId: string }) {
     <section className="mt-6 space-y-3">
       <h2 className="font-heading text-xl font-bold">{uk.company.batches}</h2>
       {error && <p role="alert">{uk.ai.error}</p>}
-      {!batches.length && !error && <p>{uk.company.noBatches}</p>}
+      {loading && !batches.length && <p>{uk.google.loading}</p>}
+      {!loading && !batches.length && !error && <p>{uk.company.noBatches}</p>}
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>

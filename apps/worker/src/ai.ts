@@ -1,12 +1,17 @@
 import {
   BudgetExceeded,
+  PaidHttpError,
   parseCampaignSuggestion,
   parseCompanyFilters,
   createOpenRouterClient,
   type TextModel,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
-import { BillingUncertain, runBudgetedRequest } from '@sonar/db/budget';
+import {
+  BillingUncertain,
+  runBudgetedRequest,
+  paidErrorReason,
+} from '@sonar/db/budget';
 import { boss, runTask, TaskFailure, type TaskOutcome } from '@sonar/db/tasks';
 type Input = {
   action: string;
@@ -98,6 +103,11 @@ export async function runAiAssist(
     };
   } catch (error) {
     if (error instanceof TaskFailure) throw error;
+    if (error instanceof PaidHttpError)
+      throw new TaskFailure(
+        `http_${error.status}`,
+        paidErrorReason(error.status, 'OpenRouter'),
+      );
     if (error instanceof BudgetExceeded || error instanceof BillingUncertain)
       return {
         status: 'paused',

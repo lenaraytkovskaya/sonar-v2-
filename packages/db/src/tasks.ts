@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
 import type { PoolClient } from 'pg';
 import { sonarPool } from './index.js';
@@ -95,6 +96,50 @@ export async function enqueueTask(
 }
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
+    const {
+      rows: [original],
+    } = await client.query('select * from tasks where id=$1 for update', [id]);
+    if (!original || original.result?.billingPending) return false;
+    if (original.type === 'google.request') {
+      const {
+        rows: [parent],
+      } = await client.query(
+        "update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null where type='google.batch' and payload->>'batchId'=$1 and status in ('paused','failed','skipped') returning id,type",
+        [original.batch_id],
+      );
+      if (!parent) return false;
+      await dispatch(client, parent.id, parent.type);
+      await logActivity(
+        'task.retry',
+        'task',
+        id,
+        userId,
+        { parentId: parent.id },
+        client,
+      );
+      return true;
+    }
+    const { rows: settled } = await client.query(
+      "select id from spend_events where task_id=$1 and (meta ? 'error' or meta ? 'reconciliation')",
+      [id],
+    );
+    if (
+      original.type === 'ai.assist' &&
+      settled.length &&
+      ['failed', 'paused'].includes(original.status)
+    ) {
+      await enqueueTask(
+        original.type,
+        `${original.idempotency_key}:retry:${randomUUID()}`,
+        original.payload,
+        client,
+      );
+      await client.query('update tasks set dismissed_at=now() where id=$1', [
+        id,
+      ]);
+      await logActivity('task.retry', 'task', id, userId, {}, client);
+      return true;
+    }
     const { rows } = await client.query(
       "update tasks set status='queued', reason_code=null, reason_uk=null, finished_at=null where id=$1 and type<>'google.request' and status in ('failed','paused','skipped') returning type",
       [id],

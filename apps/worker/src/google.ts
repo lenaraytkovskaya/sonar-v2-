@@ -4,13 +4,24 @@ import {
   normalizeWebsite,
   googlePageSchema,
   BudgetExceeded,
+  PaidHttpError,
   type GoogleSearch,
   type GoogleProfile,
   type GooglePage,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
-import { recordGooglePage, type BatchConfig } from '@sonar/db/batches';
-import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
+import {
+  recordGooglePage,
+  campaignProgress,
+  pairKey,
+  emptyProgress,
+  type BatchConfig,
+} from '@sonar/db/batches';
+import {
+  runBudgetedRequest,
+  BillingUncertain,
+  paidErrorReason,
+} from '@sonar/db/budget';
 import { boss, runTask, logActivity, type TaskOutcome } from '@sonar/db/tasks';
 import type { CountryCode } from '@sonar/core';
 type Search = (
@@ -24,15 +35,21 @@ export async function runGoogleBatch(
 ): Promise<TaskOutcome> {
   const client = await sonarPool.connect();
   const {
+    rows: [owner],
+  } = await client.query('select campaign_id from batches where id=$1', [
+    batchId,
+  ]);
+  const lockKey = owner?.campaign_id ?? batchId;
+  const {
     rows: [lock],
   } = await client.query(
     'select pg_try_advisory_lock(hashtextextended($1,0)) as locked',
-    [batchId],
+    [lockKey],
   );
   if (!lock.locked) {
     client.release();
     return {
-      status: 'paused',
+      status: 'skipped',
       reasonCode: 'batch_busy',
       reasonUk: 'Порція вже виконується.',
     };
@@ -46,12 +63,8 @@ export async function runGoogleBatch(
       return { status: 'done', result: { batchId } };
     if (initial.fixture && !search)
       throw Error('Fixture requires an explicit stub');
-    if (!search && !process.env.GOOGLE_PLACES_API_KEY)
-      return await pause(
-        'api_key_missing',
-        'Додайте ключ Google Places у налаштування стенда.',
-      );
-    search ??= createGoogleClient(process.env.GOOGLE_PLACES_API_KEY!);
+    const canSearch = Boolean(search || process.env.GOOGLE_PLACES_API_KEY);
+    search ??= createGoogleClient(process.env.GOOGLE_PLACES_API_KEY ?? '');
     const config = initial.config as BatchConfig;
     const pairs = config.queries.flatMap((query) =>
       config.cities.map((city) => ({ query, city })),
@@ -60,6 +73,7 @@ export async function runGoogleBatch(
       "update batches set status='running',reason_uk=null,started_at=coalesce(started_at,now()),finished_at=null where id=$1",
       [batchId],
     );
+    const progress = await campaignProgress(client, initial.campaign_id);
     while (true) {
       const {
         rows: [batch],
@@ -72,17 +86,26 @@ export async function runGoogleBatch(
         batch.campaign_status === 'archived'
       )
         return await pause('campaign_paused', 'Кампанію призупинено.');
-      const cursor = batch.cursor as {
-        pair: number;
-        page: number;
-        token?: string;
+      const pairIndex = pairs.findIndex((pair) => {
+        const p = progress[pairKey(pair.query, pair.city)];
+        return !p || !p.exhausted || p.buffer.length;
+      });
+      const pair = pairs[pairIndex]!;
+      const state = pair
+        ? (progress[pairKey(pair.query, pair.city)] ??= emptyProgress())
+        : null;
+      const cursor = {
+        pair: pairIndex,
+        page: state?.pages ?? 0,
+        token: state?.token,
       };
-      if (
-        batch.found_new + batch.found_known >= batch.size ||
-        cursor.pair >= pairs.length
-      ) {
+      if (batch.found_new + batch.found_known >= batch.size || pairIndex < 0) {
         const reason =
-          cursor.pair >= pairs.length ? 'Результати вичерпано.' : null;
+          pairIndex < 0
+            ? [batch.reason_uk, 'Результати вичерпано.']
+                .filter(Boolean)
+                .join(' ')
+            : batch.reason_uk;
         await client.query(
           "update batches set status='done',reason_uk=$2,finished_at=now() where id=$1",
           [batchId, reason],
@@ -104,17 +127,45 @@ export async function runGoogleBatch(
           },
         };
       }
-      const key = `google.request:${batchId}:${cursor.pair}:${cursor.page}`;
+      await client.query(
+        'update campaigns set google_progress=$2 where id=$1',
+        [batch.campaign_id, progress],
+      );
+      if (!state!.buffer.length && !canSearch)
+        return await pause(
+          'api_key_missing',
+          'Додайте ключ Google Places у налаштування стенда.',
+        );
+      const baseKey = `google.request:${batchId}:${cursor.pair}:${cursor.page}`;
+      const {
+        rows: [attempt],
+      } = await client.query(
+        `select count(*)::int as n from tasks t join spend_events s on s.task_id=t.id where t.batch_id=$1 and (t.idempotency_key=$2 or t.idempotency_key like $2||':retry:%') and (s.meta ? 'error' or s.meta ? 'reconciliation')`,
+        [batchId, baseKey],
+      );
+      const key = attempt.n ? `${baseKey}:retry:${attempt.n}` : baseKey;
       const {
         rows: [task],
       } = await client.query(
-        `insert into tasks(type,idempotency_key,batch_id,subject_type,subject_id) values('google.request',$1,$2::uuid,'batch',$2::text) on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key returning id`,
-        [key, batchId],
+        `insert into tasks(type,idempotency_key,batch_id,subject_type,subject_id,payload) values('google.request',$1,$2::uuid,'batch',$2::text,$3) on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key returning id`,
+        [
+          key,
+          batchId,
+          {
+            query: pair.query,
+            city: pair.city,
+            page: cursor.page,
+            hasPageToken: Boolean(cursor.token),
+            buffered: state!.buffer.length > 0,
+          },
+        ],
       );
-      const pair = pairs[cursor.pair]!;
       let page: GooglePage;
+      const buffered = state!.buffer.length > 0;
       try {
-        if (batch.fixture) {
+        if (buffered) {
+          page = { places: state!.buffer };
+        } else if (batch.fixture) {
           page = googlePageSchema.parse(
             await search(
               {
@@ -164,13 +215,41 @@ export async function runGoogleBatch(
           page = googlePageSchema.parse(JSON.parse(response.text));
         }
       } catch (error) {
+        if (error instanceof PaidHttpError) {
+          const reason = paidErrorReason(error.status);
+          await client.query(
+            "update tasks set status='failed',reason_code=$2,reason_uk=$3,finished_at=now() where id=$1",
+            [task.id, `http_${error.status}`, reason],
+          );
+          if (error.status === 400 && cursor.token) {
+            state!.exhausted = true;
+            state!.token = undefined;
+            state!.reason = reason;
+            await client.query(
+              'update campaigns set google_progress=$2 where id=$1',
+              [batch.campaign_id, progress],
+            );
+            await client.query('update batches set reason_uk=$2 where id=$1', [
+              batchId,
+              reason,
+            ]);
+            continue;
+          }
+          return await pause(`http_${error.status}`, reason);
+        }
         if (
           error instanceof BudgetExceeded ||
           error instanceof BillingUncertain
         ) {
           await client.query(
-            "update tasks set status='paused',reason_uk=$2,finished_at=now() where id=$1",
-            [task.id, error.message],
+            "update tasks set status='paused',reason_code=$3,reason_uk=$2,finished_at=now() where id=$1",
+            [
+              task.id,
+              error.message,
+              error instanceof BillingUncertain
+                ? 'billing_uncertain'
+                : 'budget_exceeded',
+            ],
           );
           return await pause(
             error instanceof BudgetExceeded
@@ -194,12 +273,14 @@ export async function runGoogleBatch(
       await recordGooglePage(client, batchId, async (tx) => {
         let foundNew = 0,
           foundKnown = 0;
+        let consumed = 0;
         for (const place of page.places) {
           if (
             batch.found_new + batch.found_known + foundNew + foundKnown >=
             batch.size
           )
             break;
+          consumed++;
           if (place.businessStatus === 'CLOSED_PERMANENTLY') continue;
           const site = normalizeWebsite(place.websiteUri);
           const city =
@@ -279,14 +360,21 @@ export async function runGoogleBatch(
             );
           }
         }
-        const next =
-          page.nextPageToken && cursor.page < 2
-            ? {
-                pair: cursor.pair,
-                page: cursor.page + 1,
-                token: page.nextPageToken,
-              }
-            : { pair: cursor.pair + 1, page: 0 };
+        if (!buffered) {
+          state!.pages++;
+          state!.token = page.nextPageToken;
+          state!.exhausted = !page.nextPageToken || state!.pages >= 3;
+        }
+        state!.buffer = page.places.slice(consumed);
+        await tx.query('update campaigns set google_progress=$2 where id=$1', [
+          batch.campaign_id,
+          progress,
+        ]);
+        const next = {
+          pair: pairIndex,
+          page: state!.pages,
+          token: state!.token,
+        };
         await tx.query(
           `update tasks set status='done',finished_at=now(),result=coalesce(result,'{}')||$2::jsonb where id=$1`,
           [task.id, JSON.stringify({ fixture: batch.fixture })],
@@ -308,7 +396,7 @@ export async function runGoogleBatch(
     throw error;
   } finally {
     await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [
-      batchId,
+      lockKey,
     ]);
     client.release();
   }

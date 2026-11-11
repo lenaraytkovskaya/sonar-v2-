@@ -53,7 +53,7 @@ describe('OpenRouter adapter', () => {
         'test',
         stub({ error: 'private provider details' }, 429),
       ).complete('model', [], 100),
-    ).rejects.toThrow('request_failed');
+    ).rejects.toMatchObject({ status: 429 });
   });
   it('does not call the network without a key', async () => {
     const fetcher = stub(reply);

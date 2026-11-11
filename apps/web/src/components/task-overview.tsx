@@ -16,6 +16,7 @@ type Task = {
   reason_uk: string | null;
   repetitions: number;
   result: {
+    billingPending?: boolean;
     approximate?: boolean;
     counts?: Record<string, string | null>;
   } | null;
@@ -97,6 +98,7 @@ export function TaskOverview() {
   const { tasks, failures, counts, error, batches } = useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  const [reconciling, setReconciling] = useState<string | null>(null);
   const name = (type: string) =>
     ({
       'system.registry_ping': uk.tasks.registry,
@@ -112,12 +114,21 @@ export function TaskOverview() {
         .map((x) => x.type),
     ),
   ];
-  const retry = async (id: string, action = 'retry') => {
+  const retry = async (id: string, action = 'retry', charged?: boolean) => {
     setPending(id);
     try {
-      const r = await fetch(`/api/tasks/${id}/${action}`, { method: 'POST' });
+      const r = await fetch(`/api/tasks/${id}/${action}`, {
+        method: 'POST',
+        ...(charged === undefined
+          ? {}
+          : {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ charged }),
+            }),
+      });
       if (!r.ok) throw Error();
       setRetryError(false);
+      setReconciling(null);
     } catch {
       setRetryError(true);
     } finally {
@@ -237,12 +248,35 @@ export function TaskOverview() {
             >
               {uk.tasks.dismiss}
             </Button>
-            <Button
-              disabled={pending === task.id}
-              onClick={() => void retry(task.id)}
-            >
-              {uk.tasks.retry}
-            </Button>
+            {task.result?.billingPending ? (
+              reconciling === task.id ? (
+                <>
+                  <Button
+                    disabled={pending === task.id}
+                    onClick={() => void retry(task.id, 'reconcile', true)}
+                  >
+                    {uk.tasks.charged}
+                  </Button>
+                  <Button
+                    disabled={pending === task.id}
+                    onClick={() => void retry(task.id, 'reconcile', false)}
+                  >
+                    {uk.tasks.notCharged}
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={() => setReconciling(task.id)}>
+                  {uk.tasks.reconcile}
+                </Button>
+              )
+            ) : (
+              <Button
+                disabled={pending === task.id}
+                onClick={() => void retry(task.id)}
+              >
+                {uk.tasks.retry}
+              </Button>
+            )}
           </div>
         ))}
         {failures.length === 0 && (

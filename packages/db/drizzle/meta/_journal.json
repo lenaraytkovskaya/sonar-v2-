@@ -50,6 +50,13 @@
       "when": 1794420529799,
       "tag": "0006_company_filters",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794423754831,
+      "tag": "0007_smooth_captain_universe",
+      "breakpoints": true
     }
   ]
 }

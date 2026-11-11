@@ -1,11 +1,13 @@
 import { afterAll, expect, it, vi } from 'vitest';
+import { PaidHttpError } from '@sonar/core';
 import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
   'records actual stub cost once, blocks zero budget, serializes concurrent spend',
   async () => {
     const { sonarPool } = await import('./index.js');
-    const { runBudgetedRequest } = await import('./budget.js');
+    const { runBudgetedRequest, reconcileBilling, paidErrorReason } =
+      await import('./budget.js');
     const createdIds: string[] = [];
     const {
       rows: [original],
@@ -54,6 +56,28 @@ it.skipIf(!enabled)(
       await sonarPool.query(
         "update settings set value='1' where key='budget.monthly_usd'",
       );
+      for (const status of [400, 403, 429, 500, 503]) {
+        const httpId = await id();
+        const http = vi.fn(async () => {
+          throw new PaidHttpError(status);
+        });
+        await expect(
+          runBudgetedRequest('openrouter', 0.01, httpId, http),
+        ).rejects.toMatchObject({ status });
+        await expect(
+          runBudgetedRequest('openrouter', 0.01, httpId, http),
+        ).rejects.toMatchObject({ status });
+        expect(http).toHaveBeenCalledTimes(1);
+        const row = (
+          await sonarPool.query(
+            'select cost_usd,meta from spend_events where task_id=$1',
+            [httpId],
+          )
+        ).rows[0];
+        expect(Number(row.cost_usd)).toBe(0);
+        expect(row.meta.error).toEqual({ status });
+        expect(paidErrorReason(status)).toContain(String(status));
+      }
       const op = vi.fn(async () => ({
         id: randomUUID(),
         model: 'test',
@@ -104,7 +128,7 @@ it.skipIf(!enabled)(
         runBudgetedRequest('openrouter', 0.1, uncertainId, async () => {
           throw Error('timeout');
         }),
-      ).rejects.toThrow('timeout');
+      ).rejects.toThrow('невідомий');
       const duplicate = vi.fn(paid);
       await expect(
         runBudgetedRequest('openrouter', 0.1, uncertainId, duplicate),
@@ -119,7 +143,46 @@ it.skipIf(!enabled)(
         runBudgetedRequest('openrouter', 0.3, await id(), exceedsReserved),
       ).rejects.toMatchObject({ scope: 'monthly' });
       expect(exceedsReserved).not.toHaveBeenCalled();
+      const monthly = async () =>
+        Number(
+          (
+            await sonarPool.query(`select sum(cost) as total from (
+        select cost_usd as cost from spend_events where created_at >= date_trunc('month',now())
+        union all select (result->>'billingEstimate')::numeric from tasks where result->>'billingPending'='true'
+        and (result->>'billingAt')::timestamptz >= date_trunc('month',now())) x`)
+          ).rows[0].total,
+        );
+      const before = await monthly();
+      await sonarPool.query("update tasks set status='paused' where id=$1", [
+        uncertainId,
+      ]);
+      expect(await reconcileBilling(uncertainId, false, null)).toBe(true);
+      expect(await monthly()).toBeCloseTo(before - 0.1, 10);
+      const chargedId = await id();
+      await expect(
+        runBudgetedRequest('openrouter', 0.1, chargedId, async () => {
+          throw Error('network');
+        }),
+      ).rejects.toThrow('невідомий');
+      await sonarPool.query("update tasks set status='paused' where id=$1", [
+        chargedId,
+      ]);
+      const reserved = await monthly();
+      expect(await reconcileBilling(chargedId, true, null)).toBe(true);
+      expect(await monthly()).toBeCloseTo(reserved, 10);
+      expect(
+        (
+          await sonarPool.query(
+            "select count(*)::int as n from activity_log where action='billing.reconcile' and entity_id=any($1::text[])",
+            [[uncertainId, chargedId]],
+          )
+        ).rows[0].n,
+      ).toBe(2);
     } finally {
+      await sonarPool.query(
+        'delete from activity_log where entity_id=any($1::text[])',
+        [createdIds],
+      );
       await sonarPool.query(
         'delete from spend_events where task_id=any($1::uuid[])',
         [createdIds],

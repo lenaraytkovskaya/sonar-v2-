@@ -75,6 +75,8 @@ export const uk = {
     },
   },
   google: {
+    exhausted: 'Результати вичерпано',
+    loading: 'Завантаження…',
     businessStatus: {
       OPERATIONAL: 'Працює',
       CLOSED_TEMPORARILY: 'Тимчасово зачинено',
@@ -133,6 +135,9 @@ export const uk = {
     },
   },
   tasks: {
+    reconcile: 'Звірити',
+    charged: 'Списано',
+    notCharged: 'Не списано',
     active: 'Зараз у роботі',
     failures: 'Помилки та паузи',
     registry: 'Перевірка реєстру ЄДР',
