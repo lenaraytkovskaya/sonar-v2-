@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   EmailSendError,
   messageStatusForMode,
+  normalizePhone,
   nextSendTime,
   type SendHours,
 } from '@sonar/core';
@@ -31,6 +32,9 @@ export interface EmailAccount {
 }
 export interface EmailMessage {
   id: string;
+  channel: 'email' | 'form';
+  screenshotBefore: boolean;
+  screenshotAfter: boolean;
   accountId: string;
   toAddress: string;
   subject: string;
@@ -38,6 +42,7 @@ export interface EmailMessage {
   status:
     | 'draft'
     | 'awaiting_approval'
+    | 'awaiting_manual'
     | 'queued'
     | 'sent'
     | 'delivered'
@@ -61,7 +66,7 @@ const validEmail = (value: string) =>
 const invalid = (reason: string): never => {
   throw new EmailValidationError(reason);
 };
-async function transaction<T>(
+export async function transaction<T>(
   fn: (c: PoolClient) => Promise<T>,
   existing?: PoolClient,
 ): Promise<T> {
@@ -135,7 +140,7 @@ export async function isContactBlocked(
 ): Promise<boolean> {
   return (
     await c.query(
-      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
+      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
       [companyId, address],
     )
   ).rows[0].blocked;
@@ -150,7 +155,7 @@ export async function getCompanyMessaging(companyId: string) {
   ] = await Promise.all([
     listEmailAccounts(),
     sonarPool.query(
-      `select m.id,m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by m.created_at desc,m.id`,
+      `select m.id,m.channel,(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by m.created_at desc,m.id`,
       [companyId],
     ),
     sonarPool.query(
@@ -169,6 +174,13 @@ export async function getCompanyMessaging(companyId: string) {
   const recipients = emails.map((e) => String(e.normalized)).filter(validEmail);
   return {
     accounts,
+    formAccounts: await listFormAccounts(),
+    formUrls: (
+      await sonarPool.query(
+        "select normalized from contacts where company_id=$1 and kind='form' order by rank desc,id",
+        [companyId],
+      )
+    ).rows.map((r) => String(r.normalized)),
     messages: messages as EmailMessage[],
     campaigns: campaigns as { id: string; name: string; sendMode: SendMode }[],
     emails: recipients,
@@ -180,11 +192,12 @@ export async function getCompanyMessaging(companyId: string) {
   };
 }
 type MessageInput = {
+  channel?: 'email' | 'form';
   companyId: string;
   campaignId: string;
   accountId: string;
   toAddress: string;
-  subject: string;
+  subject?: string;
   body: string;
   submit?: boolean;
   idempotencyKey: string;
@@ -211,12 +224,15 @@ export async function createCompanyMessage(
   userId: string | null,
   existing?: PoolClient,
 ) {
-  const to = input.toAddress?.trim().toLowerCase(),
-    subject = input.subject?.trim(),
+  const channel = input.channel ?? 'email';
+  const to =
+      channel === 'email'
+        ? input.toAddress?.trim().toLowerCase()
+        : input.toAddress?.trim(),
+    subject = input.subject?.trim() ?? '',
     body = input.body?.trim();
   if (
-    !validEmail(to) ||
-    !subject ||
+    (channel === 'email' ? !validEmail(to) || !subject : !validFormUrl(to)) ||
     subject.length > 998 ||
     /[\r\n]/.test(subject) ||
     !body ||
@@ -224,7 +240,11 @@ export async function createCompanyMessage(
     !input.idempotencyKey ||
     input.idempotencyKey.length > 200
   )
-    invalid('Вкажіть коректний email, тему та текст повідомлення.');
+    invalid(
+      channel === 'form'
+        ? 'Вкажіть коректну адресу форми та текст повідомлення.'
+        : 'Вкажіть коректний email, тему та текст повідомлення.',
+    );
   return transaction(async (c) => {
     const {
       rows: [prior],
@@ -234,6 +254,7 @@ export async function createCompanyMessage(
     );
     if (prior) {
       if (
+        prior.channel !== channel ||
         prior.company_id !== input.companyId ||
         prior.campaign_id !== input.campaignId ||
         prior.account_id !== input.accountId ||
@@ -250,31 +271,43 @@ export async function createCompanyMessage(
       `select a.send_mode,a.channels from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=$1 and a.id=$2 for share of a`,
       [input.companyId, input.campaignId],
     );
-    if (!campaign || campaign.channels?.email !== true)
+    if (
+      !campaign ||
+      campaign.channels?.[channel === 'form' ? 'forms' : channel] !== true
+    )
       invalid(
-        'Email у цій кампанії вимкнено або компанія не належить кампанії.',
+        'Канал у цій кампанії вимкнено або компанія не належить кампанії.',
       );
     if (await isContactBlocked(c, input.companyId, to))
       invalid('Компанія або адреса у списку «Не контактувати».');
     const {
       rows: [account],
     } = await c.query(
-      "select id from channel_accounts where id=$1 and status='active' and channel='email' for share",
-      [input.accountId],
+      "select id from channel_accounts where id=$1 and status='active' and channel=$2 for share",
+      [input.accountId, channel],
     );
-    if (!account) invalid('Оберіть активний email-акаунт.');
+    if (!account) invalid('Оберіть активний акаунт каналу.');
     const {
       rows: [contact],
     } = await c.query(
-      "select id from contacts where company_id=$1 and kind='email' and normalized=$2 for share",
-      [input.companyId, to],
+      'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
+      [input.companyId, to, channel],
     );
-    if (!contact) invalid('Оберіть email із контактів компанії.');
+    if (!contact) invalid('Оберіть адресу із контактів компанії.');
+    if (channel === 'form') {
+      const {
+        rows: [company],
+      } = await c.query('select website from companies where id=$1', [
+        input.companyId,
+      ]);
+      if (!company?.website || !sameFormDomain(to, company.website))
+        invalid('Форма повинна належати домену сайту компанії.');
+    }
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id) values($1,$2,$3) on conflict(company_id,campaign_id,channel) do update set contact_id=excluded.contact_id returning id`,
-      [input.companyId, input.campaignId, contact.id],
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,channel) do update set contact_id=excluded.contact_id returning id`,
+      [input.companyId, input.campaignId, contact.id, channel],
     );
     const status = messageStatusForMode(
       campaign.send_mode,
@@ -283,7 +316,7 @@ export async function createCompanyMessage(
     const {
       rows: [message],
     } = await c.query(
-      `insert into messages(conversation_id,account_id,to_value,subject,body,status,idempotency_key,created_by) values($1,$2,$3,$4,$5,$6,$7,$8) on conflict(idempotency_key) do update set idempotency_key=messages.idempotency_key returning *`,
+      `insert into messages(conversation_id,account_id,to_value,subject,body,status,idempotency_key,created_by,channel) values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(idempotency_key) do update set idempotency_key=messages.idempotency_key returning *`,
       [
         conversation.id,
         input.accountId,
@@ -293,6 +326,7 @@ export async function createCompanyMessage(
         status,
         input.idempotencyKey,
         userId,
+        channel,
       ],
     );
     if (message.status === 'queued')
@@ -322,15 +356,17 @@ export async function submitMessage(messageId: string, userId: string) {
     const {
       rows: [message],
     } = await c.query(
-      `select m.id,m.status,m.to_value,v.company_id,a.send_mode,a.channels from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
+      `select m.id,m.status,m.channel,m.to_value,v.company_id,a.send_mode,a.channels from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
       [messageId],
     );
     if (!message || message.status !== 'draft') return false;
     if (
-      message.channels?.email !== true ||
+      message.channels?.[
+        message.channel === 'form' ? 'forms' : message.channel
+      ] !== true ||
       (await isContactBlocked(c, message.company_id, message.to_value))
     )
-      invalid('Email вимкнено або компанія у списку «Не контактувати».');
+      invalid('Канал вимкнено або компанія у списку «Не контактувати».');
     const status = messageStatusForMode(message.send_mode, true);
     await c.query(
       'update messages set status=$2,created_by=coalesce(created_by,$3) where id=$1',
@@ -392,7 +428,7 @@ export async function blockCompany(companyId: string, userId: string) {
       [companyId, userId],
     );
     await c.query(
-      "update messages set status='failed',reason_uk='Компанія у списку «Не контактувати».' where conversation_id in (select id from conversations where company_id=$1) and status in ('draft','awaiting_approval','queued')",
+      "update messages set status='failed',reason_uk='Компанія у списку «Не контактувати».' where conversation_id in (select id from conversations where company_id=$1) and status in ('draft','awaiting_approval','awaiting_manual','queued')",
       [companyId],
     );
     await logActivity('company.blocked', 'company', companyId, userId, {}, c);
@@ -490,7 +526,7 @@ export async function sendEmailMessage(
       );
     // Session lock spans the durable first-attempt commit and the provider call.
     await c.query(
-      "select pg_advisory_lock(hashtextextended('email:'||$1::text,0))",
+      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
       [identity.account_id],
     );
     locked = true;
@@ -522,6 +558,14 @@ export async function sendEmailMessage(
       await c.query('commit');
       return outcome;
     };
+    if (m.channel !== 'email')
+      return finish(
+        terminal(
+          'skipped',
+          'channel_mismatch',
+          'Повідомлення належить іншому каналу.',
+        ),
+      );
     if (['sent', 'delivered', 'read'].includes(m.status))
       return finish({
         status: 'done',
@@ -736,9 +780,125 @@ export async function sendEmailMessage(
       );
     if (locked)
       await c.query(
-        "select pg_advisory_unlock(hashtextextended('email:'||$1::text,0))",
+        "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
         [accountLockId],
       );
     c.release();
   }
+}
+
+export const validFormUrl = (value: string): boolean => {
+  try {
+    const u = new URL(value);
+    return (
+      ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password
+    );
+  } catch {
+    return false;
+  }
+};
+export const sameFormDomain = (value: string, website: string): boolean => {
+  try {
+    return (
+      validFormUrl(value) &&
+      validFormUrl(website) &&
+      new URL(value).hostname.toLowerCase().replace(/^www\./, '') ===
+        new URL(website).hostname.toLowerCase().replace(/^www\./, '')
+    );
+  } catch {
+    return false;
+  }
+};
+export interface FormAccount extends EmailAccount {
+  senderName: string;
+  senderPhone: string;
+}
+type FormAccountInput = {
+  name: string;
+  fromAddress: string;
+  senderName: string;
+  senderPhone: string;
+  dailyLimit: number;
+};
+export async function listFormAccounts(): Promise<FormAccount[]> {
+  return (
+    await sonarPool.query(
+      `select a.id,a.name,a.address as "fromAddress",a.settings->>'senderName' as "senderName",a.settings->>'senderPhone' as "senderPhone",a.daily_limit as "dailyLimit",(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='form' order by a.name,a.id`,
+    )
+  ).rows;
+}
+function formAccountValues(input: FormAccountInput) {
+  const name = input.name?.trim(),
+    address = input.fromAddress?.trim().toLowerCase(),
+    senderName = input.senderName?.trim(),
+    senderPhone = input.senderPhone?.trim()
+      ? normalizePhone(input.senderPhone.trim(), 'UA')
+      : '';
+  if (
+    !name ||
+    name.length > 200 ||
+    !validEmail(address) ||
+    !senderName ||
+    senderName.length > 200 ||
+    (input.senderPhone?.trim() &&
+      (!senderPhone || !input.senderPhone.trim().startsWith('+'))) ||
+    !Number.isInteger(input.dailyLimit) ||
+    input.dailyLimit < 1 ||
+    input.dailyLimit > 100000
+  )
+    invalid(
+      'Вкажіть назву, ім’я, email та додатний денний ліміт. Телефон, якщо вказано, має бути міжнародним.',
+    );
+  return [
+    name,
+    address,
+    input.dailyLimit,
+    JSON.stringify({ senderName, senderPhone }),
+  ];
+}
+export async function createFormAccount(
+  input: FormAccountInput,
+  userId: string,
+) {
+  const values = formAccountValues(input);
+  return transaction(async (c) => {
+    const {
+      rows: [account],
+    } = await c.query(
+      "insert into channel_accounts(name,address,daily_limit,settings,owner_id,channel) values($1,$2,$3,$4,$5,'form') returning id",
+      [...values, userId],
+    );
+    await logActivity(
+      'form.account.created',
+      'channel_account',
+      account.id,
+      userId,
+      {},
+      c,
+    );
+    return { id: String(account.id) };
+  });
+}
+export async function updateFormAccount(
+  id: string,
+  input: FormAccountInput,
+  userId: string,
+) {
+  const values = formAccountValues(input);
+  return transaction(async (c) => {
+    const { rowCount } = await c.query(
+      "update channel_accounts set name=$1,address=$2,daily_limit=$3,settings=$4 where id=$5 and channel='form'",
+      [...values, id],
+    );
+    if (rowCount)
+      await logActivity(
+        'form.account.updated',
+        'channel_account',
+        id,
+        userId,
+        {},
+        c,
+      );
+    return !!rowCount;
+  });
 }

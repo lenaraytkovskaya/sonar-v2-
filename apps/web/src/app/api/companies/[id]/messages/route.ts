@@ -48,7 +48,8 @@ export async function POST(request: Request, context: Context) {
       !validId(data.idempotencyKey) ||
       typeof data.toAddress !== 'string' ||
       typeof data.subject !== 'string' ||
-      typeof data.body !== 'string'
+      typeof data.body !== 'string' ||
+      (data.channel !== undefined && !['email', 'form'].includes(data.channel))
     )
       return Response.json({ error: uk.ai.invalid }, { status: 400 });
     return email.createCompanyMessage(
@@ -61,6 +62,7 @@ export async function POST(request: Request, context: Context) {
         body: data.body,
         idempotencyKey: data.idempotencyKey,
         submit: true,
+        channel: data.channel === 'form' ? 'form' : 'email',
       },
       user.id,
     );

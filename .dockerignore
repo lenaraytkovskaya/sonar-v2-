@@ -8,3 +8,6 @@
 wiki
 .agents
 .codex
+test-results
+playwright-report
+*.bundle
