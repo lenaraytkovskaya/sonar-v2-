@@ -205,6 +205,13 @@ it.skipIf(!enabled)(
         reasonCode: 'billing_uncertain',
       });
       expect(unknown).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await sonarPool.query('select requests from batches where id=$1', [
+            failure.id,
+          ])
+        ).rows[0].requests,
+      ).toBe(1);
     } finally {
       await sonarPool.query(
         'delete from spend_events where task_id in (select t.id from tasks t join batches b on b.id=t.batch_id where b.campaign_id=any($1::uuid[]))',

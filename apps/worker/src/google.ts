@@ -134,7 +134,7 @@ export async function runGoogleBatch(
             task.id,
             async () => {
               await client.query(
-                "update tasks set attempts=attempts+1,status='running',started_at=now() where id=$1",
+                "with marked as (update tasks set attempts=attempts+1,status='running',started_at=now() where id=$1 returning batch_id) update batches set requests=requests+1 where id in(select batch_id from marked)",
                 [task.id],
               );
               const data = await search!(
@@ -156,6 +156,10 @@ export async function runGoogleBatch(
                 costBasis: 'estimated_tariff',
               };
             },
+          );
+          await client.query(
+            `update batches set cost_usd=(select coalesce(sum(s.cost_usd),0) from spend_events s join tasks t on t.id=s.task_id where t.batch_id=$1) where id=$1`,
+            [batchId],
           );
           page = googlePageSchema.parse(JSON.parse(response.text));
         }
@@ -288,15 +292,8 @@ export async function runGoogleBatch(
           [task.id, JSON.stringify({ fixture: batch.fixture })],
         );
         await tx.query(
-          `update batches set found_new=found_new+$2,found_known=found_known+$3,requests=requests+$4,cost_usd=cost_usd+$5,cursor=$6 where id=$1`,
-          [
-            batchId,
-            foundNew,
-            foundKnown,
-            batch.fixture ? 0 : 1,
-            batch.fixture ? 0 : config.profile.priceUsd,
-            next,
-          ],
+          `update batches set found_new=found_new+$2,found_known=found_known+$3,cursor=$4 where id=$1`,
+          [batchId, foundNew, foundKnown, next],
         );
       });
     }
