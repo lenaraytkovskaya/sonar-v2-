@@ -200,7 +200,10 @@ function emailValues(text: string): string[] {
         !/\.(?:png|jpe?g|gif|svg|webp|ico|avif)$/i.test(email),
     );
 }
-function linkedContact(raw: string, pageUrl: string): SiteContact | null {
+export function linkedContact(
+  raw: string,
+  pageUrl: string,
+): SiteContact | null {
   if (/^viber:\/\/(?:chat|add|pa|community|join)(?:[/?]|$)/i.test(raw))
     return { kind: 'viber', value: raw, rank: 70 };
   let url: URL;

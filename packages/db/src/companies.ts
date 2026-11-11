@@ -132,7 +132,7 @@ export async function getCompany(id: string) {
       [id],
     ),
     sonarPool.query(
-      'select c.id,c.name,b.id as batch_id,b.number,b.status,cc.added_at from campaign_companies cc join campaigns c on c.id=cc.campaign_id join batches b on b.id=cc.batch_id where cc.company_id=$1 order by cc.added_at desc',
+      'select c.id,c.name,b.id as batch_id,b.number,b.status,cc.added_at from campaign_companies cc join campaigns c on c.id=cc.campaign_id left join batches b on b.id=cc.batch_id where cc.company_id=$1 order by cc.added_at desc',
       [id],
     ),
     sonarPool.query(
@@ -186,3 +186,5 @@ export async function* exportCompanies(filters: CompanyFilters) {
     client.release();
   }
 }
+
+export * from './manual.js';

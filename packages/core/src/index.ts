@@ -26,3 +26,4 @@ export * from './registry.js';
 export * from './scoring.js';
 export * from './analysis.js';
 export * from './email.js';
+export * from './manual.js';

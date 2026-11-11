@@ -5,6 +5,7 @@ import { normalizeWebsite } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { CompanyEmail } from '@/components/company-email';
+import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
 import { RegistryMatch } from '@/components/registry-match';
@@ -72,7 +73,11 @@ export default async function Page({
           .filter(Boolean)
           .join(' · ')}
       />
-      <SiteScan companyId={id} hasWebsite={!!c.website} />
+      <SiteScan
+        companyId={id}
+        hasWebsite={!!c.website}
+        enrich={c.place_id.startsWith('manual:')}
+      />
       <div className="mb-5">
         <CompanyEmail
           companyId={id}
@@ -121,6 +126,7 @@ export default async function Page({
           <h2 className="font-heading text-xl font-bold">
             {uk.company.contacts}
           </h2>
+          <ManualEntry companyId={id} />
           {!contacts.length && <p>{uk.company.noData}</p>}
           {contacts.map((contact) => (
             <div
@@ -174,6 +180,14 @@ export default async function Page({
                   {uk.company.source}
                 </a>
               )}
+              {contact.meta?.note && (
+                <p>
+                  {uk.manual.fields.note}: {String(contact.meta.note)}
+                </p>
+              )}
+              {contact.source === 'manual' && (
+                <DeleteManualContact companyId={id} contactId={contact.id} />
+              )}
             </div>
           ))}
         </Card>
@@ -190,9 +204,10 @@ export default async function Page({
                 {row.name}
               </Link>
               <p>
-                {uk.company.batch} #{row.number} ·{' '}
-                {uk.tasks.status[row.status as keyof typeof uk.tasks.status]} ·{' '}
-                {date(row.added_at)}
+                {row.batch_id
+                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
+                  : uk.manual.withoutBatch}{' '}
+                · {date(row.added_at)}
               </p>
             </div>
           ))}
@@ -205,9 +220,13 @@ export default async function Page({
             <p key={row.id}>
               {row.action === 'company.found'
                 ? uk.company.added
-                : (uk.scanner.activities[
+                : (uk.manual.activities[
+                    row.action as keyof typeof uk.manual.activities
+                  ] ??
+                  uk.scanner.activities[
                     row.action as keyof typeof uk.scanner.activities
-                  ] ?? uk.company.activity)}{' '}
+                  ] ??
+                  uk.company.activity)}{' '}
               · {row.user_name ?? uk.appName} · {date(row.created_at)}
             </p>
           ))}

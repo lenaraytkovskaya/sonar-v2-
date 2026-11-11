@@ -253,9 +253,7 @@ export const campaignCompanies = pgTable(
     companyId: uuid('company_id')
       .notNull()
       .references(() => companies.id),
-    batchId: uuid('batch_id')
-      .notNull()
-      .references(() => batches.id),
+    batchId: uuid('batch_id').references(() => batches.id),
     addedAt: timestamp('added_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

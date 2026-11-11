@@ -1,4 +1,48 @@
 export const uk = {
+  manual: {
+    addCompany: 'Додати компанію',
+    addContact: 'Додати контакт',
+    deleteContact: 'Видалити ручний контакт',
+    chooseCampaign: 'Оберіть кампанію',
+    withoutBatch: 'Додано вручну, без порції',
+    fields: {
+      name: 'Назва компанії',
+      website: 'Сайт (необов’язково)',
+      city: 'Місто',
+      countryCode: 'Країна (ISO-2)',
+      value: 'Значення контакту',
+      note: 'Примітка',
+    },
+    kinds: {
+      email: 'Email',
+      phone: 'Телефон',
+      telegram: 'Telegram',
+      whatsapp: 'WhatsApp',
+      viber: 'Viber',
+      form: 'Форма',
+      social: 'Соцмережа',
+    },
+    errors: {
+      invalidContact:
+        'Перевірте контакт: email, телефон або посилання вибраного типу.',
+      invalidCompany:
+        'Вкажіть назву, чинний код країни ISO-2, кампанію та коректний сайт, якщо він є.',
+      companyNotFound: 'Компанію не знайдено.',
+      campaignNotFound: 'Кампанію не знайдено.',
+      duplicateContact: 'Такий контакт уже є у компанії.',
+      duplicateCompany:
+        'Компанія з таким сайтом або назвою в цьому місті й країні вже існує.',
+      contactBlocked: 'Контакт не додано: контактування заборонено.',
+      manualOnly: 'Можна видаляти лише ручні контакти.',
+      contactNotFound: 'Контакт не знайдено.',
+    },
+    activities: {
+      'company.manual.created': 'Компанію додано вручну',
+      'contact.manual.created': 'Контакт додано вручну',
+      'contact.manual.deleted': 'Ручний контакт видалено',
+      'company.enrich': 'Запущено збагачення',
+    },
+  },
   forms: {
     title: 'Форма',
     messaging: 'Повідомлення',
