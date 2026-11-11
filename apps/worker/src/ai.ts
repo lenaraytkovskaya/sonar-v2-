@@ -1,5 +1,6 @@
 import {
   BudgetExceeded,
+  parseCampaignSuggestion,
   createOpenRouterClient,
   type TextModel,
 } from '@sonar/core';
@@ -58,11 +59,28 @@ export async function runAiAssist(
     const response = await runBudgetedRequest('openrouter', estimate, id, () =>
       client.complete(model.id, messages, maxTokens),
     );
+    if (input.action === 'campaign') {
+      try {
+        return {
+          status: 'done',
+          result: {
+            suggestion: parseCampaignSuggestion(response.text),
+            costUsd: response.costUsd,
+          },
+        };
+      } catch {
+        throw new TaskFailure(
+          'ai_schema_invalid',
+          'ІІ повернув некоректні налаштування кампанії. Спробуйте уточнити опис.',
+        );
+      }
+    }
     return {
       status: 'done',
       result: { text: response.text, costUsd: response.costUsd },
     };
   } catch (error) {
+    if (error instanceof TaskFailure) throw error;
     if (error instanceof BudgetExceeded || error instanceof BillingUncertain)
       return {
         status: 'paused',

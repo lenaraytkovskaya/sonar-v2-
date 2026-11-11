@@ -104,3 +104,45 @@ export const spendEvents = pgTable(
     ),
   ],
 );
+
+export const sendMode = pgEnum('send_mode', ['auto', 'approval', 'manual']);
+export const campaignStatus = pgEnum('campaign_status', [
+  'draft',
+  'active',
+  'paused',
+  'archived',
+]);
+export const campaigns = pgTable(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    countryCode: text('country_code').notNull(),
+    languageCode: text('language_code').notNull(),
+    cities: text('cities').array().notNull(),
+    queries: text('queries').array().notNull(),
+    offer: text('offer').notNull(),
+    batchSize: integer('batch_size').notNull().default(20),
+    budgetUsd: numeric('budget_usd', { precision: 20, scale: 10 }).notNull(),
+    channels: jsonb('channels').notNull(),
+    sendMode: sendMode('send_mode').notNull().default('approval'),
+    scoringWeights: jsonb('scoring_weights').notNull(),
+    status: campaignStatus('status').notNull().default('draft'),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check('campaign_budget_nonnegative', sql`${t.budgetUsd} >= 0`),
+    check('campaign_batch_size', sql`${t.batchSize} in (20,50,100,200)`),
+  ],
+);
+export const campaignPresets = pgTable('campaign_presets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  data: jsonb('data').notNull(),
+});
