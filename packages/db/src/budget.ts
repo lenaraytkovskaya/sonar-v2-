@@ -1,11 +1,13 @@
 import type { PoolClient } from 'pg';
 import {
   BudgetExceeded,
+  PaidHttpError,
   checkBudget,
   moneyUnits,
   type PaidResponse,
 } from '@sonar/core';
 import { sonarPool } from './index.js';
+import { logActivity } from './tasks.js';
 export class BillingUncertain extends Error {
   constructor() {
     super(
@@ -74,6 +76,9 @@ export async function runBudgetedRequest(
         throw new Error('Task already billed to another service');
       await client.query('commit');
       transaction = false;
+      if (previous.meta.error)
+        throw new PaidHttpError(previous.meta.error.status);
+      if (!previous.meta.response) throw new BillingUncertain();
       return previous.meta.response as PaidResponse;
     }
     const {
@@ -120,7 +125,27 @@ export async function runBudgetedRequest(
     );
     await client.query('commit');
     transaction = false;
-    const response = await operation();
+    let response: PaidResponse;
+    try {
+      response = await operation();
+    } catch (error) {
+      if (error instanceof PaidHttpError) {
+        await client.query('begin');
+        transaction = true;
+        await client.query(
+          'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,0,0,$2,$3)',
+          [service, taskId, { error: { status: error.status } }],
+        );
+        await client.query(
+          `update tasks set result=result||'{"billingPending":false}'::jsonb where id=$1`,
+          [taskId],
+        );
+        await client.query('commit');
+        transaction = false;
+        throw error;
+      }
+      throw new BillingUncertain();
+    }
     moneyUnits(response.costUsd);
     if (!Number.isSafeInteger(response.units) || response.units < 0)
       throw new Error('Invalid usage');
@@ -139,6 +164,81 @@ export async function runBudgetedRequest(
     return response;
   } catch (error) {
     if (transaction) await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export function paidErrorReason(status: number, service = 'Google') {
+  if (status === 400)
+    return `${service}: некоректний запит або токен сторінки (400).`;
+  if (status === 403)
+    return `${service}: перевірте ключ і доступ до API (403).`;
+  if (status === 429)
+    return `${service}: квоту вичерпано (429). Повторіть пізніше.`;
+  if (status >= 500)
+    return `${service}: помилка сервера (${status}). Можна повторити.`;
+  return `${service}: запит відхилено (${status}).`;
+}
+export async function reconcileBilling(
+  taskId: string,
+  charged: boolean,
+  userId: string | null,
+) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(719401)');
+    const {
+      rows: [task],
+    } = await client.query(
+      "select * from tasks where id=$1 and result->>'billingPending'='true' for update",
+      [taskId],
+    );
+    if (!task || !['failed', 'paused'].includes(task.status)) {
+      await client.query('rollback');
+      return false;
+    }
+    await client.query(
+      'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,$2,$3,$4,$5)',
+      [
+        task.result.billingService,
+        charged ? 1 : 0,
+        charged ? task.result.billingEstimate : 0,
+        taskId,
+        {
+          reconciliation: charged ? 'charged' : 'not_charged',
+          costBasis: 'estimated_tariff',
+        },
+      ],
+    );
+    await client.query(
+      `update tasks set result=result||'{"billingPending":false,"billingReconciled":true}'::jsonb,status='failed',reason_code='billing_reconciled',reason_uk=$2 where id=$1`,
+      [
+        taskId,
+        charged
+          ? 'Витрати звірено: списано за оцінкою. Можна повторити.'
+          : 'Витрати звірено: не списано. Можна повторити.',
+      ],
+    );
+    if (task.batch_id)
+      await client.query(
+        `update batches set cost_usd=(select coalesce(sum(s.cost_usd),0) from spend_events s join tasks t on t.id=s.task_id where t.batch_id=$1) where id=$1`,
+        [task.batch_id],
+      );
+    await logActivity(
+      'billing.reconcile',
+      'task',
+      taskId,
+      userId,
+      { charged, estimateUsd: task.result.billingEstimate },
+      client,
+    );
+    await client.query('commit');
+    return true;
+  } catch (error) {
+    await client.query('rollback');
     throw error;
   } finally {
     client.release();

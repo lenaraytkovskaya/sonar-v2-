@@ -12,12 +12,15 @@ export async function POST(
   const body = await request.json().catch(() => null);
   if (!validId(body?.requestId))
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { createBatch } = await import('@sonar/db/batches');
+  const { createBatch, ContinuationUnavailable } =
+    await import('@sonar/db/batches');
   try {
     return Response.json(await createBatch(id, user.id, body.requestId), {
       status: 202,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ContinuationUnavailable)
+      return Response.json({ error: error.message }, { status: 409 });
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   }
 }

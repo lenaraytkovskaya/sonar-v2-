@@ -1,3 +1,9 @@
+export class PaidHttpError extends Error {
+  constructor(public status: number) {
+    super(`HTTP ${status}`);
+  }
+}
+
 // Contract: https://openrouter.ai/docs/cookbook/administration/usage-accounting
 export type PaidResponse = {
   id: string;
@@ -49,7 +55,7 @@ export function createOpenRouterClient(
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(30000),
     });
-    if (!response.ok) throw new OpenRouterError('request_failed');
+    if (!response.ok) throw new PaidHttpError(response.status);
     return record(await response.json());
   }
   return {

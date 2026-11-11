@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PaidHttpError } from './openrouter.js';
 const baseFields = [
   'places.id',
   'places.displayName',
@@ -136,7 +137,7 @@ export function createGoogleClient(key: string, fetcher: typeof fetch = fetch) {
         signal: AbortSignal.timeout(30000),
       },
     );
-    if (!response.ok) throw Error(`Google HTTP ${response.status}`);
+    if (!response.ok) throw new PaidHttpError(response.status);
     return googlePageSchema.parse(await response.json());
   };
 }

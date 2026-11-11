@@ -11,9 +11,13 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader } from './shared';
 import { AiAssist } from './ai-assist';
+import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
 import { runAiJob } from '@/lib/ai-job';
-type Row = CampaignInput & { id: string };
+type Row = CampaignInput & {
+  id: string;
+  google_progress?: Record<string, { exhausted: boolean; buffer: unknown[] }>;
+};
 const initial: CampaignInput = {
   name: '',
   country_code: 'UA',
@@ -82,6 +86,7 @@ function Chips({
   );
 }
 export function CampaignPanel() {
+  const { batches: batchProgress } = useTasks();
   const [rows, setRows] = useState<Row[]>([]),
     [presets, setPresets] = useState<
       { id: string; name: string; data: CampaignInput }[]
@@ -93,6 +98,16 @@ export function CampaignPanel() {
     [source, setSource] = useState('form'),
     [pending, setPending] = useState(false),
     [message, setMessage] = useState('');
+  const savedProgress = rows.find((row) => row.id === id)?.google_progress;
+  const exhausted =
+    form.queries.length > 0 &&
+    form.cities.length > 0 &&
+    form.queries.every((query) =>
+      form.cities.every((city) => {
+        const p = savedProgress?.[JSON.stringify([query, city])];
+        return p?.exhausted && !p.buffer.length;
+      }),
+    );
   const update = <K extends keyof CampaignInput>(
     key: K,
     value: CampaignInput[K],
@@ -112,7 +127,11 @@ export function CampaignPanel() {
       const row = d.campaigns.find((c: Row) => c.id === selected);
       if (row) {
         setId(row.id);
-        setForm({ ...row, budget_usd: Number(row.budget_usd) });
+        setForm(
+          campaignSchema
+            .strip()
+            .parse({ ...row, budget_usd: Number(row.budget_usd) }),
+        );
       }
     }
     setPresets(d.presets);
@@ -120,6 +139,9 @@ export function CampaignPanel() {
   useEffect(() => {
     void load(true).catch(() => setMessage(uk.ai.error));
   }, []);
+  useEffect(() => {
+    void load().catch(() => setMessage(uk.ai.error));
+  }, [batchProgress]);
   const act = async (kind: 'save' | 'start' | 'pause') => {
     setPending(true);
     setMessage('');
@@ -150,7 +172,13 @@ export function CampaignPanel() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ requestId: crypto.randomUUID() }),
         });
-        if (!start.ok) throw Error(uk.ai.error);
+        const started = await start.json();
+        if (!start.ok) throw Error(started.error ?? uk.ai.error);
+        if (started.exhausted) {
+          await load();
+          setMessage(uk.google.exhausted);
+          return;
+        }
       }
       await load();
       setMessage(kind === 'start' ? uk.campaign.queued : uk.ai.saved);
@@ -201,7 +229,11 @@ export function CampaignPanel() {
               key={row.id}
               onClick={() => {
                 setId(row.id);
-                setForm({ ...row, budget_usd: Number(row.budget_usd) });
+                setForm(
+                  campaignSchema
+                    .strip()
+                    .parse({ ...row, budget_usd: Number(row.budget_usd) }),
+                );
                 setPreview(null);
                 setSource('form');
               }}
@@ -450,13 +482,14 @@ export function CampaignPanel() {
             <Button
               disabled={
                 pending ||
+                exhausted ||
                 !form.cities.length ||
                 !form.queries.length ||
                 !campaignSchema.safeParse(form).success
               }
               onClick={() => void act('start')}
             >
-              {uk.campaign.start}
+              {exhausted ? uk.google.exhausted : uk.campaign.start}
             </Button>
             <Button
               variant="outline"

@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ADD COLUMN "google_progress" jsonb DEFAULT '{}'::jsonb NOT NULL;
