@@ -33,8 +33,12 @@ export class OpenRouterError extends Error {
       | 'request_failed'
       | 'invalid_response'
       | 'usage_missing'
+      | 'finish_reason'
+      | 'empty_content'
       | 'api_key_missing'
       | 'network_unavailable',
+    public billing?: { costUsd?: number; units: number },
+    public finishReason?: 'length' | 'content_filter' | 'error' | 'tool_calls',
   ) {
     super(code);
   }
@@ -70,7 +74,14 @@ export function createOpenRouterClient(
       throw new OpenRouterError('network_unavailable');
     });
     if (!response.ok) throw new PaidHttpError(response.status);
-    return record(await response.json());
+    const text = await response.text().catch(() => {
+      throw new OpenRouterError('network_unavailable');
+    });
+    try {
+      return record(JSON.parse(text));
+    } catch {
+      throw new OpenRouterError('invalid_response', { units: 0 });
+    }
   }
   return {
     async models(): Promise<TextModel[]> {
@@ -118,30 +129,60 @@ export function createOpenRouterClient(
         messages,
         max_tokens: maxTokens,
         stream: false,
+        reasoning: { exclude: true },
       });
-      const choices = response.choices;
-      const text = record(
-        record(Array.isArray(choices) ? choices[0] : null).message,
-      ).content;
-      if (
-        typeof response.id !== 'string' ||
-        typeof text !== 'string' ||
-        !text.trim()
-      )
-        throw new OpenRouterError('invalid_response');
-      const usage = record(response.usage);
-      if (usage.cost === undefined || usage.cost === null)
-        throw new OpenRouterError('usage_missing');
-      const units = amount(usage.total_tokens);
-      if (!Number.isSafeInteger(units))
-        throw new OpenRouterError('invalid_response');
-      return {
-        id: response.id,
-        model: typeof response.model === 'string' ? response.model : model,
-        text,
-        costUsd: amount(usage.cost),
-        units,
-      };
+      // Retain only validated billing numbers, never provider content or keys.
+      const usage = response.usage as Record<string, unknown> | undefined;
+      const billing: { costUsd?: number; units: number } = { units: 0 };
+      try {
+        if (usage?.cost != null) billing.costUsd = amount(usage.cost);
+      } catch {
+        /* Invalid cost falls back to the reservation. */
+      }
+      try {
+        const units = amount(usage?.total_tokens);
+        if (Number.isSafeInteger(units)) billing.units = units;
+      } catch {
+        /* Missing token counts do not invalidate a known cost. */
+      }
+      try {
+        const choices = response.choices;
+        const choice = record(Array.isArray(choices) ? choices[0] : null);
+        if (
+          ['length', 'content_filter', 'error', 'tool_calls'].includes(
+            String(choice.finish_reason),
+          )
+        )
+          throw new OpenRouterError(
+            'finish_reason',
+            billing,
+            choice.finish_reason as OpenRouterError['finishReason'],
+          );
+        const text = record(choice.message).content;
+        if (text == null || (typeof text === 'string' && !text.trim()))
+          throw new OpenRouterError('empty_content');
+        if (
+          typeof response.id !== 'string' ||
+          typeof text !== 'string' ||
+          !text.trim()
+        )
+          throw new OpenRouterError('invalid_response');
+        if (billing.costUsd === undefined)
+          throw new OpenRouterError('usage_missing');
+        const units = amount(usage?.total_tokens);
+        if (!Number.isSafeInteger(units))
+          throw new OpenRouterError('invalid_response');
+        return {
+          id: response.id,
+          model: typeof response.model === 'string' ? response.model : model,
+          text,
+          costUsd: billing.costUsd,
+          units,
+        };
+      } catch (error) {
+        if (error instanceof OpenRouterError) error.billing = billing;
+        throw error;
+      }
     },
   };
 }
