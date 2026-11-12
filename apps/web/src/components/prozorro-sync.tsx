@@ -62,7 +62,7 @@ export function ProzorroSync() {
   };
   return (
     <Card className="space-y-4 p-6">
-      <h2 className="font-heading text-xl font-bold">{uk.prozorro.title}</h2>
+      <h2 className="font-heading text-base font-bold">{uk.prozorro.title}</h2>
       <div className="flex flex-wrap gap-3">
         <Button
           disabled={!loaded || pending || data['prozorro.enabled'] === true}

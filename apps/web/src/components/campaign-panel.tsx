@@ -59,7 +59,7 @@ function Chips({
           <button
             type="button"
             aria-label={`${uk.campaign.remove}: ${v}`}
-            className="min-h-11 max-w-full rounded-full bg-chip px-3 break-words"
+            className="min-h-9 max-w-full rounded-full bg-chip px-3 break-words"
             key={v}
             onClick={() => onChange(values.filter((x) => x !== v))}
           >
@@ -251,7 +251,7 @@ export function CampaignPanel({
           {rows.length === 0 && <p>{uk.campaign.empty}</p>}
           {rows.map((row) => (
             <button
-              className={`min-h-11 w-full rounded-lg p-3 text-left ${id === row.id ? 'bg-chip' : 'hover:bg-raised'}`}
+              className={`min-h-9 w-full rounded-lg p-3 text-left ${id === row.id ? 'bg-chip' : 'hover:bg-raised'}`}
               key={row.id}
               onClick={() => {
                 setId(row.id);
@@ -278,7 +278,7 @@ export function CampaignPanel({
           <label className="block">
             {uk.campaign.presets}
             <select
-              className="mt-2 min-h-11 w-full rounded-lg border border-border bg-surface px-3"
+              className="mt-2 min-h-9 w-full rounded-lg border border-border bg-surface px-3"
               value=""
               onChange={(e) => {
                 const preset = presets.find((p) => p.id === e.target.value);
@@ -360,7 +360,7 @@ export function CampaignPanel({
               {preview.needs_about && (
                 <p>
                   <Link
-                    className="inline-flex min-h-11 items-center text-accent underline"
+                    className="inline-flex min-h-9 items-center text-accent underline"
                     href="/settings#company-about"
                   >
                     {uk.campaign.needsAbout}
@@ -442,7 +442,7 @@ export function CampaignPanel({
             <label>
               {uk.campaign.batch_size}
               <select
-                className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
                 value={form.batch_size}
                 onChange={(e) =>
                   update(
@@ -459,7 +459,7 @@ export function CampaignPanel({
             <label>
               {uk.campaign.send_mode}
               <select
-                className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
                 value={form.send_mode}
                 onChange={(e) =>
                   update(
@@ -478,7 +478,7 @@ export function CampaignPanel({
             <label>
               {uk.campaign.status}
               <select
-                className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
                 value={form.status}
                 onChange={(e) =>
                   update('status', e.target.value as CampaignInput['status'])
@@ -496,7 +496,7 @@ export function CampaignPanel({
             <legend>{uk.campaign.channels}</legend>
             <div className="flex flex-wrap gap-4">
               {Object.entries(form.channels).map(([key, v]) => (
-                <label className="flex min-h-11 items-center gap-2" key={key}>
+                <label className="flex min-h-9 items-center gap-2" key={key}>
                   <input
                     type="checkbox"
                     checked={v}
@@ -519,7 +519,7 @@ export function CampaignPanel({
           <fieldset className="space-y-3">
             <legend>{uk.campaign.scoring_weights}</legend>
             {Object.entries(form.scoring_weights).map(([key, v]) => (
-              <label className="flex min-h-11 items-center gap-4" key={key}>
+              <label className="flex min-h-9 items-center gap-4" key={key}>
                 {uk.campaign.weights[key as keyof typeof uk.campaign.weights] ??
                   key}
                 <input
@@ -572,7 +572,7 @@ export function CampaignPanel({
           <label className="block">
             {uk.google.profile}
             <select
-              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+              className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
               value={form.field_profile}
               onChange={(e) =>
                 update('field_profile', e.target.value as 'contacts' | 'basic')

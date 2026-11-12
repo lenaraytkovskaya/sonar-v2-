@@ -30,7 +30,7 @@ export function CommandInput({
       />
       <CommandPrimitive.Input
         className={cn(
-          'min-h-11 w-full min-w-0 bg-transparent py-3 text-base outline-none placeholder:text-muted-foreground',
+          'min-h-9 w-full min-w-0 bg-transparent py-3 text-base outline-none placeholder:text-muted-foreground',
           className,
         )}
         {...props}
@@ -69,7 +69,7 @@ export function CommandItem({
   return (
     <CommandPrimitive.Item
       className={cn(
-        'relative flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm outline-none select-none data-[selected=true]:bg-chip data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50',
+        'relative flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm outline-none select-none data-[selected=true]:bg-chip data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50',
         className,
       )}
       {...props}

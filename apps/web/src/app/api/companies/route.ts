@@ -12,7 +12,11 @@ export async function GET(request: Request) {
     if (!Number.isSafeInteger(page) || page < 1 || page > 100000)
       return Response.json({ error: uk.ai.invalid }, { status: 400 });
     const { listCompanies } = await import('@sonar/db/companies');
-    return Response.json(await listCompanies(filters, page));
+    return Response.json(
+      await listCompanies(filters, page, 25, undefined, {
+        groupChains: true,
+      }),
+    );
   } catch {
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   }

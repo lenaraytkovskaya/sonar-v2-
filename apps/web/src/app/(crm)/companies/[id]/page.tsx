@@ -1,15 +1,110 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { ExternalLink, MapPin, Star } from 'lucide-react';
 import { validId } from '@/lib/api-access';
 import { notFound } from 'next/navigation';
 import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
 import { uk } from '@/i18n/uk';
-import { Card, PageHeader } from '@/components/shared';
+import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { CompanyEmail } from '@/components/company-email';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
 import { RegistryMatch } from '@/components/registry-match';
+import { LocalTime } from '@/components/local-time';
 import { ScanSummary, Score } from '@/components/shared';
+import { cn } from '@/lib/utils';
+
+const kindOrder = [
+  'email',
+  'phone',
+  'telegram',
+  'whatsapp',
+  'viber',
+  'form',
+  'social',
+  'website',
+];
+const visibleContacts = 12;
+
+function Section({
+  title,
+  children,
+  className,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <Card className={cn('min-w-0 space-y-2.5 break-words p-4', className)}>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h2>
+        {action}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+function Collapsible({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="min-w-0 break-words">
+      <details>
+        <summary className="flex cursor-pointer items-center justify-between gap-2 p-4 font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
+          {title}
+          {count !== undefined && (
+            <span className="rounded-full bg-chip px-2 text-xs normal-case">
+              {count}
+            </span>
+          )}
+        </summary>
+        <div className="space-y-2 border-t border-border p-4 text-sm">
+          {children}
+        </div>
+      </details>
+    </Card>
+  );
+}
+
+function SourceLink({ url }: { url: string | null | undefined }) {
+  const href = normalizeWebsite(url ?? undefined)?.website;
+  return href ? (
+    <a
+      className="inline-flex text-accent"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={uk.company.source}
+      aria-label={uk.company.source}
+    >
+      <ExternalLink aria-hidden="true" className="size-3.5" />
+    </a>
+  ) : null;
+}
+
+function contactHref(contact: {
+  kind: string;
+  normalized: string;
+  value: string;
+}) {
+  if (contact.kind === 'email') return 'mailto:' + contact.normalized;
+  if (contact.kind === 'phone') return 'tel:' + contact.normalized;
+  return normalizeWebsite(contact.value)?.website;
+}
+
 export default async function Page({
   params,
   searchParams,
@@ -40,8 +135,6 @@ export default async function Page({
     scores,
     analyses,
   } = data;
-  const date = (value: string | Date) =>
-    new Date(value).toLocaleString('uk-UA');
   const siteFacts = facts.filter(
     (fact) =>
       fact.source !== 'registry' &&
@@ -52,6 +145,9 @@ export default async function Page({
     (fact) =>
       fact.source === 'registry' &&
       !['registry_entity', 'registry_candidates'].includes(fact.kind),
+  );
+  const registryName = registryFacts.find((fact) =>
+    ['short_name', 'legal_name'].includes(fact.kind),
   );
   const candidates = facts
     .filter(
@@ -71,11 +167,76 @@ export default async function Page({
       ['phone', 'email'].includes(contact.kind) &&
       (contact.source === 'prozorro' || contact.meta?.alsoInProzorro),
   );
+  const sortedContacts = [...contacts].sort(
+    (a, b) =>
+      ((kindOrder.indexOf(a.kind) + 99) % 99) -
+        ((kindOrder.indexOf(b.kind) + 99) % 99) || b.rank - a.rank,
+  );
+  const orderedScores = [...scores].sort(
+    (a, b) =>
+      Number(b.campaign_id === selectedCampaign) -
+      Number(a.campaign_id === selectedCampaign),
+  );
+  const mainScore = orderedScores[0];
   const map = normalizeWebsite(c.google_maps_uri)?.website;
+  const website = normalizeWebsite(c.website ?? undefined);
+  const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
+  const contactRow = (contact: (typeof contacts)[number]) => {
+    const href = contactHref(contact);
+    return (
+      <li
+        key={contact.id}
+        className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
+      >
+        <span className="w-16 shrink-0 pt-0.5 text-xs text-muted-foreground">
+          {uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {href ? (
+              <a
+                className="truncate text-accent"
+                href={href}
+                target={
+                  contact.kind === 'phone' || contact.kind === 'email'
+                    ? undefined
+                    : '_blank'
+                }
+                rel="noreferrer"
+                title={contact.normalized}
+              >
+                {contact.normalized}
+              </a>
+            ) : (
+              <span className="truncate">{contact.normalized}</span>
+            )}
+            <SourceLink url={contact.source_url} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {
+              uk.company.sources[
+                contact.source as keyof typeof uk.company.sources
+              ]
+            }{' '}
+            · <LocalTime value={contact.found_at} dateOnly />
+            {contact.meta?.ai && ` · ${uk.scanner.ai}`}
+            {contact.meta?.alsoOnWebsite && ` · ${uk.scanner.alsoOnWebsite}`}
+            {contact.meta?.alsoInProzorro &&
+              contact.source !== 'prozorro' &&
+              ` · ${uk.prozorro.alsoInProzorro}`}
+            {contact.meta?.note && ` · ${String(contact.meta.note)}`}
+          </p>
+          {contact.source === 'manual' && (
+            <DeleteManualContact companyId={id} contactId={contact.id} />
+          )}
+        </div>
+      </li>
+    );
+  };
   return (
     <>
       <Link
-        className="mb-4 inline-flex min-h-11 items-center text-accent"
+        className="mb-2 inline-flex items-center text-sm text-accent"
         href={
           '/companies' +
           (selectedCampaign ? '?campaignId=' + selectedCampaign : '')
@@ -83,533 +244,463 @@ export default async function Page({
       >
         ← {uk.company.back}
       </Link>
-      <PageHeader
-        title={c.name}
-        description={[
-          c.city,
-          c.primary_type,
-          uk.company.statuses[c.status as keyof typeof uk.company.statuses],
-        ]
-          .filter(Boolean)
-          .join(' · ')}
-      />
-      <SiteScan
-        companyId={id}
-        hasWebsite={!!c.website}
-        enrich={c.place_id.startsWith('manual:')}
-      />
-      <div className="mb-5">
-        <CompanyEmail
-          companyId={id}
-          initial={messaging}
-          selectedCampaign={selectedCampaign}
-          drafts={Object.fromEntries(
-            analyses.map((analysis) => [
-              analysis.campaign_id,
-              analysis.result.first_message,
-            ]),
-          )}
-        />
-      </div>
-      <div className="grid items-start gap-5 lg:grid-cols-2 2xl:grid-cols-3">
-        <Card className="min-w-0 space-y-3 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.company.googleData}
-          </h2>
-          <p>{c.address ?? uk.company.noData}</p>
-          <p>
-            {uk.company.rating}: {c.rating ?? '—'} ({c.ratings_count ?? 0})
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-heading text-xl font-bold tracking-tight">
+              {c.name}
+            </h1>
+            <CompanyStatus
+              status={c.status as keyof typeof uk.company.statuses}
+            />
+          </div>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+            {[c.city, c.primary_type].filter(Boolean).join(' · ')}
+            {c.rating && (
+              <span className="inline-flex items-center gap-1">
+                <Star aria-hidden="true" className="size-3.5 text-wait" />
+                {c.rating} ({c.ratings_count ?? 0} {uk.company.reviews})
+              </span>
+            )}
+            {website && (
+              <a
+                className="text-accent"
+                href={website.website}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {website.domain}
+              </a>
+            )}
           </p>
-          <p>
+        </div>
+        <SiteScan
+          companyId={id}
+          hasWebsite={!!c.website}
+          enrich={c.place_id.startsWith('manual:')}
+        />
+      </header>
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Section title={uk.company.score}>
+          {mainScore ? (
+            <>
+              <p
+                className={cn(
+                  'font-heading text-3xl font-bold tabular-nums',
+                  scoreTone(mainScore.score).text,
+                )}
+              >
+                {mainScore.score.toFixed(1)}
+              </p>
+              <Score value={mainScore.score} />
+              <p className="text-xs text-muted-foreground">
+                {mainScore.campaign_name} ·{' '}
+                <LocalTime value={mainScore.computed_at} />
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">{uk.scoring.empty}</p>
+          )}
+        </Section>
+        <Section title={uk.scoring.top}>
+          {mainScore ? (
+            <ul className="space-y-1 text-sm">
+              {(
+                Object.keys(
+                  uk.scoring.categories,
+                ) as (keyof typeof uk.scoring.categories)[]
+              ).map((category) => {
+                const contact = mainScore.breakdown.top[category];
+                const href = contact ? contactHref(contact) : undefined;
+                return (
+                  <li key={category} className="flex min-w-0 gap-2">
+                    <span className="w-20 shrink-0 text-xs leading-5 text-muted-foreground">
+                      {uk.scoring.categories[category]}
+                    </span>
+                    {!contact ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : href ? (
+                      <a
+                        className="truncate text-accent"
+                        href={href}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={contact.normalized}
+                      >
+                        {contact.normalized}
+                      </a>
+                    ) : (
+                      <span className="truncate">{contact.normalized}</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">{uk.company.noData}</p>
+          )}
+        </Section>
+        <Section
+          title={uk.company.googleData}
+          action={
+            map && (
+              <a
+                className="inline-flex items-center gap-1 text-xs text-accent"
+                href={map}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <MapPin aria-hidden="true" className="size-3.5" />
+                {uk.company.maps}
+              </a>
+            )
+          }
+        >
+          <p className="text-sm">{c.address ?? uk.company.noData}</p>
+          <p className="text-sm text-muted-foreground">
             {uk.google.businessStatus[
               c.business_status as keyof typeof uk.google.businessStatus
             ] ??
               c.business_status ??
               '—'}
           </p>
-          <p>
-            {uk.company.expires}:{' '}
-            {c.google_expires_at ? date(c.google_expires_at) : '—'}
-          </p>
-          {map && (
-            <a
-              className="inline-flex min-h-11 items-center text-accent"
-              href={map}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {uk.company.maps}
-            </a>
+          {siteStatus && (
+            <p className="text-xs text-muted-foreground">
+              {uk.scanner.kinds.site_status}:{' '}
+              {siteStatus.value?.reason ?? uk.tasks.status.done}
+            </p>
           )}
-        </Card>
-        <Card className="min-w-0 space-y-4 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.company.contacts}
-          </h2>
-          <ManualEntry companyId={id} />
-          {!contacts.length && <p>{uk.company.noData}</p>}
-          {contacts.map((contact) => (
-            <div
-              className="min-w-0 break-words border-b border-border pb-3"
-              key={contact.id}
-            >
-              <p>
-                {
-                  uk.company.kinds[
-                    contact.kind as keyof typeof uk.company.kinds
-                  ]
-                }
-                {': '}
-                {contact.kind === 'website' &&
-                normalizeWebsite(contact.value) ? (
-                  <a
-                    className="text-accent"
-                    href={normalizeWebsite(contact.value)!.website}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {contact.normalized}
-                  </a>
-                ) : contact.kind === 'phone' ? (
-                  <a className="text-accent" href={'tel:' + contact.normalized}>
-                    {contact.normalized}
-                  </a>
-                ) : (
-                  contact.normalized
-                )}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {uk.company.source}:{' '}
-                {
-                  uk.company.sources[
-                    contact.source as keyof typeof uk.company.sources
-                  ]
-                }{' '}
-                · {date(contact.found_at)}
-                {contact.meta?.ai && ` · ${uk.scanner.ai}`}
-                {contact.meta?.alsoOnWebsite &&
-                  ` · ${uk.scanner.alsoOnWebsite}`}
-                {contact.meta?.alsoInProzorro &&
-                  contact.source !== 'prozorro' &&
-                  ` · ${uk.prozorro.alsoInProzorro}`}
-              </p>
-              {normalizeWebsite(contact.source_url)?.website && (
-                <a
-                  className="text-accent"
-                  href={normalizeWebsite(contact.source_url)!.website}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {uk.company.source}
-                </a>
-              )}
-              {contact.meta?.note && (
-                <p>
-                  {uk.manual.fields.note}: {String(contact.meta.note)}
-                </p>
-              )}
-              {contact.source === 'manual' && (
-                <DeleteManualContact companyId={id} contactId={contact.id} />
-              )}
-            </div>
-          ))}
-        </Card>
-        <Card className="min-w-0 space-y-3 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.prozorro.title}
-          </h2>
-          <p>
-            {uk.prozorro.purchases}: {prozorro.count.toLocaleString('uk-UA')}
-          </p>
-          <h3 className="font-semibold">{uk.company.contacts}</h3>
-          {!prozorroContacts.length && <p>{uk.company.noData}</p>}
-          {prozorroContacts.map((contact) => (
-            <p key={contact.id}>
-              {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
-              <a
-                className="text-accent"
-                href={`${contact.kind === 'phone' ? 'tel:' : 'mailto:'}${contact.normalized}`}
-              >
-                {contact.normalized}
-              </a>
-            </p>
-          ))}
-          {facts
-            .filter(
-              (fact) =>
-                fact.source === 'prozorro' && fact.kind === 'contact_person',
-            )
-            .map((fact) => (
-              <div key={fact.id}>
-                <p>
-                  {uk.prozorro.contactPerson}: {String(fact.value)}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {date(fact.found_at)}
-                </p>
-                {normalizeWebsite(fact.source_url)?.website && (
-                  <a
-                    className="inline-flex min-h-11 items-center text-accent"
-                    href={normalizeWebsite(fact.source_url)!.website}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {uk.company.source}
-                  </a>
-                )}
-              </div>
-            ))}
-          <h3 className="font-semibold">{uk.prozorro.latest}</h3>
-          {!prozorro.latest.length && <p>{uk.prozorro.empty}</p>}
-          {prozorro.latest.map((purchase) => (
-            <div
-              className="space-y-1 border-t border-border pt-3"
-              key={`${purchase.docType}:${purchase.docId}`}
-            >
-              <p>{purchase.title ?? uk.prozorro.untitled}</p>
-              <p className="text-sm text-muted-foreground">
-                {date(purchase.date)} · {uk.prozorro.roles[purchase.role]}
-              </p>
-              <p>
-                {purchase.amount === null
-                  ? '—'
-                  : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
-                {purchase.currency}
-              </p>
-              {normalizeWebsite(purchase.sourceUrl)?.website && (
-                <a
-                  className="inline-flex min-h-11 items-center text-accent"
-                  href={normalizeWebsite(purchase.sourceUrl)!.website}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {uk.prozorro.source}
-                </a>
-              )}
-            </div>
-          ))}
-        </Card>
-        <Card className="min-w-0 space-y-3 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.company.campaign}
-          </h2>
-          {campaigns.map((row) => (
-            <div key={row.id}>
-              <Link
-                className="text-accent"
-                href={'/campaigns?campaign=' + row.id}
-              >
-                {row.name}
-              </Link>
-              <p>
-                {row.batch_id
-                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
-                  : uk.manual.withoutBatch}{' '}
-                · {date(row.added_at)}
-              </p>
-            </div>
-          ))}
-        </Card>
-        <Card className="min-w-0 space-y-3 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.company.history}
-          </h2>
-          {history.map((row) => (
-            <p key={row.id}>
-              {row.action === 'company.found'
-                ? uk.company.added
-                : (uk.manual.activities[
-                    row.action as keyof typeof uk.manual.activities
-                  ] ??
-                  uk.scanner.activities[
-                    row.action as keyof typeof uk.scanner.activities
-                  ] ??
-                  uk.registry.activities[
-                    row.action as keyof typeof uk.registry.activities
-                  ] ??
-                  uk.company.activity)}{' '}
-              · {row.user_name ?? uk.appName} · {date(row.created_at)}
-            </p>
-          ))}
-          {scans.map((scan) => (
-            <div key={scan.id}>
-              <p>
-                {uk.scanner.title} ·{' '}
-                {uk.tasks.status[scan.status as keyof typeof uk.tasks.status]} ·{' '}
-                {date(scan.created_at)}
-              </p>
-              {scan.reason_uk && <p>{scan.reason_uk}</p>}
-              <ScanSummary result={scan.result} />
-            </div>
-          ))}
-          {!history.length && !scans.length && <p>{uk.company.noData}</p>}
-        </Card>
-        <Card className="min-w-0 space-y-3 break-words p-5">
-          <h2 className="font-heading text-xl font-bold">{uk.scanner.facts}</h2>
-          {!siteFacts.length && <p>{uk.company.noData}</p>}
-          {siteFacts.map((fact) => (
-            <div
-              key={fact.id}
-              className="min-w-0 break-words border-b border-border pb-3"
-            >
-              {fact.kind === 'schema_org' ? (
-                <details>
-                  <summary className="cursor-pointer min-h-11 py-2">
-                    {uk.scanner.kinds.schema_org}
-                  </summary>
-                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-3 text-sm">
-                    {JSON.stringify(fact.value, null, 2)}
-                  </pre>
-                </details>
-              ) : (
-                <p>
-                  {uk.scanner.kinds[
-                    fact.kind as keyof typeof uk.scanner.kinds
-                  ] ?? fact.kind}
-                  :{' '}
-                  {fact.kind === 'site_status'
-                    ? (fact.value.reason ?? uk.tasks.status.done)
-                    : fact.kind === 'captcha'
-                      ? (uk.scanner.captchas[
-                          fact.value as keyof typeof uk.scanner.captchas
-                        ] ?? String(fact.value))
-                      : typeof fact.value === 'string'
-                        ? fact.value
-                        : JSON.stringify(fact.value)}
-                </p>
-              )}
-              <p className="text-sm text-muted-foreground">
-                {
-                  uk.company.sources[
-                    fact.source as keyof typeof uk.company.sources
-                  ]
-                }{' '}
-                · {date(fact.found_at)}
-                {fact.expires_at &&
-                  ` · ${uk.company.expires}: ${date(fact.expires_at)}`}
-              </p>
-              {normalizeWebsite(fact.source_url)?.website && (
-                <a
-                  className="text-accent"
-                  href={normalizeWebsite(fact.source_url)!.website}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {uk.company.source}
-                </a>
-              )}
-            </div>
-          ))}
-        </Card>
-        <Card className="p-5">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.company.registry}
-          </h2>
-          <RegistryMatch companyId={c.id} candidates={candidates} />
-          {!registryFacts.length && (
-            <p className="mt-3 text-muted-foreground">{uk.registry.empty}</p>
+        </Section>
+        <Section title={uk.company.registry}>
+          {registryName ? (
+            <p className="text-sm font-medium">{String(registryName.value)}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{uk.registry.empty}</p>
           )}
           {terminated && (
-            <p role="alert" className="mt-3 text-err">
+            <p role="alert" className="text-sm text-err">
               {uk.registry.terminated}
             </p>
           )}
-          <dl className="mt-3 space-y-2">
-            {registryFacts.map((fact) => (
-              <div key={fact.id} className="min-w-0 break-words">
-                <dt className="text-sm text-muted-foreground">
-                  {uk.registry.kinds[
-                    fact.kind as keyof typeof uk.registry.kinds
-                  ] ?? fact.kind}
-                </dt>
-                <dd>
-                  {fact.kind === 'registry_match_method'
-                    ? (uk.registry.methods[
-                        String(fact.value) as keyof typeof uk.registry.methods
-                      ] ?? String(fact.value))
-                    : fact.kind === 'founders' && Array.isArray(fact.value)
-                      ? fact.value
-                          .map((f: { name: string | null; role: string }) =>
-                            [f.name, f.role].filter(Boolean).join(' · '),
-                          )
-                          .join('; ')
-                      : String(fact.value)}
-                </dd>
+          <p className="text-sm text-muted-foreground">
+            {uk.prozorro.title} · {uk.prozorro.purchases}:{' '}
+            {prozorro.count.toLocaleString('uk-UA')}
+          </p>
+        </Section>
+      </div>
+
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="min-w-0 space-y-3">
+          <Section title={uk.analysis.title}>
+            {!campaigns.length && (
+              <p className="text-sm text-muted-foreground">
+                {uk.company.noData}
+              </p>
+            )}
+            {[...campaigns]
+              .sort(
+                (a, b) =>
+                  Number(b.id === selectedCampaign) -
+                  Number(a.id === selectedCampaign),
+              )
+              .map((campaign, index) => (
+                <section
+                  key={campaign.id}
+                  className={cn(
+                    'space-y-2 text-sm',
+                    index > 0 && 'border-t border-border pt-3',
+                  )}
+                >
+                  {campaigns.length > 1 && (
+                    <h3 className="font-semibold">{campaign.name}</h3>
+                  )}
+                  <CompanyAnalysis
+                    companyId={id}
+                    campaignId={campaign.id}
+                    analysis={analyses.find(
+                      (row) => row.campaign_id === campaign.id,
+                    )}
+                  />
+                </section>
+              ))}
+          </Section>
+          <CompanyEmail
+            companyId={id}
+            initial={messaging}
+            selectedCampaign={selectedCampaign}
+            drafts={Object.fromEntries(
+              analyses.map((analysis) => [
+                analysis.campaign_id,
+                analysis.result.first_message,
+              ]),
+            )}
+          />
+          {orderedScores.length > 0 && (
+            <Collapsible title={uk.scoring.details}>
+              {orderedScores.map((row) => (
+                <section key={row.campaign_id} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Link
+                      className="text-accent"
+                      href={'/campaigns?campaign=' + row.campaign_id}
+                    >
+                      {row.campaign_name}
+                    </Link>
+                    <Score value={row.score} compact />
+                  </div>
+                  <table className="w-full text-left text-sm">
+                    <thead className="text-xs text-muted-foreground">
+                      <tr>
+                        {[
+                          uk.company.score,
+                          uk.scoring.value,
+                          uk.scoring.weight,
+                          uk.scoring.contribution,
+                        ].map((label) => (
+                          <th key={label} className="px-2 py-1 font-medium">
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {row.breakdown.features.map((feature) => (
+                        <tr
+                          key={feature.feature}
+                          className="border-t border-border"
+                        >
+                          <th scope="row" className="px-2 py-1 font-normal">
+                            {
+                              uk.campaign.weights[
+                                feature.feature as keyof typeof uk.campaign.weights
+                              ]
+                            }
+                          </th>
+                          <td
+                            className={cn(
+                              'px-2 py-1 tabular-nums',
+                              feature.value >= 0.7
+                                ? 'text-ok'
+                                : feature.value > 0
+                                  ? 'text-wait'
+                                  : 'text-err',
+                            )}
+                          >
+                            {(feature.value * 100).toFixed(0)}%
+                          </td>
+                          <td className="px-2 py-1 tabular-nums">
+                            {feature.weight}
+                          </td>
+                          <td className="px-2 py-1 tabular-nums">
+                            {feature.contribution.toFixed(1)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ))}
+            </Collapsible>
+          )}
+        </div>
+
+        <div className="min-w-0 space-y-3">
+          <Section title={`${uk.company.contacts} · ${contacts.length}`}>
+            <ManualEntry companyId={id} />
+            {!contacts.length && (
+              <p className="text-sm text-muted-foreground">
+                {uk.company.noData}
+              </p>
+            )}
+            <ul className="text-sm">
+              {sortedContacts.slice(0, visibleContacts).map(contactRow)}
+            </ul>
+            {sortedContacts.length > visibleContacts && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-accent">
+                  {uk.company.more}: {sortedContacts.length - visibleContacts}
+                </summary>
+                <ul>{sortedContacts.slice(visibleContacts).map(contactRow)}</ul>
+              </details>
+            )}
+          </Section>
+          <Section title={uk.company.registry}>
+            <RegistryMatch companyId={c.id} candidates={candidates} />
+            {registryFacts.length > 0 && (
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+                {registryFacts.map((fact) => (
+                  <div key={fact.id} className="contents">
+                    <dt className="text-muted-foreground">
+                      {uk.registry.kinds[
+                        fact.kind as keyof typeof uk.registry.kinds
+                      ] ?? fact.kind}
+                    </dt>
+                    <dd className="break-words">
+                      {fact.kind === 'registry_match_method'
+                        ? (uk.registry.methods[
+                            String(
+                              fact.value,
+                            ) as keyof typeof uk.registry.methods
+                          ] ?? String(fact.value))
+                        : fact.kind === 'founders' && Array.isArray(fact.value)
+                          ? fact.value
+                              .map((f: { name: string | null; role: string }) =>
+                                [f.name, f.role].filter(Boolean).join(' · '),
+                              )
+                              .join('; ')
+                          : String(fact.value)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {registryFacts[0] && (
+              <p className="text-xs text-muted-foreground">
+                {uk.company.sources.registry} ·{' '}
+                <LocalTime value={registryFacts[0].found_at} dateOnly />
+              </p>
+            )}
+          </Section>
+          <Collapsible title={uk.prozorro.title} count={prozorro.count}>
+            {prozorroContacts.map((contact) => (
+              <p key={contact.id}>
+                {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
+                <a className="text-accent" href={contactHref(contact)}>
+                  {contact.normalized}
+                </a>
+              </p>
+            ))}
+            {facts
+              .filter(
+                (fact) =>
+                  fact.source === 'prozorro' && fact.kind === 'contact_person',
+              )
+              .map((fact) => (
+                <p key={fact.id} className="flex items-center gap-1.5">
+                  {uk.prozorro.contactPerson}: {String(fact.value)}
+                  <SourceLink url={fact.source_url} />
+                </p>
+              ))}
+            {!prozorro.latest.length && (
+              <p className="text-muted-foreground">{uk.prozorro.empty}</p>
+            )}
+            {prozorro.latest.map((purchase) => (
+              <div
+                className="space-y-0.5 border-t border-border pt-2"
+                key={`${purchase.docType}:${purchase.docId}`}
+              >
+                <p className="flex items-start gap-1.5">
+                  {purchase.title ?? uk.prozorro.untitled}
+                  <SourceLink url={purchase.sourceUrl} />
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  <LocalTime value={purchase.date} dateOnly /> ·{' '}
+                  {uk.prozorro.roles[purchase.role]} ·{' '}
+                  {purchase.amount === null
+                    ? '—'
+                    : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
+                  {purchase.currency}
+                </p>
               </div>
             ))}
-          </dl>
-          {registryFacts[0] && (
-            <p className="mt-3 text-sm text-muted-foreground">
-              {uk.company.sources.registry} · {date(registryFacts[0].found_at)}
-            </p>
-          )}
-        </Card>
-        <Card className="min-w-0 space-y-5 break-words p-5 lg:col-span-2">
-          <h2 className="font-heading text-xl font-bold">
-            {uk.analysis.title}
-          </h2>
-          {!campaigns.length && <p>{uk.company.noData}</p>}
-          {[...campaigns]
-            .sort(
-              (a, b) =>
-                Number(b.id === selectedCampaign) -
-                Number(a.id === selectedCampaign),
-            )
-            .map((campaign) => (
-              <section
-                key={campaign.id}
-                className="space-y-3 border-t border-border pt-4"
-              >
-                <h3 className="font-semibold">{campaign.name}</h3>
-                <CompanyAnalysis
-                  companyId={id}
-                  campaignId={campaign.id}
-                  analysis={analyses.find(
-                    (row) => row.campaign_id === campaign.id,
-                  )}
-                />
-              </section>
+          </Collapsible>
+          <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
+            {!siteFacts.length && (
+              <p className="text-muted-foreground">{uk.company.noData}</p>
+            )}
+            {siteFacts.map((fact) => (
+              <div key={fact.id} className="min-w-0">
+                {fact.kind === 'schema_org' ? (
+                  <details>
+                    <summary className="cursor-pointer">
+                      {uk.scanner.kinds.schema_org}
+                    </summary>
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-2 text-xs">
+                      {JSON.stringify(fact.value, null, 2)}
+                    </pre>
+                  </details>
+                ) : (
+                  <p className="flex items-center gap-1.5">
+                    <span>
+                      <span className="text-muted-foreground">
+                        {uk.scanner.kinds[
+                          fact.kind as keyof typeof uk.scanner.kinds
+                        ] ?? fact.kind}
+                        :
+                      </span>{' '}
+                      {fact.kind === 'site_status'
+                        ? (fact.value.reason ?? uk.tasks.status.done)
+                        : fact.kind === 'captcha'
+                          ? (uk.scanner.captchas[
+                              fact.value as keyof typeof uk.scanner.captchas
+                            ] ?? String(fact.value))
+                          : typeof fact.value === 'string'
+                            ? fact.value
+                            : JSON.stringify(fact.value)}
+                    </span>
+                    <SourceLink url={fact.source_url} />
+                  </p>
+                )}
+              </div>
             ))}
-        </Card>
-        <Card className="min-w-0 space-y-5 p-5 lg:col-span-2">
-          <h2 className="font-heading text-xl font-bold">{uk.company.score}</h2>
-          {!scores.length && (
-            <p className="text-muted-foreground">{uk.scoring.empty}</p>
-          )}
-          {[...scores]
-            .sort(
-              (a, b) =>
-                Number(b.campaign_id === selectedCampaign) -
-                Number(a.campaign_id === selectedCampaign),
-            )
-            .map((row) => (
-              <section
-                key={row.campaign_id}
-                className="space-y-4 border-t border-border pt-4"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <Link
-                    className="text-accent"
-                    href={'/campaigns?campaign=' + row.campaign_id}
-                  >
-                    {row.campaign_name}
-                  </Link>
-                  <Score value={row.score} />
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {uk.scoring.computed}: {date(row.computed_at)}
+          </Collapsible>
+          <Collapsible
+            title={uk.company.history}
+            count={history.length + scans.length}
+          >
+            {campaigns.map((row) => (
+              <p key={row.id}>
+                <Link
+                  className="text-accent"
+                  href={'/campaigns?campaign=' + row.id}
+                >
+                  {row.name}
+                </Link>{' '}
+                ·{' '}
+                {row.batch_id
+                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
+                  : uk.manual.withoutBatch}{' '}
+                · <LocalTime value={row.added_at} />
+              </p>
+            ))}
+            {scans.map((scan) => (
+              <div key={scan.id}>
+                <p>
+                  {uk.scanner.title} ·{' '}
+                  {uk.tasks.status[scan.status as keyof typeof uk.tasks.status]}{' '}
+                  · <LocalTime value={scan.created_at} />
                 </p>
-                <div className="grid gap-5 lg:grid-cols-2">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr>
-                          {[
-                            uk.company.score,
-                            uk.scoring.value,
-                            uk.scoring.weight,
-                            uk.scoring.contribution,
-                          ].map((label) => (
-                            <th key={label} className="p-2">
-                              {label}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {row.breakdown.features.map((feature) => (
-                          <tr
-                            key={feature.feature}
-                            className="border-t border-border"
-                          >
-                            <th scope="row" className="p-2 font-normal">
-                              {
-                                uk.campaign.weights[
-                                  feature.feature as keyof typeof uk.campaign.weights
-                                ]
-                              }
-                            </th>
-                            <td className="p-2">
-                              {(feature.value * 100).toFixed(0)}%
-                            </td>
-                            <td className="p-2">{feature.weight}</td>
-                            <td className="p-2">
-                              {feature.contribution.toFixed(1)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="min-w-0 space-y-3">
-                    <h3 className="font-semibold">{uk.scoring.top}</h3>
-                    {(
-                      Object.keys(
-                        uk.scoring.categories,
-                      ) as (keyof typeof uk.scoring.categories)[]
-                    ).map((category) => {
-                      const contact = row.breakdown.top[category];
-                      const source = normalizeWebsite(
-                        contact?.source_url ?? undefined,
-                      )?.website;
-                      const href =
-                        contact?.kind === 'email'
-                          ? 'mailto:' + contact.normalized
-                          : contact?.kind === 'phone'
-                            ? 'tel:' + contact.normalized
-                            : normalizeWebsite(contact?.value)?.website;
-                      return (
-                        <div key={category} className="min-w-0 break-words">
-                          <p className="font-medium">
-                            {uk.scoring.categories[category]}
-                          </p>
-                          {!contact ? (
-                            <p className="text-muted-foreground">
-                              {uk.company.noData}
-                            </p>
-                          ) : (
-                            <>
-                              {href ? (
-                                <a
-                                  className="text-accent"
-                                  href={href}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {contact.normalized}
-                                </a>
-                              ) : (
-                                <p>{contact.normalized}</p>
-                              )}
-                              <p className="text-sm text-muted-foreground">
-                                {uk.company.source}:{' '}
-                                {
-                                  uk.company.sources[
-                                    contact.source as keyof typeof uk.company.sources
-                                  ]
-                                }{' '}
-                                · {date(contact.found_at)}
-                              </p>
-                              {source && (
-                                <a
-                                  className="text-accent"
-                                  href={source}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {uk.company.source}
-                                </a>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </section>
+                {scan.reason_uk && (
+                  <p className="text-muted-foreground">{scan.reason_uk}</p>
+                )}
+                <ScanSummary result={scan.result} />
+              </div>
             ))}
-        </Card>
+            <ul className="space-y-1">
+              {history.map((row) => (
+                <li key={row.id}>
+                  {row.action === 'company.found'
+                    ? uk.company.added
+                    : (uk.manual.activities[
+                        row.action as keyof typeof uk.manual.activities
+                      ] ??
+                      uk.scanner.activities[
+                        row.action as keyof typeof uk.scanner.activities
+                      ] ??
+                      uk.registry.activities[
+                        row.action as keyof typeof uk.registry.activities
+                      ] ??
+                      uk.company.activity)}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    · {row.user_name ?? uk.appName} ·{' '}
+                    <LocalTime value={row.created_at} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Collapsible>
+        </div>
       </div>
     </>
   );

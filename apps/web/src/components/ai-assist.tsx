@@ -45,7 +45,7 @@ export function AiAssist({
             aria-label={uk.ai.assist}
             value={action}
             onChange={(e) => setAction(e.target.value as typeof action)}
-            className="min-h-11 w-full rounded-lg border border-border bg-surface px-3"
+            className="min-h-9 w-full rounded-lg border border-border bg-surface px-3"
           >
             {Object.entries(uk.ai.actions).map(([key, label]) => (
               <option key={key} value={key}>

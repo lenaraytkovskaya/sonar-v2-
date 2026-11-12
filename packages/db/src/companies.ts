@@ -59,7 +59,16 @@ export type CompanyRow = {
   domain: string | null;
   status: string;
   created_at: string;
+  ratings_count: number | null;
   phones: string[];
+  emails: string[];
+  channels: string[];
+  registry: boolean;
+  platform: boolean;
+  chain_key: string;
+  chain_rank: number;
+  chain_size: number;
+  branches?: { id: string; name: string; address: string | null }[];
   campaigns: { id: string; name: string }[];
 };
 export type CompanyScoreRow = {
@@ -84,6 +93,7 @@ export async function listCompanies(
   page = 1,
   pageSize = 25,
   connection: Pick<PoolClient, 'query'> = sonarPool,
+  { groupChains = false }: { groupChains?: boolean } = {},
 ) {
   if (
     !Number.isSafeInteger(page) ||
@@ -97,20 +107,48 @@ export async function listCompanies(
   const { sql, values, scoreSql } = companyWhere(parsedFilters);
   const sort =
     parsedFilters.sort ?? (parsedFilters.campaignId ? 'score' : 'newest');
-  const order = `${sort === 'score' ? 'score desc nulls last,' : ''}c.created_at desc,c.id`;
+  const order = `${sort === 'score' ? 't.score desc nulls last,' : ''}t.created_at desc,t.id`;
+  const windowOrder = `${sort === 'score' ? scoreSql + ' desc nulls last,' : ''}c.created_at desc,c.id`;
+  // Branches of one chain share the company's own domain; listings on platforms never group.
+  const platform = `exists(select 1 from jsonb_array_elements_text(coalesce((select value from settings where key='platforms.domains'),'[]'::jsonb)) x where c.domain=x or c.domain like '%.'||x)`;
+  const chainKey = groupChains
+    ? `case when c.domain is null or ${platform} then c.id::text else c.domain end`
+    : 'c.id::text';
   const {
     rows: [count],
   } = await connection.query(
-    `select count(*)::int as total from companies c ${sql}`,
+    `select count(distinct ${chainKey})::int as total from companies c ${sql}`,
     values,
   );
   const { rows } = await connection.query<CompanyRow>(
-    `select c.id,c.name,c.city,c.primary_type,c.rating,${scoreSql} as score,c.website,c.domain,c.status,c.created_at,
- array(select p.normalized from contacts p where p.company_id=c.id and p.kind='phone' order by p.rank desc,p.normalized) as phones,
+    `select t.* from (select c.id,c.name,c.city,c.primary_type,c.rating,c.ratings_count,${scoreSql} as score,c.website,c.domain,c.status,c.created_at,
+ ${platform} as platform,${chainKey} as chain_key,
+ row_number() over (partition by ${chainKey} order by ${windowOrder}) as chain_rank,
+ count(*) over (partition by ${chainKey})::int as chain_size,
+ array(select p.normalized from contacts p where p.company_id=c.id and p.kind='phone' order by p.rank desc,p.normalized ${groupChains ? 'limit 3' : ''}) as phones,
+ array(select p.normalized from contacts p where p.company_id=c.id and p.kind='email' order by p.rank desc,p.normalized limit 2) as emails,
+ array(select distinct p.kind from contacts p where p.company_id=c.id) as channels,
+ exists(select 1 from company_facts r where r.company_id=c.id and r.kind='registry_entity') as registry,
  coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'name',a.name) order by a.name) from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=c.id),'[]') as campaigns
- from companies c ${sql} order by ${order} limit $${values.length + 1} offset $${values.length + 2}`,
+ from companies c ${sql}) t where t.chain_rank=1 order by ${order.replace(/c\./g, 't.')} limit $${values.length + 1} offset $${values.length + 2}`,
     [...values, pageSize, (page - 1) * pageSize],
   );
+  const chains = rows.filter((row) => row.chain_size > 1);
+  if (chains.length) {
+    const { rows: branches } = await connection.query<{
+      chain_key: string;
+      id: string;
+      name: string;
+      address: string | null;
+    }>(
+      `select c.domain as chain_key,c.id,c.name,c.address from companies c ${sql ? sql + ' and' : 'where'} c.domain=any($${values.length + 1}) order by c.name`,
+      [...values, chains.map((row) => row.chain_key)],
+    );
+    for (const row of chains)
+      row.branches = branches
+        .filter((branch) => branch.chain_key === row.chain_key)
+        .map(({ id, name, address }) => ({ id, name, address }));
+  }
   return { companies: rows, total: count.total as number, page, pageSize };
 }
 export async function getCompany(id: string) {

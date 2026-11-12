@@ -110,7 +110,7 @@ export function ManualEntry({
             <label>
               {companyId ? uk.company.type : uk.company.campaign}
               <select
-                className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
                 required
                 value={values[companyId ? 'kind' : 'campaignId']}
                 onChange={(event) =>

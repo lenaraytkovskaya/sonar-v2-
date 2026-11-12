@@ -43,7 +43,7 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
   };
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="font-heading text-xl font-bold">{uk.email.accounts}</h2>
+      <h2 className="font-heading text-base font-bold">{uk.email.accounts}</h2>
       {!accounts.length && <p>{uk.email.empty}</p>}
       {!!accounts.length && (
         <div className="overflow-x-auto">

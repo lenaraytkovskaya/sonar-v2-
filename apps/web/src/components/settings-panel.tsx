@@ -96,7 +96,7 @@ export function SettingsPanel() {
         <RegistryPhoneSync />
         <ProzorroSync />
         <Card className="space-y-4 p-6">
-          <h2 className="font-heading text-xl font-bold">{uk.ai.title}</h2>
+          <h2 className="font-heading text-base font-bold">{uk.ai.title}</h2>
           <p className="text-sm text-muted-foreground">{uk.ai.price}</p>
           <ModelPicker
             label={uk.ai.cheap}
@@ -159,7 +159,9 @@ export function SettingsPanel() {
           <AiAssist text={analysisPrompt} onApply={setAnalysisPrompt} />
         </Card>
         <Card className="space-y-4 p-6">
-          <h2 className="font-heading text-xl font-bold">{uk.google.title}</h2>
+          <h2 className="font-heading text-base font-bold">
+            {uk.google.title}
+          </h2>
           <p>{uk.google.estimated}</p>
           {profiles.map((p, index) => (
             <label className="block" key={p.id}>
@@ -197,7 +199,9 @@ export function SettingsPanel() {
           </label>
         </Card>
         <Card className="space-y-4 p-6">
-          <h2 className="font-heading text-xl font-bold">{uk.scanner.title}</h2>
+          <h2 className="font-heading text-base font-bold">
+            {uk.scanner.title}
+          </h2>
           {Object.entries(scannerFields).map(([key, range]) => (
             <label className="block space-y-2" key={key}>
               <span>
@@ -225,7 +229,7 @@ export function SettingsPanel() {
               }
             />
           </label>
-          <label className="flex min-h-11 items-center gap-3">
+          <label className="flex min-h-9 items-center gap-3">
             <input
               type="checkbox"
               checked={scanner['scanner.ai_fallback'] === true}
