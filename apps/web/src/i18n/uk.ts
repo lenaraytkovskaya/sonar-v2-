@@ -92,6 +92,8 @@ export const uk = {
     scheduled: 'Заплановано на',
     enabled: 'Активний',
     disabled: 'Вимкнений',
+    enable: 'Увімкнути',
+    disable: 'Вимкнути',
     add: 'Додати акаунт',
     empty: 'Email-акаунтів ще немає.',
     write: 'Написати',

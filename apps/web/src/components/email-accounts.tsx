@@ -41,6 +41,27 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
       setPending(false);
     }
   };
+  const toggle = async (id: string, enabled: boolean) => {
+    if (busy.current) return;
+    busy.current = true;
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch('/api/email-accounts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, enabled }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error ?? uk.email.error);
+      router.refresh();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : uk.email.error);
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  };
   return (
     <Card className="space-y-4 p-5">
       <h2 className="font-heading text-base font-bold">{uk.email.accounts}</h2>
@@ -79,7 +100,27 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
                       : '—'}
                   </td>
                   <td className="p-3">
-                    {account.enabled ? uk.email.enabled : uk.email.disabled}
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={
+                          account.enabled
+                            ? 'rounded-full bg-ok-bg px-2 py-0.5 text-xs text-ok'
+                            : 'rounded-full bg-idle-bg px-2 py-0.5 text-xs text-idle'
+                        }
+                      >
+                        {account.enabled ? uk.email.enabled : uk.email.disabled}
+                      </span>
+                      <Button
+                        variant="outline"
+                        className="min-h-7 px-2 text-xs"
+                        disabled={pending}
+                        onClick={() =>
+                          void toggle(account.id, !account.enabled)
+                        }
+                      >
+                        {account.enabled ? uk.email.disable : uk.email.enable}
+                      </Button>
+                    </span>
                   </td>
                 </tr>
               ))}

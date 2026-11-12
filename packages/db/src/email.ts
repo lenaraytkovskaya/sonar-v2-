@@ -98,6 +98,28 @@ export async function countSentToday(): Promise<number> {
     )
   ).rows[0].total;
 }
+export async function setEmailAccountEnabled(
+  id: string,
+  enabled: boolean,
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const { rowCount } = await c.query(
+      "update channel_accounts set status=$2 where id=$1 and channel='email'",
+      [id, enabled ? 'active' : 'disabled'],
+    );
+    if (!rowCount) invalid('Акаунт не знайдено.');
+    await logActivity(
+      enabled ? 'email.account.enabled' : 'email.account.disabled',
+      'channel_account',
+      id,
+      userId,
+      {},
+      c,
+    );
+    return { id };
+  });
+}
 export async function createEmailAccount(
   input: { name: string; fromAddress: string; dailyLimit: number },
   userId: string,
