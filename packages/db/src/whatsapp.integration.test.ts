@@ -86,6 +86,26 @@ it.skipIf(!enabled)(
         dailyLimit: 4,
       });
       await db.sonarPool.query(
+        `update channel_accounts set settings=settings||'{"providerStatus":"SCAN_QR_CODE"}' where id=$1`,
+        [accountId],
+      );
+      adapter.getSession.mockResolvedValueOnce({
+        status: 'FAILED',
+        phone: null,
+      });
+      adapter.restart.mockResolvedValueOnce({
+        status: 'SCAN_QR_CODE',
+        phone: null,
+      });
+      expect(
+        await accounts.refreshWhatsAppAccount(accountId, user, adapter),
+      ).toMatchObject({
+        status: 'qr',
+        qr: 'data:image/png;base64,cXItc2VjcmV0',
+      });
+      expect(adapter.restart).toHaveBeenCalledTimes(1);
+      await accounts.refreshWhatsAppAccount(accountId, user, adapter);
+      await db.sonarPool.query(
         "update channel_accounts set status='paused' where id=$1",
         [accountId],
       );
