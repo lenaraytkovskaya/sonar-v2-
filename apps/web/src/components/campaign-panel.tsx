@@ -13,6 +13,7 @@ import { Card, PageHeader } from './shared';
 import { AiAssist } from './ai-assist';
 import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
+import { CampaignCompanies } from './campaign-companies';
 import { runAiJob } from '@/lib/ai-job';
 type Row = CampaignInput & {
   id: string;
@@ -544,6 +545,11 @@ export function CampaignPanel({
           {id && <BatchList key={id} campaignId={id} />}
         </Card>
       </div>
+      {id && (
+        <Card className="mt-4 p-4">
+          <CampaignCompanies key={id} campaignId={id} />
+        </Card>
+      )}
     </>
   );
 }
