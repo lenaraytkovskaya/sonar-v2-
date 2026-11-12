@@ -194,7 +194,7 @@ it.skipIf(!enabled)(
         null,
       ))!;
       await db.sonarPool.query(
-        'update campaigns set budget_usd=0 where id=$1',
+        'update campaigns set budget_usd=0.000001 where id=$1',
         [campaignId],
       );
       expect(

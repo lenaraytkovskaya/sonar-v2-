@@ -49,7 +49,7 @@ export const campaignSuggestionSchema = campaignSchema
   })
   .extend({
     cities: z.array(text).min(1).max(100),
-    queries: z.array(text).min(5).max(10),
+    queries: z.array(text).min(5).max(20),
     // Older completed tasks do not contain this flag.
     needs_about: z.boolean().default(false),
   })
@@ -131,7 +131,8 @@ export function applyCampaignSuggestion(
   return {
     ...form,
     ...fields,
-    offer: needs_about ? '' : fields.offer,
+    // An empty suggested offer never wipes a message the person already wrote.
+    offer: !needs_about && fields.offer.trim() ? fields.offer : form.offer,
     queries: cleanCampaignQueries(fields.queries, fields.cities),
   };
 }

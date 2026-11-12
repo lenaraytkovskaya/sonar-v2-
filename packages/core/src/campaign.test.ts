@@ -130,7 +130,7 @@ it('applies cleaned suggestions without leaking metadata into the strict campaig
     queries: ['СТО Київ', 'сто Києва', 'Київ'],
   });
   expect(result.queries).toEqual(['СТО']);
-  expect(result.offer).toBe('');
+  expect(result.offer).toBe(input.offer);
   expect(campaignSchema.safeParse(result).success).toBe(true);
   expect(result).not.toHaveProperty('needs_about');
   expect(input.offer).toBe(suggestion.offer);

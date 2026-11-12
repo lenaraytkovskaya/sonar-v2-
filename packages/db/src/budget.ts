@@ -117,8 +117,9 @@ export async function runBudgetedRequest(
       ) usage`,
         [campaign.id],
       );
+      // 0 means no separate campaign cap; the monthly and service budgets still apply.
       if (
-        moneyUnits(Number(campaign.budget_usd)) === 0n ||
+        moneyUnits(Number(campaign.budget_usd)) > 0n &&
         moneyUnits(Number(spent.cost)) + moneyUnits(estimateUsd) >
           moneyUnits(Number(campaign.budget_usd))
       )
