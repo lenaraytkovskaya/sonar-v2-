@@ -49,6 +49,9 @@ services:
       migrate: { condition: service_completed_successfully }
   worker:
     build: { context: .., dockerfile: docker/Dockerfile, target: worker }
+    volumes:
+      # Free-space check only: same filesystem as the data, without the repo root (.env).
+      - ./:/host-disk:ro
     environment:
       GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

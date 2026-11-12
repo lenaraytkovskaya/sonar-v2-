@@ -494,3 +494,33 @@ export const messages = pgTable(
     ),
   ],
 );
+
+export const prozorroParties = pgTable(
+  'prozorro_parties',
+  {
+    code: text('code').notNull(),
+    scheme: text('scheme'),
+    name: text('name'),
+    contactName: text('contact_name'),
+    email: text('email'),
+    telephone: text('telephone'),
+    url: text('url'),
+    role: text('role').$type<'supplier' | 'tenderer' | 'buyer'>().notNull(),
+    docType: text('doc_type').$type<'tender' | 'contract'>().notNull(),
+    docId: text('doc_id').notNull(),
+    publicId: text('public_id'),
+    sourceUrl: text('source_url').notNull(),
+    title: text('title'),
+    amount: numeric('amount'),
+    currency: text('currency'),
+    date: timestamp('date', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.docType, t.docId, t.code, t.role] }),
+    index('prozorro_parties_code_idx').on(t.code),
+    index('prozorro_parties_phone_idx').on(t.telephone),
+    index('prozorro_parties_email_idx').on(t.email),
+    check('prozorro_role', sql`${t.role} in ('supplier','tenderer','buyer')`),
+    check('prozorro_doc_type', sql`${t.docType} in ('tender','contract')`),
+  ],
+);

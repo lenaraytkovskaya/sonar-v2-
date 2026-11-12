@@ -23,9 +23,11 @@ export default async function Page({
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
   const { getCompanyMessaging } = await import('@sonar/db/email');
-  const [data, messaging] = await Promise.all([
+  const { getProzorroCompanySummary } = await import('@sonar/db/prozorro');
+  const [data, messaging, prozorro] = await Promise.all([
     getCompany(id),
     getCompanyMessaging(id),
+    getProzorroCompanySummary(id),
   ]);
   if (!data) notFound();
   const {
@@ -43,6 +45,7 @@ export default async function Page({
   const siteFacts = facts.filter(
     (fact) =>
       fact.source !== 'registry' &&
+      fact.source !== 'prozorro' &&
       !['page_text', 'registry_rejected'].includes(fact.kind),
   );
   const registryFacts = facts.filter(
@@ -62,6 +65,11 @@ export default async function Page({
     (fact) =>
       fact.kind === 'registry_status' &&
       /припин|ліквід|банкрут/i.test(String(fact.value)),
+  );
+  const prozorroContacts = contacts.filter(
+    (contact) =>
+      ['phone', 'email'].includes(contact.kind) &&
+      (contact.source === 'prozorro' || contact.meta?.alsoInProzorro),
   );
   const map = normalizeWebsite(c.google_maps_uri)?.website;
   return (
@@ -181,6 +189,9 @@ export default async function Page({
                 {contact.meta?.ai && ` · ${uk.scanner.ai}`}
                 {contact.meta?.alsoOnWebsite &&
                   ` · ${uk.scanner.alsoOnWebsite}`}
+                {contact.meta?.alsoInProzorro &&
+                  contact.source !== 'prozorro' &&
+                  ` · ${uk.prozorro.alsoInProzorro}`}
               </p>
               {normalizeWebsite(contact.source_url)?.website && (
                 <a
@@ -199,6 +210,81 @@ export default async function Page({
               )}
               {contact.source === 'manual' && (
                 <DeleteManualContact companyId={id} contactId={contact.id} />
+              )}
+            </div>
+          ))}
+        </Card>
+        <Card className="min-w-0 space-y-3 break-words p-5">
+          <h2 className="font-heading text-xl font-bold">
+            {uk.prozorro.title}
+          </h2>
+          <p>
+            {uk.prozorro.purchases}: {prozorro.count.toLocaleString('uk-UA')}
+          </p>
+          <h3 className="font-semibold">{uk.company.contacts}</h3>
+          {!prozorroContacts.length && <p>{uk.company.noData}</p>}
+          {prozorroContacts.map((contact) => (
+            <p key={contact.id}>
+              {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
+              <a
+                className="text-accent"
+                href={`${contact.kind === 'phone' ? 'tel:' : 'mailto:'}${contact.normalized}`}
+              >
+                {contact.normalized}
+              </a>
+            </p>
+          ))}
+          {facts
+            .filter(
+              (fact) =>
+                fact.source === 'prozorro' && fact.kind === 'contact_person',
+            )
+            .map((fact) => (
+              <div key={fact.id}>
+                <p>
+                  {uk.prozorro.contactPerson}: {String(fact.value)}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {date(fact.found_at)}
+                </p>
+                {normalizeWebsite(fact.source_url)?.website && (
+                  <a
+                    className="inline-flex min-h-11 items-center text-accent"
+                    href={normalizeWebsite(fact.source_url)!.website}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {uk.company.source}
+                  </a>
+                )}
+              </div>
+            ))}
+          <h3 className="font-semibold">{uk.prozorro.latest}</h3>
+          {!prozorro.latest.length && <p>{uk.prozorro.empty}</p>}
+          {prozorro.latest.map((purchase) => (
+            <div
+              className="space-y-1 border-t border-border pt-3"
+              key={`${purchase.docType}:${purchase.docId}`}
+            >
+              <p>{purchase.title ?? uk.prozorro.untitled}</p>
+              <p className="text-sm text-muted-foreground">
+                {date(purchase.date)} · {uk.prozorro.roles[purchase.role]}
+              </p>
+              <p>
+                {purchase.amount === null
+                  ? '—'
+                  : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
+                {purchase.currency}
+              </p>
+              {normalizeWebsite(purchase.sourceUrl)?.website && (
+                <a
+                  className="inline-flex min-h-11 items-center text-accent"
+                  href={normalizeWebsite(purchase.sourceUrl)!.website}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {uk.prozorro.source}
+                </a>
               )}
             </div>
           ))}

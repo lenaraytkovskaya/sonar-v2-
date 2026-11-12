@@ -365,7 +365,63 @@ export async function dismissTask(id: string, userId: string) {
   });
 }
 
-// Enrichment chain: site.scan -> registry.match -> company.score -> company ready.
+export async function enqueueProzorroSync(userId?: string | null) {
+  return transaction(async (client) => {
+    await client.query(
+      "select pg_advisory_xact_lock(hashtextextended('prozorro.enqueue',0))",
+    );
+    if (userId) {
+      await client.query(
+        "update settings set value='true',updated_at=now() where key='prozorro.enabled'",
+      );
+      await logActivity('prozorro.start', 'settings', null, userId, {}, client);
+    }
+    const { rows } = await client.query(
+      "select value from settings where key='prozorro.enabled'",
+    );
+    if (rows[0]?.value !== true) return;
+    // A killed worker can exhaust pg-boss retries before updating the CRM task.
+    await client.query(
+      `update tasks t set status='failed',finished_at=now(),reason_code='prozorro_interrupted',
+       reason_uk='Попередній запуск перервано. Синхронізація продовжується зі збереженого курсора.'
+       where type='prozorro.sync' and status in ('queued','running') and payload ? 'feed'
+       and not exists(select 1 from pgboss.job j where j.name='prozorro.sync'
+         and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))`,
+    );
+    for (const feed of ['tender', 'contract']) {
+      const { rows: active } = await client.query(
+        "select 1 from tasks where type='prozorro.sync' and payload->>'feed'=$1 and status in ('queued','running')",
+        [feed],
+      );
+      if (!active.length)
+        await enqueueTask(
+          'prozorro.sync',
+          `prozorro.sync:${feed}:${randomUUID()}`,
+          { feed },
+          client,
+        );
+    }
+  });
+}
+export async function enqueueProzorroLookup(companyId: string) {
+  const key = `prozorro.lookup:${companyId}:${new Date().toISOString().slice(0, 10)}`;
+  const created = await enqueueTask('prozorro.lookup', key, { companyId });
+  if (created)
+    await sonarPool.query(
+      "update tasks set subject_type='company',subject_id=$2 where id=$1",
+      [created, companyId],
+    );
+  else {
+    const { rows } = await sonarPool.query(
+      'select status from tasks where idempotency_key=$1',
+      [key],
+    );
+    if (!['queued', 'running'].includes(rows[0]?.status))
+      await finishEnrichment(companyId);
+  }
+}
+
+// Enrichment chain: site.scan -> registry.match -> prozorro.lookup -> company.score.
 // Each stage is its own task; a failed stage never blocks the next one.
 export async function enqueueEnrichment(
   companyId: string,
@@ -385,7 +441,7 @@ export async function enqueueEnrichment(
 export async function continueEnrichment(companyId: string) {
   const match = await enqueueRegistryMatch(companyId, null);
   if (!match.created && !['queued', 'running'].includes(match.status))
-    await finishEnrichment(companyId);
+    await enqueueProzorroLookup(companyId);
   return match;
 }
 export async function finishEnrichment(companyId: string) {

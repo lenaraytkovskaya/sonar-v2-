@@ -3,6 +3,7 @@ import { registerAnalysisTasks } from './analysis.js';
 import { registerScoringTasks } from './scoring.js';
 import { registerSiteTasks } from './site.js';
 import { registerRegistryTasks } from './registry.js';
+import { registerProzorroTasks } from './prozorro.js';
 import { registerGoogleTasks } from './google.js';
 import { registerAiTasks } from './ai.js';
 import { sonarPool, registryPool } from '@sonar/db';
@@ -24,8 +25,9 @@ const started = (async () => {
   await registerScoringTasks();
   await registerAiTasks();
   await registerGoogleTasks();
-  await registerSiteTasks();
+  await registerProzorroTasks();
   await registerRegistryTasks();
+  await registerSiteTasks();
   await boss.createQueue('sonar.registry.schedule');
   await runTask('system.registry_ping', async () => {
     try {
