@@ -143,7 +143,10 @@ export function telegramRandomId(key: string): ReturnType<typeof returnBigInt> {
 export type TelegramConnection = Pick<
   TelegramClient,
   'connect' | 'invoke' | 'getInputEntity' | 'destroy'
-> & { session: { save(): string } };
+> & {
+  session: { save(): string };
+  switchDC?: (dc: number) => Promise<unknown>;
+};
 type Credentials = { apiId: number; apiHash: string };
 export type TelegramClientFactory = (
   session: string,
@@ -184,6 +187,7 @@ function gramClient(
     invoke: client.invoke.bind(client),
     getInputEntity: client.getInputEntity.bind(client),
     destroy: () => client.destroy(),
+    switchDC: (dc: number) => client._switchDC(dc),
     session: saved,
   };
 }
@@ -258,6 +262,61 @@ export function createTelegramAdapter(
         };
       });
     },
+    /**
+     * QR login (Telegram → Settings → Devices → Link Desktop Device): no code message needed.
+     * Call repeatedly with the returned session until the status is 'done' or 'password'.
+     */
+    qrLogin(session: string) {
+      return temporary(session, async (client, auth) => {
+        const phoneOf = (authorization: unknown) => {
+          const user = (authorization as Api.auth.Authorization).user as
+            Api.User | undefined;
+          return user?.phone ? `+${user.phone}` : null;
+        };
+        try {
+          let result = await client.invoke(
+            new Api.auth.ExportLoginToken({ ...auth, exceptIds: [] }),
+          );
+          if (result instanceof Api.auth.LoginTokenMigrateTo) {
+            if (!client.switchDC)
+              throw new TelegramSendError(
+                'login_restart',
+                'Повторіть підключення Telegram.',
+              );
+            await client.switchDC(result.dcId);
+            result = await client.invoke(
+              new Api.auth.ImportLoginToken({ token: result.token }),
+            );
+          }
+          if (result instanceof Api.auth.LoginTokenSuccess)
+            return {
+              session: client.session.save(),
+              status: 'done' as const,
+              phone: phoneOf(result.authorization),
+            };
+          if (result instanceof Api.auth.LoginToken)
+            return {
+              session: client.session.save(),
+              status: 'qr' as const,
+              url: `tg://login?token=${Buffer.from(result.token).toString('base64url')}`,
+            };
+          throw new TelegramSendError(
+            'login_restart',
+            'Повторіть підключення Telegram.',
+          );
+        } catch (error) {
+          if (
+            (error as { errorMessage?: string }).errorMessage ===
+            'SESSION_PASSWORD_NEEDED'
+          )
+            return {
+              session: client.session.save(),
+              status: 'password' as const,
+            };
+          throw error;
+        }
+      });
+    },
     finishLogin(input: {
       session: string;
       phone: string;
@@ -269,11 +328,18 @@ export function createTelegramAdapter(
         try {
           if (input.password) {
             const params = await client.invoke(new Api.account.GetPassword());
-            await client.invoke(
+            const signed = await client.invoke(
               new Api.auth.CheckPassword({
                 password: await computeCheck(params, input.password),
               }),
             );
+            const user = (signed as Api.auth.Authorization).user as
+              Api.User | undefined;
+            return {
+              session: client.session.save(),
+              requiresPassword: false,
+              ...(user?.phone ? { phone: `+${user.phone}` } : {}),
+            };
           } else {
             if (!input.code)
               throw new TelegramSendError(

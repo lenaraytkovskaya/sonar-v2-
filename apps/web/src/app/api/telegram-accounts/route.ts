@@ -19,7 +19,41 @@ async function mutate(request: Request, method: string) {
   const invalid = () => respond({ error: uk.ai.invalid }, 400);
   const telegram = await import('@sonar/db/telegram');
   const { EmailValidationError } = await import('@sonar/db/email');
+  const qrResponse = async (result: {
+    id: string;
+    step: string;
+    url?: string;
+  }) => {
+    const { toDataURL } = await import('qrcode');
+    return respond({
+      id: result.id,
+      step: result.step,
+      ...(result.url
+        ? { qr: await toDataURL(result.url, { margin: 1, width: 240 }) }
+        : {}),
+    });
+  };
   try {
+    if (method === 'POST' && data?.action === 'qr') {
+      if (
+        typeof data.name !== 'string' ||
+        !data.name.trim() ||
+        data.name.length > 200 ||
+        !Number.isSafeInteger(data.dailyLimit) ||
+        data.dailyLimit < 1
+      )
+        return invalid();
+      return qrResponse(
+        await telegram.beginTelegramQrLogin(
+          { name: data.name, dailyLimit: data.dailyLimit },
+          user.id,
+        ),
+      );
+    }
+    if (method === 'POST' && data?.action === 'qr-poll') {
+      if (!validId(data.id)) return invalid();
+      return qrResponse(await telegram.pollTelegramQrLogin(data.id, user.id));
+    }
     if (method === 'POST' && data?.action === 'start') {
       if (
         typeof data.name !== 'string' ||

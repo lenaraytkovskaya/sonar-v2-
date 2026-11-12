@@ -12,7 +12,7 @@ import { logActivity } from './tasks.js';
 
 type Adapter = Pick<
   typeof telegramAdapter,
-  'startLogin' | 'finishLogin' | 'logout' | 'close'
+  'startLogin' | 'finishLogin' | 'logout' | 'close' | 'qrLogin'
 >;
 export interface TelegramAccount {
   id: string;
@@ -120,6 +120,110 @@ export async function beginTelegramLogin(
     };
   });
 }
+/** Starts a QR login; the phone number becomes known once the QR is scanned. */
+export async function beginTelegramQrLogin(
+  input: { name: string; dailyLimit: number },
+  userId: string,
+  adapter: Adapter = telegramAdapter,
+  now = new Date(),
+) {
+  const name = input.name?.trim();
+  if (!name || name.length > 200 || !validLimit(input.dailyLimit))
+    invalid('Вкажіть назву та додатний денний ліміт.');
+  const encryptionSecret = secret();
+  const id = await transaction(async (c) => {
+    await c.query(
+      "delete from channel_accounts where channel='telegram' and owner_id=$1 and status='pending' and (settings->>'expiresAt')::timestamptz <= $2",
+      [userId, now],
+    );
+    const {
+      rows: [account],
+    } = await c.query(
+      "insert into channel_accounts(channel,name,address,owner_id,status,daily_limit,settings) values('telegram',$1,'qr',$2,'pending',$3,$4) returning id",
+      [
+        name,
+        userId,
+        input.dailyLimit,
+        JSON.stringify({
+          pending: encryptTelegramSession(
+            JSON.stringify({ session: '', phoneCodeHash: '', qr: true }),
+            encryptionSecret,
+          ),
+          expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
+        }),
+      ],
+    );
+    return String(account.id);
+  });
+  return pollTelegramQrLogin(id, userId, adapter, now);
+}
+/** One QR poll: returns a fresh QR, asks for the 2FA password, or finishes the connection. */
+export async function pollTelegramQrLogin(
+  id: string,
+  userId: string,
+  adapter: Adapter = telegramAdapter,
+  now = new Date(),
+) {
+  return transaction(async (c) => {
+    const account = await lockAccount(c, id, userId),
+      settings = account.settings;
+    if (
+      account.status !== 'pending' ||
+      !settings.pending ||
+      new Date(settings.expiresAt).getTime() <= now.getTime()
+    )
+      invalid('Сеанс входу закінчився. Почніть підключення знову.');
+    const login = JSON.parse(
+      decryptTelegramSession(settings.pending, secret()),
+    );
+    if (!login.qr || login.requiresPassword)
+      return {
+        id,
+        step: login.requiresPassword
+          ? ('password' as const)
+          : ('code' as const),
+      };
+    const result = await loginOperation(() => adapter.qrLogin(login.session));
+    if (result.status === 'done') {
+      await c.query(
+        "update channel_accounts set status='active',address=$3,settings=$2 where id=$1",
+        [
+          id,
+          JSON.stringify({
+            sessionEncrypted: encryptTelegramSession(result.session, secret()),
+          }),
+          result.phone ?? account.address,
+        ],
+      );
+      await logActivity(
+        'telegram.account.connected',
+        'channel_account',
+        id,
+        userId,
+        { qr: true },
+        c,
+      );
+      return { id, step: 'done' as const };
+    }
+    await c.query('update channel_accounts set settings=$2 where id=$1', [
+      id,
+      JSON.stringify({
+        ...settings,
+        pending: encryptTelegramSession(
+          JSON.stringify({
+            ...login,
+            session: result.session,
+            requiresPassword: result.status === 'password',
+          }),
+          secret(),
+        ),
+      }),
+    ]);
+    return result.status === 'password'
+      ? { id, step: 'password' as const }
+      : { id, step: 'qr' as const, url: result.url };
+  });
+}
 export async function completeTelegramLogin(
   id: string,
   input: { code?: string; password?: string },
@@ -178,12 +282,13 @@ export async function completeTelegramLogin(
       return { id, step: 'password' as const };
     }
     await c.query(
-      "update channel_accounts set status='active',settings=$2 where id=$1",
+      "update channel_accounts set status='active',settings=$2,address=$3 where id=$1",
       [
         id,
         JSON.stringify({
           sessionEncrypted: encryptTelegramSession(result.session, secret()),
         }),
+        (result as { phone?: string }).phone ?? account.address,
       ],
     );
     await logActivity(
