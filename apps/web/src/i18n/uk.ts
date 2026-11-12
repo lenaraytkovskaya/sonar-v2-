@@ -80,6 +80,26 @@ export const uk = {
     after: 'Скріншот після надсилання',
     screenshotMissing: 'Скріншот недоступний.',
   },
+  telegram: {
+    title: 'Telegram',
+    accounts: 'Telegram-акаунти',
+    empty: 'Telegram-акаунтів ще немає.',
+    configuration: 'Додайте TELEGRAM_API_ID і TELEGRAM_API_HASH на сервері',
+    phone: 'Телефон (+код країни)',
+    connect: 'Підключити Telegram',
+    disconnect: 'Від’єднати',
+    disconnected: 'Від’єднаний',
+    code: 'Код підтвердження Telegram',
+    password: 'Пароль двоетапної перевірки',
+    confirm: 'Підтвердити',
+    secretHint:
+      'Введіть код або пароль вручну. Вони не передаються ІІ-помічнику.',
+    noSetup:
+      'Додайте активний Telegram-акаунт, доступний Telegram або телефон компанії та кампанію.',
+    unavailable: 'Telegram недоступний',
+    sendHint:
+      'Повідомлення буде надіслано через чергу з урахуванням ліміту акаунта.',
+  },
   email: {
     title: 'Email',
     accounts: 'Email-акаунти',

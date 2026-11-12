@@ -6,6 +6,12 @@ import {
   nextSendTime,
   type SendHours,
 } from '@sonar/core';
+import {
+  normalizeTelegramRecipient,
+  TelegramSendError,
+  decryptTelegramSession,
+} from '@sonar/core/telegram';
+import { listTelegramAccounts } from './telegram.js';
 import { sonarPool } from './index.js';
 import {
   enqueueTask,
@@ -32,7 +38,7 @@ export interface EmailAccount {
 }
 export interface EmailMessage {
   id: string;
-  channel: 'email' | 'form';
+  channel: 'email' | 'form' | 'telegram';
   screenshotBefore: boolean;
   screenshotAfter: boolean;
   accountId: string;
@@ -155,14 +161,43 @@ export async function createEmailAccount(
     return { id: String(account.id) };
   });
 }
+async function telegramContacts(
+  c: Pick<PoolClient, 'query'>,
+  companyId: string,
+  to: string,
+) {
+  const { rows } = await c.query(
+    "select id,normalized,meta from contacts where company_id=$1 and kind in ('telegram','phone') for share",
+    [companyId],
+  );
+  return rows.filter(
+    (r) =>
+      normalizeTelegramRecipient(r.normalized)?.toLowerCase() ===
+      to.toLowerCase(),
+  );
+}
 export async function isContactBlocked(
   c: Pick<PoolClient, 'query'>,
   companyId: string,
   address = '',
 ): Promise<boolean> {
+  const telegramTo = normalizeTelegramRecipient(address);
+  if (telegramTo) {
+    const { rows } = await c.query(
+      "select value_normalized from do_not_contact where kind in ('telegram','phone')",
+    );
+    if (
+      rows.some(
+        (r) =>
+          normalizeTelegramRecipient(r.value_normalized)?.toLowerCase() ===
+          telegramTo.toLowerCase(),
+      )
+    )
+      return true;
+  }
   return (
     await c.query(
-      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
+      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind in ('phone','telegram') and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
       [companyId, address],
     )
   ).rows[0].blocked;
@@ -196,6 +231,25 @@ export async function getCompanyMessaging(companyId: string) {
   const recipients = emails.map((e) => String(e.normalized)).filter(validEmail);
   return {
     accounts,
+    telegramAccounts: await listTelegramAccounts(),
+    telegramRecipients: [
+      ...new Set(
+        (
+          await sonarPool.query(
+            "select normalized from contacts where company_id=$1 and kind in ('telegram','phone') and not (meta ? 'telegram_unavailable') order by rank desc,id",
+            [companyId],
+          )
+        ).rows
+          .map((r) => normalizeTelegramRecipient(String(r.normalized)))
+          .filter((v): v is string => !!v),
+      ),
+    ],
+    telegramUnavailable: (
+      await sonarPool.query(
+        "select normalized as value,meta->'telegram_unavailable'->>'reason_uk' as \"reasonUk\" from contacts where company_id=$1 and meta ? 'telegram_unavailable' order by id",
+        [companyId],
+      )
+    ).rows as { value: string; reasonUk: string }[],
     formAccounts: await listFormAccounts(),
     formUrls: (
       await sonarPool.query(
@@ -214,7 +268,7 @@ export async function getCompanyMessaging(companyId: string) {
   };
 }
 type MessageInput = {
-  channel?: 'email' | 'form';
+  channel?: 'email' | 'form' | 'telegram';
   companyId: string;
   campaignId: string;
   accountId: string;
@@ -250,11 +304,17 @@ export async function createCompanyMessage(
   const to =
       channel === 'email'
         ? input.toAddress?.trim().toLowerCase()
-        : input.toAddress?.trim(),
+        : channel === 'telegram'
+          ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
+          : input.toAddress?.trim(),
     subject = input.subject?.trim() ?? '',
     body = input.body?.trim();
   if (
-    (channel === 'email' ? !validEmail(to) || !subject : !validFormUrl(to)) ||
+    (channel === 'email'
+      ? !validEmail(to) || !subject
+      : channel === 'telegram'
+        ? !normalizeTelegramRecipient(to)
+        : !validFormUrl(to)) ||
     subject.length > 998 ||
     /[\r\n]/.test(subject) ||
     !body ||
@@ -263,9 +323,11 @@ export async function createCompanyMessage(
     input.idempotencyKey.length > 200
   )
     invalid(
-      channel === 'form'
-        ? 'Вкажіть коректну адресу форми та текст повідомлення.'
-        : 'Вкажіть коректний email, тему та текст повідомлення.',
+      channel === 'telegram'
+        ? 'Вкажіть Telegram username або міжнародний телефон та текст повідомлення.'
+        : channel === 'form'
+          ? 'Вкажіть коректну адресу форми та текст повідомлення.'
+          : 'Вкажіть коректний email, тему та текст повідомлення.',
     );
   return transaction(async (c) => {
     const {
@@ -309,12 +371,17 @@ export async function createCompanyMessage(
       [input.accountId, channel],
     );
     if (!account) invalid('Оберіть активний акаунт каналу.');
-    const {
-      rows: [contact],
-    } = await c.query(
-      'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
-      [input.companyId, to, channel],
-    );
+    const contact =
+      channel === 'telegram'
+        ? (await telegramContacts(c, input.companyId, to)).find(
+            (r) => !r.meta.telegram_unavailable,
+          )
+        : (
+            await c.query(
+              'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
+              [input.companyId, to, channel],
+            )
+          ).rows[0];
     if (!contact) invalid('Оберіть адресу із контактів компанії.');
     if (channel === 'form') {
       const {
@@ -511,6 +578,8 @@ export async function draftFromAnalysis(
   );
 }
 
+const telegramFloodRetry =
+  'Telegram обмежив частоту. Повтор після паузи акаунта.';
 const terminal = (
   status: 'skipped' | 'paused' | 'failed',
   reasonCode: string,
@@ -521,12 +590,18 @@ const deferred = (
   reasonCode: string,
   reasonUk: string,
 ): TaskOutcome => ({ status: 'deferred', runAt, reasonCode, reasonUk });
+export type SendAccount = { id: string; settings: Record<string, unknown> };
+export type ChannelSender = (
+  request: EmailRequest,
+  account?: SendAccount,
+) => Promise<string>;
 export async function sendEmailMessage(
   messageId: string,
   taskId: string,
-  send: EmailSender,
+  send: ChannelSender,
   now = new Date(),
   random = Math.random,
+  channel: 'email' | 'telegram' = 'email',
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
@@ -570,7 +645,13 @@ export async function sendEmailMessage(
       if (outcome.status === 'deferred')
         await c.query(
           "update messages set scheduled_at=$2,status='queued',reason_uk=$3 where id=$1",
-          [messageId, outcome.runAt, outcome.reasonUk],
+          [
+            messageId,
+            outcome.runAt,
+            channel === 'telegram' && m.reason_uk === telegramFloodRetry
+              ? telegramFloodRetry
+              : outcome.reasonUk,
+          ],
         );
       if (reason)
         await c.query(
@@ -580,7 +661,7 @@ export async function sendEmailMessage(
       await c.query('commit');
       return outcome;
     };
-    if (m.channel !== 'email')
+    if (m.channel !== channel)
       return finish(
         terminal(
           'skipped',
@@ -602,6 +683,29 @@ export async function sendEmailMessage(
         ),
         'Компанія або адреса у списку «Не контактувати».',
       );
+    if (channel === 'telegram') {
+      const contacts = await telegramContacts(c, m.company_id, m.to_value);
+      if (
+        !contacts.length ||
+        contacts.every((r) => r.meta.telegram_unavailable)
+      )
+        return finish(
+          terminal(
+            'skipped',
+            'telegram_unavailable',
+            'Telegram цього контакту недоступний.',
+          ),
+          'Telegram цього контакту недоступний.',
+        );
+      if (m.first_attempt_at && m.reason_uk !== telegramFloodRetry)
+        return finish(
+          terminal(
+            'paused',
+            'telegram_delivery_uncertain',
+            'Перевірте попередню доставку Telegram вручну. Автоматичний повтор заблоковано.',
+          ),
+        );
+    }
     if (m.status !== 'queued' && !(m.status === 'failed' && m.first_attempt_at))
       return finish(
         terminal(
@@ -610,12 +714,12 @@ export async function sendEmailMessage(
           'Повідомлення не готове до надсилання.',
         ),
       );
-    if (m.channels?.email !== true || m.campaign_status !== 'active')
+    if (m.channels?.[channel] !== true || m.campaign_status !== 'active')
       return finish(
         terminal(
           'paused',
           'campaign_inactive',
-          'Активуйте кампанію та увімкніть email перед надсиланням.',
+          `Активуйте кампанію та увімкніть ${channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
         ),
       );
     if (m.send_mode === 'manual' && !m.created_by && !m.approved_by) {
@@ -649,11 +753,30 @@ export async function sendEmailMessage(
     } = await c.query('select * from channel_accounts where id=$1 for update', [
       m.account_id,
     ]);
+    if (channel === 'telegram') {
+      try {
+        if (!process.env.AUTH_SECRET || !account.settings.sessionEncrypted)
+          throw Error('session');
+        decryptTelegramSession(
+          account.settings.sessionEncrypted,
+          process.env.AUTH_SECRET,
+        );
+      } catch {
+        return finish(
+          terminal(
+            'paused',
+            'telegram_session_invalid',
+            'Сесія Telegram недійсна. Підключіть акаунт повторно.',
+          ),
+        );
+      }
+    }
     if (account.status !== 'active')
       return finish(
-        terminal('paused', 'account_disabled', 'Email-акаунт вимкнено.'),
+        terminal('paused', 'account_disabled', 'Акаунт каналу вимкнено.'),
       );
     if (
+      channel === 'email' &&
       m.first_attempt_at &&
       now.getTime() - new Date(m.first_attempt_at).getTime() >=
         23 * 60 * 60 * 1000
@@ -751,13 +874,19 @@ export async function sendEmailMessage(
         m.quota_day === day,
       ],
     );
+    if (channel === 'telegram')
+      await c.query('update messages set reason_uk=null where id=$1', [
+        messageId,
+      ]);
     await c.query('commit');
-    try {
-      const providerId = await send(request);
+    const recordDelivery = async (
+      providerId: string,
+      reasonUk: string | null = null,
+    ): Promise<TaskOutcome> => {
       await transaction(async (tx) => {
         await tx.query(
-          "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=null where id=$1",
-          [messageId, providerId, now],
+          "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=$4 where id=$1",
+          [messageId, providerId, now, reasonUk],
         );
         await tx.query(
           "update companies set status='contacted',updated_at=now() where id=$1 and status in ('new','enriching','ready')",
@@ -773,17 +902,97 @@ export async function sendEmailMessage(
         );
       });
       return { status: 'done', result: { messageId, providerId } };
+    };
+    try {
+      const providerId =
+        channel === 'telegram'
+          ? await send(request, { id: account.id, settings: account.settings })
+          : await send(request);
+      return await recordDelivery(providerId);
     } catch (error) {
+      if (error instanceof TelegramSendError) {
+        const accountRetryAfterSeconds =
+          'accountRetryAfterSeconds' in error
+            ? error.accountRetryAfterSeconds
+            : undefined;
+        if (
+          typeof accountRetryAfterSeconds === 'number' &&
+          Number.isFinite(accountRetryAfterSeconds) &&
+          accountRetryAfterSeconds > 0
+        )
+          await c.query(
+            'update channel_accounts set next_send_at=greatest(next_send_at,$2::timestamptz) where id=$1',
+            [
+              account.id,
+              new Date(now.getTime() + accountRetryAfterSeconds * 1000),
+            ],
+          );
+        if (
+          'providerMessageId' in error &&
+          typeof error.providerMessageId === 'string'
+        )
+          return recordDelivery(error.providerMessageId, error.reasonUk);
+        if (error.retryAfterSeconds !== undefined) {
+          const runAt = new Date(
+            now.getTime() + error.retryAfterSeconds * 1000,
+          );
+          await transaction(async (tx) => {
+            await tx.query(
+              'update channel_accounts set next_send_at=$2 where id=$1',
+              [account.id, runAt],
+            );
+            await tx.query(
+              "update messages set status='queued',scheduled_at=$2,reason_uk=$3 where id=$1",
+              [messageId, runAt, telegramFloodRetry],
+            );
+          });
+          return deferred(runAt, error.code, error.reasonUk);
+        }
+        if (error.unavailable) {
+          const contacts = await telegramContacts(c, m.company_id, m.to_value);
+          await c.query(
+            "update contacts set meta=jsonb_set(meta,'{telegram_unavailable}',$2::jsonb) where id=any($1::uuid[])",
+            [
+              contacts.map((r) => r.id),
+              JSON.stringify({
+                reason_uk: error.reasonUk,
+                at: now.toISOString(),
+              }),
+            ],
+          );
+        }
+        await c.query(
+          "update messages set status='failed',reason_uk=$2 where id=$1",
+          [messageId, error.reasonUk],
+        );
+        if (!error.retryable)
+          return terminal(
+            ['session_expired', 'delivery_uncertain'].includes(error.code)
+              ? 'paused'
+              : 'failed',
+            error.code,
+            error.reasonUk,
+          );
+        return terminal(
+          'paused',
+          'telegram_delivery_uncertain',
+          'Перевірте попередню доставку Telegram вручну. Автоматичний повтор заблоковано.',
+        );
+      }
       const reason =
         error instanceof EmailSendError
           ? error.reasonUk
-          : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
+          : channel === 'telegram'
+            ? 'Не вдалося підтвердити доставку Telegram. Повтор використає той самий ключ.'
+            : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
       await c.query(
         "update messages set status='failed',reason_uk=$2 where id=$1",
         [messageId, reason],
       );
       if (error instanceof EmailSendError && !error.retryable)
         return terminal('failed', error.code, reason);
+      if (channel === 'telegram')
+        return terminal('paused', 'telegram_delivery_uncertain', reason);
       throw new TaskFailure(
         error instanceof EmailSendError
           ? error.code

@@ -1,3 +1,4 @@
+import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
 import { registerAnalysisTasks } from './analysis.js';
 import { registerScoringTasks } from './scoring.js';
@@ -57,6 +58,7 @@ async function stop() {
   stopping = true;
   await started.catch(() => {});
   await closeTaskQueue();
+  await closeTelegramClients();
   await Promise.all([sonarPool.end(), registryPool.end()]);
 }
 for (const signal of ['SIGTERM', 'SIGINT'])
