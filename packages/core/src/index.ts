@@ -22,6 +22,7 @@ export type { CountryCode } from 'libphonenumber-js/max';
 export * from './company.js';
 
 export * from './scanner.js';
+export * from './test-mode.js';
 export * from './registry.js';
 export * from './scoring.js';
 export * from './analysis.js';

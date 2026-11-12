@@ -3,6 +3,7 @@ import { FormAccounts } from '@/components/form-accounts';
 import { TelegramAccounts } from '@/components/telegram-accounts';
 import { WhatsAppAccounts } from '@/components/whatsapp-accounts';
 import { EmailAccounts } from '@/components/email-accounts';
+import { SendTestMode } from '@/components/send-test-mode';
 import { uk } from '@/i18n/uk';
 export default async function Page() {
   const { listEmailAccounts, listFormAccounts } =
@@ -10,17 +11,33 @@ export default async function Page() {
   const { listManualFormMessages } = await import('@sonar/db/forms');
   const { listTelegramAccounts } = await import('@sonar/db/telegram');
   const { listWhatsAppAccounts } = await import('@sonar/db/whatsapp');
-  const [email, forms, manual, telegram, whatsapp] = await Promise.all([
-    listEmailAccounts(),
-    listFormAccounts(),
-    listManualFormMessages(),
-    listTelegramAccounts(),
-    listWhatsAppAccounts(),
-  ]);
+  const { sonarPool } = await import('@sonar/db');
+  const [email, forms, manual, telegram, whatsapp, testRows] =
+    await Promise.all([
+      listEmailAccounts(),
+      listFormAccounts(),
+      listManualFormMessages(),
+      listTelegramAccounts(),
+      listWhatsAppAccounts(),
+      sonarPool.query(
+        "select key,value from settings where key in ('send.test_mode','send.test_allowlist')",
+      ),
+    ]);
+  const test = Object.fromEntries(
+    testRows.rows.map((row) => [row.key, row.value]),
+  );
   return (
     <>
       <PageHeader {...uk.pages.channels} />
       <div className="space-y-5">
+        <SendTestMode
+          enabled={test['send.test_mode'] !== false}
+          allowlist={
+            Array.isArray(test['send.test_allowlist'])
+              ? test['send.test_allowlist']
+              : []
+          }
+        />
         <EmailAccounts accounts={email} />
         <TelegramAccounts
           accounts={telegram}

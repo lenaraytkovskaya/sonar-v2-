@@ -4,6 +4,8 @@ import {
   messageStatusForMode,
   normalizePhone,
   nextSendTime,
+  testModeAllows,
+  testModeReason,
   type SendHours,
   type CountryCode,
 } from '@sonar/core';
@@ -195,6 +197,22 @@ async function whatsappContacts(
   return rows.filter(
     (r) => normalizeWhatsAppRecipient(r.normalized, country) === to,
   );
+}
+/** Returns a reason when test mode is on and the recipient is not on the owner's list. */
+export async function testModeBlock(
+  c: Pick<PoolClient, 'query'>,
+  to: string,
+  country?: CountryCode,
+): Promise<string | null> {
+  const { rows } = await c.query(
+    "select key,value from settings where key in ('send.test_mode','send.test_allowlist')",
+  );
+  const config = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  if (config['send.test_mode'] === false) return null;
+  const list = Array.isArray(config['send.test_allowlist'])
+    ? (config['send.test_allowlist'] as string[])
+    : [];
+  return testModeAllows(to ?? '', list, country) ? null : testModeReason;
 }
 export async function isContactBlocked(
   c: Pick<PoolClient, 'query'>,
@@ -759,6 +777,9 @@ export async function sendEmailMessage(
         ),
         'Компанія або адреса у списку «Не контактувати».',
       );
+    const testBlocked = await testModeBlock(c, m.to_value, m.country_code);
+    if (testBlocked)
+      return finish(terminal('skipped', 'test_mode', testBlocked), testBlocked);
     if (channel === 'whatsapp') {
       const contacts = await whatsappContacts(
         c,
