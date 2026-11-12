@@ -221,3 +221,17 @@ it('prefers a general mailbox over branch and job mailboxes', () => {
   );
   expect(breakdown.top.email?.value).toBe('sto@avtopan.ua');
 });
+
+it('does not reward a platform even after a successful scan', () => {
+  expect(
+    value(
+      {
+        ...empty,
+        website: 'https://shop.business.site/',
+        siteScanDone: true,
+        isPlatform: true,
+      },
+      'website',
+    ),
+  ).toBe(0);
+});

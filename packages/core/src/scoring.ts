@@ -35,6 +35,7 @@ export interface ScoringContact {
 export interface ScoringInput {
   website: string | null;
   siteScanDone: boolean;
+  isPlatform?: boolean;
   rating: number | null;
   ratingsCount: number | null;
   registryFound: boolean;
@@ -158,7 +159,9 @@ export function scoreCompany(
     social: ordered.find((contact) => contact.kind === 'social') ?? null,
   };
   const values: Record<ScoringFeature, number> = {
-    website: Number(Boolean(input.website) && input.siteScanDone),
+    website: Number(
+      Boolean(input.website) && input.siteScanDone && !input.isPlatform,
+    ),
     phone: Number(Boolean(top.phone)),
     email: emailValue(contacts, input.website),
     messenger: Number(Boolean(top.messenger)),

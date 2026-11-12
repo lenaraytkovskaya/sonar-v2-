@@ -1,11 +1,16 @@
 import {
   companyFiltersSchema,
+  normalizeWebsite,
   type CompanyFilters,
   type ScoreBreakdown,
   type AnalysisResult,
 } from '@sonar/core';
 import type { PoolClient } from 'pg';
 import { sonarPool } from './index.js';
+import { transaction } from './email.js';
+import { enqueueSiteScan, logActivity } from './tasks.js';
+
+const platformSql = `exists(select 1 from jsonb_array_elements_text(coalesce((select value from settings where key='platforms.domains'),'[]'::jsonb)) x where c.domain=x or c.domain like '%.'||x)`;
 export function companyWhere(input: CompanyFilters) {
   const f = companyFiltersSchema.parse(input),
     values: unknown[] = [],
@@ -24,6 +29,8 @@ export function companyWhere(input: CompanyFilters) {
   if (f.status) conditions.push(`c.status=${param(f.status)}`);
   if (f.hasWebsite !== undefined)
     conditions.push(`(c.website is not null)=${param(f.hasWebsite)}`);
+  if (f.platforms && f.platforms !== 'all')
+    conditions.push(`${f.platforms === 'exclude' ? 'not ' : ''}${platformSql}`);
   if (f.hasPhone !== undefined)
     conditions.push(
       `exists(select 1 from contacts p where p.company_id=c.id and p.kind='phone')=${param(f.hasPhone)}`,
@@ -110,7 +117,7 @@ export async function listCompanies(
   const order = `${sort === 'score' ? 't.score desc nulls last,' : ''}t.created_at desc,t.id`;
   const windowOrder = `${sort === 'score' ? scoreSql + ' desc nulls last,' : ''}c.created_at desc,c.id`;
   // Branches of one chain share the company's own domain; listings on platforms never group.
-  const platform = `exists(select 1 from jsonb_array_elements_text(coalesce((select value from settings where key='platforms.domains'),'[]'::jsonb)) x where c.domain=x or c.domain like '%.'||x)`;
+  const platform = platformSql;
   const chainKey = groupChains
     ? `case when c.domain is null or ${platform} then c.id::text else c.domain end`
     : 'c.id::text';
@@ -226,3 +233,51 @@ export async function* exportCompanies(filters: CompanyFilters) {
 }
 
 export * from './manual.js';
+
+export class WebsiteCandidateError extends Error {}
+
+export async function adoptWebsiteCandidate(
+  companyId: string,
+  factId: string,
+  userId: string,
+) {
+  return transaction(async (client) => {
+    const {
+      rows: [lock],
+    } = await client.query(
+      'select pg_try_advisory_xact_lock(hashtextextended($1,0)) as locked',
+      [`site.scan:${companyId}`],
+    );
+    if (!lock.locked) throw new WebsiteCandidateError('scanRunning');
+    const {
+      rows: [company],
+    } = await client.query(
+      'select website from companies where id=$1 for update',
+      [companyId],
+    );
+    const {
+      rows: [fact],
+    } = await client.query(
+      "select value from company_facts where id=$1 and company_id=$2 and kind='website_candidate' and (expires_at is null or expires_at>now()) for share",
+      [factId, companyId],
+    );
+    const site =
+      typeof fact?.value === 'string' ? normalizeWebsite(fact.value) : null;
+    if (!company || !site) throw new WebsiteCandidateError('staleCandidate');
+    if (company.website === site.website) return { changed: false };
+    await client.query(
+      'update companies set website=$2,domain=$3,updated_at=now() where id=$1',
+      [companyId, site.website, site.domain],
+    );
+    await logActivity(
+      'company.website.adopted',
+      'company',
+      companyId,
+      userId,
+      { factId, previousWebsite: company.website, website: site.website },
+      client,
+    );
+    const task = await enqueueSiteScan(companyId, userId, client);
+    return { changed: true, task };
+  });
+}

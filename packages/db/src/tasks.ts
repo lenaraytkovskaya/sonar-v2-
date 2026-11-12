@@ -123,8 +123,9 @@ export async function enqueueTask(
 export async function enqueueSiteScan(
   companyId: string,
   userId: string | null,
+  existingClient?: PoolClient,
 ) {
-  return transaction(async (client) => {
+  const save = async (client: PoolClient) => {
     const {
       rows: [company],
     } = await client.query(
@@ -169,7 +170,8 @@ export async function enqueueSiteScan(
       [key],
     );
     return { ...task, created: !!created };
-  });
+  };
+  return existingClient ? save(existingClient) : transaction(save);
 }
 // Registry lookups are cheap and local; one per company per day is enough.
 export async function enqueueRegistryMatch(
