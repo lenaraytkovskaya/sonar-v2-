@@ -406,14 +406,13 @@ export async function runSiteScan(
     let pageCount = 0;
     const foundContacts = new Set<string>();
     const contactPage = /(?:contact|kontakt|контакт|feedback|zvorotn|зворотн)/i;
-    let formSaved = false,
-      formIsContactPage = false;
+    let formScore = -1;
     const persist = async (
       page: Pick<Page, 'url' | 'contacts' | 'facts'>,
       ai = false,
     ) => {
       for (const contact of page.contacts) {
-        // One contact form per site: prefer a contact page, otherwise keep the first one found.
+        // One contact form per site: prefer a contact page and a form with a message field.
         if (contact.kind === 'form') {
           let path = page.url;
           try {
@@ -421,8 +420,9 @@ export async function runSiteScan(
           } catch {
             /* Keep the raw URL when it is not valid percent-encoding. */
           }
-          const onContactPage = contactPage.test(path);
-          if (formSaved && !(onContactPage && !formIsContactPage)) continue;
+          const score =
+            (contactPage.test(path) ? 2 : 0) + (contact.rank >= 40 ? 1 : 0);
+          if (score <= formScore) continue;
           await client.query(
             "delete from contacts where company_id=$1 and kind='form' and source='website'",
             [companyId],
@@ -430,8 +430,7 @@ export async function runSiteScan(
           foundContacts.forEach(
             (key) => key.startsWith('form:') && foundContacts.delete(key),
           );
-          formSaved = true;
-          formIsContactPage = onContactPage;
+          formScore = score;
         }
         foundContacts.add(`${contact.kind}:${contact.value}`);
         await client.query(

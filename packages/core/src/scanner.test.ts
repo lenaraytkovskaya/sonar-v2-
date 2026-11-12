@@ -341,3 +341,41 @@ describe('placeholder phones', () => {
     expect(placeholderPhone('+380443387518')).toBe(false);
   });
 });
+describe('feedback forms and clean links', () => {
+  const forms = (html: string) =>
+    extractSitePage(html, context)
+      .contacts.filter((contact) => contact.kind === 'form')
+      .map((contact) => contact.rank);
+  it.each([
+    '<form><input name="login"><input type="password" name="pass"><input name="email"></form>',
+    '<form role="search"><input name="q"><input name="email"></form>',
+    '<form action="/search"><input type="search" name="s"></form>',
+    '<form class="add-to-cart"><input name="name"><input name="phone"><input name="qty"></form>',
+    '<form><input name="email" placeholder="Email"><button>Підписатися</button></form>',
+    '<form><input name="phone"><button>Передзвоніть мені</button></form>',
+  ])('ignores non-feedback form %s', (html) => {
+    expect(forms(html)).toEqual([]);
+  });
+  it('ranks forms with a message field above callback forms', () => {
+    expect(
+      forms('<form><input name="name"><input name="phone"></form>'),
+    ).toEqual([30]);
+    expect(
+      forms(
+        '<form><input name="name"><input type="hidden" name="token"><textarea name="description"></textarea></form>',
+      ),
+    ).toEqual([40]);
+  });
+  it('drops tracking parameters from social and Telegram links', () => {
+    const links = extractSitePage(
+      '<a href="https://www.tiktok.com/@fine.auto?_t=8nJE&_r=1">t</a><a href="https://instagram.com/garage/?igsh=abc">i</a><a href="https://www.facebook.com/profile.php?id=615&ref=x">f</a><a href="https://t.me/garage?start=1">tg</a>',
+      context,
+    ).contacts.map((contact) => contact.value);
+    expect(links).toEqual([
+      'https://www.tiktok.com/@fine.auto',
+      'https://instagram.com/garage/',
+      'https://www.facebook.com/profile.php?id=615',
+      'https://t.me/garage',
+    ]);
+  });
+});

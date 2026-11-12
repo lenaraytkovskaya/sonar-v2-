@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import {
+  emailPreference,
   normalizedRating,
   scoreCompany,
   scoringFeatures,
@@ -190,4 +191,33 @@ it('selects top contacts by rank, mobile suitability, source and freshness witho
       {},
     ).breakdown.top.email?.source,
   ).toBe('google');
+});
+
+it('prefers a general mailbox over branch and job mailboxes', () => {
+  expect(emailPreference('info@avtopan.ua')).toBe(1);
+  expect(emailPreference('lviv@avtopan.ua')).toBe(-1);
+  expect(emailPreference('hr@avtopan.ua')).toBe(-1);
+  expect(emailPreference('ivan@avtopan.ua')).toBe(0);
+  const contact = (id: string, value: string): ScoringContact => ({
+    id,
+    kind: 'email',
+    value,
+    normalized: value,
+    source: 'website',
+    source_url: null,
+    rank: 100,
+    found_at: '2026-11-11T00:00:00Z',
+  });
+  const { breakdown } = scoreCompany(
+    {
+      ...empty,
+      contacts: [
+        contact('1', 'lviv@avtopan.ua'),
+        contact('2', 'zakaz@avtopan.ua'),
+        contact('3', 'sto@avtopan.ua'),
+      ],
+    },
+    {},
+  );
+  expect(breakdown.top.email?.value).toBe('sto@avtopan.ua');
 });
