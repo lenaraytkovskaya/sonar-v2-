@@ -100,11 +100,8 @@ export async function runAiAssist(
           result: {
             suggestion: (() => {
               const suggestion = parseCampaignSuggestion(response.text);
-              // Sender facts come from settings, never from the recipient description.
-              return {
-                ...suggestion,
-                ...(!about ? { offer: '', needs_about: true } : {}),
-              };
+              // The outreach message is written separately; collecting companies needs none.
+              return { ...suggestion, offer: '', needs_about: false };
             })(),
             costUsd: response.costUsd,
           },

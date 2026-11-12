@@ -77,8 +77,8 @@ it.each(['Обладнання для СТО.', '', '   ', undefined])(
       status: 'done',
       result: {
         suggestion: {
-          offer: about?.trim() ? suggestion.offer : '',
-          needs_about: !about?.trim(),
+          offer: '',
+          needs_about: false,
         },
       },
     });
@@ -102,4 +102,21 @@ it('migration specifies geography, business-only queries and factual first-messa
     expect(instruction).toContain(rule);
   expect(migration).toContain("jsonb_set(value, '{campaign}'");
   expect(migration).toContain("WHERE key='ai.actions'");
+});
+it('campaign assistant fills the whole form and leaves the outreach message empty', () => {
+  const sql = readFileSync(
+    new URL(
+      '../../../packages/db/drizzle/0022_campaign_ai_fill.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  for (const rule of [
+    'queries (10-20 strings)',
+    'NEVER include geography',
+    'Київ, not Киев',
+    'Always set offer=""',
+    'budget_usd=0',
+  ])
+    expect(sql).toContain(rule);
 });

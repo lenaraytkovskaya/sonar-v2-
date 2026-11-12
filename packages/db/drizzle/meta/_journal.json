@@ -159,8 +159,15 @@
     {
       "idx": 22,
       "version": "7",
-      "when": 1794481000000,
-      "tag": "0022_platform_kinds",
+      "when": 1794490000000,
+      "tag": "0022_campaign_ai_fill",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0023_platform_kinds",
       "breakpoints": true
     }
   ]
