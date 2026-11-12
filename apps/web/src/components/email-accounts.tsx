@@ -41,6 +41,31 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
       setPending(false);
     }
   };
+  const remove = async (id: string, name: string) => {
+    if (
+      busy.current ||
+      !window.confirm(uk.email.removeConfirm + ' ' + name + '?')
+    )
+      return;
+    busy.current = true;
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch('/api/email-accounts', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error ?? uk.email.error);
+      router.refresh();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : uk.email.error);
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  };
   const toggle = async (id: string, enabled: boolean) => {
     if (busy.current) return;
     busy.current = true;
@@ -119,6 +144,16 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
                         }
                       >
                         {account.enabled ? uk.email.disable : uk.email.enable}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="min-h-7 px-2 text-xs"
+                        disabled={pending}
+                        onClick={() =>
+                          void remove(account.id, account.fromAddress)
+                        }
+                      >
+                        {uk.email.remove}
                       </Button>
                     </span>
                   </td>

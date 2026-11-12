@@ -139,6 +139,8 @@ export const uk = {
   },
   email: {
     title: 'Email',
+    remove: 'Видалити',
+    removeConfirm: 'Видалити акаунт',
     accounts: 'Email-акаунти',
     name: 'Назва акаунта',
     address: 'Адреса відправника',

@@ -12,6 +12,17 @@ export async function PATCH(request: Request) {
     return setEmailAccountEnabled(data.id, data.enabled, user.id);
   });
 }
+export async function DELETE(request: Request) {
+  const user = await apiUser(request, true);
+  if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
+  const data = await request.json().catch(() => null);
+  if (!validId(data?.id))
+    return Response.json({ error: uk.ai.invalid }, { status: 400 });
+  return emailResponse(async () => {
+    const { removeEmailAccount } = await import('@sonar/db/email');
+    return removeEmailAccount(data.id, user.id);
+  });
+}
 export async function POST(request: Request) {
   const user = await apiUser(request, true);
   if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });

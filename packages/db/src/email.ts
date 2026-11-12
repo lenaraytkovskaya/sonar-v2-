@@ -102,7 +102,7 @@ export async function listEmailAccounts(): Promise<EmailAccount[]> {
   return (
     await sonarPool.query(`select a.id,a.name,a.address as "fromAddress",a.daily_limit as "dailyLimit",(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
-    from channel_accounts a left join users u on u.id=a.owner_id where a.channel='email' order by a.name,a.id`)
+    from channel_accounts a left join users u on u.id=a.owner_id where a.channel='email' and a.status<>'removed' order by a.name,a.id`)
   ).rows;
 }
 export async function countSentToday(): Promise<number> {
@@ -111,6 +111,36 @@ export async function countSentToday(): Promise<number> {
       "select count(*)::int as total from messages where sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'",
     )
   ).rows[0].total;
+}
+/** Deletes an email account; one with message history is hidden instead so the history stays intact. */
+export async function removeEmailAccount(id: string, userId: string) {
+  return transaction(async (c) => {
+    const {
+      rows: [used],
+    } = await c.query(
+      'select exists(select 1 from messages where account_id=$1) as used',
+      [id],
+    );
+    const { rowCount } = used.used
+      ? await c.query(
+          "update channel_accounts set status='removed' where id=$1 and channel='email'",
+          [id],
+        )
+      : await c.query(
+          "delete from channel_accounts where id=$1 and channel='email'",
+          [id],
+        );
+    if (!rowCount) invalid('Акаунт не знайдено.');
+    await logActivity(
+      'email.account.removed',
+      'channel_account',
+      id,
+      userId,
+      {},
+      c,
+    );
+    return { id };
+  });
 }
 export async function setEmailAccountEnabled(
   id: string,
