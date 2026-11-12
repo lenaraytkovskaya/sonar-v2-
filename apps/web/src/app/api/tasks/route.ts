@@ -19,6 +19,8 @@ export async function GET(request: Request) {
       select distinct on (type,case when result->>'billingPending'='true' then id end) id,type,status,reason_uk,result,created_at,
         count(*) over (partition by type)::int as repetitions
       from tasks where status in ('failed','paused') and dismissed_at is null
+        -- A later successful run of the same job on the same subject resolves the failure.
+        and not exists(select 1 from tasks d where d.type=tasks.type and d.subject_id is not distinct from tasks.subject_id and d.status='done' and d.created_at>tasks.created_at)
       order by type,case when result->>'billingPending'='true' then id end,created_at desc,id desc
     ) latest order by created_at desc`);
   const { rows: batches } = await sonarPool.query(

@@ -58,7 +58,9 @@ export function FormAccounts({
   return (
     <div className="space-y-5">
       <Card className="space-y-4 p-5">
-        <h2 className="font-heading text-xl font-bold">{uk.forms.accounts}</h2>
+        <h2 className="font-heading text-base font-bold">
+          {uk.forms.accounts}
+        </h2>
         {!accounts.length && <p>{uk.forms.empty}</p>}
         {accounts.map((account) => (
           <section
@@ -191,7 +193,7 @@ export function FormAccounts({
         )}
       </Card>
       <Card className="space-y-4 p-5">
-        <h2 className="font-heading text-xl font-bold">{uk.forms.manual}</h2>
+        <h2 className="font-heading text-base font-bold">{uk.forms.manual}</h2>
         <p className="text-sm text-muted-foreground">{uk.forms.manualHint}</p>
         {!manual.length && <p>{uk.forms.manualEmpty}</p>}
         {manual.map((message) => (

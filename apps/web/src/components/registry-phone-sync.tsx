@@ -64,7 +64,7 @@ export function RegistryPhoneSync() {
   };
   return (
     <Card className="space-y-3 p-6">
-      <h2 className="font-heading text-xl font-bold">
+      <h2 className="font-heading text-base font-bold">
         {uk.registry.syncTitle}
       </h2>
       <Button disabled={pending || !!active} onClick={() => void sync()}>

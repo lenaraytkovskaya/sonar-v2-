@@ -66,6 +66,9 @@
   --font-heading: var(--font-manrope);
 }
 @layer base {
+  html {
+    font-size: 15px;
+  }
   body {
     margin: 0;
     background: var(--bg);

@@ -136,11 +136,13 @@ export function CompanyEmail({
         data.formAccounts.some((account) => account.enabled)));
   const sender = data.formAccounts.find((account) => account.id === accountId);
   const selectClass =
-    'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
+    'min-h-9 w-full rounded-lg border border-border bg-surface px-3';
   return (
-    <Card className="min-w-0 space-y-4 p-5 lg:col-span-2">
+    <Card className="min-w-0 space-y-3 p-4 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-heading text-xl font-bold">{uk.forms.messaging}</h2>
+        <h2 className="font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
+          {uk.forms.messaging}
+        </h2>
         <div className="flex flex-wrap gap-3">
           <Button
             disabled={data.blocked || pending || !canWrite}

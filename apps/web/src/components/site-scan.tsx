@@ -59,7 +59,7 @@ export function SiteScan({
     }
   };
   return (
-    <div className="mb-5 space-y-2">
+    <div className="space-y-1 text-sm">
       <Button
         disabled={(!enrich && !hasWebsite) || pending || !!active}
         onClick={() => void scan()}

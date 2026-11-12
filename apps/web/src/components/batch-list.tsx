@@ -74,7 +74,7 @@ export function BatchList({ campaignId }: { campaignId: string }) {
   }, [campaignId, progress]);
   return (
     <section className="mt-6 space-y-3">
-      <h2 className="font-heading text-xl font-bold">{uk.company.batches}</h2>
+      <h2 className="font-heading text-base font-bold">{uk.company.batches}</h2>
       {error && <p role="alert">{uk.ai.error}</p>}
       {loading && !batches.length && <p>{uk.google.loading}</p>}
       {!loading && !batches.length && !error && <p>{uk.company.noBatches}</p>}

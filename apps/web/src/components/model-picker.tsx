@@ -84,7 +84,7 @@ export function ModelPicker({
               onValueChange={setQuery}
             />
             <label
-              className="flex min-h-11 cursor-pointer items-center gap-2 border-b border-border px-3 text-sm"
+              className="flex min-h-9 cursor-pointer items-center gap-2 border-b border-border px-3 text-sm"
               title={uk.ai.cheapLimit}
             >
               <input

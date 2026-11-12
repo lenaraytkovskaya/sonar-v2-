@@ -35,8 +35,8 @@ const links = [
 ] as const;
 export function Logo() {
   return (
-    <span className="inline-flex items-center gap-2.5 font-heading text-2xl font-bold">
-      <Radar aria-hidden="true" className="size-8 text-accent" />
+    <span className="inline-flex items-center gap-2.5 font-heading text-xl font-bold">
+      <Radar aria-hidden="true" className="size-6 text-accent" />
       {uk.appName}
     </span>
   );
@@ -46,13 +46,13 @@ export function ThemeSelect() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   return (
-    <label className="flex min-h-11 items-center gap-3 text-sm text-muted-foreground">
+    <label className="flex min-h-9 items-center gap-3 text-sm text-muted-foreground">
       <span>{uk.theme}</span>
       <select
         aria-label={uk.theme}
         value={mounted ? theme : 'system'}
         onChange={(event) => setTheme(event.target.value)}
-        className="min-h-11 min-w-0 rounded-lg border border-border bg-surface px-2 text-foreground"
+        className="min-h-9 min-w-0 rounded-lg border border-border bg-surface px-2 text-foreground"
       >
         {Object.entries(uk.themes).map(([value, label]) => (
           <option key={value} value={value}>
@@ -86,7 +86,7 @@ export function Shell({
             onClick={() => setOpen(false)}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium',
+              'flex min-h-9 items-center gap-3 rounded-lg px-3 text-sm font-medium',
               href === '/settings' && 'mt-auto',
               active
                 ? 'bg-chip text-accent'
@@ -103,14 +103,14 @@ export function Shell({
   );
   return (
     <TasksProvider>
-      <div className="min-h-dvh md:grid md:grid-cols-[240px_minmax(0,1fr)]">
+      <div className="min-h-dvh md:grid md:grid-cols-[208px_minmax(0,1fr)]">
         <a
           href="#content"
           className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface focus:p-3"
         >
           {uk.skip}
         </a>
-        <aside className="sticky top-0 hidden h-dvh flex-col gap-8 border-r border-border bg-surface p-5 md:flex">
+        <aside className="sticky top-0 hidden h-dvh flex-col gap-6 border-r border-border bg-surface p-4 md:flex">
           <Link href="/" className="px-2">
             <Logo />
           </Link>
@@ -118,7 +118,7 @@ export function Shell({
           <ThemeSelect />
         </aside>
         <div className="min-w-0">
-          <header className="flex min-h-20 items-center justify-between gap-3 border-b border-border bg-surface px-5 md:justify-end md:px-10">
+          <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border bg-surface px-4 md:justify-end md:px-6">
             <div className="flex items-center gap-3 md:hidden">
               <Dialog.Root open={open} onOpenChange={setOpen}>
                 <Dialog.Trigger asChild>
@@ -181,7 +181,7 @@ export function Shell({
                     >
                       <button
                         type="submit"
-                        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+                        className="flex min-h-9 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
                       >
                         <LogOut aria-hidden="true" className="size-4" />
                         {uk.logout}
@@ -195,7 +195,7 @@ export function Shell({
           <main
             id="content"
             tabIndex={-1}
-            className="w-full p-5 py-8 md:p-8 2xl:px-12"
+            className="w-full p-4 md:p-6 2xl:px-8"
           >
             {children}
           </main>

@@ -148,6 +148,13 @@
       "when": 1794444003000,
       "tag": "0020_cheerful_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794480000000,
+      "tag": "0021_platform_domains",
+      "breakpoints": true
     }
   ]
 }

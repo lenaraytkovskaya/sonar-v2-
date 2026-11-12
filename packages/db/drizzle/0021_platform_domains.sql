@@ -1,0 +1,3 @@
+-- Marketplaces, classifieds, site builders and social networks: a company "website" on these
+-- hosts is a listing, not the company's own site, so it never groups branches into one chain.
+INSERT INTO settings(key,value) VALUES ('platforms.domains', '["olx.ua","olx.pl","prom.ua","rozetka.com.ua","epicentrk.ua","business.site","sites.google.com","google.com","goo.gl","maps.app.goo.gl","facebook.com","instagram.com","t.me","tiktok.com","youtube.com","linktr.ee","taplink.cc","taplink.ws","wixsite.com","uaprom.net","all.biz","autoria.com","auto.ria.com","ria.com","bizkatalog.com.ua","2gis.ua","yell.ua","master.shop","zakupivli.pro"]') ON CONFLICT DO NOTHING;

@@ -5,7 +5,8 @@ import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, PageHeader, Score } from './shared';
+import { ChevronDown, Network, Store } from 'lucide-react';
+import { Card, CompanyStatus, PageHeader, Score } from './shared';
 import { runAiJob } from '@/lib/ai-job';
 import { ManualEntry } from './manual-entry';
 type Row = {
@@ -18,9 +19,26 @@ type Row = {
   website: string | null;
   status: keyof typeof uk.company.statuses;
   created_at: string;
+  ratings_count: number | null;
   phones: string[];
+  emails: string[];
+  channels: string[];
+  registry: boolean;
+  platform: boolean;
+  domain: string | null;
+  chain_size: number;
+  branches?: { id: string; name: string; address: string | null }[];
   campaigns: { id: string; name: string }[];
 };
+const channelOrder = [
+  'email',
+  'phone',
+  'telegram',
+  'whatsapp',
+  'viber',
+  'form',
+  'social',
+] as const;
 function params(filters: CompanyFilters) {
   return new URLSearchParams(
     Object.entries(filters)
@@ -50,7 +68,8 @@ export function CompanyList({
     [description, setDescription] = useState(''),
     [preview, setPreview] = useState<CompanyFilters | null>(null),
     [pending, setPending] = useState(false),
-    [loading, setLoading] = useState(false);
+    [loading, setLoading] = useState(false),
+    [showFilters, setShowFilters] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -111,6 +130,10 @@ export function CompanyList({
     setFilters(companyFiltersSchema.parse(f));
     setPage(1);
   };
+  const link = (id: string) =>
+    '/companies/' +
+    id +
+    (filters.campaignId ? '?campaignId=' + filters.campaignId : '');
   return (
     <>
       <PageHeader {...uk.pages.companies} />
@@ -118,211 +141,236 @@ export function CompanyList({
         campaigns={campaigns}
         initialCampaignId={initialCampaignId}
       />
-      <Card className="mb-6 space-y-4 p-5">
-        <label className="block">
-          {uk.company.natural}
-          <Input
-            value={description}
-            maxLength={1000}
-            onChange={(e) => {
-              setDescription(e.target.value);
-              setPreview(null);
-            }}
-          />
-        </label>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input
+          aria-label={uk.company.search}
+          placeholder={uk.company.search}
+          className="max-w-sm"
+          value={draft.q ?? ''}
+          maxLength={200}
+          onChange={(e) => update('q', e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') apply(draft);
+          }}
+        />
         <Button
           variant="outline"
-          disabled={pending || !description.trim()}
-          onClick={() => void suggest()}
+          aria-expanded={showFilters}
+          onClick={() => setShowFilters(!showFilters)}
         >
-          {pending ? uk.ai.pending : uk.company.suggest}
+          {showFilters ? uk.company.hideFilters : uk.company.showFilters}
+          <ChevronDown
+            aria-hidden="true"
+            className={showFilters ? 'rotate-180' : ''}
+          />
         </Button>
-        {preview && (
-          <div className="space-y-3 rounded-lg bg-raised p-4">
-            <p>{uk.ai.preview}</p>
-            {Object.entries(preview).map(([key, value]) => (
-              <p key={key}>
-                {
+        <a
+          className="inline-flex min-h-9 items-center rounded-lg border border-border px-3 text-sm"
+          href={'/api/companies/export?' + params(filters)}
+        >
+          {uk.company.export}
+        </a>
+        <span
+          className="ml-auto text-sm text-muted-foreground"
+          aria-live="polite"
+        >
+          {uk.company.total}: {loading ? '…' : data.total}
+        </span>
+      </div>
+      {showFilters && (
+        <Card className="mb-3 space-y-3 p-4">
+          <label className="block">
+            {uk.company.natural}
+            <Input
+              value={description}
+              maxLength={1000}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setPreview(null);
+              }}
+            />
+          </label>
+          <Button
+            variant="outline"
+            disabled={pending || !description.trim()}
+            onClick={() => void suggest()}
+          >
+            {pending ? uk.ai.pending : uk.company.suggest}
+          </Button>
+          {preview && (
+            <div className="space-y-3 rounded-lg bg-raised p-4">
+              <p>{uk.ai.preview}</p>
+              {Object.entries(preview).map(([key, value]) => (
+                <p key={key}>
                   {
-                    q: uk.company.search,
-                    city: uk.company.city,
-                    campaignId: uk.company.campaign,
-                    status: uk.company.status,
-                    hasWebsite: uk.company.hasWebsite,
-                    hasPhone: uk.company.hasPhone,
-                    minRating: uk.company.minRating,
-                    minScore: uk.company.minScore,
-                    sort: uk.company.sort,
-                  }[key as keyof CompanyFilters]
+                    {
+                      q: uk.company.search,
+                      city: uk.company.city,
+                      campaignId: uk.company.campaign,
+                      status: uk.company.status,
+                      hasWebsite: uk.company.hasWebsite,
+                      hasPhone: uk.company.hasPhone,
+                      minRating: uk.company.minRating,
+                      minScore: uk.company.minScore,
+                      sort: uk.company.sort,
+                    }[key as keyof CompanyFilters]
+                  }
+                  :{' '}
+                  {typeof value === 'boolean'
+                    ? value
+                      ? '✓'
+                      : '—'
+                    : String(value)}
+                </p>
+              ))}
+              <Button
+                onClick={() => {
+                  setDraft(preview);
+                  apply(preview);
+                  setPreview(null);
+                }}
+              >
+                {uk.ai.apply}
+              </Button>
+              <Button variant="outline" onClick={() => setPreview(null)}>
+                {uk.ai.cancel}
+              </Button>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+            <label>
+              {uk.company.city}
+              <Input
+                value={draft.city ?? ''}
+                maxLength={200}
+                onChange={(e) => update('city', e.target.value)}
+              />
+            </label>
+            <label>
+              {uk.company.minRating}
+              <Input
+                type="number"
+                min="0"
+                max="5"
+                step="0.1"
+                value={draft.minRating ?? ''}
+                onChange={(e) =>
+                  update(
+                    'minRating',
+                    e.target.value === '' ? undefined : e.target.valueAsNumber,
+                  )
                 }
-                :{' '}
-                {typeof value === 'boolean'
-                  ? value
-                    ? '✓'
-                    : '—'
-                  : String(value)}
-              </p>
-            ))}
+              />
+            </label>
+            <label>
+              {uk.company.minScore}
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                value={draft.minScore ?? ''}
+                onChange={(e) =>
+                  update(
+                    'minScore',
+                    e.target.value === '' ? undefined : e.target.valueAsNumber,
+                  )
+                }
+              />
+            </label>
+            <label>
+              {uk.company.sort}
+              <select
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
+                value={draft.sort ?? (draft.campaignId ? 'score' : 'newest')}
+                onChange={(e) =>
+                  update('sort', e.target.value as CompanyFilters['sort'])
+                }
+              >
+                <option value="score">{uk.company.scoreDescending}</option>
+                <option value="newest">{uk.company.newest}</option>
+              </select>
+            </label>
+            <label>
+              {uk.company.campaign}
+              <select
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
+                value={draft.campaignId ?? ''}
+                onChange={(e) =>
+                  update('campaignId', e.target.value || undefined)
+                }
+              >
+                <option value="">{uk.company.all}</option>
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {uk.company.status}
+              <select
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
+                value={draft.status ?? ''}
+                onChange={(e) =>
+                  update(
+                    'status',
+                    (e.target.value || undefined) as CompanyFilters['status'],
+                  )
+                }
+              >
+                <option value="">{uk.company.all}</option>
+                {Object.entries(uk.company.statuses).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-center gap-5">
+              {(['hasWebsite', 'hasPhone'] as const).map((key) => (
+                <label className="flex min-h-9 items-center gap-2" key={key}>
+                  <input
+                    type="checkbox"
+                    checked={draft[key] === true}
+                    onChange={(e) =>
+                      update(key, e.target.checked ? true : undefined)
+                    }
+                  />
+                  {uk.company[key]}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
             <Button
+              disabled={!companyFiltersSchema.safeParse(draft).success}
+              onClick={() => apply(draft)}
+            >
+              {uk.company.apply}
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => {
-                setDraft(preview);
-                apply(preview);
+                setDraft({});
+                apply({});
                 setPreview(null);
               }}
             >
-              {uk.ai.apply}
-            </Button>
-            <Button variant="outline" onClick={() => setPreview(null)}>
-              {uk.ai.cancel}
+              {uk.company.reset}
             </Button>
           </div>
-        )}
-        <div className="grid gap-4 md:grid-cols-3 2xl:grid-cols-6">
-          <label>
-            {uk.company.search}
-            <Input
-              value={draft.q ?? ''}
-              maxLength={200}
-              onChange={(e) => update('q', e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') apply(draft);
-              }}
-            />
-          </label>
-          <label>
-            {uk.company.city}
-            <Input
-              value={draft.city ?? ''}
-              maxLength={200}
-              onChange={(e) => update('city', e.target.value)}
-            />
-          </label>
-          <label>
-            {uk.company.minRating}
-            <Input
-              type="number"
-              min="0"
-              max="5"
-              step="0.1"
-              value={draft.minRating ?? ''}
-              onChange={(e) =>
-                update(
-                  'minRating',
-                  e.target.value === '' ? undefined : e.target.valueAsNumber,
-                )
-              }
-            />
-          </label>
-          <label>
-            {uk.company.minScore}
-            <Input
-              type="number"
-              min="0"
-              max="100"
-              step="0.1"
-              value={draft.minScore ?? ''}
-              onChange={(e) =>
-                update(
-                  'minScore',
-                  e.target.value === '' ? undefined : e.target.valueAsNumber,
-                )
-              }
-            />
-          </label>
-          <label>
-            {uk.company.sort}
-            <select
-              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
-              value={draft.sort ?? (draft.campaignId ? 'score' : 'newest')}
-              onChange={(e) =>
-                update('sort', e.target.value as CompanyFilters['sort'])
-              }
-            >
-              <option value="score">{uk.company.scoreDescending}</option>
-              <option value="newest">{uk.company.newest}</option>
-            </select>
-          </label>
-          <label>
-            {uk.company.campaign}
-            <select
-              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
-              value={draft.campaignId ?? ''}
-              onChange={(e) =>
-                update('campaignId', e.target.value || undefined)
-              }
-            >
-              <option value="">{uk.company.all}</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {uk.company.status}
-            <select
-              className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
-              value={draft.status ?? ''}
-              onChange={(e) =>
-                update(
-                  'status',
-                  (e.target.value || undefined) as CompanyFilters['status'],
-                )
-              }
-            >
-              <option value="">{uk.company.all}</option>
-              {Object.entries(uk.company.statuses).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="flex items-center gap-5">
-            {(['hasWebsite', 'hasPhone'] as const).map((key) => (
-              <label className="flex min-h-11 items-center gap-2" key={key}>
-                <input
-                  type="checkbox"
-                  checked={draft[key] === true}
-                  onChange={(e) =>
-                    update(key, e.target.checked ? true : undefined)
-                  }
-                />
-                {uk.company[key]}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            disabled={!companyFiltersSchema.safeParse(draft).success}
-            onClick={() => apply(draft)}
-          >
-            {uk.company.apply}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setDraft({});
-              apply({});
-              setPreview(null);
-            }}
-          >
-            {uk.company.reset}
-          </Button>
-          <a
-            className="inline-flex min-h-11 items-center rounded-lg border border-border px-4"
-            href={'/api/companies/export?' + params(filters)}
-          >
-            {uk.company.export}
-          </a>
-        </div>
-      </Card>
-      <div className="mb-4 flex flex-wrap gap-2" aria-label={uk.company.status}>
+        </Card>
+      )}
+      <div
+        className="mb-3 flex flex-wrap gap-1.5"
+        aria-label={uk.company.status}
+      >
         {['', ...Object.keys(uk.company.statuses)].map((status) => (
           <Button
             key={status}
+            className="min-h-8 px-2.5 text-xs"
             variant={
               filters.status === status || (!filters.status && !status)
                 ? 'default'
@@ -344,102 +392,145 @@ export function CompanyList({
         ))}
       </div>
       {error && (
-        <p role="alert" className="mb-4 text-err">
+        <p role="alert" className="mb-3 text-err">
           {error}
         </p>
       )}
-      <p className="mb-3" aria-live="polite">
-        {uk.company.total}: {loading ? '…' : data.total}
-      </p>
-      <Card className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-raised">
-            <tr>
-              {[
-                uk.company.name,
-                uk.company.score,
-                uk.company.contacts,
-                uk.company.campaign,
-                uk.company.status,
-                uk.company.date,
-              ].map((h) => (
-                <th className="p-4" key={h}>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.companies.map((c) => (
-              <tr className="border-t border-border" key={c.id}>
-                <td className="min-w-52 p-4">
-                  <Link
-                    className="font-semibold text-accent"
-                    href={
-                      '/companies/' +
-                      c.id +
-                      (filters.campaignId
-                        ? '?campaignId=' + filters.campaignId
-                        : '')
-                    }
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {data.companies.map((c) => (
+          <Card key={c.id} className="flex min-w-0 flex-col gap-2.5 p-3.5">
+            <div className="flex items-start justify-between gap-2">
+              <Link
+                className="line-clamp-2 min-w-0 font-semibold leading-snug text-foreground hover:text-accent"
+                href={link(c.id)}
+                title={c.name}
+              >
+                {c.name}
+              </Link>
+              <CompanyStatus status={c.status} />
+            </div>
+            <div className="flex items-end justify-between gap-3">
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <p className="truncate">
+                  {[c.city, c.primary_type].filter(Boolean).join(' · ') || '—'}
+                </p>
+                <p>
+                  <span className="text-wait">★</span> {c.rating ?? '—'}
+                  {c.ratings_count ? (
+                    <>
+                      {' '}
+                      · {c.ratings_count} {uk.company.reviews}
+                    </>
+                  ) : null}
+                </p>
+              </div>
+              <Score value={c.score} compact />
+            </div>
+            <div
+              className="flex flex-wrap gap-1"
+              aria-label={uk.company.channels}
+            >
+              {channelOrder
+                .filter((kind) => c.channels.includes(kind))
+                .map((kind) => (
+                  <span
+                    key={kind}
+                    className="rounded bg-ok-bg px-1.5 py-0.5 text-[11px] font-medium text-ok"
                   >
-                    {c.name}
-                  </Link>
-                  <p className="text-muted-foreground">
-                    {c.city} · {c.primary_type}
-                  </p>
-                  <p>
-                    {uk.company.rating}: {c.rating ?? '—'}
-                  </p>
-                </td>
-                <td className="p-4">
-                  <Score value={c.score} />
-                </td>
-                <td className="p-4">
-                  {c.website && (
-                    <a
-                      className="block max-w-52 truncate text-accent"
-                      target="_blank"
-                      rel="noreferrer"
-                      href={c.website}
-                    >
-                      {c.website}
-                    </a>
-                  )}
-                  {c.phones.map((phone) => (
-                    <a className="block" key={phone} href={'tel:' + phone}>
-                      {phone}
-                    </a>
-                  ))}
-                </td>
-                <td className="p-4">
-                  {c.campaigns.map((a) => (
-                    <Link
-                      className="block text-accent"
-                      key={a.id}
-                      href={'/campaigns?campaign=' + a.id}
-                    >
-                      {a.name}
-                    </Link>
-                  ))}
-                </td>
-                <td className="p-4">
-                  <span className="rounded-full bg-chip px-3 py-1 whitespace-nowrap">
-                    {uk.company.statuses[c.status]}
+                    {uk.company.kinds[kind]}
                   </span>
-                </td>
-                <td className="p-4 whitespace-nowrap">
-                  {new Date(c.created_at).toLocaleDateString('uk-UA')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!loading && !data.companies.length && (
-          <p className="p-5">{uk.company.noResults}</p>
-        )}
-      </Card>
-      <div className="mt-4 flex items-center gap-4">
+                ))}
+              {c.registry && (
+                <span className="rounded bg-run-bg px-1.5 py-0.5 text-[11px] font-medium text-run">
+                  {uk.company.registry}
+                </span>
+              )}
+              {c.platform && (
+                <span
+                  className="inline-flex items-center gap-1 rounded bg-wait-bg px-1.5 py-0.5 text-[11px] font-medium text-wait"
+                  title={uk.company.platformHint}
+                >
+                  <Store aria-hidden="true" className="size-3" />
+                  {uk.company.platform}
+                </span>
+              )}
+              {!c.channels.length && (
+                <span className="text-xs text-muted-foreground">
+                  {uk.company.noContacts}
+                </span>
+              )}
+            </div>
+            <div className="min-w-0 space-y-0.5 text-sm">
+              {c.website && (
+                <a
+                  className="block truncate text-accent"
+                  target="_blank"
+                  rel="noreferrer"
+                  href={c.website}
+                >
+                  {c.domain ?? c.website}
+                </a>
+              )}
+              {c.emails[0] && (
+                <a className="block truncate" href={'mailto:' + c.emails[0]}>
+                  {c.emails[0]}
+                </a>
+              )}
+              {c.phones[0] && (
+                <a className="block tabular-nums" href={'tel:' + c.phones[0]}>
+                  {c.phones[0]}
+                  {c.phones.length > 1 && (
+                    <span className="text-xs text-muted-foreground">
+                      {' '}
+                      +{c.phones.length - 1}
+                    </span>
+                  )}
+                </a>
+              )}
+            </div>
+            {c.chain_size > 1 && (
+              <details className="rounded-lg bg-raised px-2.5 py-1.5 text-sm">
+                <summary className="flex cursor-pointer items-center gap-1.5 font-medium">
+                  <Network
+                    aria-hidden="true"
+                    className="size-3.5 text-accent"
+                  />
+                  {uk.company.chain}: {c.chain_size} {uk.company.branches}
+                </summary>
+                <ul className="mt-1.5 space-y-1">
+                  {c.branches?.map((branch) => (
+                    <li key={branch.id} className="min-w-0">
+                      <Link
+                        className="block truncate text-accent"
+                        href={link(branch.id)}
+                      >
+                        {branch.name}
+                      </Link>
+                      {branch.address && (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {branch.address}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+              <span className="min-w-0 truncate">
+                {c.campaigns.map((a) => a.name).join(', ')}
+              </span>
+              <span className="shrink-0">
+                {new Date(c.created_at).toLocaleDateString('uk-UA')}
+              </span>
+            </div>
+          </Card>
+        ))}
+      </div>
+      {!loading && !data.companies.length && (
+        <Card className="p-5">{uk.company.noResults}</Card>
+      )}
+      <div className="mt-4 flex items-center gap-3 text-sm">
         <Button
           variant="outline"
           disabled={loading || page === 1}
