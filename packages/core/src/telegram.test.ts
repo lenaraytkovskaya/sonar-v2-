@@ -310,6 +310,46 @@ describe('Telegram transport', () => {
       'auth.LogOut',
     ]);
   });
+  it('logs in by QR: shows a token, follows a DC migration, then returns the phone', async () => {
+    let scanned = false;
+    const { adapter, client } = mockClient((r) => {
+      if (r instanceof Api.auth.ExportLoginToken)
+        return scanned
+          ? new Api.auth.LoginTokenMigrateTo({
+              dcId: 4,
+              token: Buffer.from('t2'),
+            })
+          : new Api.auth.LoginToken({ expires: 30, token: Buffer.from('t1') });
+      if (r instanceof Api.auth.ImportLoginToken)
+        return new Api.auth.LoginTokenSuccess({
+          authorization: new Api.auth.Authorization({ user }),
+        });
+      return {};
+    });
+    const switchDC = vi.fn(async () => true);
+    Object.assign(client, { switchDC });
+    expect(await adapter.qrLogin('')).toEqual({
+      session: 'saved-session',
+      status: 'qr',
+      url: 'tg://login?token=' + Buffer.from('t1').toString('base64url'),
+    });
+    scanned = true;
+    expect(await adapter.qrLogin('saved-session')).toEqual({
+      session: 'saved-session',
+      status: 'done',
+      phone: '+380501234567',
+    });
+    expect(switchDC).toHaveBeenCalledWith(4);
+  });
+  it('asks for the 2FA password after a QR scan', async () => {
+    const { adapter } = mockClient(() => {
+      throw { errorMessage: 'SESSION_PASSWORD_NEEDED' };
+    });
+    expect(await adapter.qrLogin('saved-session')).toEqual({
+      session: 'saved-session',
+      status: 'password',
+    });
+  });
   it('validates identifiers and fails safely when credentials are missing', async () => {
     expect(normalizeTelegramRecipient('https://t.me/stub_user')).toBe(
       '@stub_user',

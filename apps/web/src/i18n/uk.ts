@@ -87,6 +87,11 @@ export const uk = {
     configuration: 'Додайте TELEGRAM_API_ID і TELEGRAM_API_HASH на сервері',
     phone: 'Телефон (+код країни)',
     connect: 'Підключити Telegram',
+    connectQr: 'Підключити через QR',
+    qrNeeds: 'Для QR вкажіть назву акаунта та денний ліміт.',
+    qrAlt: 'QR-код входу в Telegram',
+    qrHint:
+      'Відкрийте Telegram на телефоні → Налаштування → Пристрої → Підключити пристрій і відскануйте QR-код. Код оновлюється сам.',
     disconnect: 'Від’єднати',
     disconnected: 'Від’єднаний',
     code: 'Код підтвердження Telegram',

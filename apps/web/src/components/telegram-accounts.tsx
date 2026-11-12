@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { listTelegramAccounts } from '@sonar/db/telegram';
 import { uk } from '@/i18n/uk';
@@ -25,6 +25,7 @@ export function TelegramAccounts({
     step: 'code' | 'password';
   } | null>(null);
   const [delivery, setDelivery] = useState('');
+  const [qr, setQr] = useState<{ id: string; image: string } | null>(null);
   const [secret, setSecret] = useState(''),
     [pending, setPending] = useState(false),
     [error, setError] = useState('');
@@ -43,6 +44,11 @@ export function TelegramAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       if (result.step === 'code' || result.step === 'password')
         setLogin({ id: result.id, step: result.step });
+      setQr(
+        result.step === 'qr' && result.qr
+          ? { id: result.id, image: result.qr }
+          : null,
+      );
       if (result.deliveryUk) setDelivery(result.deliveryUk);
       if (result.step === 'done') {
         setLogin(null);
@@ -50,6 +56,7 @@ export function TelegramAccounts({
       }
       if (method === 'DELETE' && 'id' in fields && fields.id === login?.id)
         setLogin(null);
+      if (method === 'DELETE') setQr(null);
       router.refresh();
     } catch (error) {
       setError(error instanceof Error ? error.message : uk.email.error);
@@ -58,6 +65,27 @@ export function TelegramAccounts({
       busy.current = false;
       setPending(false);
     }
+  };
+  // While a QR is shown, ask the server every few seconds whether it was scanned.
+  const qrId = qr?.id;
+  useEffect(() => {
+    if (!qrId) return;
+    const timer = setInterval(() => {
+      if (!busy.current) void mutate('POST', { action: 'qr-poll', id: qrId });
+    }, 4000);
+    return () => clearInterval(timer);
+    // mutate is recreated every render; polling depends only on the QR session.
+  }, [qrId]);
+  const startQr = () => {
+    if (!form.name.trim() || !(Number(form.dailyLimit) >= 1)) {
+      setError(uk.telegram.qrNeeds);
+      return;
+    }
+    void mutate('POST', {
+      action: 'qr',
+      name: form.name,
+      dailyLimit: Number(form.dailyLimit),
+    });
   };
   return (
     <Card className="space-y-4 p-5">
@@ -164,7 +192,18 @@ export function TelegramAccounts({
           );
         }}
       >
-        {login ? (
+        {qr && !login ? (
+          <div className="space-y-2 md:col-span-3">
+            <img
+              src={qr.image}
+              alt={uk.telegram.qrAlt}
+              width={240}
+              height={240}
+              className="rounded-lg bg-white p-2"
+            />
+            <p className="text-sm">{uk.telegram.qrHint}</p>
+          </div>
+        ) : login ? (
           <div className="md:col-span-3">
             <label htmlFor="telegram-secret">
               {login.step === 'code' ? uk.telegram.code : uk.telegram.password}
@@ -228,20 +267,32 @@ export function TelegramAccounts({
           ))
         )}
         <div className="flex gap-3 md:col-span-3">
-          <Button disabled={pending || !configured}>
-            {pending
-              ? uk.ai.pending
-              : login
-                ? uk.telegram.confirm
-                : uk.telegram.connect}
-          </Button>
-          {login && (
+          {!qr && (
+            <Button disabled={pending || !configured}>
+              {pending
+                ? uk.ai.pending
+                : login
+                  ? uk.telegram.confirm
+                  : uk.telegram.connect}
+            </Button>
+          )}
+          {!login && !qr && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !configured}
+              onClick={startQr}
+            >
+              {uk.telegram.connectQr}
+            </Button>
+          )}
+          {(login || qr) && (
             <Button
               type="button"
               variant="outline"
               disabled={pending}
               onClick={() => {
-                void mutate('DELETE', { id: login.id });
+                void mutate('DELETE', { id: (login ?? qr)!.id });
                 setSecret('');
               }}
             >
