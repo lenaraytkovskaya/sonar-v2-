@@ -32,7 +32,9 @@ export function CompanyEmail({
       ?.id ??
     initial.campaignId ??
     '';
-  const [channel, setChannel] = useState<'email' | 'form'>('email');
+  const [channel, setChannel] = useState<'email' | 'form' | 'telegram'>(
+    'email',
+  );
   const [campaignId, setCampaignId] = useState(firstCampaign),
     [accountId, setAccountId] = useState(
       initial.accounts.find((account) => account.enabled)?.id ?? '',
@@ -105,8 +107,18 @@ export function CompanyEmail({
   const approval =
     data.campaigns.find((campaign) => campaign.id === campaignId)?.sendMode ===
     'approval';
-  const accounts = channel === 'form' ? data.formAccounts : data.accounts;
-  const recipients = channel === 'form' ? data.formUrls : data.emails;
+  const accounts =
+    channel === 'telegram'
+      ? data.telegramAccounts
+      : channel === 'form'
+        ? data.formAccounts
+        : data.accounts;
+  const recipients =
+    channel === 'telegram'
+      ? data.telegramRecipients
+      : channel === 'form'
+        ? data.formUrls
+        : data.emails;
   // Contacts and accounts can appear after the page loaded (manual add, polling);
   // keep the selected values inside the options the selects actually show.
   const recipientKey = recipients.join('\n');
@@ -133,7 +145,9 @@ export function CompanyEmail({
     ((data.emails.length > 0 &&
       data.accounts.some((account) => account.enabled)) ||
       (data.formUrls.length > 0 &&
-        data.formAccounts.some((account) => account.enabled)));
+        data.formAccounts.some((account) => account.enabled)) ||
+      (data.telegramRecipients.length > 0 &&
+        data.telegramAccounts.some((account) => account.enabled)));
   const sender = data.formAccounts.find((account) => account.id === accountId);
   const selectClass =
     'min-h-9 w-full rounded-lg border border-border bg-surface px-3';
@@ -164,7 +178,7 @@ export function CompanyEmail({
       ) : (
         !canWrite && (
           <p>
-            {uk.email.noSetup} {uk.forms.noSetup}
+            {uk.email.noSetup} {uk.forms.noSetup} {uk.telegram.noSetup}
           </p>
         )
       )}
@@ -182,24 +196,42 @@ export function CompanyEmail({
               className={selectClass}
               value={channel}
               onChange={(event) => {
-                const next = event.target.value as 'email' | 'form';
+                const next = event.target.value as
+                  'email' | 'form' | 'telegram';
                 setChannel(next);
                 setAccountId(
-                  (next === 'form' ? data.formAccounts : data.accounts).find(
-                    (account) => account.enabled,
-                  )?.id ?? '',
+                  (next === 'telegram'
+                    ? data.telegramAccounts
+                    : next === 'form'
+                      ? data.formAccounts
+                      : data.accounts
+                  ).find((account) => account.enabled)?.id ?? '',
                 );
                 setToAddress(
-                  (next === 'form' ? data.formUrls : data.emails)[0] ?? '',
+                  (next === 'telegram'
+                    ? data.telegramRecipients
+                    : next === 'form'
+                      ? data.formUrls
+                      : data.emails)[0] ?? '',
                 );
               }}
             >
               <option value="email">{uk.email.title}</option>
               <option value="form">{uk.forms.title}</option>
+              {data.telegramRecipients.length > 0 &&
+                data.telegramAccounts.some((account) => account.enabled) && (
+                  <option value="telegram">{uk.telegram.title}</option>
+                )}
             </select>
           </label>
           {!ready && (
-            <p>{channel === 'form' ? uk.forms.noSetup : uk.email.noSetup}</p>
+            <p>
+              {channel === 'telegram'
+                ? uk.telegram.noSetup
+                : channel === 'form'
+                  ? uk.forms.noSetup
+                  : uk.email.noSetup}
+            </p>
           )}
           <div className="grid gap-4 md:grid-cols-3">
             <label className="space-y-2">
@@ -232,7 +264,10 @@ export function CompanyEmail({
                   .filter((account) => account.enabled)
                   .map((account) => (
                     <option key={account.id} value={account.id}>
-                      {account.name} · {account.fromAddress}
+                      {account.name} ·{' '}
+                      {'address' in account
+                        ? account.address
+                        : account.fromAddress}
                     </option>
                   ))}
               </select>
@@ -271,7 +306,7 @@ export function CompanyEmail({
             <textarea
               id="email-body"
               required
-              maxLength={20000}
+              maxLength={channel === 'telegram' ? 4096 : 20000}
               rows={8}
               className="w-full rounded-lg border border-border bg-surface p-3"
               value={body}
@@ -297,9 +332,11 @@ export function CompanyEmail({
           <p className="text-sm text-muted-foreground">
             {approval
               ? uk.email.approvalHint
-              : channel === 'form'
-                ? uk.forms.sendHint
-                : uk.email.sendHint}
+              : channel === 'telegram'
+                ? uk.telegram.sendHint
+                : channel === 'form'
+                  ? uk.forms.sendHint
+                  : uk.email.sendHint}
           </p>
           <Button type="submit" disabled={pending || !ready}>
             {pending
@@ -310,6 +347,14 @@ export function CompanyEmail({
           </Button>
         </form>
       )}
+      {data.telegramUnavailable.map((contact) => (
+        <p
+          key={contact.value}
+          className="rounded-lg bg-err-bg px-3 py-2 text-xs text-err"
+        >
+          {contact.value} · {uk.telegram.unavailable}: {contact.reasonUk}
+        </p>
+      ))}
       {notice && <p role="status">{notice}</p>}
       <h3 className="font-semibold">{uk.email.history}</h3>
       {!data.messages.length && <p>{uk.email.noMessages}</p>}
@@ -319,8 +364,12 @@ export function CompanyEmail({
           className="space-y-2 border-t border-border pt-4"
         >
           <p className="break-words font-medium">
-            {message.channel === 'form' ? uk.forms.title : message.subject} ·{' '}
-            {message.toAddress}
+            {message.channel === 'telegram'
+              ? uk.telegram.title
+              : message.channel === 'form'
+                ? uk.forms.title
+                : message.subject}{' '}
+            · {message.toAddress}
           </p>
           <p className="text-sm text-muted-foreground">
             {uk.email.statuses[message.status]} ·{' '}

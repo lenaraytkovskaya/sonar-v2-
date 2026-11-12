@@ -195,6 +195,14 @@ export default async function Page({
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
   const contactRow = (contact: (typeof contacts)[number]) => {
     const href = contactHref(contact);
+    const unavailable = contact.meta?.telegram_unavailable;
+    const unavailableReason =
+      unavailable &&
+      typeof unavailable === 'object' &&
+      'reason_uk' in unavailable &&
+      typeof unavailable.reason_uk === 'string'
+        ? unavailable.reason_uk
+        : '';
     return (
       <li
         key={contact.id}
@@ -238,6 +246,12 @@ export default async function Page({
               ` · ${uk.prozorro.alsoInProzorro}`}
             {contact.meta?.note && ` · ${String(contact.meta.note)}`}
           </p>
+          {unavailable && (
+            <p className="mt-1 inline-block rounded-full bg-err-bg px-2 py-0.5 text-xs text-err">
+              {uk.telegram.unavailable}
+              {unavailableReason ? `: ${unavailableReason}` : ''}
+            </p>
+          )}
           {contact.source === 'manual' && (
             <DeleteManualContact companyId={id} contactId={contact.id} />
           )}

@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
+    "./telegram": {
+      "types": "./dist/telegram.d.ts",
+      "default": "./dist/telegram.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
@@ -20,6 +24,7 @@
   "dependencies": {
     "cheerio": "^1.2.0",
     "libphonenumber-js": "^1.13.16",
+    "telegram": "^2.26.22",
     "tldts": "^7.4.22",
     "zod": "^4.6.7"
   }

@@ -51,6 +51,10 @@
     "./prozorro": {
       "types": "./dist/prozorro.d.ts",
       "default": "./dist/prozorro.js"
+    },
+    "./telegram": {
+      "types": "./dist/telegram.d.ts",
+      "default": "./dist/telegram.js"
     }
   },
   "files": [

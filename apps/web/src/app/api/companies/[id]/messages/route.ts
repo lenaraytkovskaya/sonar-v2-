@@ -49,7 +49,8 @@ export async function POST(request: Request, context: Context) {
       typeof data.toAddress !== 'string' ||
       typeof data.subject !== 'string' ||
       typeof data.body !== 'string' ||
-      (data.channel !== undefined && !['email', 'form'].includes(data.channel))
+      (data.channel !== undefined &&
+        !['email', 'form', 'telegram'].includes(data.channel))
     )
       return Response.json({ error: uk.ai.invalid }, { status: 400 });
     return email.createCompanyMessage(
@@ -62,7 +63,12 @@ export async function POST(request: Request, context: Context) {
         body: data.body,
         idempotencyKey: data.idempotencyKey,
         submit: true,
-        channel: data.channel === 'form' ? 'form' : 'email',
+        channel:
+          data.channel === 'telegram'
+            ? 'telegram'
+            : data.channel === 'form'
+              ? 'form'
+              : 'email',
       },
       user.id,
     );
