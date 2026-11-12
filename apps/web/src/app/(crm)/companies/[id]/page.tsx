@@ -188,7 +188,7 @@ export default async function Page({
         key={contact.id}
         className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
       >
-        <span className="w-16 shrink-0 pt-0.5 text-xs text-muted-foreground">
+        <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
           {uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
         </span>
         <div className="min-w-0 flex-1">
@@ -293,7 +293,15 @@ export default async function Page({
               >
                 {mainScore.score.toFixed(1)}
               </p>
-              <Score value={mainScore.score} />
+              <div className="h-1.5 overflow-hidden rounded-full bg-chip">
+                <div
+                  className={cn(
+                    'h-full rounded-full',
+                    scoreTone(mainScore.score).bar,
+                  )}
+                  style={{ width: `${mainScore.score}%` }}
+                />
+              </div>
               <p className="text-xs text-muted-foreground">
                 {mainScore.campaign_name} ·{' '}
                 <LocalTime value={mainScore.computed_at} />

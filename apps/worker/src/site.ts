@@ -522,6 +522,13 @@ export async function runSiteScan(
         costUsd: billing.count ? Number(billing.cost) : ai.costUsd,
         durationMs: Date.now() - started,
       };
+      // A completed scan is the current truth about the site: drop website contacts
+      // that earlier scans (or older extraction rules) found but this one did not.
+      if (pages.length)
+        await client.query(
+          "delete from contacts where company_id=$1 and source='website' and not (kind||':'||normalized = any($2::text[])) and not exists(select 1 from conversations v where v.contact_id=contacts.id)",
+          [companyId, [...foundContacts]],
+        );
       await saveFact(
         'site_status',
         { status: 'done', pages: pageCount },
