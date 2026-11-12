@@ -1,12 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import {
   campaignSchema,
   applyCampaignSuggestion,
   campaignSuggestionSchema,
   type CampaignInput,
-  type CampaignSuggestion,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
@@ -28,7 +26,7 @@ const initial: CampaignInput = {
   queries: [],
   offer: '',
   batch_size: 20,
-  budget_usd: 0.5,
+  budget_usd: 0,
   channels: { email: true, telegram: false, whatsapp: false, forms: false },
   send_mode: 'approval',
   scoring_weights: {},
@@ -105,7 +103,6 @@ export function CampaignPanel({
     [id, setId] = useState<string | null>(null),
     [form, setForm] = useState(initialForm),
     [description, setDescription] = useState(''),
-    [preview, setPreview] = useState<CampaignSuggestion | null>(null),
     [source, setSource] = useState('form'),
     [pending, setPending] = useState(false),
     [message, setMessage] = useState('');
@@ -123,7 +120,6 @@ export function CampaignPanel({
     key: K,
     value: CampaignInput[K],
   ) => {
-    setPreview(null);
     setForm({ ...form, [key]: value });
   };
   const load = async (selectFromUrl = false) => {
@@ -218,14 +214,19 @@ export function CampaignPanel({
   };
   const suggest = async () => {
     setPending(true);
-    setPreview(null);
     setMessage('');
     try {
       const r = await runAiJob('/api/ai/assist', {
         action: 'campaign',
         text: description,
       });
-      setPreview(campaignSuggestionSchema.parse(r.suggestion));
+      const next = applyCampaignSuggestion(
+        form,
+        campaignSuggestionSchema.parse(r.suggestion),
+      );
+      setForm(next);
+      setSource('ai');
+      setMessage(uk.campaign.filled);
     } catch (e) {
       setMessage(
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
@@ -243,7 +244,6 @@ export function CampaignPanel({
             onClick={() => {
               setId(null);
               setForm(initialForm);
-              setPreview(null);
             }}
           >
             {uk.campaign.create}
@@ -263,7 +263,6 @@ export function CampaignPanel({
                     }),
                   ),
                 );
-                setPreview(null);
                 setSource('form');
               }}
             >
@@ -285,7 +284,6 @@ export function CampaignPanel({
                 if (preset) {
                   setId(null);
                   setForm(withWeights(preset.data));
-                  setPreview(null);
                 }
               }}
             >
@@ -304,7 +302,6 @@ export function CampaignPanel({
               maxLength={1000}
               onChange={(e) => {
                 setDescription(e.target.value);
-                setPreview(null);
               }}
             />
           </label>
@@ -312,82 +309,11 @@ export function CampaignPanel({
             disabled={pending || !description.trim()}
             onClick={() => void suggest()}
           >
-            {uk.campaign.suggest}
+            {pending ? uk.ai.pending : uk.campaign.suggest}
           </Button>
-          {preview && (
-            <div className="space-y-3 rounded-lg bg-raised p-4">
-              <h2 className="font-heading text-lg font-bold">
-                {uk.ai.preview}
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {(['name', 'country_code', 'language_code'] as const).map(
-                  (key) => (
-                    <label key={key} className="min-w-0">
-                      {uk.campaign[key]}
-                      <Input
-                        value={preview[key]}
-                        maxLength={200}
-                        onChange={(e) =>
-                          setPreview({ ...preview, [key]: e.target.value })
-                        }
-                      />
-                    </label>
-                  ),
-                )}
-              </div>
-              <Chips
-                label={uk.campaign.cities}
-                values={preview.cities}
-                onChange={(cities) => setPreview({ ...preview, cities })}
-              />
-              <Chips
-                label={uk.campaign.queries}
-                values={preview.queries}
-                onChange={(queries) => setPreview({ ...preview, queries })}
-              />
-              <label className="block">
-                {uk.campaign.offer}
-                <textarea
-                  className="mt-2 min-h-32 w-full rounded-lg border border-border bg-surface p-3"
-                  value={preview.offer}
-                  maxLength={20000}
-                  disabled={preview.needs_about}
-                  onChange={(e) =>
-                    setPreview({ ...preview, offer: e.target.value })
-                  }
-                />
-              </label>
-              {preview.needs_about && (
-                <p>
-                  <Link
-                    className="inline-flex min-h-9 items-center text-accent underline"
-                    href="/settings#company-about"
-                  >
-                    {uk.campaign.needsAbout}
-                  </Link>
-                </p>
-              )}
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  disabled={
-                    !campaignSchema.safeParse(
-                      applyCampaignSuggestion(form, preview),
-                    ).success
-                  }
-                  onClick={() => {
-                    setForm(applyCampaignSuggestion(form, preview));
-                    setSource('ai');
-                    setPreview(null);
-                  }}
-                >
-                  {uk.ai.apply}
-                </Button>
-                <Button variant="outline" onClick={() => setPreview(null)}>
-                  {uk.ai.cancel}
-                </Button>
-              </div>
-            </div>
-          )}
+          <p className="text-sm text-muted-foreground">
+            {uk.campaign.suggestHint}
+          </p>
           <div className="grid gap-4 sm:grid-cols-2">
             {(['name', 'country_code', 'language_code'] as const).map((key) => (
               <label key={key}>
@@ -399,16 +325,6 @@ export function CampaignPanel({
                 />
               </label>
             ))}
-            <label>
-              {uk.campaign.budget_usd}
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.budget_usd}
-                onChange={(e) => update('budget_usd', Number(e.target.value))}
-              />
-            </label>
           </div>
           <Chips
             key={`${id}:cities`}
@@ -424,8 +340,11 @@ export function CampaignPanel({
           />
           <label className="block">
             {uk.campaign.offer}
+            <span className="block text-sm text-muted-foreground">
+              {uk.campaign.offerHint}
+            </span>
             <textarea
-              className="mt-2 min-h-32 w-full rounded-lg border border-border bg-surface p-3"
+              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
               value={form.offer}
               maxLength={20000}
               onChange={(e) => update('offer', e.target.value)}
