@@ -20,7 +20,7 @@ import {
   boss,
   runTask,
   logActivity,
-  finishEnrichment,
+  enqueueProzorroLookup,
   type TaskOutcome,
 } from '@sonar/db/tasks';
 type Query = Pick<typeof registryPool, 'query'>;
@@ -331,7 +331,7 @@ export async function registerRegistryTasks() {
       return runRegistryMatch(payload as { companyId: string }, id);
     },
     async (payload) => {
-      await finishEnrichment((payload as { companyId: string }).companyId);
+      await enqueueProzorroLookup((payload as { companyId: string }).companyId);
     },
   );
 }

@@ -49,6 +49,8 @@ services:
       migrate: { condition: service_completed_successfully }
   worker:
     build: { context: .., dockerfile: docker/Dockerfile, target: worker }
+    volumes:
+      - ..:/host-disk:ro
     environment:
       GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

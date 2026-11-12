@@ -47,6 +47,10 @@
     "./forms": {
       "types": "./dist/forms.d.ts",
       "default": "./dist/forms.js"
+    },
+    "./prozorro": {
+      "types": "./dist/prozorro.d.ts",
+      "default": "./dist/prozorro.js"
     }
   },
   "files": [
