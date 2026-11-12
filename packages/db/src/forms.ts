@@ -1,11 +1,6 @@
 import { nextSendTime, type SendHours } from '@sonar/core';
 import { sonarPool } from './index.js';
-import {
-  isContactBlocked,
-  sameFormDomain,
-  testModeBlock,
-  transaction,
-} from './email.js';
+import { isContactBlocked, sameFormDomain, transaction } from './email.js';
 import { logActivity, type TaskOutcome } from './tasks.js';
 
 export type FormRequest = {
@@ -97,14 +92,6 @@ export async function sendFormMessage(
         [messageId, reason],
       );
       return stop('skipped', 'do_not_contact', reason);
-    }
-    const testBlocked = await testModeBlock(c, m.to_value, m.country_code);
-    if (testBlocked) {
-      await c.query(
-        "update messages set status='failed',reason_uk=$2 where id=$1",
-        [messageId, testBlocked],
-      );
-      return stop('skipped', 'test_mode', testBlocked);
     }
     if (m.first_attempt_at || m.status === 'awaiting_manual') {
       await c.query(

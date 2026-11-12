@@ -8,10 +8,6 @@ let tasks: typeof import('./tasks.js');
 let admin: import('pg-boss').PgBoss;
 beforeAll(async () => {
   if (!enabled) return;
-  // These suites exercise real sending logic; the owner's test-mode allowlist is covered in core.
-  await (await import('./index.js')).sonarPool.query(
-    "update settings set value='false' where key='send.test_mode'",
-  );
   db = await import('./index.js');
   email = await import('./email.js');
   tasks = await import('./tasks.js');
