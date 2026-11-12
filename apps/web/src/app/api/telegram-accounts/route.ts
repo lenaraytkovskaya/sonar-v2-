@@ -35,7 +35,11 @@ async function mutate(request: Request, method: string) {
         { name: data.name, phone: data.phone, dailyLimit: data.dailyLimit },
         user.id,
       );
-      return respond({ id: result.id, step: result.step });
+      return respond({
+        id: result.id,
+        step: result.step,
+        deliveryUk: result.deliveryUk,
+      });
     }
     if (!validId(data?.id)) return invalid();
     if (method === 'POST' && data.action === 'complete') {

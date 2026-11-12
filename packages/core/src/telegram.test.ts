@@ -9,6 +9,7 @@ import {
   telegramError,
   telegramRandomId,
   type TelegramConnection,
+  codeDelivery,
 } from './telegram.js';
 vi.mock('telegram/Password.js', () => ({
   computeCheck: vi.fn(async () => new Api.InputCheckPasswordEmpty()),
@@ -275,7 +276,19 @@ describe('Telegram transport', () => {
     expect(await adapter.startLogin('+380501234567')).toEqual({
       session: 'saved-session',
       phoneCodeHash: 'hash',
+      deliveryUk: expect.stringContaining('застосунок Telegram'),
     });
+    expect(
+      codeDelivery(new Api.auth.SentCodeTypeSetUpEmailRequired({})),
+    ).toContain('пошта для входу');
+    expect(
+      codeDelivery(
+        new Api.auth.SentCodeTypeEmailCode({
+          emailPattern: 'l***@gmail.com',
+          length: 6,
+        }),
+      ),
+    ).toContain('l***@gmail.com');
     const input = {
       session: 'saved-session',
       phone: '+380501234567',

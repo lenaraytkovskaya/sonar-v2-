@@ -113,7 +113,11 @@ export async function beginTelegramLogin(
         }),
       ],
     );
-    return { id: String(account.id), step: 'code' as const };
+    return {
+      id: String(account.id),
+      step: 'code' as const,
+      deliveryUk: (login as { deliveryUk?: string }).deliveryUk,
+    };
   });
 }
 export async function completeTelegramLogin(

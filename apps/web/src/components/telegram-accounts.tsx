@@ -24,6 +24,7 @@ export function TelegramAccounts({
     id: string;
     step: 'code' | 'password';
   } | null>(null);
+  const [delivery, setDelivery] = useState('');
   const [secret, setSecret] = useState(''),
     [pending, setPending] = useState(false),
     [error, setError] = useState('');
@@ -42,6 +43,7 @@ export function TelegramAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       if (result.step === 'code' || result.step === 'password')
         setLogin({ id: result.id, step: result.step });
+      if (result.deliveryUk) setDelivery(result.deliveryUk);
       if (result.step === 'done') {
         setLogin(null);
         setForm({ name: '', phone: '', dailyLimit: '' });
@@ -177,6 +179,11 @@ export function TelegramAccounts({
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
             />
+            {login.step === 'code' && delivery && (
+              <p role="status" className="mt-2 text-sm">
+                {delivery}
+              </p>
+            )}
             <p className="mt-2 text-sm text-muted-foreground">
               {uk.telegram.secretHint}
             </p>
