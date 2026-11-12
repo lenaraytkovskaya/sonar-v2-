@@ -115,12 +115,6 @@ export function TelegramAccounts({
                     setLimits({ ...limits, [account.id]: event.target.value })
                   }
                 />
-                <AiAssist
-                  text={limits[account.id] ?? String(account.dailyLimit)}
-                  onApply={(text) =>
-                    setLimits({ ...limits, [account.id]: text })
-                  }
-                />
               </div>
               <Button variant="outline" disabled={pending}>
                 {uk.forms.save}
@@ -217,10 +211,12 @@ export function TelegramAccounts({
                   setForm({ ...form, [key]: event.target.value })
                 }
               />
-              <AiAssist
-                text={form[key]}
-                onApply={(text) => setForm({ ...form, [key]: text })}
-              />
+              {key === 'name' && (
+                <AiAssist
+                  text={form[key]}
+                  onApply={(text) => setForm({ ...form, [key]: text })}
+                />
+              )}
             </div>
           ))
         )}
