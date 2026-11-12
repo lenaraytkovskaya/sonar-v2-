@@ -166,10 +166,6 @@ export function WhatsAppAccounts({
                 value={limit || account.dailyLimit}
                 onChange={(event) => setLimit(event.target.value)}
               />
-              <AiAssist
-                text={limit || String(account.dailyLimit)}
-                onApply={setLimit}
-              />
             </div>
             <Button variant="outline" disabled={pending}>
               {uk.forms.save}
@@ -247,7 +243,6 @@ export function WhatsAppAccounts({
                 required
                 onChange={(event) => setLimit(event.target.value)}
               />
-              <AiAssist text={limit} onApply={setLimit} />
             </div>
             <Button className="md:col-span-2" disabled={pending || !configured}>
               {pending ? uk.ai.pending : uk.whatsapp.connect}
