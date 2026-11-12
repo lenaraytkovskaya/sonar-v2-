@@ -107,6 +107,23 @@ export function CompanyEmail({
     'approval';
   const accounts = channel === 'form' ? data.formAccounts : data.accounts;
   const recipients = channel === 'form' ? data.formUrls : data.emails;
+  // Contacts and accounts can appear after the page loaded (manual add, polling);
+  // keep the selected values inside the options the selects actually show.
+  const recipientKey = recipients.join('\n');
+  const accountKey = accounts
+    .filter((account) => account.enabled)
+    .map((account) => account.id)
+    .join('\n');
+  useEffect(() => {
+    const options = recipientKey ? recipientKey.split('\n') : [];
+    if (options.length && !options.includes(toAddress))
+      setToAddress(options[0]!);
+  }, [recipientKey, toAddress]);
+  useEffect(() => {
+    const options = accountKey ? accountKey.split('\n') : [];
+    if (options.length && !options.includes(accountId))
+      setAccountId(options[0]!);
+  }, [accountKey, accountId]);
   const ready =
     recipients.length > 0 &&
     accounts.some((account) => account.enabled) &&
