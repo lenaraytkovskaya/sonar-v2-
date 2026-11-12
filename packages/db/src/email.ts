@@ -5,6 +5,7 @@ import {
   normalizePhone,
   nextSendTime,
   type SendHours,
+  type CountryCode,
 } from '@sonar/core';
 import {
   normalizeTelegramRecipient,
@@ -12,6 +13,11 @@ import {
   decryptTelegramSession,
 } from '@sonar/core/telegram';
 import { listTelegramAccounts } from './telegram.js';
+import {
+  normalizeWhatsAppRecipient,
+  WhatsAppSendError,
+} from '@sonar/core/whatsapp';
+import { listWhatsAppAccounts } from './whatsapp.js';
 import { sonarPool } from './index.js';
 import {
   enqueueTask,
@@ -38,7 +44,7 @@ export interface EmailAccount {
 }
 export interface EmailMessage {
   id: string;
-  channel: 'email' | 'form' | 'telegram';
+  channel: 'email' | 'form' | 'telegram' | 'whatsapp';
   screenshotBefore: boolean;
   screenshotAfter: boolean;
   accountId: string;
@@ -176,11 +182,40 @@ async function telegramContacts(
       to.toLowerCase(),
   );
 }
+async function whatsappContacts(
+  c: Pick<PoolClient, 'query'>,
+  companyId: string,
+  to: string,
+  country?: CountryCode,
+) {
+  const { rows } = await c.query(
+    "select id,normalized,meta from contacts where company_id=$1 and kind in ('whatsapp','phone') for share",
+    [companyId],
+  );
+  return rows.filter(
+    (r) => normalizeWhatsAppRecipient(r.normalized, country) === to,
+  );
+}
 export async function isContactBlocked(
   c: Pick<PoolClient, 'query'>,
   companyId: string,
   address = '',
+  country?: CountryCode,
 ): Promise<boolean> {
+  const whatsappTo = normalizeWhatsAppRecipient(address, country);
+  if (whatsappTo) {
+    const { rows } = await c.query(
+      "select value_normalized from do_not_contact where kind in ('whatsapp','phone')",
+    );
+    if (
+      rows.some(
+        (r) =>
+          normalizeWhatsAppRecipient(r.value_normalized, country) ===
+          whatsappTo,
+      )
+    )
+      return true;
+  }
   const telegramTo = normalizeTelegramRecipient(address);
   if (telegramTo) {
     const { rows } = await c.query(
@@ -197,7 +232,7 @@ export async function isContactBlocked(
   }
   return (
     await c.query(
-      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind in ('phone','telegram') and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
+      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind in ('phone','telegram','whatsapp') and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
       [companyId, address],
     )
   ).rows[0].blocked;
@@ -228,10 +263,29 @@ export async function getCompanyMessaging(companyId: string) {
       [companyId],
     ),
   ]);
+  const { rows: whatsappContacts } = await sonarPool.query(
+    `select ct.normalized,ct.meta,coalesce((select a.country_code from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=co.id order by cc.added_at desc,a.id limit 1),co.country_code) as country_code from contacts ct join companies co on co.id=ct.company_id where ct.company_id=$1 and ct.kind in ('whatsapp','phone') order by ct.rank desc,ct.id`,
+    [companyId],
+  );
   const recipients = emails.map((e) => String(e.normalized)).filter(validEmail);
   return {
     accounts,
     telegramAccounts: await listTelegramAccounts(),
+    whatsappAccounts: await listWhatsAppAccounts(),
+    whatsappRecipients: [
+      ...new Set(
+        whatsappContacts
+          .filter((r) => !r.meta.whatsapp_unavailable)
+          .map((r) => normalizeWhatsAppRecipient(r.normalized, r.country_code))
+          .filter((v): v is string => !!v),
+      ),
+    ],
+    whatsappUnavailable: whatsappContacts
+      .filter((r) => r.meta.whatsapp_unavailable)
+      .map((r) => ({
+        value: String(r.normalized),
+        reasonUk: String(r.meta.whatsapp_unavailable.reason_uk),
+      })),
     telegramRecipients: [
       ...new Set(
         (
@@ -268,7 +322,7 @@ export async function getCompanyMessaging(companyId: string) {
   };
 }
 type MessageInput = {
-  channel?: 'email' | 'form' | 'telegram';
+  channel?: 'email' | 'form' | 'telegram' | 'whatsapp';
   companyId: string;
   campaignId: string;
   accountId: string;
@@ -301,20 +355,33 @@ export async function createCompanyMessage(
   existing?: PoolClient,
 ) {
   const channel = input.channel ?? 'email';
+  const country =
+    channel === 'whatsapp'
+      ? (
+          await (existing ?? sonarPool).query(
+            'select country_code from campaigns where id=$1',
+            [input.campaignId],
+          )
+        ).rows[0]?.country_code
+      : undefined;
   const to =
       channel === 'email'
         ? input.toAddress?.trim().toLowerCase()
-        : channel === 'telegram'
-          ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
-          : input.toAddress?.trim(),
+        : channel === 'whatsapp'
+          ? (normalizeWhatsAppRecipient(input.toAddress ?? '', country) ?? '')
+          : channel === 'telegram'
+            ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
+            : input.toAddress?.trim(),
     subject = input.subject?.trim() ?? '',
     body = input.body?.trim();
   if (
     (channel === 'email'
       ? !validEmail(to) || !subject
-      : channel === 'telegram'
-        ? !normalizeTelegramRecipient(to)
-        : !validFormUrl(to)) ||
+      : channel === 'whatsapp'
+        ? !normalizeWhatsAppRecipient(to, country)
+        : channel === 'telegram'
+          ? !normalizeTelegramRecipient(to)
+          : !validFormUrl(to)) ||
     subject.length > 998 ||
     /[\r\n]/.test(subject) ||
     !body ||
@@ -323,11 +390,13 @@ export async function createCompanyMessage(
     input.idempotencyKey.length > 200
   )
     invalid(
-      channel === 'telegram'
-        ? 'Вкажіть Telegram username або міжнародний телефон та текст повідомлення.'
-        : channel === 'form'
-          ? 'Вкажіть коректну адресу форми та текст повідомлення.'
-          : 'Вкажіть коректний email, тему та текст повідомлення.',
+      channel === 'whatsapp'
+        ? 'Вкажіть міжнародний телефон WhatsApp та текст повідомлення.'
+        : channel === 'telegram'
+          ? 'Вкажіть Telegram username або міжнародний телефон та текст повідомлення.'
+          : channel === 'form'
+            ? 'Вкажіть коректну адресу форми та текст повідомлення.'
+            : 'Вкажіть коректний email, тему та текст повідомлення.',
     );
   return transaction(async (c) => {
     const {
@@ -362,7 +431,7 @@ export async function createCompanyMessage(
       invalid(
         'Канал у цій кампанії вимкнено або компанія не належить кампанії.',
       );
-    if (await isContactBlocked(c, input.companyId, to))
+    if (await isContactBlocked(c, input.companyId, to, country))
       invalid('Компанія або адреса у списку «Не контактувати».');
     const {
       rows: [account],
@@ -372,16 +441,20 @@ export async function createCompanyMessage(
     );
     if (!account) invalid('Оберіть активний акаунт каналу.');
     const contact =
-      channel === 'telegram'
-        ? (await telegramContacts(c, input.companyId, to)).find(
-            (r) => !r.meta.telegram_unavailable,
+      channel === 'whatsapp'
+        ? (await whatsappContacts(c, input.companyId, to, country)).find(
+            (r) => !r.meta.whatsapp_unavailable,
           )
-        : (
-            await c.query(
-              'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
-              [input.companyId, to, channel],
+        : channel === 'telegram'
+          ? (await telegramContacts(c, input.companyId, to)).find(
+              (r) => !r.meta.telegram_unavailable,
             )
-          ).rows[0];
+          : (
+              await c.query(
+                'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
+                [input.companyId, to, channel],
+              )
+            ).rows[0];
     if (!contact) invalid('Оберіть адресу із контактів компанії.');
     if (channel === 'form') {
       const {
@@ -578,6 +651,7 @@ export async function draftFromAnalysis(
   );
 }
 
+const whatsappRetry = 'Тимчасова помилка WhatsApp. Повтор після паузи акаунта.';
 const telegramFloodRetry =
   'Telegram обмежив частоту. Повтор після паузи акаунта.';
 const terminal = (
@@ -601,7 +675,7 @@ export async function sendEmailMessage(
   send: ChannelSender,
   now = new Date(),
   random = Math.random,
-  channel: 'email' | 'telegram' = 'email',
+  channel: 'email' | 'telegram' | 'whatsapp' = 'email',
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
@@ -648,9 +722,11 @@ export async function sendEmailMessage(
           [
             messageId,
             outcome.runAt,
-            channel === 'telegram' && m.reason_uk === telegramFloodRetry
-              ? telegramFloodRetry
-              : outcome.reasonUk,
+            channel === 'whatsapp' && m.reason_uk === whatsappRetry
+              ? whatsappRetry
+              : channel === 'telegram' && m.reason_uk === telegramFloodRetry
+                ? telegramFloodRetry
+                : outcome.reasonUk,
           ],
         );
       if (reason)
@@ -674,7 +750,7 @@ export async function sendEmailMessage(
         status: 'done',
         result: { messageId, providerId: m.provider_id },
       });
-    if (await isContactBlocked(c, m.company_id, m.to_value))
+    if (await isContactBlocked(c, m.company_id, m.to_value, m.country_code))
       return finish(
         terminal(
           'skipped',
@@ -683,6 +759,34 @@ export async function sendEmailMessage(
         ),
         'Компанія або адреса у списку «Не контактувати».',
       );
+    if (channel === 'whatsapp') {
+      const contacts = await whatsappContacts(
+        c,
+        m.company_id,
+        m.to_value,
+        m.country_code,
+      );
+      if (
+        !contacts.length ||
+        contacts.every((r) => r.meta.whatsapp_unavailable)
+      )
+        return finish(
+          terminal(
+            'skipped',
+            'whatsapp_unavailable',
+            'WhatsApp цього контакту недоступний.',
+          ),
+          'WhatsApp цього контакту недоступний.',
+        );
+      if (m.first_attempt_at && m.reason_uk !== whatsappRetry)
+        return finish(
+          terminal(
+            'paused',
+            'whatsapp_delivery_uncertain',
+            'Перевірте попередню доставку WhatsApp вручну. Автоматичний повтор заблоковано.',
+          ),
+        );
+    }
     if (channel === 'telegram') {
       const contacts = await telegramContacts(c, m.company_id, m.to_value);
       if (
@@ -719,7 +823,7 @@ export async function sendEmailMessage(
         terminal(
           'paused',
           'campaign_inactive',
-          `Активуйте кампанію та увімкніть ${channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
+          `Активуйте кампанію та увімкніть ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
         ),
       );
     if (m.send_mode === 'manual' && !m.created_by && !m.approved_by) {
@@ -795,8 +899,9 @@ export async function sendEmailMessage(
     const config = Object.fromEntries(settings.map((s) => [s.key, s.value]));
     const zone = config['send.time_zones']?.[m.country_code];
     let at: Date;
-    const min = Number(config['send.min_gap_seconds']),
-      max = Number(config['send.max_gap_seconds']);
+    const gapPrefix = channel === 'whatsapp' ? 'send.whatsapp' : 'send';
+    const min = Number(config[`${gapPrefix}.min_gap_seconds`]),
+      max = Number(config[`${gapPrefix}.max_gap_seconds`]);
     try {
       if (
         !zone ||
@@ -863,18 +968,14 @@ export async function sendEmailMessage(
         messageId,
         day,
       ]);
+    const nextSendAt = new Date(
+      now.getTime() + (min + Math.floor(random() * (max - min + 1))) * 1000,
+    );
     await c.query(
       'update channel_accounts set sent_day=case when $4 then sent_day else $2 end,attempt_count=case when $4 then attempt_count when sent_day=$2 then attempt_count+1 else 1 end,next_send_at=$3 where id=$1',
-      [
-        account.id,
-        day,
-        new Date(
-          now.getTime() + (min + Math.floor(random() * (max - min + 1))) * 1000,
-        ),
-        m.quota_day === day,
-      ],
+      [account.id, day, nextSendAt, m.quota_day === day],
     );
-    if (channel === 'telegram')
+    if (channel === 'telegram' || channel === 'whatsapp')
       await c.query('update messages set reason_uk=null where id=$1', [
         messageId,
       ]);
@@ -905,11 +1006,82 @@ export async function sendEmailMessage(
     };
     try {
       const providerId =
-        channel === 'telegram'
-          ? await send(request, { id: account.id, settings: account.settings })
+        channel === 'telegram' || channel === 'whatsapp'
+          ? await send(request, {
+              id: account.id,
+              settings: { ...account.settings, countryCode: m.country_code },
+            })
           : await send(request);
       return await recordDelivery(providerId);
     } catch (error) {
+      if (error instanceof WhatsAppSendError) {
+        if (error.sessionInactive) {
+          await transaction(async (tx) => {
+            await tx.query(
+              "update channel_accounts set status='paused',settings=settings || jsonb_build_object('reasonUk',$2::text) where id=$1",
+              [account.id, error.reasonUk],
+            );
+            await tx.query(
+              "update messages set status='queued',reason_uk=$2 where id=$1",
+              [messageId, whatsappRetry],
+            );
+          });
+          return terminal('paused', error.code, error.reasonUk);
+        }
+        if (error.unavailable) {
+          const contacts = await whatsappContacts(
+            c,
+            m.company_id,
+            m.to_value,
+            m.country_code,
+          );
+          await c.query(
+            "update contacts set meta=jsonb_set(meta,'{whatsapp_unavailable}',$2::jsonb) where id=any($1::uuid[])",
+            [
+              contacts.map((r) => r.id),
+              JSON.stringify({
+                reason_uk: error.reasonUk,
+                at: now.toISOString(),
+              }),
+            ],
+          );
+          await c.query(
+            "update messages set status='failed',reason_uk=$2 where id=$1",
+            [messageId, error.reasonUk],
+          );
+          return terminal('skipped', error.code, error.reasonUk);
+        }
+        if (error.retryable) {
+          // Provider HTTP failures retry; ambiguous transport failures pause.
+          const runAt = new Date(
+            Math.max(
+              nextSendAt.getTime(),
+              now.getTime() + (error.retryAfterSeconds ?? min) * 1000,
+              now.getTime() + min * 1000,
+            ),
+          );
+          await transaction(async (tx) => {
+            await tx.query(
+              'update channel_accounts set next_send_at=$2 where id=$1',
+              [account.id, runAt],
+            );
+            await tx.query(
+              "update messages set status='queued',scheduled_at=$2,reason_uk=$3 where id=$1",
+              [messageId, runAt, whatsappRetry],
+            );
+          });
+          return deferred(runAt, error.code, error.reasonUk);
+        }
+        await c.query(
+          "update messages set status='failed',reason_uk=$2 where id=$1",
+          [messageId, error.reasonUk],
+        );
+        return terminal(
+          error.code === 'send_ambiguous' ? 'paused' : 'failed',
+          error.code,
+          error.reasonUk,
+        );
+      }
       if (error instanceof TelegramSendError) {
         const accountRetryAfterSeconds =
           'accountRetryAfterSeconds' in error
@@ -982,15 +1154,19 @@ export async function sendEmailMessage(
       const reason =
         error instanceof EmailSendError
           ? error.reasonUk
-          : channel === 'telegram'
-            ? 'Не вдалося підтвердити доставку Telegram. Повтор використає той самий ключ.'
-            : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
+          : channel === 'whatsapp'
+            ? 'Не вдалося підтвердити доставку WhatsApp. Перевірте доставку вручну; автоматичний повтор заблоковано.'
+            : channel === 'telegram'
+              ? 'Не вдалося підтвердити доставку Telegram. Повтор використає той самий ключ.'
+              : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
       await c.query(
         "update messages set status='failed',reason_uk=$2 where id=$1",
         [messageId, reason],
       );
       if (error instanceof EmailSendError && !error.retryable)
         return terminal('failed', error.code, reason);
+      if (channel === 'whatsapp')
+        return terminal('paused', 'whatsapp_delivery_uncertain', reason);
       if (channel === 'telegram')
         return terminal('paused', 'telegram_delivery_uncertain', reason);
       throw new TaskFailure(

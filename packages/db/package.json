@@ -55,6 +55,10 @@
     "./telegram": {
       "types": "./dist/telegram.d.ts",
       "default": "./dist/telegram.js"
+    },
+    "./whatsapp": {
+      "types": "./dist/whatsapp.d.ts",
+      "default": "./dist/whatsapp.js"
     }
   },
   "files": [

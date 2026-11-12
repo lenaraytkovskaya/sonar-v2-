@@ -396,6 +396,9 @@ export const channelAccounts = pgTable(
       .defaultNow(),
   },
   (t) => [
+    uniqueIndex('channel_accounts_whatsapp_singleton')
+      .on(t.channel)
+      .where(sql`${t.channel} = 'whatsapp'`),
     check('account_daily_limit', sql`${t.dailyLimit} > 0`),
     check(
       'account_channel',

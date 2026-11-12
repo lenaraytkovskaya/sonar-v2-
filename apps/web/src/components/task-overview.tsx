@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import {
   createContext,
   useContext,
@@ -335,6 +336,10 @@ export function TaskOverview() {
                     {uk.tasks.reconcile}
                   </Button>
                 )
+              ) : task.type.startsWith('whatsapp.account.') ? (
+                <Button asChild>
+                  <Link href="/channels">{uk.pages.channels.title}</Link>
+                </Button>
               ) : (
                 <Button
                   disabled={pending === task.id}
