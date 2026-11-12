@@ -23,6 +23,16 @@ const values = (name: string, kind: string) =>
     .map((contact) => contact.value);
 
 describe('website extraction from authored HTML fixtures', () => {
+  it('extracts full FOP names and initials from visible website evidence', () => {
+    expect(
+      page('15-fop').facts.filter((fact) => fact.kind === 'fop_name'),
+    ).toEqual([
+      { kind: 'fop_name', value: 'Петренко Іван Петрович' },
+      { kind: 'fop_name', value: 'Ковальчук О. І.' },
+      { kind: 'fop_name', value: "Мар'яненко Анна-Лідія Юріївна" },
+      { kind: 'fop_name', value: 'ГНАТЮК МАРІЯ ОЛЕГІВНА' },
+    ]);
+  });
   it('decodes mailto and obfuscated emails, ranks own domain, rejects examples/images', () => {
     expect(values('01-emails', 'email')).toEqual(
       expect.arrayContaining([

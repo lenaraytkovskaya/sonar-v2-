@@ -112,6 +112,8 @@ export function TaskOverview() {
   const name = (type: string) =>
     ({
       'system.registry_ping': uk.tasks.registry,
+      'registry.match': uk.company.registry,
+      'registry.phones.sync': uk.registry.sync,
       'ai.models': uk.tasks.aiModels,
       'ai.assist': uk.tasks.aiAssist,
       'google.batch': uk.google.title,

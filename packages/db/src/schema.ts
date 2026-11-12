@@ -13,6 +13,9 @@ import {
   unique,
   uniqueIndex,
   customType,
+  bigint,
+  primaryKey,
+  index,
 } from 'drizzle-orm/pg-core';
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 export const users = pgTable('users', {
@@ -31,6 +34,19 @@ export const settings = pgTable('settings', {
     .notNull()
     .defaultNow(),
 });
+export const registryPhones = pgTable(
+  'registry_phones',
+  {
+    phoneE164: text('phone_e164').notNull(),
+    entityType: text('entity_type').notNull(),
+    entityId: bigint('entity_id', { mode: 'bigint' }).notNull(),
+    confidence: numeric('confidence').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.phoneE164, t.entityType, t.entityId] }),
+    index('registry_phones_phone_idx').on(t.phoneE164),
+  ],
+);
 
 export const taskStatus = pgEnum('task_status', [
   'queued',

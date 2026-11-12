@@ -1,9 +1,17 @@
 import {
+  registryAlternatives,
+  registryEntityById,
+  registryRead,
+  type RegistryIdentity,
+} from './registry-lookup.js';
+import { registerRegistryPhoneTasks } from './registry-phones.js';
+import {
   pickRegistryEntity,
   registryCodes,
   registryContacts,
   registryFacts,
   registryTables,
+  registryTerminated,
   type RegistryEntity,
   type RegistryEntityType,
 } from '@sonar/core';
@@ -73,9 +81,15 @@ async function registryDetails(
 }
 
 export async function runRegistryMatch(
-  payload: { companyId: string },
+  payload: {
+    companyId: string;
+    candidate?: RegistryIdentity;
+    actorId?: string;
+  },
   taskId: string,
   lookup: typeof lookupRegistry = lookupRegistry,
+  alternatives: typeof registryAlternatives = registryAlternatives,
+  byId: typeof registryEntityById = registryEntityById,
 ): Promise<TaskOutcome> {
   const { companyId } = payload;
   const {
@@ -101,23 +115,90 @@ export async function runRegistryMatch(
     [companyId],
   );
   const codes = registryCodes(evidence.map((row) => row.value));
-  if (!codes.length)
-    return {
-      status: 'skipped',
-      reasonCode: 'registry_code_missing',
-      reasonUk:
-        'На сайті компанії не знайдено код ЄДРПОУ. Зіставлення за назвою ще не підключено.',
-    };
   let match: Awaited<ReturnType<typeof lookupRegistry>> = null;
-  for (const code of codes) {
-    match = await lookup(registryPool, code);
-    if (match) break;
+  let method = 'code';
+  if (payload.candidate) {
+    if (
+      !Object.hasOwn(registryTables, payload.candidate.type) ||
+      !/^\d+$/.test(payload.candidate.id)
+    )
+      throw new Error('Некоректний кандидат ЄДР.');
+    const entity = await byId(payload.candidate);
+    if (entity)
+      match = {
+        entity,
+        ...(await registryRead((client) =>
+          registryDetails(client, entity.entity_type, entity.id),
+        )),
+      };
+    method = 'confirmed';
+  } else if (codes.length) {
+    for (const code of codes) {
+      match = await lookup(registryPool, code);
+      if (match) break;
+    }
+  } else {
+    const candidates = await alternatives(companyId);
+    const active = candidates.filter(
+      ({ entity }) =>
+        !entity.termination_date &&
+        !registryTerminated(entity.status) &&
+        /^(зареєстровано|діючий|діюча|діюче|active|registered)$/i.test(
+          entity.status?.trim() ?? '',
+        ),
+    );
+    if (active.length === 1 && !active[0]!.review) {
+      const { entity } = active[0]!;
+      method = active[0]!.method;
+      match = {
+        entity,
+        ...(await registryRead((client) =>
+          registryDetails(client, entity.entity_type, entity.id),
+        )),
+      };
+    } else if (candidates.length) {
+      const client = await sonarPool.connect();
+      try {
+        await client.query('begin');
+        await client.query('select id from companies where id=$1 for update', [
+          companyId,
+        ]);
+        // A confirmed/manual choice is authoritative over concurrent automatic matching.
+        const { rows: choices } = await client.query(
+          "select 1 from company_facts where company_id=$1 and kind='registry_match_method' and value='\"confirmed\"'::jsonb",
+          [companyId],
+        );
+        if (!choices.length) {
+          await client.query(
+            "delete from company_facts where company_id=$1 and kind='registry_candidates'",
+            [companyId],
+          );
+          await client.query(
+            `insert into company_facts(company_id,kind,value,source)
+            select $1,'registry_candidates',coalesce(jsonb_agg(candidate),'[]'::jsonb),'registry' from jsonb_array_elements($2::jsonb) candidate where not exists(select 1 from company_facts r where r.company_id=$1 and r.kind='registry_rejected' and r.value=jsonb_build_object('type',candidate->>'entity_type','id',candidate->>'id'))`,
+            [companyId, JSON.stringify(candidates.map((c) => c.entity))],
+          );
+        }
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+      return {
+        status: 'skipped',
+        reasonCode: 'registry_candidates',
+        reasonUk:
+          'Знайдено можливі збіги ЄДР. Потрібне підтвердження у картці компанії.',
+      };
+    }
   }
   if (!match)
     return {
       status: 'skipped',
       reasonCode: 'registry_not_found',
-      reasonUk: `Код ${codes.join(', ')} не знайдено в ЄДР.`,
+      reasonUk: 'В ЄДР не знайдено збіг за кодом, телефонами або ПІБ ФОП.',
     };
   const { entity, founders, contacts } = match;
   const {
@@ -126,11 +207,65 @@ export async function runRegistryMatch(
     "select value from settings where key='retention.registry_days'",
   );
   const days = Number(retention?.value ?? 365);
-  const facts = registryFacts(entity, founders);
+  const facts = [
+    ...registryFacts(entity, founders),
+    { kind: 'registry_match_method', value: method },
+  ];
   const found = registryContacts(contacts);
   const client = await sonarPool.connect();
   try {
     await client.query('begin');
+    await client.query('select id from companies where id=$1 for update', [
+      companyId,
+    ]);
+    if (payload.candidate) {
+      const { rows } = await client.query(
+        `select 1 from company_facts where company_id=$1 and kind='registry_candidates'
+        and value @> $2::jsonb`,
+        [
+          companyId,
+          JSON.stringify([{ entity_type: entity.entity_type, id: entity.id }]),
+        ],
+      );
+      if (!rows.length) {
+        await client.query('rollback');
+        return {
+          status: 'skipped',
+          reasonCode: 'registry_candidate_stale',
+          reasonUk: 'Кандидат більше не очікує підтвердження.',
+        };
+      }
+    } else {
+      const { rows } = await client.query(
+        "select 1 from company_facts where company_id=$1 and kind='registry_match_method' and value='\"confirmed\"'::jsonb",
+        [companyId],
+      );
+      if (rows.length) {
+        await client.query('rollback');
+        return {
+          status: 'skipped',
+          reasonCode: 'registry_already_confirmed',
+          reasonUk: 'Збіг ЄДР уже підтверджено користувачем.',
+        };
+      }
+    }
+    if (!payload.candidate) {
+      const { rows } = await client.query(
+        "select 1 from company_facts where company_id=$1 and kind='registry_rejected' and value=$2::jsonb",
+        [
+          companyId,
+          JSON.stringify({ type: entity.entity_type, id: entity.id }),
+        ],
+      );
+      if (rows.length) {
+        await client.query('rollback');
+        return {
+          status: 'skipped',
+          reasonCode: 'registry_candidate_rejected',
+          reasonUk: 'Цей збіг ЄДР відхилено користувачем.',
+        };
+      }
+    }
     // A new match replaces the previous registry snapshot for this company.
     await client.query(
       "delete from company_facts where company_id=$1 and source='registry'",
@@ -155,12 +290,14 @@ export async function runRegistryMatch(
         ],
       );
     await logActivity(
-      'registry.match',
+      payload.candidate ? 'registry.candidate.confirmed' : 'registry.match',
       'company',
       companyId,
-      null,
+      payload.actorId ?? null,
       {
         taskId,
+        method,
+        entityId: entity.id,
         edrpou: entity.edrpou,
         entityType: entity.entity_type,
         contacts: found.length,
@@ -186,6 +323,7 @@ export async function runRegistryMatch(
   };
 }
 export async function registerRegistryTasks() {
+  await registerRegistryPhoneTasks();
   await boss.createQueue('registry.match');
   await runTask(
     'registry.match',

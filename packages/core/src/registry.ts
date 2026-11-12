@@ -32,6 +32,34 @@ export type RegistryFounderRow = {
   country: string | null;
 };
 
+// Registry normalized_name is lowercase; website typography may vary in spacing/apostrophes.
+export function normalizeRegistryName(value: string): string {
+  return value
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[’‘ʼ`]/g, "'")
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+export function registryInitialsMatch(
+  input: string,
+  candidate: string,
+): boolean {
+  const initials = normalizeRegistryName(input).match(
+    /^([^\s.]+)\s+([а-яіїєґ])\s*\.\s*([а-яіїєґ])\s*\.$/u,
+  );
+  const full = normalizeRegistryName(candidate).split(' ');
+  return Boolean(
+    initials &&
+    full.length === 3 &&
+    full.every((part) => /^[а-яіїєґ][а-яіїєґ'-]+$/u.test(part)) &&
+    full[0] === initials[1] &&
+    full[1]![0] === initials[2] &&
+    full[2]![0] === initials[3],
+  );
+}
+
 // Codes are taken only from evidence on the company's own site; invalid shapes are dropped.
 export function registryCodes(values: unknown[]): string[] {
   return [

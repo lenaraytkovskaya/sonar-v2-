@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { validId } from '@/lib/api-access';
 import { notFound } from 'next/navigation';
-import { normalizeWebsite } from '@sonar/core';
+import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, PageHeader } from '@/components/shared';
 import { CompanyEmail } from '@/components/company-email';
@@ -41,11 +41,23 @@ export default async function Page({
   const date = (value: string | Date) =>
     new Date(value).toLocaleString('uk-UA');
   const siteFacts = facts.filter(
-    (fact) => fact.source !== 'registry' && fact.kind !== 'page_text',
+    (fact) =>
+      fact.source !== 'registry' &&
+      !['page_text', 'registry_rejected'].includes(fact.kind),
   );
   const registryFacts = facts.filter(
-    (fact) => fact.source === 'registry' && fact.kind !== 'registry_entity',
+    (fact) =>
+      fact.source === 'registry' &&
+      !['registry_entity', 'registry_candidates'].includes(fact.kind),
   );
+  const candidates = facts
+    .filter(
+      (fact) =>
+        fact.source === 'registry' &&
+        fact.kind === 'registry_candidates' &&
+        Array.isArray(fact.value),
+    )
+    .flatMap((fact) => fact.value as RegistryEntity[]);
   const terminated = registryFacts.some(
     (fact) =>
       fact.kind === 'registry_status' &&
@@ -226,6 +238,9 @@ export default async function Page({
                   uk.scanner.activities[
                     row.action as keyof typeof uk.scanner.activities
                   ] ??
+                  uk.registry.activities[
+                    row.action as keyof typeof uk.registry.activities
+                  ] ??
                   uk.company.activity)}{' '}
               · {row.user_name ?? uk.appName} · {date(row.created_at)}
             </p>
@@ -304,7 +319,7 @@ export default async function Page({
           <h2 className="font-heading text-xl font-bold">
             {uk.company.registry}
           </h2>
-          <RegistryMatch companyId={c.id} />
+          <RegistryMatch companyId={c.id} candidates={candidates} />
           {!registryFacts.length && (
             <p className="mt-3 text-muted-foreground">{uk.registry.empty}</p>
           )}
@@ -322,13 +337,17 @@ export default async function Page({
                   ] ?? fact.kind}
                 </dt>
                 <dd>
-                  {fact.kind === 'founders' && Array.isArray(fact.value)
-                    ? fact.value
-                        .map((f: { name: string | null; role: string }) =>
-                          [f.name, f.role].filter(Boolean).join(' · '),
-                        )
-                        .join('; ')
-                    : String(fact.value)}
+                  {fact.kind === 'registry_match_method'
+                    ? (uk.registry.methods[
+                        String(fact.value) as keyof typeof uk.registry.methods
+                      ] ?? String(fact.value))
+                    : fact.kind === 'founders' && Array.isArray(fact.value)
+                      ? fact.value
+                          .map((f: { name: string | null; role: string }) =>
+                            [f.name, f.role].filter(Boolean).join(' · '),
+                          )
+                          .join('; ')
+                      : String(fact.value)}
                 </dd>
               </div>
             ))}

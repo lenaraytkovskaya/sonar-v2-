@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   pickRegistryEntity,
+  normalizeRegistryName,
   registryCodes,
+  registryInitialsMatch,
   registryContacts,
   registryFacts,
   registryTerminated,
@@ -22,6 +24,31 @@ const entity = (patch: Partial<RegistryEntity>): RegistryEntity => ({
   ...patch,
 });
 describe('registry matching', () => {
+  it('normalizes names to the registry lowercase convention and website typography', () => {
+    expect(
+      normalizeRegistryName('  МАР’ЯНЕНКО\u00a0 АННА-ЛІДІЯ  ЮРІЇВНА '),
+    ).toBe("мар'яненко анна-лідія юріївна");
+  });
+  it('requires the same surname and both initials against a full registry name', () => {
+    expect(
+      registryInitialsMatch('Ковальчук О. І.', 'КОВАЛЬЧУК ОЛЕГ ІВАНОВИЧ'),
+    ).toBe(true);
+    expect(
+      registryInitialsMatch('Мар’яненко А.Ю.', "Мар'яненко Анна-Лідія Юріївна"),
+    ).toBe(true);
+    expect(
+      registryInitialsMatch('Ковальчук О. І.', 'КОВАЛЬЧУК ОЛЕГ ПЕТРОВИЧ'),
+    ).toBe(false);
+    expect(
+      registryInitialsMatch('Ковальчук О. І.', 'КОВАЛЕНКО ОЛЕГ ІВАНОВИЧ'),
+    ).toBe(false);
+    expect(registryInitialsMatch('Ковальчук О. І.', 'КОВАЛЬЧУК О. І.')).toBe(
+      false,
+    );
+    expect(
+      registryInitialsMatch('Ковальчук О.', 'КОВАЛЬЧУК ОЛЕГ ІВАНОВИЧ'),
+    ).toBe(false);
+  });
   it('accepts only 8-digit codes from strings and fact objects, max three', () => {
     expect(
       registryCodes([
