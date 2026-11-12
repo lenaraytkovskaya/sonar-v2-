@@ -100,6 +100,32 @@ export const uk = {
     sendHint:
       'Повідомлення буде надіслано через чергу з урахуванням ліміту акаунта.',
   },
+  whatsapp: {
+    title: 'WhatsApp',
+    accounts: 'WhatsApp-акаунт',
+    empty: 'WhatsApp ще не підключено.',
+    configuration: 'Налаштуйте WAHA_URL і WAHA_API_KEY на сервері.',
+    singleSession:
+      'WAHA Core підтримує один акаунт. Для кількох номерів потрібні окремі контейнери або WAHA Plus.',
+    connect: 'Підключити WhatsApp',
+    restart: 'Перезапустити підключення',
+    disconnect: 'Від’єднати',
+    qr: 'QR-код підключення WhatsApp',
+    scan: 'Відкрийте WhatsApp на телефоні → Пов’язані пристрої → Підключити пристрій і відскануйте QR-код.',
+    qrPending: 'Очікуємо QR-код…',
+    noSetup:
+      'Додайте активний WhatsApp-акаунт, WhatsApp або телефон компанії та кампанію.',
+    unavailable: 'WhatsApp недоступний',
+    sendHint:
+      'Повідомлення буде надіслано через чергу з урахуванням ліміту акаунта.',
+    statuses: {
+      active: 'Підключений',
+      qr: 'Очікує сканування QR-коду',
+      starting: 'Підключається',
+      failed: 'Помилка підключення',
+      stopped: 'Підключення зупинено',
+    },
+  },
   email: {
     title: 'Email',
     accounts: 'Email-акаунти',

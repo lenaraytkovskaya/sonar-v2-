@@ -215,7 +215,12 @@ export async function retryTask(id: string, userId: string) {
     const {
       rows: [original],
     } = await client.query('select * from tasks where id=$1 for update', [id]);
-    if (!original || original.result?.billingPending) return false;
+    if (
+      !original ||
+      original.result?.billingPending ||
+      original.type.startsWith('whatsapp.account.')
+    )
+      return false;
     if (original.type === 'google.request') {
       const {
         rows: [parent],
