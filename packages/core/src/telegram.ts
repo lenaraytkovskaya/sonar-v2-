@@ -9,6 +9,33 @@ export {
   decryptTelegramSession,
 } from './telegram-crypto.js';
 
+/** Tells the person where Telegram actually delivered the login code. */
+export function codeDelivery(type: {
+  className?: string;
+  emailPattern?: string;
+}) {
+  switch (type.className) {
+    case 'auth.SentCodeTypeApp':
+      return 'Код надіслано в застосунок Telegram (чат «Telegram» із синьою галочкою) на пристрої, де вже виконано вхід із цим номером.';
+    case 'auth.SentCodeTypeSms':
+    case 'auth.SentCodeTypeSmsWord':
+    case 'auth.SentCodeTypeSmsPhrase':
+    case 'auth.SentCodeTypeFirebaseSms':
+      return 'Код надіслано SMS на цей номер.';
+    case 'auth.SentCodeTypeFragmentSms':
+      return 'Код надіслано через Fragment (номер куплено на Fragment).';
+    case 'auth.SentCodeTypeEmailCode':
+      return `Код надіслано на пошту для входу${type.emailPattern ? ' ' + type.emailPattern : ''}.`;
+    case 'auth.SentCodeTypeSetUpEmailRequired':
+      return 'Telegram не надсилає код: спершу потрібна пошта для входу. Відкрийте Telegram → Налаштування → Конфіденційність → Пошта для входу, додайте її і підключіть знову.';
+    case 'auth.SentCodeTypeCall':
+    case 'auth.SentCodeTypeFlashCall':
+    case 'auth.SentCodeTypeMissedCall':
+      return 'Telegram зателефонує на цей номер: код — у дзвінку або в останніх цифрах номера, що телефонує.';
+    default:
+      return `Telegram надіслав код способом ${type.className ?? 'невідомо'}.`;
+  }
+}
 export class TelegramSendError extends Error {
   public providerMessageId?: string;
   public accountRetryAfterSeconds?: number;
@@ -227,6 +254,7 @@ export function createTelegramAdapter(
         return {
           session: client.session.save(),
           phoneCodeHash: sent.phoneCodeHash,
+          deliveryUk: codeDelivery(sent.type),
         };
       });
     },
