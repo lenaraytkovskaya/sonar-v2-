@@ -126,7 +126,7 @@ export async function listCompanies(
  row_number() over (partition by ${chainKey} order by ${windowOrder}) as chain_rank,
  count(*) over (partition by ${chainKey})::int as chain_size,
  array(select p.normalized from contacts p where p.company_id=c.id and p.kind='phone' order by p.rank desc,p.normalized ${groupChains ? 'limit 3' : ''}) as phones,
- array(select p.normalized from contacts p where p.company_id=c.id and p.kind='email' order by p.rank desc,p.normalized limit 2) as emails,
+ array(select p.normalized from contacts p where p.company_id=c.id and p.kind='email' order by (split_part(p.normalized,'@',1) ~ '^(info|office|sto|service|servis|contact|kontakt|hello|mail|sales|zakaz|order|support|admin)') desc,p.rank desc,p.normalized limit 2) as emails,
  array(select distinct p.kind from contacts p where p.company_id=c.id) as channels,
  exists(select 1 from company_facts r where r.company_id=c.id and r.kind='registry_entity') as registry,
  coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'name',a.name) order by a.name) from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=c.id),'[]') as campaigns
