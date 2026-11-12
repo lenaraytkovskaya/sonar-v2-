@@ -93,6 +93,28 @@ function emailValue(
     : 0.5;
 }
 
+/**
+ * General mailboxes reach the company; city, job and no-reply mailboxes usually
+ * belong to another branch or department.
+ */
+export function emailPreference(email: string): number {
+  const local = email.split('@')[0]?.toLowerCase() ?? '';
+  if (
+    /^(?:no-?reply|do-?not-?reply|mailer-daemon|hr|jobs?|career|vacanc|robota|rabota|buh|accounting|billing)/.test(
+      local,
+    ) ||
+    /^(?:kyiv|kiev|lviv|lvov|odesa|odessa|kharkiv|kharkov|dnipro|dnepr|zaporizh|zaporozh|vinnyt|vinnits|poltava|chernihiv|cherkasy|sumy|rivne|lutsk|ternopil|uzhhorod|ivano|khmelnyt|zhytomyr|mykolaiv|nikolaev|kherson|kropyv|warsaw|krakow|wroclaw|berlin)/.test(
+      local,
+    )
+  )
+    return -1;
+  return /^(?:info|office|sto|service|servis|contact|kontakt|hello|mail|sales|zakaz|order|support|admin)/.test(
+    local,
+  )
+    ? 1
+    : 0;
+}
+
 function mobile(contact: ScoringContact): number {
   if (contact.kind !== 'phone') return 0;
   const type = parsePhoneNumberFromString(contact.normalized)?.getType();
@@ -123,7 +145,13 @@ export function scoreCompany(
       a.id.localeCompare(b.id),
   );
   const top: ScoreBreakdown['top'] = {
-    email: ordered.find((contact) => contact.kind === 'email') ?? null,
+    email:
+      ordered
+        .filter((contact) => contact.kind === 'email')
+        .sort(
+          (a, b) =>
+            emailPreference(b.normalized) - emailPreference(a.normalized),
+        )[0] ?? null,
     phone: ordered.find((contact) => contact.kind === 'phone') ?? null,
     messenger: ordered.find((contact) => messengers.has(contact.kind)) ?? null,
     form: ordered.find((contact) => contact.kind === 'form') ?? null,

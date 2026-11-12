@@ -63,14 +63,29 @@ export async function sendResendEmail(
       true,
     );
   }
-  if (!response.ok)
+  if (!response.ok) {
+    const detail: unknown = await response.json().catch(() => null);
+    const reason =
+      detail &&
+      typeof detail === 'object' &&
+      'message' in detail &&
+      typeof detail.message === 'string'
+        ? detail.message.slice(0, 300)
+        : '';
+    const hint =
+      response.status === 403 && /domain/i.test(reason)
+        ? ' Домен адреси відправника не підтверджено в цьому акаунті Resend.'
+        : response.status === 401 || /api key/i.test(reason)
+          ? ' Перевірте ключ Resend на сервері.'
+          : '';
     throw new EmailSendError(
       `resend_${response.status}`,
-      `Resend відхилив запит (HTTP ${response.status}).`,
+      `Resend відхилив запит (HTTP ${response.status}).${hint}${reason ? ` Відповідь Resend: ${reason}` : ''}`,
       response.status === 429 ||
         response.status === 409 ||
         response.status >= 500,
     );
+  }
   const result: unknown = await response.json().catch(() => null);
   if (
     !result ||

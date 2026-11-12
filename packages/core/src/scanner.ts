@@ -221,7 +221,7 @@ export function linkedContact(
     path &&
     !/^\/(?:share|iv|proxy|socks)(?:\/|$)/i.test(path)
   )
-    return { kind: 'telegram', value: url.href, rank: 70 };
+    return { kind: 'telegram', value: `https://t.me${path}`, rank: 70 };
   if (
     (host === 'wa.me' && /^\/(?:\d+|message\/[^/]+)$/.test(path)) ||
     (host === 'api.whatsapp.com' &&
@@ -260,12 +260,62 @@ export function linkedContact(
     'tiktok.com': /^\/@[^/]+$/i,
   };
   if (!profilePatterns[network]!.test(path)) return null;
+  // Tracking parameters (?_t=, utm_*, igsh=) make one profile look like many.
+  const profileId =
+    network === 'facebook.com' && /^\/profile\.php$/i.test(path)
+      ? url.searchParams.get('id')
+      : null;
+  url.search = profileId ? `?id=${profileId}` : '';
+  url.hash = '';
   return {
     kind: 'social',
     value: url.href,
     rank: 40,
     meta: { network: network.split('.')[0] },
   };
+}
+/**
+ * Keeps only forms a person uses to reach the company (contact, callback, booking):
+ * login, search, newsletter, cart and filter forms are not a way to write to them.
+ */
+export function feedbackForm(form: {
+  fields: string;
+  message: boolean;
+  identities: number;
+  count: number;
+  password: boolean;
+  search: boolean;
+  context: string;
+}): boolean {
+  if (form.password || form.search || form.count === 0) return false;
+  const text = `${form.fields} ${form.context}`;
+  if (
+    /(?:login|log-in|signin|sign-in|register|registration|auth|password|парол|вхід|увійти|войти|реєстрац|регистрац)/i.test(
+      text,
+    )
+  )
+    return false;
+  if (
+    /(?:search|пошук|поиск|(?:^|\s)(?:q|s)(?:\s|$)|filter|фільтр|фильтр|sort)/i.test(
+      form.fields,
+    ) &&
+    !form.message
+  )
+    return false;
+  if (
+    /(?:add-to-cart|add_to_cart|cart|basket|checkout|кошик|корзин|купити|купить|quantity|qty|coupon|промокод)/i.test(
+      text,
+    )
+  )
+    return false;
+  // Newsletter: a lone email field with a subscribe button.
+  if (
+    !form.message &&
+    form.identities <= 1 &&
+    /(?:subscri|newsletter|підпис|подпис|розсилк|рассылк)/i.test(text)
+  )
+    return false;
+  return form.message || form.identities >= 2;
 }
 function fopNames(text: string): string[] {
   const name = "[А-ЯІЇЄҐ][а-яіїєґА-ЯІЇЄҐ'’‘ʼ`-]+";
@@ -389,14 +439,20 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
         ? 'turnstile'
         : 'none';
   $('form').each((_, form) => {
-    const fields = $(form)
+    const inputs = $(form)
       .find('input,textarea,select')
+      .filter((_, field) => {
+        const type = ($(field).attr('type') ?? '').toLowerCase();
+        return !['hidden', 'submit', 'button', 'reset', 'image'].includes(type);
+      });
+    const fields = inputs
       .map((_, field) =>
         [
           $(field).attr('name'),
           $(field).attr('type'),
           $(field).attr('placeholder'),
           $(field).attr('id'),
+          $(field).attr('aria-label'),
         ].join(' '),
       )
       .get()
@@ -406,8 +462,36 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
       /(?:email|e-mail)/i,
       /(?:phone|tel|тел)/i,
     ].filter((pattern) => pattern.test(fields)).length;
-    if (/(?:message|повідом|сообщ)/i.test(fields) || identities >= 2)
-      add({ kind: 'form', value: context.url, rank: 30, meta: { captcha } });
+    const message =
+      $(form).find('textarea').length > 0 ||
+      /(?:message|comment|коментар|комментар|повідом|сообщ|питання|вопрос)/i.test(
+        fields,
+      );
+    if (
+      feedbackForm({
+        fields,
+        message,
+        identities,
+        count: inputs.length,
+        password: $(form).find('input[type="password" i]').length > 0,
+        search:
+          $(form).is('[role="search"]') ||
+          $(form).find('input[type="search" i]').length > 0,
+        context: [
+          $(form).attr('action'),
+          $(form).attr('id'),
+          $(form).attr('class'),
+          $(form).find('button,[type="submit"]').text(),
+          $(form).find('[type="submit"]').attr('value'),
+        ].join(' '),
+      })
+    )
+      add({
+        kind: 'form',
+        value: context.url,
+        rank: message ? 40 : 30,
+        meta: { captcha },
+      });
   });
   if (contacts.some((contact) => contact.kind === 'form'))
     facts.push({ kind: 'captcha', value: captcha });
