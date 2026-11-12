@@ -18,6 +18,7 @@ export async function GET(request: Request) {
         'analysis.prompt',
         'google.field_profiles',
         'retention.google_days',
+        'registry.phones.progress',
         ...scannerKeys,
       ],
     ],

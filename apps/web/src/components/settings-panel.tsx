@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
 import { ModelPicker } from './model-picker';
+import { RegistryPhoneSync } from './registry-phone-sync';
 import {
   scannerFields,
   scannerKeys,
@@ -91,6 +92,7 @@ export function SettingsPanel() {
     <>
       <PageHeader {...uk.pages.settings} />
       <div className="grid items-start gap-6 xl:grid-cols-2">
+        <RegistryPhoneSync />
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-xl font-bold">{uk.ai.title}</h2>
           <p className="text-sm text-muted-foreground">{uk.ai.price}</p>

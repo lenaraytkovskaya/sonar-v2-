@@ -6,6 +6,7 @@ import {
 import { getDomain } from 'tldts';
 import { z } from 'zod';
 import { normalizePhone } from './index.js';
+import { normalizeRegistryName } from './registry.js';
 
 export interface SiteContact {
   kind:
@@ -266,6 +267,23 @@ export function linkedContact(
     meta: { network: network.split('.')[0] },
   };
 }
+function fopNames(text: string): string[] {
+  const name = "[А-ЯІЇЄҐ][а-яіїєґА-ЯІЇЄҐ'’‘ʼ`-]+";
+  const person = new RegExp(
+    `^(${name}\\s+(?:[А-ЯІЇЄҐ]\\s*\\.\\s*[А-ЯІЇЄҐ]\\s*\\.|${name}\\s+${name}))(?![\\p{L}'’ʼ-])`,
+    'u',
+  );
+  const found = new Map<string, string>();
+  for (const prefix of text.matchAll(
+    /(?<!\p{L})(?:ФОП|фізична\s+особа\s*[-–—]\s*підприємець)\s*[:№]?\s+/giu,
+  )) {
+    const value = text
+      .slice(prefix.index + prefix[0].length)
+      .match(person)?.[1];
+    if (value) found.set(normalizeRegistryName(value), value);
+  }
+  return [...found.values()];
+}
 export function extractSitePage(html: string, context: SiteContext): SitePage {
   const $ = load(html);
   const contacts: SiteContact[] = [];
@@ -402,6 +420,7 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
   $('script,style,noscript,template,svg').remove();
   $('body').find('p,div,li,td,section,footer,header,br,h1,h2,h3').append(' ');
   const text = $('body').text().replace(/\s+/g, ' ').trim();
+  for (const value of fopNames(text)) facts.push({ kind: 'fop_name', value });
   addEmail(text);
   const phoneText = text
     .replace(

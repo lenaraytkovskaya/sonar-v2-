@@ -134,6 +134,13 @@
       "when": 1794444001000,
       "tag": "0018_redundant_master_mold",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794444002000,
+      "tag": "0019_talented_blizzard",
+      "breakpoints": true
     }
   ]
 }
