@@ -133,7 +133,20 @@ export async function enqueueSiteScan(
     );
     if (!company?.website) return null;
     const day = new Date().toISOString().slice(0, 10);
-    const key = `site.scan:${companyId}:${day}`;
+    let key = `site.scan:${companyId}:${day}`;
+    // Automatic runs scan once a day; a person pressing the button again after the
+    // previous scan finished gets a fresh scan instead of the old result.
+    if (userId) {
+      const {
+        rows: [latest],
+      } = await client.query(
+        "select idempotency_key,status from tasks where type='site.scan' and idempotency_key like $1 order by created_at desc limit 1",
+        [`${key}%`],
+      );
+      if (latest && ['done', 'skipped', 'failed'].includes(latest.status))
+        key = `${key}:${Date.now()}`;
+      else if (latest) key = latest.idempotency_key;
+    }
     const created = await enqueueTask('site.scan', key, { companyId }, client);
     if (created) {
       await client.query(
