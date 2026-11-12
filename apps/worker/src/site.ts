@@ -1,6 +1,9 @@
 import { chromium } from 'playwright';
 import {
   extractSitePage,
+  extractPlatformFacts,
+  platformKind,
+  type PlatformKinds,
   decodeSiteHtml,
   orderSiteUrls,
   shouldStopSiteScan,
@@ -110,14 +113,16 @@ export async function scanSite(
   country: CountryCode,
   onPage: (page: Page, count: number) => Promise<void>,
   render = renderSitePage,
+  kinds: PlatformKinds = {},
 ) {
+  const kind = platformKind(new URL(http.home).hostname, kinds);
+  const maxPages = Math.min(
+    http.settings.maxPages,
+    kind === 'classified' ? 1 : kind === 'minisite' ? 3 : Infinity,
+  );
   const pages: Page[] = [];
   let urls = [http.home];
-  for (
-    let index = 0;
-    index < urls.length && index < http.settings.maxPages;
-    index++
-  ) {
+  for (let index = 0; index < urls.length && index < maxPages; index++) {
     const response = await http.read(urls[index]!);
     if (response.status >= 400) {
       if (!index)
@@ -142,7 +147,7 @@ export async function scanSite(
         'challenge',
         'Сайт недоступний: захист від ботів або перевірка CAPTCHA.',
       );
-    if (!index && page.text.length < 200 && page.spa) {
+    if (kind !== 'classified' && !index && page.text.length < 200 && page.spa) {
       html = await render(http, response.url, html);
       page = extractSitePage(html, { url: response.url, country });
       if (page.challenge)
@@ -151,6 +156,10 @@ export async function scanSite(
           'Сайт недоступний: захист від ботів або перевірка CAPTCHA.',
         );
     }
+    if (kind)
+      page.facts.push(
+        ...extractPlatformFacts(html, { url: response.url, kinds }),
+      );
     const found = { ...page, url: response.url };
     pages.push(found);
     await onPage(found, pages.length);
@@ -163,6 +172,7 @@ export async function scanSite(
       )
     )
       break;
+    if (index + 1 >= maxPages) break;
     if (!index) {
       let sitemapUrls: string[] = [];
       const sitemap = await http.read(
@@ -361,11 +371,13 @@ export async function runSiteScan(
         reasonUk: 'У компанії немає сайту.',
       };
     const { rows } = await client.query(
-      "select key,value from settings where key like 'scanner.%' or key like 'ai.%' or key='retention.website_days'",
+      "select key,value from settings where key like 'scanner.%' or key like 'ai.%' or key='retention.website_days' or key='platforms.kinds'",
     );
     const config: Config = Object.fromEntries(
       rows.map((row) => [row.key, row.value]),
     );
+    const kinds = (config['platforms.kinds'] ?? {}) as PlatformKinds;
+    const kind = platformKind(new URL(company.website).hostname, kinds);
     const settings = {
       maxPages: Number(config['scanner.max_pages']),
       timeoutMs: Number(config['scanner.timeout_ms']),
@@ -468,6 +480,20 @@ export async function runSiteScan(
       );
     };
     try {
+      if (kind === 'social' || kind === 'maps') {
+        if (kind === 'social')
+          await persist({
+            url: company.website,
+            contacts: [{ kind: 'social', value: company.website, rank: 50 }],
+            facts: [],
+          });
+        throw new SiteUnavailable(
+          `platform_${kind}`,
+          kind === 'social'
+            ? 'Сайт компанії — сторінка соцмережі'
+            : 'Сайт компанії — сторінка карт або каталогу',
+        );
+      }
       const pages = await scanSite(
         new SiteHttp(company.website, settings),
         country,
@@ -481,16 +507,19 @@ export async function runSiteScan(
             [taskId, JSON.stringify({ pages: count, contacts })],
           );
         },
+        renderSitePage,
+        kinds,
       );
-      const ai = pages.length
-        ? await aiSiteFallback(pages, country, config, taskId)
-        : {
-            contacts: [],
-            facts: [],
-            aiUsed: false,
-            costUsd: 0,
-            aiStatus: 'no_pages',
-          };
+      const ai =
+        pages.length && !kind
+          ? await aiSiteFallback(pages, country, config, taskId)
+          : {
+              contacts: [],
+              facts: [],
+              aiUsed: false,
+              costUsd: 0,
+              aiStatus: kind ? 'platform' : 'no_pages',
+            };
       for (const contact of ai.contacts) {
         const page = aiEvidencePage(
           contact.value,
@@ -551,7 +580,20 @@ export async function runSiteScan(
           reasonUk: error.message,
         };
       if (!(error instanceof SiteUnavailable)) throw error;
-      const unavailable = error;
+      const unavailable =
+        kind === 'classified' &&
+        [
+          'http_401',
+          'http_403',
+          'http_429',
+          'challenge',
+          'robots_denied',
+        ].includes(error.code)
+          ? new SiteUnavailable(
+              error.code,
+              'Площадка не дозволяє автоматичне читання сторінки',
+            )
+          : error;
       await saveFact(
         'site_status',
         {

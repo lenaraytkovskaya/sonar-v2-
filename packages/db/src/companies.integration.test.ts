@@ -170,6 +170,35 @@ it.skipIf(!enabled)(
         exported.push(row.id);
       expect(exported).toHaveLength(27);
       expect(new Set(exported).size).toBe(27);
+      const {
+        rows: [platforms],
+      } = await sonarPool.query(
+        "select value from settings where key='platforms.domains'",
+      );
+      const domain = platforms.value[0];
+      expect(typeof domain).toBe('string');
+      for (const [index, value] of [
+        domain,
+        `branch.${domain}`,
+        `evil${domain}`,
+        null,
+      ].entries())
+        await sonarPool.query('update companies set domain=$2 where id=$1', [
+          ids[index],
+          value,
+        ]);
+      const platformOnly = await listCompanies({
+        campaignId,
+        platforms: 'only',
+      });
+      expect(platformOnly.total).toBe(2);
+      expect(platformOnly.companies.every((row) => row.platform)).toBe(true);
+      expect(
+        (await listCompanies({ campaignId, platforms: 'exclude' })).total,
+      ).toBe(25);
+      expect(
+        (await listCompanies({ campaignId, platforms: 'all' })).total,
+      ).toBe(27);
       const interrupted = exportCompanies({ campaignId });
       await interrupted.next();
       await interrupted.return();

@@ -209,6 +209,7 @@ export function CompanyList({
                       campaignId: uk.company.campaign,
                       status: uk.company.status,
                       hasWebsite: uk.company.hasWebsite,
+                      platforms: uk.company.platforms,
                       hasPhone: uk.company.hasPhone,
                       minRating: uk.company.minRating,
                       minScore: uk.company.minScore,
@@ -220,7 +221,11 @@ export function CompanyList({
                     ? value
                       ? '✓'
                       : '—'
-                    : String(value)}
+                    : key === 'platforms'
+                      ? uk.company.platformOptions[
+                          value as keyof typeof uk.company.platformOptions
+                        ]
+                      : String(value)}
                 </p>
               ))}
               <Button
@@ -326,6 +331,27 @@ export function CompanyList({
                     {label}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label>
+              {uk.company.platforms}
+              <select
+                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
+                value={draft.platforms ?? 'all'}
+                onChange={(e) =>
+                  update(
+                    'platforms',
+                    e.target.value as CompanyFilters['platforms'],
+                  )
+                }
+              >
+                {Object.entries(uk.company.platformOptions).map(
+                  ([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             <div className="flex items-center gap-5">

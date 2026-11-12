@@ -1,7 +1,7 @@
 import { enqueueCompanyAnalysis } from './analysis.js';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { scoreCompany, registryTerminated } from '@sonar/core';
+import { scoreCompany, registryTerminated, platformKind } from '@sonar/core';
 import { sonarPool } from './index.js';
 import { enqueueTask, logActivity } from './tasks.js';
 
@@ -14,7 +14,7 @@ async function snapshot(
   const {
     rows: [row],
   } = await client.query(
-    `select c.website,c.rating,c.ratings_count,a.scoring_weights,a.scoring_revision,
+    `select c.website,(select value from settings where key='platforms.kinds') as platform_kinds,c.rating,c.ratings_count,a.scoring_weights,a.scoring_revision,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.id) from contacts p where p.company_id=c.id),'[]') as contacts,
       coalesce((select jsonb_agg(to_jsonb(f) order by f.found_at desc,f.id) from company_facts f where f.company_id=c.id and (f.expires_at is null or f.expires_at>now()) and f.kind in ('site_status','registry_entity','registry_status','termination_date')),'[]') as facts
      from companies c join campaign_companies cc on cc.company_id=c.id join campaigns a on a.id=cc.campaign_id
@@ -35,6 +35,9 @@ async function snapshot(
     weights: row.scoring_weights,
     input: {
       website: row.website,
+      isPlatform:
+        !!row.website &&
+        !!platformKind(new URL(row.website).hostname, row.platform_kinds ?? {}),
       siteScanDone: fact('site_status', 'website')?.status === 'done',
       rating: row.rating === null ? null : Number(row.rating),
       ratingsCount: row.ratings_count,

@@ -14,6 +14,7 @@ it('validates AI filters including false without accepting raw SQL or unknown ke
     '{"minRating":6}',
     '{"hasWebsite":"true"}',
     '{"status":"bad"}',
+    '{"platforms":"bad"}',
     'not json',
   ])
     expect(() => parseCompanyFilters(value)).toThrow();
@@ -23,8 +24,10 @@ it('validates AI filters including false without accepting raw SQL or unknown ke
 });
 it('parses query flags without converting false to true', () => {
   expect(
-    filtersFromParams(new URLSearchParams('hasPhone=false&minRating=4.5')),
-  ).toEqual({ hasPhone: false, minRating: 4.5 });
+    filtersFromParams(
+      new URLSearchParams('hasPhone=false&minRating=4.5&platforms=exclude'),
+    ),
+  ).toEqual({ hasPhone: false, minRating: 4.5, platforms: 'exclude' });
   expect(() =>
     filtersFromParams(new URLSearchParams('hasPhone=yes')),
   ).toThrow();

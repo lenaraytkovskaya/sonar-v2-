@@ -317,7 +317,7 @@ export function feedbackForm(form: {
     return false;
   return form.message || form.identities >= 2;
 }
-function fopNames(text: string): string[] {
+export function fopNames(text: string): string[] {
   const name = "[А-ЯІЇЄҐ][а-яіїєґА-ЯІЇЄҐ'’‘ʼ`-]+";
   const person = new RegExp(
     `^(${name}\\s+(?:[А-ЯІЇЄҐ]\\s*\\.\\s*[А-ЯІЇЄҐ]\\s*\\.|${name}\\s+${name}))(?![\\p{L}'’ʼ-])`,

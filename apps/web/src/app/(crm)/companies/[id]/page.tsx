@@ -10,6 +10,7 @@ import { CompanyEmail } from '@/components/company-email';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
+import { WebsiteCandidate } from '@/components/website-candidate';
 import { RegistryMatch } from '@/components/registry-match';
 import { LocalTime } from '@/components/local-time';
 import { ScanSummary, Score } from '@/components/shared';
@@ -139,8 +140,19 @@ export default async function Page({
     (fact) =>
       fact.source !== 'registry' &&
       fact.source !== 'prozorro' &&
-      !['page_text', 'registry_rejected'].includes(fact.kind),
+      !['page_text', 'registry_rejected', 'website_candidate'].includes(
+        fact.kind,
+      ),
   );
+  const websiteCandidates = facts.flatMap((fact) => {
+    const site =
+      fact.kind === 'website_candidate' &&
+      typeof fact.value === 'string' &&
+      (!fact.expires_at || new Date(fact.expires_at) > new Date())
+        ? normalizeWebsite(fact.value)
+        : null;
+    return site && site.website !== c.website ? [{ ...fact, site }] : [];
+  });
   const registryFacts = facts.filter(
     (fact) =>
       fact.source === 'registry' &&
@@ -379,6 +391,34 @@ export default async function Page({
               {siteStatus.value?.reason ?? uk.tasks.status.done}
             </p>
           )}
+          {websiteCandidates.map((fact) => (
+            <div
+              key={fact.id}
+              className="space-y-1 border-t border-border pt-2"
+            >
+              <p className="text-xs text-muted-foreground">
+                {uk.company.websiteCandidate}
+              </p>
+              <a
+                className="block break-all text-sm text-accent"
+                href={fact.site.website}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {fact.site.website}
+              </a>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                {
+                  uk.company.sources[
+                    fact.source as keyof typeof uk.company.sources
+                  ]
+                }{' '}
+                · <LocalTime value={fact.found_at} dateOnly />
+                <SourceLink url={fact.source_url} />
+              </p>
+              <WebsiteCandidate companyId={id} factId={fact.id} />
+            </div>
+          ))}
         </Section>
         <Section title={uk.company.registry}>
           {registryName ? (
@@ -688,18 +728,20 @@ export default async function Page({
             <ul className="space-y-1">
               {history.map((row) => (
                 <li key={row.id}>
-                  {row.action === 'company.found'
-                    ? uk.company.added
-                    : (uk.manual.activities[
-                        row.action as keyof typeof uk.manual.activities
-                      ] ??
-                      uk.scanner.activities[
-                        row.action as keyof typeof uk.scanner.activities
-                      ] ??
-                      uk.registry.activities[
-                        row.action as keyof typeof uk.registry.activities
-                      ] ??
-                      uk.company.activity)}{' '}
+                  {row.action === 'company.website.adopted'
+                    ? uk.company.websiteAdopted
+                    : row.action === 'company.found'
+                      ? uk.company.added
+                      : (uk.manual.activities[
+                          row.action as keyof typeof uk.manual.activities
+                        ] ??
+                        uk.scanner.activities[
+                          row.action as keyof typeof uk.scanner.activities
+                        ] ??
+                        uk.registry.activities[
+                          row.action as keyof typeof uk.registry.activities
+                        ] ??
+                        uk.company.activity)}{' '}
                   <span className="text-xs text-muted-foreground">
                     · {row.user_name ?? uk.appName} ·{' '}
                     <LocalTime value={row.created_at} />
