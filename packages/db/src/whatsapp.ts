@@ -98,16 +98,6 @@ async function external(
   adapter: Adapter,
 ): Promise<WhatsAppAccountState> {
   const id = randomUUID();
-  await c.query(
-    "insert into tasks(id,type,status,subject_type,subject_id,idempotency_key,payload,attempts,started_at) values($1,$2,'running','channel_account',$3,$4,$5,1,now())",
-    [
-      id,
-      `whatsapp.account.${operation}`,
-      account.id,
-      `whatsapp.account:${id}`,
-      JSON.stringify({ accountId: account.id }),
-    ],
-  );
   let session: WhatsAppSession | null = null,
     qr: string | undefined,
     failure: ReturnType<typeof whatsappError> | undefined;
@@ -121,6 +111,15 @@ async function external(
         : operation === 'start'
           ? adapter.start()
           : adapter.restart());
+      // WAHA fails a session whose QR codes expired unscanned; while the page is open, start over.
+      if (
+        operation === 'refresh' &&
+        session?.status === 'FAILED' &&
+        ['SCAN_QR_CODE', 'STARTING'].includes(account.settings.providerStatus)
+      ) {
+        operation = 'restart';
+        session = await adapter.restart();
+      }
       if (session?.status === 'SCAN_QR_CODE') qr = await adapter.getQr();
     }
   } catch (error) {
@@ -144,14 +143,25 @@ async function external(
       JSON.stringify(settings),
     ],
   );
+  // Status polling is recorded only when something changed, so the task log stays readable.
+  if (
+    operation === 'refresh' &&
+    !failure &&
+    settings.providerStatus === account.settings.providerStatus
+  )
+    return { id: account.id, status, reasonUk, ...(qr ? { qr } : {}) };
   await c.query(
-    'update tasks set status=$2,reason_code=$3,reason_uk=$4,result=$5,finished_at=now() where id=$1',
+    "insert into tasks(id,type,status,subject_type,subject_id,idempotency_key,payload,attempts,started_at,result,reason_code,reason_uk,finished_at) values($1,$2,$3,'channel_account',$4,$5,$6,1,now(),$7,$8,$9,now())",
     [
       id,
+      `whatsapp.account.${operation}`,
       failure ? 'failed' : 'done',
+      account.id,
+      `whatsapp.account:${id}`,
+      JSON.stringify({ accountId: account.id }),
+      JSON.stringify({ status }),
       failure?.code ?? null,
       failure?.reasonUk ?? null,
-      JSON.stringify({ status }),
     ],
   );
   await logActivity(
