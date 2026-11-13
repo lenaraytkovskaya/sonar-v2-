@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { getCompanyChat } from '@sonar/db/outreach';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
@@ -183,11 +184,15 @@ export function CompanyChat({
   initial,
   selectedCampaign,
   selectedContact,
+  redirectToInbox = false,
 }: {
   initial: Chat;
   selectedCampaign?: string;
   selectedContact?: string;
+  /** On the company "Contact" tab: open the dialog in the inbox once a message goes out. */
+  redirectToInbox?: boolean;
 }) {
+  const router = useRouter();
   const [data, setData] = useState(initial);
   const contacts = data.contacts.filter((contact) =>
     ['email', 'form', 'social', 'phone', 'telegram', 'whatsapp'].includes(
@@ -265,7 +270,27 @@ export function CompanyChat({
         requestKey.current = { fingerprint: '', key: '' };
       }
       const snapshot = await fetch(path).catch(() => null);
-      if (snapshot?.ok) setData(await snapshot.json());
+      const next: Chat | null = snapshot?.ok ? await snapshot.json() : null;
+      if (next) setData(next);
+      if (
+        redirectToInbox &&
+        ['send', 'approve', 'manual', 'call'].includes(action)
+      ) {
+        const source = next ?? data;
+        const conversationId =
+          source.messages.find((row) => row.id === fields.messageId)
+            ?.conversationId ??
+          source.conversations
+            .filter(
+              (row) =>
+                row.contactId === fields.contactId &&
+                row.campaignId === fields.campaignId,
+            )
+            .at(-1)?.id;
+        router.push(
+          conversationId ? `/inbox?conversation=${conversationId}` : '/inbox',
+        );
+      }
       return true;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : uk.email.error);

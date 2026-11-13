@@ -111,10 +111,11 @@ export default async function Page({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ campaignId?: string }>;
+  searchParams: Promise<{ campaignId?: string; tab?: string }>;
 }) {
   const { id } = await params;
-  const { campaignId } = await searchParams;
+  const { campaignId, tab } = await searchParams;
+  const contactTab = tab === 'contact';
   const selectedCampaign = validId(campaignId) ? campaignId : undefined;
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
@@ -317,459 +318,520 @@ export default async function Page({
           enrich={c.place_id.startsWith('manual:')}
         />
       </header>
-
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Section title={uk.company.score}>
-          {mainScore ? (
-            <>
-              <p
-                className={cn(
-                  'font-heading text-3xl font-bold tabular-nums',
-                  scoreTone(mainScore.score).text,
-                )}
-              >
-                {mainScore.score.toFixed(1)}
-              </p>
-              <div className="h-1.5 overflow-hidden rounded-full bg-chip">
-                <div
-                  className={cn(
-                    'h-full rounded-full',
-                    scoreTone(mainScore.score).bar,
-                  )}
-                  style={{ width: `${mainScore.score}%` }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {mainScore.campaign_name} ·{' '}
-                <LocalTime value={mainScore.computed_at} />
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">{uk.scoring.empty}</p>
-          )}
-        </Section>
-        <Section title={uk.scoring.top}>
-          {mainScore ? (
-            <ul className="space-y-1 text-sm">
-              {(
-                Object.keys(
-                  uk.scoring.categories,
-                ) as (keyof typeof uk.scoring.categories)[]
-              ).map((category) => {
-                const contact = mainScore.breakdown.top[category];
-                const href = contact ? contactHref(contact) : undefined;
-                return (
-                  <li key={category} className="flex min-w-0 gap-2">
-                    <span className="w-20 shrink-0 text-xs leading-5 text-muted-foreground">
-                      {uk.scoring.categories[category]}
-                    </span>
-                    {!contact ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : href ? (
-                      <a
-                        className="truncate text-accent"
-                        href={href}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={contact.normalized}
-                      >
-                        {contact.normalized}
-                      </a>
-                    ) : (
-                      <span className="truncate">{contact.normalized}</span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">{uk.company.noData}</p>
-          )}
-        </Section>
-        <Section
-          title={uk.company.googleData}
-          action={
-            map && (
-              <a
-                className="inline-flex items-center gap-1 text-xs text-accent"
-                href={map}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <MapPin aria-hidden="true" className="size-3.5" />
-                {uk.company.maps}
-              </a>
-            )
-          }
-        >
-          <p className="text-sm">{c.address ?? uk.company.noData}</p>
-          <p className="text-sm text-muted-foreground">
-            {uk.google.businessStatus[
-              c.business_status as keyof typeof uk.google.businessStatus
-            ] ??
-              c.business_status ??
-              '—'}
-          </p>
-          {siteStatus && (
-            <p className="text-xs text-muted-foreground">
-              {uk.scanner.kinds.site_status}:{' '}
-              {siteStatus.value?.reason ?? uk.tasks.status.done}
-            </p>
-          )}
-          {websiteCandidates.map((fact) => (
-            <div
-              key={fact.id}
-              className="space-y-1 border-t border-border pt-2"
+      <nav
+        aria-label={uk.company.tabs}
+        className="mb-4 flex gap-2 border-b border-border"
+      >
+        {[
+          {
+            key: 'overview',
+            label: uk.company.overviewTab,
+            active: !contactTab,
+          },
+          { key: 'contact', label: uk.company.contactTab, active: contactTab },
+        ].map((item) => {
+          const query = new URLSearchParams();
+          if (selectedCampaign) query.set('campaignId', selectedCampaign);
+          if (item.key === 'contact') query.set('tab', 'contact');
+          const suffix = query.size ? '?' + query.toString() : '';
+          return (
+            <Link
+              key={item.key}
+              href={`/companies/${id}${suffix}`}
+              aria-current={item.active ? 'page' : undefined}
+              className={cn(
+                '-mb-px inline-flex min-h-10 items-center border-b-2 px-3 text-sm',
+                item.active
+                  ? 'border-accent font-semibold text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
             >
-              <p className="text-xs text-muted-foreground">
-                {uk.company.websiteCandidate}
-              </p>
-              <a
-                className="block break-all text-sm text-accent"
-                href={fact.site.website}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {fact.site.website}
-              </a>
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                {
-                  uk.company.sources[
-                    fact.source as keyof typeof uk.company.sources
-                  ]
-                }{' '}
-                · <LocalTime value={fact.found_at} dateOnly />
-                <SourceLink url={fact.source_url} />
-              </p>
-              <WebsiteCandidate companyId={id} factId={fact.id} />
-            </div>
-          ))}
-        </Section>
-        <Section title={uk.company.registry}>
-          {registryName ? (
-            <p className="text-sm font-medium">{String(registryName.value)}</p>
-          ) : (
-            <p className="text-sm text-muted-foreground">{uk.registry.empty}</p>
-          )}
-          {terminated && (
-            <p role="alert" className="text-sm text-err">
-              {uk.registry.terminated}
-            </p>
-          )}
-          <p className="text-sm text-muted-foreground">
-            {uk.prozorro.title} · {uk.prozorro.purchases}:{' '}
-            {prozorro.count.toLocaleString('uk-UA')}
-          </p>
-        </Section>
-      </div>
-
-      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="min-w-0 space-y-3">
-          <Section title={uk.analysis.title}>
-            {!campaigns.length && (
-              <p className="text-sm text-muted-foreground">
-                {uk.company.noData}
-              </p>
-            )}
-            {[...campaigns]
-              .sort(
-                (a, b) =>
-                  Number(b.id === selectedCampaign) -
-                  Number(a.id === selectedCampaign),
-              )
-              .map((campaign, index) => (
-                <section
-                  key={campaign.id}
-                  className={cn(
-                    'space-y-2 text-sm',
-                    index > 0 && 'border-t border-border pt-3',
-                  )}
-                >
-                  {campaigns.length > 1 && (
-                    <h3 className="font-semibold">{campaign.name}</h3>
-                  )}
-                  <CompanyAnalysis
-                    companyId={id}
-                    campaignId={campaign.id}
-                    analysis={analyses.find(
-                      (row) => row.campaign_id === campaign.id,
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+      {contactTab ? (
+        <CompanyChat
+          initial={messaging}
+          selectedCampaign={selectedCampaign}
+          redirectToInbox
+        />
+      ) : (
+        <>
+          <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Section title={uk.company.score}>
+              {mainScore ? (
+                <>
+                  <p
+                    className={cn(
+                      'font-heading text-3xl font-bold tabular-nums',
+                      scoreTone(mainScore.score).text,
                     )}
-                  />
-                </section>
-              ))}
-          </Section>
-          <CompanyChat
-            initial={messaging}
-            selectedCampaign={selectedCampaign}
-          />
-          {orderedScores.length > 0 && (
-            <Collapsible title={uk.scoring.details}>
-              {orderedScores.map((row) => (
-                <section key={row.campaign_id} className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <Link
-                      className="text-accent"
-                      href={'/campaigns?campaign=' + row.campaign_id}
-                    >
-                      {row.campaign_name}
-                    </Link>
-                    <Score value={row.score} compact />
+                  >
+                    {mainScore.score.toFixed(1)}
+                  </p>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-chip">
+                    <div
+                      className={cn(
+                        'h-full rounded-full',
+                        scoreTone(mainScore.score).bar,
+                      )}
+                      style={{ width: `${mainScore.score}%` }}
+                    />
                   </div>
-                  <table className="w-full text-left text-sm">
-                    <thead className="text-xs text-muted-foreground">
-                      <tr>
-                        {[
-                          uk.company.score,
-                          uk.scoring.value,
-                          uk.scoring.weight,
-                          uk.scoring.contribution,
-                        ].map((label) => (
-                          <th key={label} className="px-2 py-1 font-medium">
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {row.breakdown.features.map((feature) => (
-                        <tr
-                          key={feature.feature}
-                          className="border-t border-border"
-                        >
-                          <th scope="row" className="px-2 py-1 font-normal">
-                            {
-                              uk.campaign.weights[
-                                feature.feature as keyof typeof uk.campaign.weights
-                              ]
-                            }
-                          </th>
-                          <td
-                            className={cn(
-                              'px-2 py-1 tabular-nums',
-                              feature.value >= 0.7
-                                ? 'text-ok'
-                                : feature.value > 0
-                                  ? 'text-wait'
-                                  : 'text-err',
-                            )}
+                  <p className="text-xs text-muted-foreground">
+                    {mainScore.campaign_name} ·{' '}
+                    <LocalTime value={mainScore.computed_at} />
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {uk.scoring.empty}
+                </p>
+              )}
+            </Section>
+            <Section title={uk.scoring.top}>
+              {mainScore ? (
+                <ul className="space-y-1 text-sm">
+                  {(
+                    Object.keys(
+                      uk.scoring.categories,
+                    ) as (keyof typeof uk.scoring.categories)[]
+                  ).map((category) => {
+                    const contact = mainScore.breakdown.top[category];
+                    const href = contact ? contactHref(contact) : undefined;
+                    return (
+                      <li key={category} className="flex min-w-0 gap-2">
+                        <span className="w-20 shrink-0 text-xs leading-5 text-muted-foreground">
+                          {uk.scoring.categories[category]}
+                        </span>
+                        {!contact ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : href ? (
+                          <a
+                            className="truncate text-accent"
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={contact.normalized}
                           >
-                            {(feature.value * 100).toFixed(0)}%
-                          </td>
-                          <td className="px-2 py-1 tabular-nums">
-                            {feature.weight}
-                          </td>
-                          <td className="px-2 py-1 tabular-nums">
-                            {feature.contribution.toFixed(1)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </section>
-              ))}
-            </Collapsible>
-          )}
-        </div>
-
-        <div className="min-w-0 space-y-3">
-          <Section title={`${uk.company.contacts} · ${contacts.length}`}>
-            <ManualEntry companyId={id} />
-            {!contacts.length && (
+                            {contact.normalized}
+                          </a>
+                        ) : (
+                          <span className="truncate">{contact.normalized}</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {uk.company.noData}
+                </p>
+              )}
+            </Section>
+            <Section
+              title={uk.company.googleData}
+              action={
+                map && (
+                  <a
+                    className="inline-flex items-center gap-1 text-xs text-accent"
+                    href={map}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <MapPin aria-hidden="true" className="size-3.5" />
+                    {uk.company.maps}
+                  </a>
+                )
+              }
+            >
+              <p className="text-sm">{c.address ?? uk.company.noData}</p>
               <p className="text-sm text-muted-foreground">
-                {uk.company.noData}
+                {uk.google.businessStatus[
+                  c.business_status as keyof typeof uk.google.businessStatus
+                ] ??
+                  c.business_status ??
+                  '—'}
               </p>
-            )}
-            <ul className="text-sm">
-              {sortedContacts.slice(0, visibleContacts).map(contactRow)}
-            </ul>
-            {sortedContacts.length > visibleContacts && (
-              <details className="text-sm">
-                <summary className="cursor-pointer text-accent">
-                  {uk.company.more}: {sortedContacts.length - visibleContacts}
-                </summary>
-                <ul>{sortedContacts.slice(visibleContacts).map(contactRow)}</ul>
-              </details>
-            )}
-          </Section>
-          <Section title={uk.company.registry}>
-            <RegistryMatch companyId={c.id} candidates={candidates} />
-            {registryFacts.length > 0 && (
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-                {registryFacts.map((fact) => (
-                  <div key={fact.id} className="contents">
-                    <dt className="text-muted-foreground">
-                      {uk.registry.kinds[
-                        fact.kind as keyof typeof uk.registry.kinds
-                      ] ?? fact.kind}
-                    </dt>
-                    <dd className="break-words">
-                      {fact.kind === 'registry_match_method'
-                        ? (uk.registry.methods[
-                            String(
-                              fact.value,
-                            ) as keyof typeof uk.registry.methods
-                          ] ?? String(fact.value))
-                        : fact.kind === 'founders' && Array.isArray(fact.value)
-                          ? fact.value
-                              .map((f: { name: string | null; role: string }) =>
-                                [f.name, f.role].filter(Boolean).join(' · '),
-                              )
-                              .join('; ')
-                          : String(fact.value)}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            {registryFacts[0] && (
-              <p className="text-xs text-muted-foreground">
-                {uk.company.sources.registry} ·{' '}
-                <LocalTime value={registryFacts[0].found_at} dateOnly />
-              </p>
-            )}
-          </Section>
-          <Collapsible title={uk.prozorro.title} count={prozorro.count}>
-            {prozorroContacts.map((contact) => (
-              <p key={contact.id}>
-                {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
-                <a className="text-accent" href={contactHref(contact)}>
-                  {contact.normalized}
-                </a>
-              </p>
-            ))}
-            {facts
-              .filter(
-                (fact) =>
-                  fact.source === 'prozorro' && fact.kind === 'contact_person',
-              )
-              .map((fact) => (
-                <p key={fact.id} className="flex items-center gap-1.5">
-                  {uk.prozorro.contactPerson}: {String(fact.value)}
-                  <SourceLink url={fact.source_url} />
-                </p>
-              ))}
-            {!prozorro.latest.length && (
-              <p className="text-muted-foreground">{uk.prozorro.empty}</p>
-            )}
-            {prozorro.latest.map((purchase) => (
-              <div
-                className="space-y-0.5 border-t border-border pt-2"
-                key={`${purchase.docType}:${purchase.docId}`}
-              >
-                <p className="flex items-start gap-1.5">
-                  {purchase.title ?? uk.prozorro.untitled}
-                  <SourceLink url={purchase.sourceUrl} />
-                </p>
+              {siteStatus && (
                 <p className="text-xs text-muted-foreground">
-                  <LocalTime value={purchase.date} dateOnly /> ·{' '}
-                  {uk.prozorro.roles[purchase.role]} ·{' '}
-                  {purchase.amount === null
-                    ? '—'
-                    : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
-                  {purchase.currency}
+                  {uk.scanner.kinds.site_status}:{' '}
+                  {siteStatus.value?.reason ?? uk.tasks.status.done}
                 </p>
-              </div>
-            ))}
-          </Collapsible>
-          <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
-            {!siteFacts.length && (
-              <p className="text-muted-foreground">{uk.company.noData}</p>
-            )}
-            {siteFacts.map((fact) => (
-              <div key={fact.id} className="min-w-0">
-                {fact.kind === 'schema_org' ? (
-                  <details>
-                    <summary className="cursor-pointer">
-                      {uk.scanner.kinds.schema_org}
-                    </summary>
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-2 text-xs">
-                      {JSON.stringify(fact.value, null, 2)}
-                    </pre>
-                  </details>
-                ) : (
-                  <p className="flex items-center gap-1.5">
-                    <span>
-                      <span className="text-muted-foreground">
-                        {uk.scanner.kinds[
-                          fact.kind as keyof typeof uk.scanner.kinds
-                        ] ?? fact.kind}
-                        :
-                      </span>{' '}
-                      {fact.kind === 'site_status'
-                        ? (fact.value.reason ?? uk.tasks.status.done)
-                        : fact.kind === 'captcha'
-                          ? (uk.scanner.captchas[
-                              fact.value as keyof typeof uk.scanner.captchas
-                            ] ?? String(fact.value))
-                          : typeof fact.value === 'string'
-                            ? fact.value
-                            : JSON.stringify(fact.value)}
-                    </span>
+              )}
+              {websiteCandidates.map((fact) => (
+                <div
+                  key={fact.id}
+                  className="space-y-1 border-t border-border pt-2"
+                >
+                  <p className="text-xs text-muted-foreground">
+                    {uk.company.websiteCandidate}
+                  </p>
+                  <a
+                    className="block break-all text-sm text-accent"
+                    href={fact.site.website}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {fact.site.website}
+                  </a>
+                  <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {
+                      uk.company.sources[
+                        fact.source as keyof typeof uk.company.sources
+                      ]
+                    }{' '}
+                    · <LocalTime value={fact.found_at} dateOnly />
                     <SourceLink url={fact.source_url} />
                   </p>
-                )}
-              </div>
-            ))}
-          </Collapsible>
-          <Collapsible
-            title={uk.company.history}
-            count={history.length + scans.length}
-          >
-            {campaigns.map((row) => (
-              <p key={row.id}>
-                <Link
-                  className="text-accent"
-                  href={'/campaigns?campaign=' + row.id}
-                >
-                  {row.name}
-                </Link>{' '}
-                ·{' '}
-                {row.batch_id
-                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
-                  : uk.manual.withoutBatch}{' '}
-                · <LocalTime value={row.added_at} />
-              </p>
-            ))}
-            {scans.map((scan) => (
-              <div key={scan.id}>
-                <p>
-                  {uk.scanner.title} ·{' '}
-                  {uk.tasks.status[scan.status as keyof typeof uk.tasks.status]}{' '}
-                  · <LocalTime value={scan.created_at} />
-                </p>
-                {scan.reason_uk && (
-                  <p className="text-muted-foreground">{scan.reason_uk}</p>
-                )}
-                <ScanSummary result={scan.result} />
-              </div>
-            ))}
-            <ul className="space-y-1">
-              {history.map((row) => (
-                <li key={row.id}>
-                  {row.action === 'company.website.adopted'
-                    ? uk.company.websiteAdopted
-                    : row.action === 'company.found'
-                      ? uk.company.added
-                      : (uk.manual.activities[
-                          row.action as keyof typeof uk.manual.activities
-                        ] ??
-                        uk.scanner.activities[
-                          row.action as keyof typeof uk.scanner.activities
-                        ] ??
-                        uk.registry.activities[
-                          row.action as keyof typeof uk.registry.activities
-                        ] ??
-                        uk.company.activity)}{' '}
-                  <span className="text-xs text-muted-foreground">
-                    · {row.user_name ?? uk.appName} ·{' '}
-                    <LocalTime value={row.created_at} />
-                  </span>
-                </li>
+                  <WebsiteCandidate companyId={id} factId={fact.id} />
+                </div>
               ))}
-            </ul>
-          </Collapsible>
-        </div>
-      </div>
+            </Section>
+            <Section title={uk.company.registry}>
+              {registryName ? (
+                <p className="text-sm font-medium">
+                  {String(registryName.value)}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {uk.registry.empty}
+                </p>
+              )}
+              {terminated && (
+                <p role="alert" className="text-sm text-err">
+                  {uk.registry.terminated}
+                </p>
+              )}
+              <p className="text-sm text-muted-foreground">
+                {uk.prozorro.title} · {uk.prozorro.purchases}:{' '}
+                {prozorro.count.toLocaleString('uk-UA')}
+              </p>
+            </Section>
+          </div>
+
+          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <div className="min-w-0 space-y-3">
+              <Section title={uk.analysis.title}>
+                {!campaigns.length && (
+                  <p className="text-sm text-muted-foreground">
+                    {uk.company.noData}
+                  </p>
+                )}
+                {[...campaigns]
+                  .sort(
+                    (a, b) =>
+                      Number(b.id === selectedCampaign) -
+                      Number(a.id === selectedCampaign),
+                  )
+                  .map((campaign, index) => (
+                    <section
+                      key={campaign.id}
+                      className={cn(
+                        'space-y-2 text-sm',
+                        index > 0 && 'border-t border-border pt-3',
+                      )}
+                    >
+                      {campaigns.length > 1 && (
+                        <h3 className="font-semibold">{campaign.name}</h3>
+                      )}
+                      <CompanyAnalysis
+                        companyId={id}
+                        campaignId={campaign.id}
+                        analysis={analyses.find(
+                          (row) => row.campaign_id === campaign.id,
+                        )}
+                      />
+                    </section>
+                  ))}
+              </Section>
+              {orderedScores.length > 0 && (
+                <Collapsible title={uk.scoring.details}>
+                  {orderedScores.map((row) => (
+                    <section key={row.campaign_id} className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <Link
+                          className="text-accent"
+                          href={'/campaigns?campaign=' + row.campaign_id}
+                        >
+                          {row.campaign_name}
+                        </Link>
+                        <Score value={row.score} compact />
+                      </div>
+                      <table className="w-full text-left text-sm">
+                        <thead className="text-xs text-muted-foreground">
+                          <tr>
+                            {[
+                              uk.company.score,
+                              uk.scoring.value,
+                              uk.scoring.weight,
+                              uk.scoring.contribution,
+                            ].map((label) => (
+                              <th key={label} className="px-2 py-1 font-medium">
+                                {label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {row.breakdown.features.map((feature) => (
+                            <tr
+                              key={feature.feature}
+                              className="border-t border-border"
+                            >
+                              <th scope="row" className="px-2 py-1 font-normal">
+                                {
+                                  uk.campaign.weights[
+                                    feature.feature as keyof typeof uk.campaign.weights
+                                  ]
+                                }
+                              </th>
+                              <td
+                                className={cn(
+                                  'px-2 py-1 tabular-nums',
+                                  feature.value >= 0.7
+                                    ? 'text-ok'
+                                    : feature.value > 0
+                                      ? 'text-wait'
+                                      : 'text-err',
+                                )}
+                              >
+                                {(feature.value * 100).toFixed(0)}%
+                              </td>
+                              <td className="px-2 py-1 tabular-nums">
+                                {feature.weight}
+                              </td>
+                              <td className="px-2 py-1 tabular-nums">
+                                {feature.contribution.toFixed(1)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </section>
+                  ))}
+                </Collapsible>
+              )}
+            </div>
+
+            <div className="min-w-0 space-y-3">
+              <Section title={`${uk.company.contacts} · ${contacts.length}`}>
+                <ManualEntry companyId={id} />
+                {!contacts.length && (
+                  <p className="text-sm text-muted-foreground">
+                    {uk.company.noData}
+                  </p>
+                )}
+                <ul className="text-sm">
+                  {sortedContacts.slice(0, visibleContacts).map(contactRow)}
+                </ul>
+                {sortedContacts.length > visibleContacts && (
+                  <details className="text-sm">
+                    <summary className="cursor-pointer text-accent">
+                      {uk.company.more}:{' '}
+                      {sortedContacts.length - visibleContacts}
+                    </summary>
+                    <ul>
+                      {sortedContacts.slice(visibleContacts).map(contactRow)}
+                    </ul>
+                  </details>
+                )}
+              </Section>
+              <Section title={uk.company.registry}>
+                <RegistryMatch companyId={c.id} candidates={candidates} />
+                {registryFacts.length > 0 && (
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+                    {registryFacts.map((fact) => (
+                      <div key={fact.id} className="contents">
+                        <dt className="text-muted-foreground">
+                          {uk.registry.kinds[
+                            fact.kind as keyof typeof uk.registry.kinds
+                          ] ?? fact.kind}
+                        </dt>
+                        <dd className="break-words">
+                          {fact.kind === 'registry_match_method'
+                            ? (uk.registry.methods[
+                                String(
+                                  fact.value,
+                                ) as keyof typeof uk.registry.methods
+                              ] ?? String(fact.value))
+                            : fact.kind === 'founders' &&
+                                Array.isArray(fact.value)
+                              ? fact.value
+                                  .map(
+                                    (f: {
+                                      name: string | null;
+                                      role: string;
+                                    }) =>
+                                      [f.name, f.role]
+                                        .filter(Boolean)
+                                        .join(' · '),
+                                  )
+                                  .join('; ')
+                              : String(fact.value)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {registryFacts[0] && (
+                  <p className="text-xs text-muted-foreground">
+                    {uk.company.sources.registry} ·{' '}
+                    <LocalTime value={registryFacts[0].found_at} dateOnly />
+                  </p>
+                )}
+              </Section>
+              <Collapsible title={uk.prozorro.title} count={prozorro.count}>
+                {prozorroContacts.map((contact) => (
+                  <p key={contact.id}>
+                    {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
+                    <a className="text-accent" href={contactHref(contact)}>
+                      {contact.normalized}
+                    </a>
+                  </p>
+                ))}
+                {facts
+                  .filter(
+                    (fact) =>
+                      fact.source === 'prozorro' &&
+                      fact.kind === 'contact_person',
+                  )
+                  .map((fact) => (
+                    <p key={fact.id} className="flex items-center gap-1.5">
+                      {uk.prozorro.contactPerson}: {String(fact.value)}
+                      <SourceLink url={fact.source_url} />
+                    </p>
+                  ))}
+                {!prozorro.latest.length && (
+                  <p className="text-muted-foreground">{uk.prozorro.empty}</p>
+                )}
+                {prozorro.latest.map((purchase) => (
+                  <div
+                    className="space-y-0.5 border-t border-border pt-2"
+                    key={`${purchase.docType}:${purchase.docId}`}
+                  >
+                    <p className="flex items-start gap-1.5">
+                      {purchase.title ?? uk.prozorro.untitled}
+                      <SourceLink url={purchase.sourceUrl} />
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      <LocalTime value={purchase.date} dateOnly /> ·{' '}
+                      {uk.prozorro.roles[purchase.role]} ·{' '}
+                      {purchase.amount === null
+                        ? '—'
+                        : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
+                      {purchase.currency}
+                    </p>
+                  </div>
+                ))}
+              </Collapsible>
+              <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
+                {!siteFacts.length && (
+                  <p className="text-muted-foreground">{uk.company.noData}</p>
+                )}
+                {siteFacts.map((fact) => (
+                  <div key={fact.id} className="min-w-0">
+                    {fact.kind === 'schema_org' ? (
+                      <details>
+                        <summary className="cursor-pointer">
+                          {uk.scanner.kinds.schema_org}
+                        </summary>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-2 text-xs">
+                          {JSON.stringify(fact.value, null, 2)}
+                        </pre>
+                      </details>
+                    ) : (
+                      <p className="flex items-center gap-1.5">
+                        <span>
+                          <span className="text-muted-foreground">
+                            {uk.scanner.kinds[
+                              fact.kind as keyof typeof uk.scanner.kinds
+                            ] ?? fact.kind}
+                            :
+                          </span>{' '}
+                          {fact.kind === 'site_status'
+                            ? (fact.value.reason ?? uk.tasks.status.done)
+                            : fact.kind === 'captcha'
+                              ? (uk.scanner.captchas[
+                                  fact.value as keyof typeof uk.scanner.captchas
+                                ] ?? String(fact.value))
+                              : typeof fact.value === 'string'
+                                ? fact.value
+                                : JSON.stringify(fact.value)}
+                        </span>
+                        <SourceLink url={fact.source_url} />
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </Collapsible>
+              <Collapsible
+                title={uk.company.history}
+                count={history.length + scans.length}
+              >
+                {campaigns.map((row) => (
+                  <p key={row.id}>
+                    <Link
+                      className="text-accent"
+                      href={'/campaigns?campaign=' + row.id}
+                    >
+                      {row.name}
+                    </Link>{' '}
+                    ·{' '}
+                    {row.batch_id
+                      ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
+                      : uk.manual.withoutBatch}{' '}
+                    · <LocalTime value={row.added_at} />
+                  </p>
+                ))}
+                {scans.map((scan) => (
+                  <div key={scan.id}>
+                    <p>
+                      {uk.scanner.title} ·{' '}
+                      {
+                        uk.tasks.status[
+                          scan.status as keyof typeof uk.tasks.status
+                        ]
+                      }{' '}
+                      · <LocalTime value={scan.created_at} />
+                    </p>
+                    {scan.reason_uk && (
+                      <p className="text-muted-foreground">{scan.reason_uk}</p>
+                    )}
+                    <ScanSummary result={scan.result} />
+                  </div>
+                ))}
+                <ul className="space-y-1">
+                  {history.map((row) => (
+                    <li key={row.id}>
+                      {row.action === 'company.website.adopted'
+                        ? uk.company.websiteAdopted
+                        : row.action === 'company.found'
+                          ? uk.company.added
+                          : (uk.manual.activities[
+                              row.action as keyof typeof uk.manual.activities
+                            ] ??
+                            uk.scanner.activities[
+                              row.action as keyof typeof uk.scanner.activities
+                            ] ??
+                            uk.registry.activities[
+                              row.action as keyof typeof uk.registry.activities
+                            ] ??
+                            uk.company.activity)}{' '}
+                      <span className="text-xs text-muted-foreground">
+                        · {row.user_name ?? uk.appName} ·{' '}
+                        <LocalTime value={row.created_at} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Collapsible>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

@@ -295,6 +295,9 @@ export const uk = {
     },
   },
   company: {
+    tabs: 'Розділи компанії',
+    overviewTab: 'Огляд',
+    contactTab: 'Звʼязатися',
     name: 'Компанія',
     city: 'Місто',
     type: 'Тип',
