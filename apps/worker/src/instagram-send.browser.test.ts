@@ -172,6 +172,100 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it.each([
+      {},
+      { menuDialog: true },
+      { menuItem: true },
+      { menuLink: true },
+      { directAvailable: true },
+    ])('uses the profile overflow portal safely (%j)', async (options) => {
+      const f = await fixture({ overflow: true, ...options });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.events).toEqual([
+          ...('directAvailable' in options ? [] : ['options']),
+          'open',
+          'mark',
+          'send',
+        ]);
+        expect(f.inputs).toEqual(['textbox']);
+        expect(f.mark).toHaveBeenCalledOnce();
+        expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
+      ['wrongOptionsScope', 'messagebutton'],
+      ['unknownOptions', 'messagebutton'],
+      ['duplicateOptions', 'messagebutton'],
+      ['existingMenu', 'messagebutton'],
+      ['wrongMenu', 'messagebutton'],
+      ['duplicateMenu', 'messagebutton'],
+      ['duplicateMenuAction', 'messagebutton'],
+      ['noMenuMessage', 'messagebutton'],
+      ['menuProfileMismatch', 'messagebutton'],
+      ['wrongRecipient', 'dialog'],
+      ['groupRecipient', 'dialog'],
+    ])('refuses unsafe overflow route %s', async (option, stage) => {
+      const f = await fixture({ overflow: true, [option!]: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'unavailable',
+          stage,
+        });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+        expect(f.events).toEqual(
+          [
+            'wrongOptionsScope',
+            'unknownOptions',
+            'duplicateOptions',
+            'existingMenu',
+          ].includes(option!)
+            ? []
+            : ['wrongRecipient', 'groupRecipient'].includes(option!)
+              ? ['options', 'open']
+              : ['options'],
+        );
+      } finally {
+        await f.close();
+      }
+    });
+    it.each(['switchRecipient', 'switchComposer', 'markerRateLimit'])(
+      'preserves the durable attempt and session gates after overflow (%s)',
+      async (option) => {
+        const f = await fixture({ overflow: true, [option]: true });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code:
+              option === 'markerRateLimit'
+                ? 'rate_limit'
+                : 'delivery_uncertain',
+          });
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual(['options', 'open', 'mark']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('stops on a rate limit while opening the profile options', async () => {
+      const f = await fixture({ overflow: true, menuRateLimit: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'rate_limit',
+          stage: 'session',
+        });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.events).toEqual(['options']);
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
     it('reproduces why the former generic last textbox is unsafe on an actual DOM', async () => {
       const f = await fixture();
       try {
