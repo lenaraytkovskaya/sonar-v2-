@@ -1,3 +1,4 @@
+import { FilterPanel } from '@/components/filter-panel';
 import { TaskOverview } from '@/components/task-overview';
 import { Card, PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
@@ -22,26 +23,32 @@ export default async function Page({
   return (
     <>
       <PageHeader {...uk.pages.overview} />
-      <form className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="grid max-w-full gap-1 text-sm">
-          {t.campaign}
-          <select
-            name="campaign"
-            defaultValue={selected ?? ''}
-            className="min-h-11 max-w-full rounded-lg border border-border bg-surface px-3"
-          >
-            <option value="">{t.all}</option>
-            {campaigns.rows.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button type="submit" className="min-h-11">
-          {uk.finance.apply}
-        </Button>
-      </form>
+      <FilterPanel
+        key={selected ?? 'all'}
+        count={selected ? 1 : 0}
+        resetHref="/"
+      >
+        <form className="flex flex-wrap items-end gap-3">
+          <label className="grid max-w-full gap-1 text-sm">
+            {t.campaign}
+            <select
+              name="campaign"
+              defaultValue={selected ?? ''}
+              className="min-h-11 max-w-full rounded-lg border border-border bg-surface px-3"
+            >
+              <option value="">{t.all}</option>
+              {campaigns.rows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="submit" className="min-h-11">
+            {uk.finance.apply}
+          </Button>
+        </form>
+      </FilterPanel>
       <Card className="mb-4 p-4">
         <h2 className="mb-2 font-heading font-bold">{t.funnel}</h2>
         <p className="mb-4 text-sm text-muted-foreground">{t.funnelHint}</p>

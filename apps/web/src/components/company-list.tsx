@@ -4,7 +4,7 @@ import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { ChevronDown } from 'lucide-react';
+import { FilterPanel } from './filter-panel';
 import { CompanyCard, type CompanyCardRow } from './company-card';
 import { Card, PageHeader } from './shared';
 import { runAiJob } from '@/lib/ai-job';
@@ -18,16 +18,12 @@ function params(filters: CompanyFilters) {
   );
 }
 export function CompanyList({
-  initialCampaignId,
+  initialFilters = {},
 }: {
-  initialCampaignId?: string;
+  initialFilters?: CompanyFilters;
 }) {
-  const [draft, setDraft] = useState<CompanyFilters>({
-      campaignId: initialCampaignId,
-    }),
-    [filters, setFilters] = useState<CompanyFilters>({
-      campaignId: initialCampaignId,
-    }),
+  const [draft, setDraft] = useState<CompanyFilters>(initialFilters),
+    [filters, setFilters] = useState<CompanyFilters>(initialFilters),
     [page, setPage] = useState(1),
     [data, setData] = useState<{
       companies: Row[];
@@ -39,8 +35,7 @@ export function CompanyList({
     [description, setDescription] = useState(''),
     [preview, setPreview] = useState<CompanyFilters | null>(null),
     [pending, setPending] = useState(false),
-    [loading, setLoading] = useState(false),
-    [showFilters, setShowFilters] = useState(false);
+    [loading, setLoading] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -100,6 +95,12 @@ export function CompanyList({
   const apply = (f: CompanyFilters) => {
     setFilters(companyFiltersSchema.parse(f));
     setPage(1);
+    const query = params(f).toString();
+    window.history.replaceState(
+      null,
+      '',
+      query ? `/companies?${query}` : '/companies',
+    );
   };
   const link = (id: string) =>
     '/companies/' +
@@ -110,46 +111,34 @@ export function CompanyList({
       <PageHeader {...uk.pages.companies} />
       <ManualEntry
         campaigns={campaigns}
-        initialCampaignId={initialCampaignId}
+        initialCampaignId={initialFilters.campaignId}
       />
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Input
-          aria-label={uk.company.search}
-          placeholder={uk.company.search}
-          className="max-w-sm"
-          value={draft.q ?? ''}
-          maxLength={200}
-          onChange={(e) => update('q', e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') apply(draft);
-          }}
-        />
-        <Button
-          variant="outline"
-          aria-expanded={showFilters}
-          onClick={() => setShowFilters(!showFilters)}
-        >
-          {showFilters ? uk.company.hideFilters : uk.company.showFilters}
-          <ChevronDown
-            aria-hidden="true"
-            className={showFilters ? 'rotate-180' : ''}
+      <FilterPanel
+        count={
+          Object.values(filters).filter(
+            (value) => value !== undefined && value !== '',
+          ).length
+        }
+        onReset={() => {
+          setDraft({});
+          apply({});
+          setPreview(null);
+        }}
+        toolbar={
+          <Input
+            aria-label={uk.company.search}
+            placeholder={uk.company.search}
+            className="max-w-sm"
+            value={draft.q ?? ''}
+            maxLength={200}
+            onChange={(e) => update('q', e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') apply(draft);
+            }}
           />
-        </Button>
-        <a
-          className="inline-flex min-h-9 items-center rounded-lg border border-border px-3 text-sm"
-          href={'/api/companies/export?' + params(filters)}
-        >
-          {uk.company.export}
-        </a>
-        <span
-          className="ml-auto text-sm text-muted-foreground"
-          aria-live="polite"
-        >
-          {uk.company.total}: {loading ? '…' : data.total}
-        </span>
-      </div>
-      {showFilters && (
-        <Card className="mb-3 space-y-3 p-4">
+        }
+      >
+        <Card className="space-y-3 border-0 shadow-none">
           <label className="block">
             {uk.company.natural}
             <Input
@@ -359,67 +348,80 @@ export function CompanyList({
             </Button>
           </div>
         </Card>
-      )}
-      {campaigns.length > 0 && (
-        <div
-          className="mb-2 flex flex-wrap items-center gap-1.5"
-          aria-label={uk.company.campaign}
-        >
-          <span className="mr-1 text-xs text-muted-foreground">
-            {uk.company.campaign}:
-          </span>
-          {[{ id: '', name: uk.company.allCampaigns }, ...campaigns].map(
-            (campaign) => (
-              <Button
-                key={campaign.id}
-                className="min-h-8 px-2.5 text-xs"
-                variant={
-                  (filters.campaignId ?? '') === campaign.id
-                    ? 'default'
-                    : 'outline'
-                }
-                onClick={() => {
-                  const f = {
-                    ...filters,
-                    campaignId: campaign.id || undefined,
-                  };
-                  setDraft(f);
-                  apply(f);
-                }}
-              >
-                {campaign.name}
-              </Button>
-            ),
-          )}
-        </div>
-      )}
-      <div
-        className="mb-3 flex flex-wrap gap-1.5"
-        aria-label={uk.company.status}
-      >
-        {['', ...Object.keys(uk.company.statuses)].map((status) => (
-          <Button
-            key={status}
-            className="min-h-8 px-2.5 text-xs"
-            variant={
-              filters.status === status || (!filters.status && !status)
-                ? 'default'
-                : 'outline'
-            }
-            onClick={() => {
-              const f = {
-                ...filters,
-                status: (status as CompanyFilters['status']) || undefined,
-              };
-              setDraft(f);
-              apply(f);
-            }}
+        {campaigns.length > 0 && (
+          <div
+            className="mb-2 flex flex-wrap items-center gap-1.5"
+            aria-label={uk.company.campaign}
           >
-            {status
-              ? uk.company.statuses[status as keyof typeof uk.company.statuses]
-              : uk.company.all}
-          </Button>
-        ))}
+            <span className="mr-1 text-xs text-muted-foreground">
+              {uk.company.campaign}:
+            </span>
+            {[{ id: '', name: uk.company.allCampaigns }, ...campaigns].map(
+              (campaign) => (
+                <Button
+                  key={campaign.id}
+                  className="min-h-8 px-2.5 text-xs"
+                  variant={
+                    (filters.campaignId ?? '') === campaign.id
+                      ? 'default'
+                      : 'outline'
+                  }
+                  onClick={() => {
+                    const f = {
+                      ...filters,
+                      campaignId: campaign.id || undefined,
+                    };
+                    setDraft(f);
+                    apply(f);
+                  }}
+                >
+                  {campaign.name}
+                </Button>
+              ),
+            )}
+          </div>
+        )}
+        <div
+          className="mb-3 flex flex-wrap gap-1.5"
+          aria-label={uk.company.status}
+        >
+          {['', ...Object.keys(uk.company.statuses)].map((status) => (
+            <Button
+              key={status}
+              className="min-h-8 px-2.5 text-xs"
+              variant={
+                filters.status === status || (!filters.status && !status)
+                  ? 'default'
+                  : 'outline'
+              }
+              onClick={() => {
+                const f = {
+                  ...filters,
+                  status: (status as CompanyFilters['status']) || undefined,
+                };
+                setDraft(f);
+                apply(f);
+              }}
+            >
+              {status
+                ? uk.company.statuses[
+                    status as keyof typeof uk.company.statuses
+                  ]
+                : uk.company.all}
+            </Button>
+          ))}
+        </div>
+      </FilterPanel>
+      <div className="mb-3 flex items-center justify-between gap-2 text-sm">
+        <a
+          className="inline-flex min-h-11 items-center rounded-lg border border-border px-3"
+          href={'/api/companies/export?' + params(filters)}
+        >
+          {uk.company.export}
+        </a>
+        <span aria-live="polite" className="text-muted-foreground">
+          {uk.company.total}: {loading ? '…' : data.total}
+        </span>
       </div>
       {error && (
         <p role="alert" className="mb-3 text-err">

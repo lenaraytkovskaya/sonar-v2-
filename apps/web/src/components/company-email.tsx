@@ -1,5 +1,17 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import {
+  Bot,
+  ArrowDownLeft,
+  Code2,
+  UserRound,
+  Reply,
+  Clock,
+  Check,
+  CheckCheck,
+  AlertCircle,
+  FilePenLine,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { getCompanyChat } from '@sonar/db/outreach';
@@ -30,6 +42,7 @@ export function Draft({
   approval,
   act,
   onUseText,
+  messenger = false,
 }: {
   message: Message;
   blocked: boolean;
@@ -37,6 +50,7 @@ export function Draft({
   approval: boolean;
   act: Action;
   onUseText?: (body: string) => void;
+  messenger?: boolean;
 }) {
   const [subject, setSubject] = useState(message.subject),
     [body, setBody] = useState(message.body);
@@ -50,152 +64,242 @@ export function Draft({
     if (changed && !(await save())) return;
     await act(action, { messageId: message.id });
   };
+  const StatusIcon = ['queued', 'running'].includes(message.status)
+    ? Clock
+    : message.status === 'sent'
+      ? Check
+      : ['delivered', 'read'].includes(message.status)
+        ? CheckCheck
+        : message.status === 'failed'
+          ? AlertCircle
+          : FilePenLine;
+  const SourceIcon =
+    message.source === 'inbound'
+      ? ArrowDownLeft
+      : message.source === 'api'
+        ? Code2
+        : message.source === 'reply'
+          ? Reply
+          : message.source === 'manual'
+            ? UserRound
+            : Bot;
   return (
-    <section
-      className={cn(
-        'min-w-0 space-y-2 rounded-lg border border-border p-3',
-        message.direction === 'in' ? 'mr-6 bg-surface' : 'ml-6 bg-raised',
-      )}
+    <article
+      className={
+        messenger
+          ? message.direction === 'in'
+            ? 'flex justify-start'
+            : 'flex justify-end'
+          : undefined
+      }
     >
-      <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-        <span>
-          {message.direction === 'in'
-            ? uk.outreach.incoming
-            : uk.outreach.outgoing}
-        </span>
-        <StatusBadge status={message.status}>
-          {messageStatus(message.status)}
-        </StatusBadge>
-        <span>
-          {uk.outreach.sources[
-            message.source as keyof typeof uk.outreach.sources
-          ] ?? message.source}
-        </span>
-        <LocalTime value={message.sentAt ?? message.createdAt} />
-      </p>
-      {message.classification && (
-        <p className="text-xs text-muted-foreground">
-          {
-            uk.inbound.categories[
-              message.classification as keyof typeof uk.inbound.categories
-            ]
-          }
-          {message.needsHuman && (
+      <div className={messenger ? 'min-w-0 max-w-[75%] space-y-1' : 'w-full'}>
+        <section
+          className={cn(
+            'min-w-0 space-y-2 border border-border p-3 text-sm',
+            messenger
+              ? message.direction === 'in'
+                ? 'rounded-2xl rounded-bl-sm bg-surface'
+                : 'rounded-2xl rounded-br-sm border-accent/20 bg-accent/10'
+              : message.direction === 'in'
+                ? 'mr-6 rounded-lg bg-surface'
+                : 'ml-6 rounded-lg bg-raised',
+          )}
+        >
+          {!messenger && (
             <>
-              {' '}
-              ·{' '}
-              <StatusBadge status="handoff">
-                {uk.inbound.needsHuman}
-              </StatusBadge>
+              <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                <span>
+                  {message.direction === 'in'
+                    ? uk.outreach.incoming
+                    : uk.outreach.outgoing}
+                </span>
+                <StatusBadge status={message.status}>
+                  {messageStatus(message.status)}
+                </StatusBadge>
+                <span>
+                  {uk.outreach.sources[
+                    message.source as keyof typeof uk.outreach.sources
+                  ] ?? message.source}
+                </span>
+                <LocalTime value={message.sentAt ?? message.createdAt} />
+              </p>
             </>
           )}
-        </p>
-      )}
-      {editable && !blocked ? (
-        <>
-          {message.channel === 'email' && (
-            <div>
-              <label htmlFor={`subject-${message.id}`}>
-                {uk.email.subject}
-              </label>
-              <Input
-                id={`subject-${message.id}`}
-                value={subject}
-                maxLength={998}
-                onChange={(event) => setSubject(event.target.value)}
-              />
-              <AiAssist text={subject} onApply={setSubject} />
-            </div>
-          )}
-          <div>
-            <label htmlFor={`body-${message.id}`}>{uk.email.body}</label>
-            <textarea
-              id={`body-${message.id}`}
-              rows={5}
-              maxLength={20000}
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-              className="w-full rounded-lg border border-border bg-surface p-3"
-            />
-            <AiAssist text={body} onApply={setBody} />
-          </div>
-          {manual && !onUseText && (
+          {message.classification && (
             <p className="text-xs text-muted-foreground">
-              {uk.outreach.manualHint}
+              {
+                uk.inbound.categories[
+                  message.classification as keyof typeof uk.inbound.categories
+                ]
+              }
+              {message.needsHuman && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <StatusBadge status="handoff">
+                    {uk.inbound.needsHuman}
+                  </StatusBadge>
+                </>
+              )}
             </p>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={pending || !changed || !body.trim()}
-              onClick={() => void save()}
-            >
-              {uk.outreach.save}
-            </Button>
-            {manual ? (
-              <>
+          {editable && !blocked ? (
+            <>
+              {message.channel === 'email' && (
+                <div>
+                  <label htmlFor={`subject-${message.id}`}>
+                    {uk.email.subject}
+                  </label>
+                  <Input
+                    id={`subject-${message.id}`}
+                    value={subject}
+                    maxLength={998}
+                    onChange={(event) => setSubject(event.target.value)}
+                  />
+                  <AiAssist text={subject} onApply={setSubject} />
+                </div>
+              )}
+              <div>
+                <label htmlFor={`body-${message.id}`}>{uk.email.body}</label>
+                <textarea
+                  id={`body-${message.id}`}
+                  rows={5}
+                  maxLength={20000}
+                  value={body}
+                  onChange={(event) => setBody(event.target.value)}
+                  className="w-full rounded-lg border border-border bg-surface p-3"
+                />
+                <AiAssist text={body} onApply={setBody} />
+              </div>
+              {manual && !onUseText && (
+                <p className="text-xs text-muted-foreground">
+                  {uk.outreach.manualHint}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
-                  disabled={pending || !body.trim()}
-                  onClick={() =>
-                    void navigator.clipboard
-                      .writeText(body)
-                      .then(() => act('copied'))
-                      .catch(() => act('copyError'))
-                  }
+                  disabled={pending || !changed || !body.trim()}
+                  onClick={() => void save()}
                 >
-                  {uk.outreach.copy}
+                  {uk.outreach.save}
                 </Button>
+                {manual ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      disabled={pending || !body.trim()}
+                      onClick={() =>
+                        void navigator.clipboard
+                          .writeText(body)
+                          .then(() => act('copied'))
+                          .catch(() => act('copyError'))
+                      }
+                    >
+                      {uk.outreach.copy}
+                    </Button>
+                    <Button
+                      disabled={pending || !body.trim()}
+                      onClick={() =>
+                        onUseText ? onUseText(body) : void proceed('manual')
+                      }
+                    >
+                      {onUseText
+                        ? uk.socialAccounts.useText
+                        : uk.outreach.manualSent}
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    disabled={
+                      pending ||
+                      !body.trim() ||
+                      (message.channel === 'email' && !subject.trim())
+                    }
+                    onClick={() =>
+                      void proceed(
+                        message.status === 'awaiting_approval'
+                          ? 'approve'
+                          : 'send',
+                      )
+                    }
+                  >
+                    {message.status === 'awaiting_approval'
+                      ? uk.email.approve
+                      : approval
+                        ? uk.email.requestApproval
+                        : uk.email.send}
+                  </Button>
+                )}
                 <Button
-                  disabled={pending || !body.trim()}
-                  onClick={() =>
-                    onUseText ? onUseText(body) : void proceed('manual')
-                  }
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => void act('skip', { messageId: message.id })}
                 >
-                  {onUseText
-                    ? uk.socialAccounts.useText
-                    : uk.outreach.manualSent}
+                  {uk.outreach.skip}
                 </Button>
-              </>
-            ) : (
-              <Button
-                disabled={
-                  pending ||
-                  !body.trim() ||
-                  (message.channel === 'email' && !subject.trim())
-                }
-                onClick={() =>
-                  void proceed(
-                    message.status === 'awaiting_approval' ? 'approve' : 'send',
-                  )
-                }
-              >
-                {message.status === 'awaiting_approval'
-                  ? uk.email.approve
-                  : approval
-                    ? uk.email.requestApproval
-                    : uk.email.send}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              disabled={pending}
-              onClick={() => void act('skip', { messageId: message.id })}
-            >
-              {uk.outreach.skip}
-            </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          {message.subject && (
-            <h3 className="font-semibold">{message.subject}</h3>
+              </div>
+            </>
+          ) : (
+            <>
+              {message.subject && (
+                <h3 className="font-semibold">{message.subject}</h3>
+              )}
+              <p className="whitespace-pre-wrap break-words">{message.body}</p>
+            </>
           )}
-          <p className="whitespace-pre-wrap break-words">{message.body}</p>
-        </>
-      )}
-      {message.reasonUk && <p className="text-err">{message.reasonUk}</p>}
-    </section>
+          {!messenger && message.reasonUk && (
+            <p className="text-err">{message.reasonUk}</p>
+          )}
+        </section>
+        {messenger && (
+          <div
+            className={cn(
+              'flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground',
+              message.direction === 'out' && 'justify-end',
+            )}
+          >
+            <span
+              title={
+                uk.outreach.sources[
+                  message.source as keyof typeof uk.outreach.sources
+                ] ?? message.source
+              }
+            >
+              <SourceIcon
+                aria-label={
+                  uk.outreach.sources[
+                    message.source as keyof typeof uk.outreach.sources
+                  ] ?? message.source
+                }
+                className="size-3"
+              />
+            </span>
+            <LocalTime value={message.sentAt ?? message.createdAt} timeOnly />
+            {message.direction === 'out' && (
+              <span
+                title={messageStatus(message.status)}
+                className={cn(
+                  'inline-flex items-center gap-1',
+                  message.status === 'failed' && 'text-err',
+                  message.status === 'read' && 'text-accent',
+                )}
+              >
+                <StatusIcon
+                  aria-label={messageStatus(message.status)}
+                  className="size-3.5"
+                />
+                {editable && messageStatus(message.status)}
+              </span>
+            )}
+          </div>
+        )}
+        {messenger && message.reasonUk && (
+          <p className="px-1 text-xs text-err">{message.reasonUk}</p>
+        )}
+      </div>
+    </article>
   );
 }
 

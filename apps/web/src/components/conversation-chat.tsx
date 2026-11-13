@@ -1,5 +1,7 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { ArrowUp } from 'lucide-react';
+import { LocalTime } from './local-time';
 import Link from 'next/link';
 import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
@@ -15,6 +17,11 @@ type Chat = Awaited<ReturnType<typeof getConversationChat>>;
 type Task = { id: string; status: string; reason_uk?: string };
 export function ConversationChat({ initial }: { initial: Chat }) {
   const [data, setData] = useState(initial);
+  const [timeZone, setTimeZone] = useState('UTC');
+  useEffect(
+    () => setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
+    [],
+  );
   const [body, setBody] = useState('');
   const [subject, setSubject] = useState(
     [...initial.messages].reverse().find((m) => m.subject)?.subject ?? '',
@@ -23,6 +30,35 @@ export function ConversationChat({ initial }: { initial: Chat }) {
   const [notice, setNotice] = useState('');
   const [task, setTask] = useState<Task | null>(null);
   const busy = useRef(false);
+  const log = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const latestMessage = data.messages.at(-1);
+  useEffect(() => {
+    const element = log.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [latestMessage?.id, latestMessage?.body, timeZone]);
+  useEffect(() => {
+    const element = log.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    const element = textarea.current;
+    if (element) {
+      element.style.height = 'auto';
+      const style = getComputedStyle(element);
+      const maxHeight =
+        parseFloat(style.lineHeight) * 6 +
+        parseFloat(style.paddingTop) +
+        parseFloat(style.paddingBottom);
+      element.style.maxHeight = `${maxHeight}px`;
+      element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`;
+    }
+  }, [body]);
   const requestKey = useRef({ fingerprint: '', key: '' });
   const path = `/api/conversations/${initial.conversation?.id}`;
   const lastInbound = [...data.messages]
@@ -118,68 +154,134 @@ export function ConversationChat({ initial }: { initial: Chat }) {
     ['form', 'social'].includes(conversation.channel) &&
     /^https?:\/\//i.test(conversation.contactValue ?? '')
       ? conversation.contactValue
-      : null;
+      : conversation.channel === 'call' &&
+          /^\+[1-9]\d{1,14}$/.test(conversation.contactValue ?? '')
+        ? `tel:${conversation.contactValue}`
+        : null;
+  const send = () => {
+    if (
+      pending ||
+      !body.trim() ||
+      (conversation.channel === 'email' && !subject.trim())
+    )
+      return;
+    void act('reply', {
+      body,
+      subject,
+      ...(social
+        ? { socialDelivery: data.socialAvailable ? 'browser' : 'manual' }
+        : {}),
+    });
+  };
   return (
-    <Card className="min-w-0 space-y-4 p-4">
-      <h2 className="font-heading text-lg font-bold">
-        {conversation.companyId ? (
-          <Link href={`/companies/${conversation.companyId}`}>
-            {conversation.companyName}
-          </Link>
-        ) : (
-          uk.inbound.unknownCompany
-        )}
-      </h2>
-      <p className="break-words text-sm text-muted-foreground">
-        <ChannelIcon
-          channel={conversation.channel}
-          value={conversation.contactValue ?? ''}
-        />{' '}
-        {channelLabel(conversation.channel, conversation.contactValue ?? '')} ·{' '}
-        {contactLabel(conversation.contactValue)}
-      </p>
+    <Card className="flex min-w-0 flex-col overflow-hidden lg:h-[calc(100dvh-13rem)] lg:min-h-[32rem]">
+      <header className="flex shrink-0 items-center gap-3 border-b border-border p-4">
+        <span
+          aria-hidden="true"
+          className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-semibold text-accent"
+        >
+          {(conversation.companyName || uk.inbound.unknownCompany)
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((word) => word.match(/[\p{L}\p{N}]/u)?.[0] ?? '')
+            .join('')}
+        </span>
+        <div className="min-w-0">
+          <h2 className="truncate font-heading font-bold">
+            {conversation.companyId ? (
+              <Link
+                className="hover:text-accent"
+                href={`/companies/${conversation.companyId}`}
+              >
+                {conversation.companyName}
+              </Link>
+            ) : (
+              uk.inbound.unknownCompany
+            )}
+          </h2>
+          <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <ChannelIcon
+              channel={conversation.channel}
+              value={conversation.contactValue ?? ''}
+            />
+            <span
+              className="truncate"
+              title={channelLabel(
+                conversation.channel,
+                conversation.contactValue ?? '',
+              )}
+            >
+              {contactLabel(conversation.contactValue)}
+            </span>
+          </p>
+        </div>
+      </header>
       {conversation.needsHuman && (
-        <p className="rounded-lg bg-wait-bg p-3 text-wait">
+        <p className="m-3 rounded-lg bg-wait-bg p-3 text-wait">
           <StatusBadge status="handoff">{uk.inbound.needsHuman}</StatusBadge>
         </p>
       )}
       {data.blocked && (
-        <p className="rounded-lg bg-err-bg p-3 text-err">
+        <p className="m-3 rounded-lg bg-err-bg p-3 text-err">
           <StatusBadge status="do_not_contact">{uk.email.blocked}</StatusBadge>
         </p>
       )}
       <div
+        ref={log}
         role="log"
         aria-label={uk.email.history}
-        className="max-h-[36rem] space-y-3 overflow-y-auto"
+        className="min-h-48 max-h-[55dvh] flex-1 space-y-3 overflow-y-auto bg-raised p-3 sm:p-4 lg:max-h-none"
       >
-        {data.messages.map((message) => (
-          <Draft
-            key={`${message.id}:${message.body}:${message.subject}:${message.status}`}
-            message={message}
-            blocked={data.blocked}
-            pending={pending}
-            approval={
-              message.source !== 'reply' &&
-              conversation.campaignSendMode === 'approval'
-            }
-            act={act}
-            onUseText={
-              social && data.socialAvailable
-                ? (text) => {
-                    setBody(text);
-                    document.getElementById('reply-body')?.focus();
-                  }
-                : undefined
-            }
-          />
+        {data.messages.map((message, index) => (
+          <Fragment key={message.id}>
+            {(index === 0 ||
+              new Date(message.sentAt ?? message.createdAt).toLocaleDateString(
+                'uk-UA',
+                { timeZone },
+              ) !==
+                new Date(
+                  data.messages[index - 1]?.sentAt ??
+                    data.messages[index - 1]?.createdAt ??
+                    message.createdAt,
+                ).toLocaleDateString('uk-UA', { timeZone })) && (
+              <div className="flex items-center gap-3 py-2 text-[11px] text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                <LocalTime
+                  value={message.sentAt ?? message.createdAt}
+                  dateOnly
+                />
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            )}
+            <Draft
+              key={`${message.id}:${message.body}:${message.subject}:${message.status}`}
+              messenger
+              message={message}
+              blocked={data.blocked}
+              pending={pending}
+              approval={
+                message.source !== 'reply' &&
+                conversation.campaignSendMode === 'approval'
+              }
+              act={act}
+              onUseText={
+                social && data.socialAvailable
+                  ? (text) => {
+                      setBody(text);
+                      document.getElementById('reply-body')?.focus();
+                    }
+                  : undefined
+              }
+            />
+          </Fragment>
         ))}
       </div>
       {!data.blocked && canReply && (
-        <div className="space-y-3 border-t border-border pt-3">
+        <div className="shrink-0 space-y-2 border-t border-border p-3">
           {lastInbound && (
             <Button
               variant="outline"
+              className="min-h-8 px-2 text-xs"
               disabled={pending || generating}
               onClick={() => void act('generate')}
             >
@@ -187,7 +289,7 @@ export function ConversationChat({ initial }: { initial: Chat }) {
             </Button>
           )}
           {social && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {data.socialAvailable
                 ? uk.socialAccounts.browser
                 : uk.socialAccounts.manual}
@@ -201,9 +303,12 @@ export function ConversationChat({ initial }: { initial: Chat }) {
                 rel="noreferrer"
                 className="text-accent"
               >
-                {uk.outreach.openContact}
-              </a>{' '}
-              · {uk.outreach.manualHint}
+                {conversation.channel === 'call'
+                  ? uk.outreach.openCall
+                  : uk.outreach.openContact}
+              </a>
+              {conversation.channel !== 'call' &&
+                ` · ${uk.outreach.manualHint}`}
             </p>
           )}
           {conversation.channel === 'email' && (
@@ -218,53 +323,72 @@ export function ConversationChat({ initial }: { initial: Chat }) {
               <AiAssist text={subject} onApply={setSubject} />
             </div>
           )}
-          <label className="block" htmlFor="reply-body">
-            {conversation.channel === 'call'
-              ? uk.outreach.callNote
-              : data.messages.length
-                ? uk.inbound.reply
-                : uk.inbound.firstMessage}
-          </label>
-          <textarea
-            id="reply-body"
-            value={body}
-            rows={4}
-            maxLength={20000}
-            onChange={(event) => setBody(event.target.value)}
-            className="w-full rounded-lg border border-border bg-surface p-3"
-          />
-          <AiAssist text={body} onApply={setBody} />
-          <Button
-            disabled={
-              pending ||
-              !body.trim() ||
-              (conversation.channel === 'email' && !subject.trim())
-            }
-            onClick={() =>
-              void act('reply', {
-                body,
-                subject,
-                ...(social
-                  ? {
-                      socialDelivery: data.socialAvailable
-                        ? 'browser'
-                        : 'manual',
-                    }
-                  : {}),
-              })
-            }
-          >
-            {conversation.channel === 'call'
-              ? uk.outreach.logCall
-              : manual
-                ? uk.outreach.manualSent
-                : uk.email.send}
-          </Button>
+          <div className="rounded-xl border border-border bg-surface p-2 focus-within:border-accent">
+            <label className="sr-only" htmlFor="reply-body">
+              {conversation.channel === 'call'
+                ? uk.outreach.callNote
+                : uk.inbound.reply}
+            </label>
+            <textarea
+              ref={textarea}
+              id="reply-body"
+              value={body}
+              rows={1}
+              maxLength={20000}
+              placeholder={
+                conversation.channel === 'call'
+                  ? uk.outreach.callNote
+                  : uk.inbound.reply
+              }
+              onChange={(event) => setBody(event.target.value)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === 'Enter' &&
+                  (event.ctrlKey || event.metaKey) &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  send();
+                }
+              }}
+              className="block min-h-11 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none"
+            />
+            <div className="flex items-end justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <AiAssist text={body} onApply={setBody} />
+              </div>
+              <Button
+                title={uk.inbound.sendShortcut}
+                aria-label={
+                  conversation.channel === 'call'
+                    ? uk.outreach.logCall
+                    : manual
+                      ? uk.outreach.manualSent
+                      : uk.email.send
+                }
+                disabled={
+                  pending ||
+                  !body.trim() ||
+                  (conversation.channel === 'email' && !subject.trim())
+                }
+                onClick={send}
+              >
+                {manual && (
+                  <span>
+                    {conversation.channel === 'call'
+                      ? uk.outreach.logCall
+                      : uk.outreach.manualSent}
+                  </span>
+                )}
+                <ArrowUp aria-hidden="true" className="size-4" />
+              </Button>
+            </div>
+          </div>
           {link && (
             <Button
               type="button"
               variant="outline"
-              className="ml-2"
+              className="min-h-8 text-xs"
               disabled={!body.trim()}
               onClick={() =>
                 void navigator.clipboard
@@ -279,14 +403,18 @@ export function ConversationChat({ initial }: { initial: Chat }) {
         </div>
       )}
       {task && (
-        <p role="status" className="text-sm text-muted-foreground">
+        <p role="status" className="text-xs text-muted-foreground">
           <StatusBadge status={task.status}>
             {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
           </StatusBadge>
           {task.reason_uk && ` · ${task.reason_uk}`}
         </p>
       )}
-      {notice && <p role="status">{notice}</p>}
+      {notice && (
+        <p className="px-3 pb-3 text-sm" role="status">
+          {notice}
+        </p>
+      )}
     </Card>
   );
 }

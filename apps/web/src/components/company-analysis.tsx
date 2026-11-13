@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AnalysisResult } from '@sonar/core';
+import { LocalTime } from './local-time';
 import { uk } from '@/i18n/uk';
 import { StatusBadge } from './shared';
 import { Button } from './ui/button';
@@ -132,7 +133,7 @@ export function CompanyAnalysis({
           <p className="text-sm text-muted-foreground">
             {uk.analysis.model}: {analysis.model} · {uk.analysis.cost}: $
             {Number(analysis.cost_usd).toFixed(6)} ·{' '}
-            {new Date(analysis.created_at).toLocaleString('uk-UA')}
+            <LocalTime value={analysis.created_at} />
           </p>
         </>
       ) : (
