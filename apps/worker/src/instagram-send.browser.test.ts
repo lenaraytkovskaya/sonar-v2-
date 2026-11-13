@@ -11,6 +11,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       new URL('./instagram-send.fixture.html', import.meta.url),
       'utf8',
     );
+    const capturedMenu = readFileSync(
+      new URL('./instagram-menu.sanitized.fixture.html', import.meta.url),
+      'utf8',
+    );
     beforeAll(async () => {
       browser = await chromium.launch({
         headless: true,
@@ -59,7 +63,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           return route.fulfill({
             status: options.rateLimit ? 429 : 200,
             contentType: 'text/html',
-            body: html,
+            body: options.capturedMenu
+              ? capturedMenu + '<nav><a href="/direct/inbox/">Inbox</a></nav>'
+              : html,
           });
         if (url.hostname !== 'ig.me') return route.abort('blockedbyclient');
         return route.fulfill({
@@ -234,6 +240,85 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+    it('recognizes the captured role-button ancestors and keeps an already open menu blocked', async () => {
+      const f = await fixture({ capturedMenu: true });
+      try {
+        const page = await f.context.newPage();
+        await page.goto('https://www.instagram.com/fixture_company/');
+        const profile = page.locator('main header, [role="main"] header');
+        const options = profile.getByRole('button', { name: /^Параметри$/ });
+        expect(await profile.count()).toBe(1);
+        expect(await options.count()).toBe(1);
+        expect(await options.ariaSnapshot()).toContain('button "Параметри"');
+        const popup = page.locator(
+          '[role="menu"]:visible, [role="dialog"]:visible',
+        );
+        expect(await popup.count()).toBe(1);
+        expect(
+          await popup
+            .getByRole('button', { name: /^Надіслати повідомлення$/ })
+            .count(),
+        ).toBe(1);
+        await page.locator('[role="dialog"]').evaluate((node: HTMLElement) => {
+          node.hidden = true;
+        });
+        expect(await popup.count()).toBe(0);
+        expect(await options.count()).toBe(1);
+        // send() navigates a fresh page to the captured OPEN menu again.
+        await expect(f.send()).rejects.toMatchObject({
+          stage: 'messagebutton',
+          errorKind: 'unconfirmed',
+          reasonUk: expect.stringContaining(
+            '[branch=preexisting_popup; menus=0; dialogs=1; options=1]',
+          ),
+        });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+        expect(f.events).toEqual([]);
+        expect(f.requests).toEqual(
+          Array(2).fill('www.instagram.com/fixture_company/'),
+        );
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
+      [
+        'existingMenu',
+        '[branch=preexisting_popup; menus=1; dialogs=0; options=1]',
+      ],
+      [
+        'outerDialog',
+        '[branch=preexisting_popup; menus=0; dialogs=1; options=1]',
+      ],
+      [
+        'duplicateOptions',
+        '[branch=options_count; menus=0; dialogs=0; options=2+]',
+      ],
+    ])(
+      'distinguishes the safe refusal for %s without page content',
+      async (option, detail) => {
+        const f = await fixture({ overflow: true, [option!]: true });
+        try {
+          const error = await f.send().catch((error) => error);
+          expect(error).toMatchObject({
+            code: 'unavailable',
+            stage: 'messagebutton',
+            errorKind: 'unconfirmed',
+            reasonUk: expect.stringContaining(detail!),
+          });
+          expect(error.message).toBe(error.reasonUk);
+          expect(error.reasonUk).not.toMatch(
+            /fixture_company|Synthetic message|https:|cookie/i,
+          );
+          expect(f.events).toEqual([]);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each(['switchRecipient', 'switchComposer', 'markerRateLimit'])(
       'preserves the durable attempt and session gates after overflow (%s)',
       async (option) => {
