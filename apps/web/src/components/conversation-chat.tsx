@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
 import { channelLabel, contactLabel } from '@/lib/outreach-labels';
 import { Card } from './shared';
 import { Draft } from './company-email';
@@ -129,16 +131,22 @@ export function ConversationChat({ initial }: { initial: Chat }) {
         )}
       </h2>
       <p className="break-words text-sm text-muted-foreground">
+        <ChannelIcon
+          channel={conversation.channel}
+          value={conversation.contactValue ?? ''}
+        />{' '}
         {channelLabel(conversation.channel, conversation.contactValue ?? '')} ·{' '}
         {contactLabel(conversation.contactValue)}
       </p>
       {conversation.needsHuman && (
         <p className="rounded-lg bg-wait-bg p-3 text-wait">
-          {uk.inbound.needsHuman}
+          <StatusBadge status="handoff">{uk.inbound.needsHuman}</StatusBadge>
         </p>
       )}
       {data.blocked && (
-        <p className="rounded-lg bg-err-bg p-3 text-err">{uk.email.blocked}</p>
+        <p className="rounded-lg bg-err-bg p-3 text-err">
+          <StatusBadge status="do_not_contact">{uk.email.blocked}</StatusBadge>
+        </p>
       )}
       <div
         role="log"
@@ -272,7 +280,9 @@ export function ConversationChat({ initial }: { initial: Chat }) {
       )}
       {task && (
         <p role="status" className="text-sm text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
           {task.reason_uk && ` · ${task.reason_uk}`}
         </p>
       )}

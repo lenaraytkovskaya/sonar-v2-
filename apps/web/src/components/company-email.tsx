@@ -4,6 +4,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { getCompanyChat } from '@sonar/db/outreach';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { ChannelIcon } from './channel-icon';
 import { cn } from '@/lib/utils';
 import { channelLabel, messageStatus } from '@/lib/outreach-labels';
 import { Card } from './shared';
@@ -60,7 +63,9 @@ export function Draft({
             ? uk.outreach.incoming
             : uk.outreach.outgoing}
         </span>
-        <span>{messageStatus(message.status)}</span>
+        <StatusBadge status={message.status}>
+          {messageStatus(message.status)}
+        </StatusBadge>
         <span>
           {uk.outreach.sources[
             message.source as keyof typeof uk.outreach.sources
@@ -75,7 +80,15 @@ export function Draft({
               message.classification as keyof typeof uk.inbound.categories
             ]
           }
-          {message.needsHuman && ` · ${uk.inbound.needsHuman}`}
+          {message.needsHuman && (
+            <>
+              {' '}
+              ·{' '}
+              <StatusBadge status="handoff">
+                {uk.inbound.needsHuman}
+              </StatusBadge>
+            </>
+          )}
         </p>
       )}
       {editable && !blocked ? (
@@ -357,13 +370,17 @@ export function CompanyChat({
           </Link>
         </h2>
         {!data.blocked && (
-          <Button
-            variant="outline"
+          <RowActions
             disabled={pending}
-            onClick={() => void act('block')}
-          >
-            {uk.email.block}
-          </Button>
+            actions={[
+              {
+                kind: 'block',
+                label: uk.email.block,
+                danger: true,
+                onSelect: () => void act('block'),
+              },
+            ]}
+          />
         )}
         <select
           aria-label={uk.company.campaign}
@@ -399,6 +416,7 @@ export function CompanyChat({
             }}
           >
             <span className="block text-xs text-muted-foreground">
+              <ChannelIcon channel={row.kind} value={row.value} />{' '}
               {channelLabel(row.kind, row.value)}
             </span>
             {row.normalized || row.value}
@@ -408,7 +426,7 @@ export function CompanyChat({
       {!contacts.length && <p>{uk.outreach.emptyContacts}</p>}
       {blocked && (
         <p role="status" className="rounded-lg bg-err-bg p-3 text-err">
-          {uk.email.blocked}
+          <StatusBadge status="do_not_contact">{uk.email.blocked}</StatusBadge>
         </p>
       )}
       {href && (
@@ -476,7 +494,9 @@ export function CompanyChat({
         ) : null)}
       {task && (
         <p role="status" className="text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
           {task.reason_uk && ` · ${task.reason_uk}`}
         </p>
       )}

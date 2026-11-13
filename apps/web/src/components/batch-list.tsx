@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useTasks } from './task-overview';
 import { Button } from './ui/button';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
 function EnrichButton({ batchId }: { batchId: string }) {
   const [state, setState] = useState<'idle' | 'pending' | 'done' | 'error'>(
     'idle',
@@ -103,7 +104,9 @@ export function BatchList({ campaignId }: { campaignId: string }) {
               <tr key={b.id} className="border-t border-border">
                 <td className="p-2">#{b.number}</td>
                 <td className="p-2">
-                  {uk.tasks.status[b.status]}
+                  <StatusBadge status={b.status}>
+                    {uk.tasks.status[b.status]}
+                  </StatusBadge>
                   {b.reason_uk && <p>{b.reason_uk}</p>}
                   {b.fixture && <p>{uk.google.fixture}</p>}
                 </td>

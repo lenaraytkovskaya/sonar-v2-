@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
 import { Card } from './shared';
 import { Button } from './ui/button';
 type Progress = {
@@ -70,13 +72,16 @@ export function ProzorroSync() {
         >
           {uk.prozorro.start}
         </Button>
-        <Button
-          variant="outline"
-          disabled={!loaded || pending || data['prozorro.enabled'] !== true}
-          onClick={() => void act('pause')}
-        >
-          {uk.prozorro.pause}
-        </Button>
+        <RowActions
+          actions={[
+            {
+              kind: 'pause',
+              label: uk.prozorro.pause,
+              disabled: !loaded || pending || data['prozorro.enabled'] !== true,
+              onSelect: () => void act('pause'),
+            },
+          ]}
+        />
       </div>
       <div role="status" className="grid gap-4 sm:grid-cols-2">
         {(['tender', 'contract'] as const).map((feed) => {
@@ -84,7 +89,13 @@ export function ProzorroSync() {
           return (
             <section key={feed} className="space-y-1 text-sm">
               <h3 className="font-semibold">{uk.prozorro[feed]}</h3>
-              <p>
+              <StatusBadge
+                status={
+                  data['prozorro.enabled'] === false
+                    ? 'paused'
+                    : (progress?.status ?? 'queued')
+                }
+              >
                 {
                   uk.tasks.status[
                     data['prozorro.enabled'] === false
@@ -92,7 +103,7 @@ export function ProzorroSync() {
                       : (progress?.status ?? 'queued')
                   ]
                 }
-              </p>
+              </StatusBadge>
               <p>
                 {uk.prozorro.documents}:{' '}
                 {(progress?.documents ?? 0).toLocaleString('uk-UA')}

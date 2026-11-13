@@ -3,6 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { listTelegramAccounts } from '@sonar/db/telegram';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from './channel-icon';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { RevealValue, RevealToggle } from './ui/reveal-value';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -18,6 +22,7 @@ export function TelegramAccounts({
 }) {
   const router = useRouter(),
     busy = useRef(false);
+  const [secretVisible, setSecretVisible] = useState(false);
   const [limits, setLimits] = useState<Record<string, string>>({});
   const [form, setForm] = useState({ name: '', phone: '', dailyLimit: '' });
   const [login, setLogin] = useState<{
@@ -66,6 +71,7 @@ export function TelegramAccounts({
       setError(error instanceof Error ? error.message : uk.email.error);
     } finally {
       setSecret('');
+      setSecretVisible(false);
       busy.current = false;
       setPending(false);
     }
@@ -94,7 +100,7 @@ export function TelegramAccounts({
   return (
     <Card className="space-y-4 p-5">
       <h2 className="font-heading text-base font-bold">
-        {uk.telegram.accounts}
+        <ChannelIcon channel="telegram" /> {uk.telegram.accounts}
       </h2>
       {!configured && <p role="status">{uk.telegram.configuration}</p>}
       {!accounts.length && <p>{uk.telegram.empty}</p>}
@@ -105,16 +111,36 @@ export function TelegramAccounts({
         >
           <div className="min-w-0 space-y-1 break-words">
             <p className="font-medium">
-              {account.name} · {account.address}
+              {account.name} ·{' '}
+              <RevealValue
+                value={account.fullAddress}
+                masked={account.address}
+                copy
+              />
             </p>
             <p className="text-sm text-muted-foreground">
               {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
-              {account.status === 'disconnected'
-                ? uk.telegram.disconnected
-                : account.enabled
-                  ? uk.email.enabled
-                  : uk.email.disabled}
+              <StatusBadge
+                status={
+                  account.status === 'disconnected'
+                    ? 'disconnected'
+                    : account.enabled
+                      ? 'active'
+                      : 'disabled'
+                }
+              >
+                {account.status === 'disconnected'
+                  ? uk.telegram.disconnected
+                  : account.enabled
+                    ? uk.email.enabled
+                    : uk.email.disabled}
+              </StatusBadge>
             </p>
+            {account.status !== 'disconnected' && (
+              <p className="text-xs text-muted-foreground">
+                {uk.actions.session}: {uk.actions.savedSecret}
+              </p>
+            )}
             {account.nextSendAt && (
               <p className="text-sm text-muted-foreground">
                 {uk.email.next}:{' '}
@@ -156,27 +182,26 @@ export function TelegramAccounts({
             </form>
           )}
           {account.status !== 'disconnected' && (
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() =>
-                  void mutate('PATCH', {
-                    id: account.id,
-                    enabled: !account.enabled,
-                  })
-                }
-              >
-                {account.enabled ? uk.email.disable : uk.email.enable}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() => void mutate('DELETE', { id: account.id })}
-              >
-                {uk.telegram.disconnect}
-              </Button>
-            </div>
+            <RowActions
+              disabled={pending}
+              actions={[
+                {
+                  kind: account.enabled ? 'disable' : 'enable',
+                  label: account.enabled ? uk.email.disable : uk.email.enable,
+                  onSelect: () =>
+                    void mutate('PATCH', {
+                      id: account.id,
+                      enabled: !account.enabled,
+                    }),
+                },
+                {
+                  kind: 'disconnect',
+                  label: uk.telegram.disconnect,
+                  danger: true,
+                  onSelect: () => void mutate('DELETE', { id: account.id }),
+                },
+              ]}
+            />
           )}
         </section>
       ))}
@@ -214,7 +239,11 @@ export function TelegramAccounts({
             </label>
             <Input
               id="telegram-secret"
-              type={login.step === 'password' ? 'password' : 'text'}
+              type={
+                login.step === 'password' && !secretVisible
+                  ? 'password'
+                  : 'text'
+              }
               inputMode={login.step === 'code' ? 'numeric' : undefined}
               autoComplete="off"
               required
@@ -222,6 +251,12 @@ export function TelegramAccounts({
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
             />
+            {login.step === 'password' && secret && (
+              <RevealToggle
+                visible={secretVisible}
+                onToggle={() => setSecretVisible(!secretVisible)}
+              />
+            )}
             {login.step === 'code' && delivery && (
               <p role="status" className="mt-2 text-sm">
                 {delivery}
@@ -298,6 +333,7 @@ export function TelegramAccounts({
               onClick={() => {
                 void mutate('DELETE', { id: (login ?? qr)!.id });
                 setSecret('');
+                setSecretVisible(false);
               }}
             >
               {uk.forms.cancel}

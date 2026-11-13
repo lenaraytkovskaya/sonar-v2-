@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AnalysisResult } from '@sonar/core';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
 import { Button } from './ui/button';
 type Task = {
   id: string;
@@ -85,7 +86,9 @@ export function CompanyAnalysis({
       </Button>
       {task && (
         <p className="text-sm text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
           {task.reason_uk && ` · ${task.reason_uk}`}
         </p>
       )}

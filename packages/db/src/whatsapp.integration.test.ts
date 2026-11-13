@@ -69,6 +69,7 @@ it.skipIf(!enabled)(
         status: 'active',
       });
       expect(account.address).not.toContain('671234');
+      expect(account.fullAddress).toBe('+380671234567');
       expect(account).not.toHaveProperty('settings');
       await accounts.updateWhatsAppAccount(
         accountId,

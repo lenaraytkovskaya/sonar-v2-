@@ -1,7 +1,10 @@
+import { ChannelIcon } from '@/components/channel-icon';
+import { RevealValue } from '@/components/ui/reveal-value';
+import { StatusBadge } from '@/components/shared';
 import { channelLabel } from '@/lib/outreach-labels';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { ExternalLink, MapPin, Star } from 'lucide-react';
+import { ExternalLink, Star } from 'lucide-react';
 import { validId } from '@/lib/api-access';
 import { notFound } from 'next/navigation';
 import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
@@ -250,29 +253,14 @@ export default async function Page({
         className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
       >
         <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
+          <ChannelIcon channel={contact.kind} value={contact.value} />{' '}
           {contact.kind === 'social'
             ? channelLabel(contact.kind, contact.value)
             : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            {href ? (
-              <a
-                className="truncate text-accent"
-                href={href}
-                target={
-                  dialog || contact.kind === 'phone' || contact.kind === 'email'
-                    ? undefined
-                    : '_blank'
-                }
-                rel="noreferrer"
-                title={contact.normalized}
-              >
-                {contact.normalized}
-              </a>
-            ) : (
-              <span className="truncate">{contact.normalized}</span>
-            )}
+            <RevealValue value={contact.normalized} href={href} copy />
             <SourceLink url={contact.source_url} />
             {contact.kind === 'social' && (
               <Link
@@ -312,10 +300,10 @@ export default async function Page({
                 : label}
             </p>
           ))}
-          {contact.source === 'manual' && (
-            <DeleteManualContact companyId={id} contactId={contact.id} />
-          )}
         </div>
+        {contact.source === 'manual' && (
+          <DeleteManualContact companyId={id} contactId={contact.id} />
+        )}
       </li>
     );
   };
@@ -344,7 +332,13 @@ export default async function Page({
             {[c.city, c.primary_type].filter(Boolean).join(' · ')}
             {c.rating && (
               <span className="inline-flex items-center gap-1">
-                <Star aria-hidden="true" className="size-3.5 text-wait" />
+                <Star
+                  aria-hidden="true"
+                  className={cn(
+                    'size-3.5',
+                    scoreTone(Number(c.rating) * 20).text,
+                  )}
+                />
                 {c.rating} ({c.ratings_count ?? 0} {uk.company.reviews})
               </span>
             )}
@@ -415,18 +409,14 @@ export default async function Page({
                     </span>
                     {!contact ? (
                       <span className="text-muted-foreground">—</span>
-                    ) : href ? (
-                      <a
-                        className="truncate text-accent"
-                        href={href}
-                        target={dialog ? undefined : '_blank'}
-                        rel="noreferrer"
-                        title={contact.normalized}
-                      >
-                        {contact.normalized}
-                      </a>
                     ) : (
-                      <span className="truncate">{contact.normalized}</span>
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <ChannelIcon
+                          channel={contact.kind}
+                          value={contact.value}
+                        />
+                        <RevealValue value={contact.normalized} href={href} />
+                      </span>
                     )}
                   </li>
                 );
@@ -446,7 +436,7 @@ export default async function Page({
                 target="_blank"
                 rel="noreferrer"
               >
-                <MapPin aria-hidden="true" className="size-3.5" />
+                <ChannelIcon channel="map" />
                 {uk.company.maps}
               </a>
             )
@@ -592,11 +582,7 @@ export default async function Page({
                           <td
                             className={cn(
                               'px-2 py-1 tabular-nums',
-                              feature.value >= 0.7
-                                ? 'text-ok'
-                                : feature.value > 0
-                                  ? 'text-wait'
-                                  : 'text-err',
+                              scoreTone(feature.value * 100).text,
                             )}
                           >
                             {(feature.value * 100).toFixed(0)}%
@@ -684,10 +670,13 @@ export default async function Page({
           <Collapsible title={uk.prozorro.title} count={prozorro.count}>
             {prozorroContacts.map((contact) => (
               <p key={contact.id}>
+                <ChannelIcon channel={contact.kind} />{' '}
                 {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
-                <a className="text-accent" href={contactHref(contact)}>
-                  {contact.normalized}
-                </a>
+                <RevealValue
+                  value={contact.normalized}
+                  href={contactHref(contact)}
+                  copy
+                />
               </p>
             ))}
             {facts
@@ -777,9 +766,20 @@ export default async function Page({
                   {row.name}
                 </Link>{' '}
                 ·{' '}
-                {row.batch_id
-                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
-                  : uk.manual.withoutBatch}{' '}
+                {row.batch_id ? (
+                  <>
+                    {uk.company.batch} #{row.number} ·{' '}
+                    <StatusBadge status={row.status}>
+                      {
+                        uk.tasks.status[
+                          row.status as keyof typeof uk.tasks.status
+                        ]
+                      }
+                    </StatusBadge>
+                  </>
+                ) : (
+                  uk.manual.withoutBatch
+                )}{' '}
                 · <LocalTime value={row.added_at} />
               </p>
             ))}
@@ -787,7 +787,13 @@ export default async function Page({
               <div key={scan.id}>
                 <p>
                   {uk.scanner.title} ·{' '}
-                  {uk.tasks.status[scan.status as keyof typeof uk.tasks.status]}{' '}
+                  <StatusBadge status={scan.status}>
+                    {
+                      uk.tasks.status[
+                        scan.status as keyof typeof uk.tasks.status
+                      ]
+                    }
+                  </StatusBadge>{' '}
                   · <LocalTime value={scan.created_at} />
                 </p>
                 {scan.reason_uk && (

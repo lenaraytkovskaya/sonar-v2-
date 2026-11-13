@@ -45,6 +45,7 @@ const account = {
   id,
   name: 'Team',
   address: '+••••4567',
+  fullAddress: '+380500004567',
   dailyLimit: 10,
   sentToday: 0,
   enabled: false,
@@ -145,7 +146,9 @@ describe('WhatsApp account API', () => {
   it('polls status through a protected mutation and clears QR once connected', async () => {
     const response = await POST(request({ action: 'refresh', id }));
     expect(refresh).toHaveBeenCalledWith(id, 'actor');
-    expect((await response.json()).progress).toEqual({
+    const result = await response.json();
+    expect(result.accounts).toEqual([account]);
+    expect(result.progress).toEqual({
       id,
       status: 'active',
       reasonUk: null,

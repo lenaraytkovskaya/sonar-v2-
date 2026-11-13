@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
@@ -78,6 +79,11 @@ export function RegistryPhoneSync() {
             ]
           : uk.registry.sync}
       </Button>
+      {status && (
+        <StatusBadge status={status}>
+          {uk.tasks.status[status as keyof typeof uk.tasks.status]}
+        </StatusBadge>
+      )}
       {progress && (
         <div role="status" className="space-y-1 text-sm text-muted-foreground">
           <p>

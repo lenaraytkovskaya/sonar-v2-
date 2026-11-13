@@ -1,3 +1,4 @@
+import { socialTarget } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 export const contactLabel = (value: string) => {
   const telegramId = /^telegram:user:(\d+)(?::-?\d+)?$/.exec(value)?.[1];
@@ -8,28 +9,8 @@ export const contactLabel = (value: string) => {
       ? `${uk.inbound.whatsappUser} ${whatsappId}`
       : value;
 };
-export function socialNetwork(value: string) {
-  try {
-    const url = new URL(value);
-    if (
-      !['https:', 'http:'].includes(url.protocol) ||
-      url.username ||
-      url.password
-    )
-      return null;
-    const host = url.hostname.replace(/^(?:www|m|mbasic)\./, '');
-    const networks: Record<string, keyof typeof uk.social.networks> = {
-      'instagram.com': 'instagram',
-      'facebook.com': 'facebook',
-      'fb.com': 'facebook',
-      'fb.me': 'facebook',
-      'linkedin.com': 'linkedin',
-    };
-    return Object.hasOwn(networks, host) ? networks[host]! : null;
-  } catch {
-    return null;
-  }
-}
+export const socialNetwork = (value: string) =>
+  socialTarget(value)?.network ?? null;
 export const channelLabel = (channel: string, value = '') => {
   const network = channel === 'social' ? socialNetwork(value) : null;
   return network

@@ -70,6 +70,7 @@ export type CompanyRow = {
   phones: string[];
   emails: string[];
   channels: string[];
+  socials: string[];
   registry: boolean;
   platform: boolean;
   chain_key: string;
@@ -135,6 +136,7 @@ export async function listCompanies(
  array(select p.normalized from contacts p where p.company_id=c.id and p.kind='phone' order by p.rank desc,p.normalized ${groupChains ? 'limit 3' : ''}) as phones,
  array(select p.normalized from contacts p where p.company_id=c.id and p.kind='email' order by (split_part(p.normalized,'@',1) ~ '^(info|office|sto|service|servis|contact|kontakt|hello|mail|sales|zakaz|order|support|admin)') desc,p.rank desc,p.normalized limit 2) as emails,
  array(select distinct p.kind from contacts p where p.company_id=c.id) as channels,
+ array(select p.value from contacts p where p.company_id=c.id and p.kind='social' order by p.rank desc,p.value) as socials,
  exists(select 1 from company_facts r where r.company_id=c.id and r.kind='registry_entity') as registry,
  coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'name',a.name) order by a.name) from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=c.id),'[]') as campaigns
  from companies c ${sql}) t where t.chain_rank=1 order by ${order.replace(/c\./g, 't.')} limit $${values.length + 1} offset $${values.length + 2}`,

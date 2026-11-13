@@ -4,6 +4,10 @@ import { useRouter } from 'next/navigation';
 import type { listFormAccounts } from '@sonar/db/email';
 import type { listManualFormMessages } from '@sonar/db/forms';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from './channel-icon';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { RevealValue } from './ui/reveal-value';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -59,7 +63,7 @@ export function FormAccounts({
     <div className="space-y-5">
       <Card className="space-y-4 p-5">
         <h2 className="font-heading text-base font-bold">
-          {uk.forms.accounts}
+          <ChannelIcon channel="form" /> {uk.forms.accounts}
         </h2>
         {!accounts.length && <p>{uk.forms.empty}</p>}
         {accounts.map((account) => (
@@ -70,11 +74,16 @@ export function FormAccounts({
             <div className="min-w-0 space-y-1 break-words">
               <p className="font-medium">
                 {account.name} ·{' '}
-                {account.enabled ? uk.email.enabled : uk.email.disabled}
+                <StatusBadge status={account.enabled ? 'active' : 'disabled'}>
+                  {account.enabled ? uk.email.enabled : uk.email.disabled}
+                </StatusBadge>
               </p>
               <p>
-                {account.senderName} · {account.fromAddress} ·{' '}
-                {account.senderPhone}
+                {account.senderName} ·{' '}
+                <RevealValue value={account.fromAddress} copy /> ·{' '}
+                {account.senderPhone && (
+                  <RevealValue value={account.senderPhone} copy />
+                )}
               </p>
               <p className="text-sm text-muted-foreground">
                 {uk.email.owner}: {account.ownerName ?? '—'} · {uk.email.today}:{' '}
@@ -87,23 +96,26 @@ export function FormAccounts({
                   : '—'}
               </p>
             </div>
-            <Button
-              variant="outline"
+            <RowActions
               disabled={pending}
-              onClick={() => {
-                setForm({
-                  name: account.name,
-                  fromAddress: account.fromAddress,
-                  senderName: account.senderName,
-                  senderPhone: account.senderPhone,
-                  dailyLimit: String(account.dailyLimit),
-                });
-                setEditing(account.id);
-                setOpen(true);
-              }}
-            >
-              {uk.forms.edit}
-            </Button>
+              actions={[
+                {
+                  kind: 'edit',
+                  label: uk.forms.edit,
+                  onSelect: () => {
+                    setForm({
+                      name: account.name,
+                      fromAddress: account.fromAddress,
+                      senderName: account.senderName,
+                      senderPhone: account.senderPhone,
+                      dailyLimit: String(account.dailyLimit),
+                    });
+                    setEditing(account.id);
+                    setOpen(true);
+                  },
+                },
+              ]}
+            />
           </section>
         ))}
         <Button

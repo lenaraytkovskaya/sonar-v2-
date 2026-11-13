@@ -1,4 +1,4 @@
-import { Card, PageHeader } from '@/components/shared';
+import { Card, PageHeader, scoreTone } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { uk } from '@/i18n/uk';
 const money = (value: number | null) =>
@@ -53,7 +53,18 @@ export default async function Page({
         ].map(([label, value]) => (
           <Card className="p-4" key={String(label)}>
             <p className="text-sm text-muted-foreground">{label}</p>
-            <strong className="text-xl tabular-nums">
+            <strong
+              className={
+                'text-xl tabular-nums ' +
+                (label === t.remaining
+                  ? scoreTone(
+                      data.monthlyLimitUsd > 0
+                        ? (data.remainingUsd / data.monthlyLimitUsd) * 100
+                        : 0,
+                    ).text
+                  : '')
+              }
+            >
               {money(Number(value))}
             </strong>
           </Card>
@@ -125,7 +136,18 @@ export default async function Page({
                 <td className="p-2 tabular-nums">
                   {money(service.reservedUsd)}
                 </td>
-                <td className="p-2 tabular-nums">
+                <td
+                  className={
+                    'p-2 tabular-nums ' +
+                    scoreTone(
+                      service.remainingUsd === null || service.limitUsd === null
+                        ? null
+                        : service.limitUsd > 0
+                          ? (service.remainingUsd / service.limitUsd) * 100
+                          : 0,
+                    ).text
+                  }
+                >
                   {service.remainingUsd === null
                     ? t.unlimited
                     : money(service.remainingUsd)}

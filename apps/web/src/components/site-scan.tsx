@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import { ScanSummary } from './shared';
@@ -73,7 +74,9 @@ export function SiteScan({
       {task && (
         <>
           <p>
-            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+            <StatusBadge status={task.status}>
+              {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+            </StatusBadge>
             {task.reason_uk && ` · ${task.reason_uk}`}
           </p>
           {task.type === 'site.scan' && <ScanSummary result={task.result} />}

@@ -3,6 +3,10 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { EmailAccount } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from './channel-icon';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { RevealValue } from './ui/reveal-value';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -41,12 +45,8 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
       setPending(false);
     }
   };
-  const remove = async (id: string, name: string) => {
-    if (
-      busy.current ||
-      !window.confirm(uk.email.removeConfirm + ' ' + name + '?')
-    )
-      return;
+  const remove = async (id: string) => {
+    if (busy.current) return;
     busy.current = true;
     setPending(true);
     setError('');
@@ -89,12 +89,14 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
   };
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="font-heading text-base font-bold">{uk.email.accounts}</h2>
+      <h2 className="font-heading text-base font-bold">
+        <ChannelIcon channel="email" /> {uk.email.accounts}
+      </h2>
       {!accounts.length && <p>{uk.email.empty}</p>}
       {!!accounts.length && (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
+          <table className="block w-full text-left text-sm md:table">
+            <thead className="hidden md:table-header-group">
               <tr>
                 {[
                   uk.email.name,
@@ -110,51 +112,78 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block md:table-row-group">
               {accounts.map((account) => (
-                <tr key={account.id} className="border-t border-border">
-                  <td className="p-3">{account.name}</td>
-                  <td className="p-3">{account.fromAddress}</td>
-                  <td className="p-3">{account.ownerName ?? '—'}</td>
-                  <td className="p-3">
+                <tr
+                  key={account.id}
+                  className="grid grid-cols-2 gap-2 border-t border-border py-3 md:table-row md:py-0"
+                >
+                  <td
+                    data-label={uk.email.name}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
+                    {account.name}
+                  </td>
+                  <td
+                    data-label={uk.email.address}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
+                    <RevealValue value={account.fromAddress} copy />
+                  </td>
+                  <td
+                    data-label={uk.email.owner}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
+                    {account.ownerName ?? '—'}
+                  </td>
+                  <td
+                    data-label={uk.email.today}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
                     {account.sentToday} / {account.dailyLimit}
                   </td>
-                  <td className="p-3">
+                  <td
+                    data-label={uk.email.next}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
                     {account.nextSendAt
                       ? new Date(account.nextSendAt).toLocaleString('uk-UA')
                       : '—'}
                   </td>
-                  <td className="p-3">
+                  <td
+                    data-label={uk.company.status}
+                    className="min-w-0 p-1 before:block before:text-xs before:text-muted-foreground before:content-[attr(data-label)] md:p-3 md:before:hidden"
+                  >
                     <span className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={
-                          account.enabled
-                            ? 'rounded-full bg-ok-bg px-2 py-0.5 text-xs text-ok'
-                            : 'rounded-full bg-idle-bg px-2 py-0.5 text-xs text-idle'
-                        }
+                      <StatusBadge
+                        status={account.enabled ? 'active' : 'disabled'}
                       >
                         {account.enabled ? uk.email.enabled : uk.email.disabled}
-                      </span>
-                      <Button
-                        variant="outline"
-                        className="min-h-7 px-2 text-xs"
+                      </StatusBadge>
+                      <RowActions
                         disabled={pending}
-                        onClick={() =>
-                          void toggle(account.id, !account.enabled)
-                        }
-                      >
-                        {account.enabled ? uk.email.disable : uk.email.enable}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="min-h-7 px-2 text-xs"
-                        disabled={pending}
-                        onClick={() =>
-                          void remove(account.id, account.fromAddress)
-                        }
-                      >
-                        {uk.email.remove}
-                      </Button>
+                        actions={[
+                          {
+                            kind: account.enabled ? 'disable' : 'enable',
+                            label: account.enabled
+                              ? uk.email.disable
+                              : uk.email.enable,
+                            onSelect: () =>
+                              void toggle(account.id, !account.enabled),
+                          },
+                          {
+                            kind: 'delete',
+                            label: uk.email.remove,
+                            danger: true,
+                            confirm:
+                              uk.email.removeConfirm +
+                              ' ' +
+                              account.fromAddress +
+                              '?',
+                            onSelect: () => void remove(account.id),
+                          },
+                        ]}
+                      />
                     </span>
                   </td>
                 </tr>

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { socialTarget } from '@sonar/core';
 import type { getCompanySocial } from '@sonar/db/social';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
 
@@ -154,7 +156,10 @@ export function CompanySocial({
           key={`${row.network}:${row.sourceUrl}`}
           className="min-w-0 space-y-2 border-t border-border pt-3"
         >
-          <h3 className="font-semibold">{uk.social.networks[row.network]}</h3>
+          <h3 className="font-semibold">
+            <ChannelIcon channel={row.network} />{' '}
+            {uk.social.networks[row.network]}
+          </h3>
           <p>
             <PublicLink value={row.sourceUrl} />{' '}
             {contacts
@@ -181,9 +186,11 @@ export function CompanySocial({
           </p>
           {row.task && (
             <p className="text-xs text-muted-foreground">
-              {uk.tasks.status[
-                row.task.status as keyof typeof uk.tasks.status
-              ] ?? '—'}
+              <StatusBadge status={row.task.status}>
+                {uk.tasks.status[
+                  row.task.status as keyof typeof uk.tasks.status
+                ] ?? '—'}
+              </StatusBadge>
               {row.task.reasonUk && ` · ${row.task.reasonUk}`}
             </p>
           )}
