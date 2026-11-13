@@ -312,7 +312,7 @@ describe('Telegram transport', () => {
   });
   it('logs in by QR: shows a token, follows a DC migration, then returns the phone', async () => {
     let scanned = false;
-    const { adapter, client } = mockClient((r) => {
+    const { adapter, client, factory } = mockClient((r) => {
       if (r instanceof Api.auth.ExportLoginToken)
         return scanned
           ? new Api.auth.LoginTokenMigrateTo({
@@ -320,14 +320,25 @@ describe('Telegram transport', () => {
               token: Buffer.from('t2'),
             })
           : new Api.auth.LoginToken({ expires: 30, token: Buffer.from('t1') });
+      if (r instanceof Api.help.GetConfig)
+        return {
+          dcOptions: [
+            new Api.DcOption({
+              id: 4,
+              ipAddress: '10.0.0.4',
+              port: 443,
+              ipv6: true,
+            }),
+            new Api.DcOption({ id: 4, ipAddress: '10.0.0.4', port: 443 }),
+          ],
+        };
       if (r instanceof Api.auth.ImportLoginToken)
         return new Api.auth.LoginTokenSuccess({
           authorization: new Api.auth.Authorization({ user }),
         });
       return {};
     });
-    const switchDC = vi.fn(async () => true);
-    Object.assign(client, { switchDC });
+    Object.assign(client, { invoke: client.invoke });
     expect(await adapter.qrLogin('')).toEqual({
       session: 'saved-session',
       status: 'qr',
@@ -339,7 +350,11 @@ describe('Telegram transport', () => {
       status: 'done',
       phone: '+380501234567',
     });
-    expect(switchDC).toHaveBeenCalledWith(4);
+    expect(factory).toHaveBeenLastCalledWith('', expect.anything(), {
+      id: 4,
+      ip: '10.0.0.4',
+      port: 443,
+    });
   });
   it('never hangs: a stuck call times out and a stuck destroy is not awaited', async () => {
     const stuck = mockClient(() => new Promise(() => {}));
