@@ -7,6 +7,14 @@ export const socialFields = {
       [`social.${network}.daily_limit`, { min: 1, max: 100000, step: 1 }],
       [`social.${network}.min_gap_seconds`, { min: 0, max: 86400, step: 1 }],
       [`social.${network}.pause_minutes`, { min: 0, max: 10080, step: 1 }],
+      [
+        `social.${network}.session_fetch_gap_seconds`,
+        { min: 0, max: 86400, step: 1 },
+      ],
+      [
+        `social.${network}.session_fetch_daily_limit`,
+        { min: 1, max: 100000, step: 1 },
+      ],
     ]),
   ),
 } as Record<string, { min: number; max: number; step: number }>;

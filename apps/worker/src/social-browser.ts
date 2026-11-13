@@ -3,9 +3,14 @@ import {
   type Browser,
   type APIRequestContext,
   type BrowserContext,
+  type Page,
 } from 'playwright';
-import { type SocialTarget } from '@sonar/core';
-import { socialProxyList } from '@sonar/core/social-session';
+import { detectSocialBlock, type SocialTarget } from '@sonar/core';
+import {
+  socialProxyList,
+  type resolveSocialSession,
+} from '@sonar/core/social-session';
+import { assertSocialSession } from './social-send-browser.js';
 export type SocialProxy = {
   server: string;
   username?: string;
@@ -13,10 +18,16 @@ export type SocialProxy = {
 };
 export type SocialPage = {
   usedProxy?: boolean;
+  proxyUnits?: number;
   html: string;
   url: string;
   status: number;
-  error?: 'robots_denied' | 'robots_unavailable' | 'network_error';
+  documents?: { url: string; html: string }[];
+  error?:
+    | 'robots_denied'
+    | 'robots_unavailable'
+    | 'network_error'
+    | 'session_invalid';
 };
 let sharedBrowser: Promise<Browser> | undefined;
 export async function closeSocialBrowser() {
@@ -58,6 +69,7 @@ export async function fetchSocialPage(
   proxy: SocialProxy,
   timeoutMs: number,
   userAgent: string,
+  session?: ReturnType<typeof resolveSocialSession>,
 ): Promise<SocialPage> {
   const empty = (error: SocialPage['error']): SocialPage => ({
     html: '',
@@ -81,11 +93,51 @@ export async function fetchSocialPage(
         throw new Error('Не вдалося запустити браузер соцмереж.');
       }));
     context = await browser.newContext({
-      proxy,
+      proxy: session?.proxy ?? proxy,
       userAgent,
       serviceWorkers: 'block',
       acceptDownloads: false,
     });
+    if (session) await context.addCookies(session.cookies);
+    if (session) {
+      // All resource traffic uses the pinned context proxy. Only the platform and its
+      // static CDNs are allowed; external links and local-network redirects stay blocked.
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url());
+        const hosts = [
+          `${target.network}.com`,
+          ...{
+            instagram: ['cdninstagram.com', 'fbcdn.net'],
+            facebook: ['fbcdn.net', 'fbsbx.com'],
+            linkedin: ['licdn.com'],
+          }[target.network],
+        ];
+        const allowed =
+          url.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          !url.port &&
+          hosts.some(
+            (host) =>
+              url.hostname === host || url.hostname.endsWith(`.${host}`),
+          );
+        if (
+          !allowed ||
+          (route.request().isNavigationRequest() &&
+            url.origin !== new URL(target.canonicalUrl).origin)
+        )
+          return route.abort();
+        usedProxy = true;
+        return route.continue();
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(timeoutMs);
+      await page.routeWebSocket('**/*', (socket) => socket.close());
+      return {
+        ...(await renderSocialDocuments(page, target, timeoutMs)),
+        usedProxy,
+      };
+    }
     usedProxy = true;
     const result = await readSocialDocuments(
       context.request,
@@ -108,6 +160,124 @@ export async function fetchSocialPage(
   } finally {
     await context?.close().catch(() => {});
   }
+}
+
+export function socialDocumentUrls(
+  target: SocialTarget,
+  hrefs: string[],
+): string[] {
+  const base = new URL(target.canonicalUrl);
+  if (target.network === 'instagram') {
+    const urls: string[] = [];
+    for (const href of hrefs) {
+      try {
+        const url = new URL(href, base);
+        if (
+          url.origin !== base.origin ||
+          !/^\/(?:p|reel)\/[A-Za-z0-9_-]+\/$/.test(url.pathname)
+        )
+          continue;
+        url.search = '';
+        url.hash = '';
+        if (!urls.includes(url.href)) urls.push(url.href);
+      } catch {
+        /* Ignore malformed profile links. */
+      }
+      if (urls.length === 4) break;
+    }
+    return urls;
+  }
+  if (target.network === 'facebook') {
+    if (base.pathname === '/profile.php') {
+      base.searchParams.set('sk', 'about_contact_and_basic_info');
+      return [base.href];
+    }
+    return [
+      new URL(
+        `${base.pathname.replace(/\/$/, '')}/about_contact_and_basic_info/`,
+        base,
+      ).href,
+    ];
+  }
+  return ['about/', 'posts/'].map(
+    (path) =>
+      new URL(path, base.href.endsWith('/') ? base : `${base.href}/`).href,
+  );
+}
+export async function renderSocialDocuments(
+  page: Page,
+  target: SocialTarget,
+  timeoutMs: number,
+): Promise<SocialPage> {
+  let proxyUnits = 0;
+  const read = async (url: string) => {
+    proxyUnits++;
+    try {
+      const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+      });
+      // Give scripts a bounded opportunity to render profile sections and the post grid.
+      await page
+        .waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, 3000) })
+        .catch(() => {});
+      let html = await page.content();
+      const status = response?.status() ?? 0;
+      if (!detectSocialBlock(html, page.url(), status, target)) {
+        await page.evaluate(() => window.scrollBy(0, 650));
+        await page
+          .waitForLoadState('networkidle', {
+            timeout: Math.min(timeoutMs, 1500),
+          })
+          .catch(() => {});
+        html = await page.content();
+      }
+      return { html, url: page.url(), status };
+    } catch {
+      return { html: '', url, status: 0, error: 'network_error' as const };
+    }
+  };
+  const initial = await read(target.canonicalUrl);
+  if (
+    initial.error ||
+    detectSocialBlock(initial.html, initial.url, initial.status, target) ||
+    initial.status >= 400
+  )
+    return { ...initial, proxyUnits };
+  try {
+    await assertSocialSession(page, target.network);
+  } catch {
+    return { ...initial, proxyUnits, error: 'session_invalid' };
+  }
+  // Instagram profile-grid links identify the profile's own posts. The parser also
+  // checks post ownership before using their dates; pinned links are not date ordering.
+  const hrefs =
+    target.network === 'instagram'
+      ? await page
+          .locator('main a[href*="/p/"], main a[href*="/reel/"]')
+          .evaluateAll((links) =>
+            links
+              .filter((link) => !link.closest('aside,nav'))
+              .map((link) => link.getAttribute('href') ?? ''),
+          )
+      : [];
+  const documents: { url: string; html: string }[] = [];
+  for (const url of socialDocumentUrls(target, hrefs)) {
+    const document = await read(url);
+    if (
+      document.error ||
+      detectSocialBlock(document.html, document.url, document.status, target)
+    )
+      return { ...document, documents, proxyUnits };
+    try {
+      await assertSocialSession(page, target.network);
+    } catch {
+      return { ...document, documents, proxyUnits, error: 'session_invalid' };
+    }
+    if (document.status < 400 && document.status > 0)
+      documents.push({ url: document.url, html: document.html });
+  }
+  return { ...initial, documents, proxyUnits };
 }
 export async function readSocialDocuments(
   request: Pick<APIRequestContext, 'get'>,

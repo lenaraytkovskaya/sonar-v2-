@@ -43,16 +43,28 @@ export const uk = {
     settings: {
       'social.cost_per_request_usd': 'Вартість запиту проксі, USD',
       'social.page_timeout_ms': 'Тайм-аут сторінки, мс',
+      'social.facebook.session_fetch_gap_seconds':
+        'Facebook: інтервал збору через акаунт, секунд',
+      'social.facebook.session_fetch_daily_limit':
+        'Facebook: зборів через акаунт на день',
       'social.facebook.daily_limit': 'Facebook: запитів на день',
       'social.facebook.min_gap_seconds':
         'Facebook: інтервал між запитами, секунд',
       'social.facebook.pause_minutes':
         'Facebook: пауза після обмеження, хвилин',
+      'social.instagram.session_fetch_gap_seconds':
+        'Instagram: інтервал збору через акаунт, секунд',
+      'social.instagram.session_fetch_daily_limit':
+        'Instagram: зборів через акаунт на день',
       'social.instagram.daily_limit': 'Instagram: запитів на день',
       'social.instagram.min_gap_seconds':
         'Instagram: інтервал між запитами, секунд',
       'social.instagram.pause_minutes':
         'Instagram: пауза після обмеження, хвилин',
+      'social.linkedin.session_fetch_gap_seconds':
+        'LinkedIn: інтервал збору через акаунт, секунд',
+      'social.linkedin.session_fetch_daily_limit':
+        'LinkedIn: зборів через акаунт на день',
       'social.linkedin.daily_limit': 'LinkedIn: запитів на день',
       'social.linkedin.min_gap_seconds':
         'LinkedIn: інтервал між запитами, секунд',
@@ -61,6 +73,7 @@ export const uk = {
     },
     posts: 'Останні публікації',
     post: 'Публікація',
+    methods: { session: 'Через робочий акаунт', anonymous: 'Анонімно' },
     networks: {
       facebook: 'Facebook',
       instagram: 'Instagram',
@@ -69,6 +82,10 @@ export const uk = {
     fields: {
       name: 'Назва',
       category: 'Категорія',
+      address: 'Адреса',
+      rating: 'Рейтинг / рекомендації',
+      reviewsCount: 'Відгуки',
+      method: 'Спосіб отримання',
       description: 'Опис',
       website: 'Сайт',
       phones: 'Телефони',
@@ -490,6 +507,7 @@ export const uk = {
       form: 'Форма',
       social: 'Соцмережа',
       website: 'Сайт',
+      address: 'Адреса',
     },
   },
   scoring: {

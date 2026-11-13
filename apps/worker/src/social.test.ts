@@ -1,14 +1,33 @@
-import { afterEach, expect, it, vi } from 'vitest';
-const { connect, budgeted, query, release } = vi.hoisted(() => ({
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+const {
+  connect,
+  budgeted,
+  query,
+  release,
+  acquireSession,
+  reserveSession,
+  pauseSession,
+  releaseSession,
+} = vi.hoisted(() => ({
   connect: vi.fn(),
   budgeted: vi.fn(),
   query: vi.fn(),
   release: vi.fn(),
+  acquireSession: vi.fn(),
+  reserveSession: vi.fn(),
+  pauseSession: vi.fn(),
+  releaseSession: vi.fn(),
 }));
 vi.mock('@sonar/db', () => ({ sonarPool: { connect } }));
 vi.mock('@sonar/db/tasks', () => ({ boss: {}, runTask: vi.fn() }));
 vi.mock('@sonar/db/social', () => ({ saveSocialProfile: vi.fn() }));
 vi.mock('@sonar/db/scoring', () => ({ enqueueCompanyScores: vi.fn() }));
+vi.mock('@sonar/db/social-accounts', () => ({
+  acquireSocialFetchSession: acquireSession,
+  reserveSocialFetchSession: reserveSession,
+  pauseSocialFetchSession: pauseSession,
+  releaseSocialFetchSession: releaseSession,
+}));
 vi.mock('@sonar/db/budget', () => ({
   runBudgetedRequest: budgeted,
   BillingUncertain: class extends Error {
@@ -29,9 +48,205 @@ const payload = {
     canonicalUrl: 'https://www.instagram.com/sonar/',
   },
 };
+beforeEach(() => acquireSession.mockResolvedValue(null));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+  acquireSession.mockResolvedValue(null);
+});
+
+function prepareSocialFetch(overrides: Record<string, unknown> = {}) {
+  vi.stubEnv('SOCIAL_PROXY_URLS', 'http://anonymous.example:8000');
+  connect.mockResolvedValue({ query, release });
+  const settings = {
+    'social.cost_per_request_usd': 0.001,
+    'social.page_timeout_ms': 30000,
+    'social.instagram.min_gap_seconds': 60,
+    'social.instagram.daily_limit': 100,
+    'social.instagram.pause_minutes': 60,
+    'social.instagram.session_fetch_daily_limit': 60,
+    'social.instagram.session_fetch_gap_seconds': 90,
+    ...overrides,
+  };
+  query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('pg_try_advisory')
+      ? [{ locked: true }]
+      : sql.includes('select key,value')
+        ? Object.entries(settings).map(([key, value]) => ({ key, value }))
+        : sql.includes('select idempotency_key,payload')
+          ? [{ idempotency_key: 'social.fetch:instagram:sonar:2026-11-13' }]
+          : sql.includes('insert into tasks')
+            ? [{ id: 'request' }]
+            : sql.includes('coalesce(c.country_code')
+              ? [{ country_code: 'UA' }]
+              : sql.includes('select payload')
+                ? [{ payload: {} }]
+                : [],
+  }));
+  budgeted.mockImplementation(async (_service, _estimate, _id, run) => run());
+}
+const authenticated = {
+  account: { id: 'account', channel: 'instagram', settings: {} },
+  session: {
+    network: 'instagram',
+    cookies: [],
+    proxy: { server: 'http://pinned.example:9000' },
+  },
+};
+const publicPage = {
+  url: payload.target.canonicalUrl,
+  status: 200,
+  usedProxy: true,
+  html: '<meta property="og:url" content="https://www.instagram.com/sonar/"><script type="application/json">{"username":"sonar","full_name":"Sonar","follower_count":12}</script>',
+};
+it('reads through the selected account pinned proxy and records an independent session reservation after budget approval', async () => {
+  prepareSocialFetch();
+  acquireSession.mockResolvedValue(authenticated);
+  const fetch = vi.fn().mockResolvedValue(publicPage);
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'done',
+    result: { profile: { method: 'session' } },
+  });
+  expect(fetch).toHaveBeenCalledWith(
+    payload.target,
+    authenticated.session.proxy,
+    30000,
+    'SonarBot/1.0',
+    authenticated.session,
+  );
+  expect(reserveSession).toHaveBeenCalledWith(
+    expect.anything(),
+    'account',
+    'request',
+    90,
+  );
+  expect(releaseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+  expect(budgeted.mock.calls[0]?.[1]).toBe(0.006);
+});
+it.each(['accounts/login', 'checkpoint'])(
+  'pauses precisely the invalid session after %s and falls back anonymously under the same paid request',
+  async (path) => {
+    prepareSocialFetch();
+    acquireSession.mockResolvedValue(authenticated);
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        html: '',
+        url: `https://www.instagram.com/${path}/`,
+        status: 200,
+        usedProxy: true,
+      })
+      .mockResolvedValueOnce(publicPage);
+    const outcome = await runSocialFetch(payload, 'task', fetch);
+    expect(outcome).toMatchObject({
+      status: 'done',
+      result: { profile: { method: 'anonymous' }, costUsd: 0.002 },
+    });
+    expect(pauseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+    expect(fetch.mock.calls[1]).toHaveLength(4);
+    expect(fetch.mock.calls[1]?.[1]).toEqual({
+      server: 'http://anonymous.example:8000',
+    });
+    expect(budgeted).toHaveBeenCalledOnce();
+    expect(reserveSession).toHaveBeenCalledOnce();
+  },
+);
+it.each([
+  { status: 429, html: '' },
+  { status: 200, html: 'Please wait a few minutes before you try again' },
+])(
+  'preserves a session rate limit without anonymous fallback or invalidating cookies (%s)',
+  async (page) => {
+    prepareSocialFetch();
+    acquireSession.mockResolvedValue(authenticated);
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...page,
+        url: payload.target.canonicalUrl,
+        usedProxy: true,
+      })
+      .mockResolvedValueOnce(publicPage);
+    expect(await runSocialFetch(payload, 'task', fetch)).toEqual({
+      status: 'paused',
+      reasonCode: 'social_rate_limit',
+      reasonUk:
+        'Соцмережа обмежила запити (429). Повторіть вручну після паузи.',
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[1]).toEqual(authenticated.session.proxy);
+    expect(pauseSession).not.toHaveBeenCalled();
+    const pauseUpdate = query.mock.calls.find(([sql]) =>
+      sql.includes('value=value||'),
+    );
+    const pause = JSON.parse(pauseUpdate?.[1]?.[1]);
+    expect(pause).toMatchObject({ blocked: true, blockCode: 'rate_limit' });
+    expect(Date.parse(pause.pauseUntil)).toBeGreaterThan(Date.now());
+    expect(pause.reason).not.toContain('cookies');
+    expect(reserveSession).toHaveBeenCalledOnce();
+    expect(releaseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+  },
+);
+it('defers the account reading gap without billing or reserving and uses anonymous reads when no account is usable', async () => {
+  prepareSocialFetch();
+  const runAt = new Date(Date.now() + 90000);
+  acquireSession.mockResolvedValueOnce({ runAt });
+  const fetch = vi.fn().mockResolvedValue(publicPage);
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'deferred',
+    runAt,
+    reasonCode: 'social_session_gap',
+  });
+  expect(budgeted).not.toHaveBeenCalled();
+  expect(reserveSession).not.toHaveBeenCalled();
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'done',
+    result: { profile: { method: 'anonymous' } },
+  });
+  expect(fetch.mock.calls[0]).toHaveLength(5);
+  expect(fetch.mock.calls[0]?.[4]).toBeUndefined();
+});
+it('does not reserve a session or open either browser mode when budget is exhausted', async () => {
+  prepareSocialFetch();
+  acquireSession.mockResolvedValue(authenticated);
+  budgeted.mockRejectedValue(new BudgetExceeded('monthly'));
+  const fetch = vi.fn();
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'budget_exceeded',
+  });
+  expect(reserveSession).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(releaseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+});
+it('lets a newly active account recover an anonymous login wall while preserving shared protection pauses', async () => {
+  prepareSocialFetch({
+    'social.instagram.runtime': {
+      blocked: true,
+      blockCode: 'login_wall',
+      pauseUntil: new Date(Date.now() + 3600000).toISOString(),
+    },
+  });
+  acquireSession.mockResolvedValue(authenticated);
+  const fetch = vi.fn().mockResolvedValue(publicPage);
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'done',
+    result: { profile: { method: 'session' } },
+  });
+  prepareSocialFetch({
+    'social.instagram.runtime': {
+      blocked: true,
+      blockCode: 'captcha',
+      reason: 'captcha',
+      pauseUntil: new Date(Date.now() + 3600000).toISOString(),
+    },
+  });
+  fetch.mockClear();
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'social_network_paused',
+  });
+  expect(fetch).not.toHaveBeenCalled();
 });
 it('pauses without a proxy before connecting to the database or starting a browser', async () => {
   vi.stubEnv('SOCIAL_PROXY_URLS', '');
@@ -108,6 +323,8 @@ it('checks proxy budget before invoking paid traffic', async () => {
     'social.instagram.min_gap_seconds': 60,
     'social.instagram.daily_limit': 100,
     'social.instagram.pause_minutes': 60,
+    'social.instagram.session_fetch_daily_limit': 60,
+    'social.instagram.session_fetch_gap_seconds': 90,
   };
   query.mockImplementation(async (sql: string) => ({
     rows: sql.includes('pg_try_advisory')
@@ -168,6 +385,8 @@ it('records zero cost when Chromium cannot start before any proxy traffic', asyn
     'social.instagram.min_gap_seconds': 60,
     'social.instagram.daily_limit': 100,
     'social.instagram.pause_minutes': 60,
+    'social.instagram.session_fetch_daily_limit': 60,
+    'social.instagram.session_fetch_gap_seconds': 90,
   };
   query.mockImplementation(async (sql: string) => ({
     rows: sql.includes('pg_try_advisory')

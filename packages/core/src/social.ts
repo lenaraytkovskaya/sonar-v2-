@@ -13,6 +13,10 @@ export interface SocialTarget {
   canonicalUrl: string;
 }
 export interface SocialProfile {
+  method?: 'session' | 'anonymous';
+  address?: string | null;
+  rating?: string | null;
+  reviewsCount?: number | null;
   name: string | null;
   category: string | null;
   description: string | null;
@@ -28,6 +32,10 @@ export interface SocialProfile {
   foundedYear: number | null;
   lastPostAt: string | null;
   posts: { date: string; url: string }[];
+}
+export interface SocialDocument {
+  url: string;
+  html: string;
 }
 
 type RecordValue = Record<string, unknown>;
@@ -167,16 +175,22 @@ function count(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const match = value
     .trim()
-    .match(/^(\d[\d\s,'’]*(?:\.\d+)?)\s*(k|m|b|тис\.?|млн\.?)?$/iu);
+    .match(/^(\d[\d\s,.'’]*)\s*(k|m|b|тис\.?|тыс\.?|млн\.?)?$/iu);
   if (!match) return null;
-  const multiplier = /^(?:k|тис)/iu.test(match[2] ?? '')
+  const multiplier = /^(?:k|тис|тыс)/iu.test(match[2] ?? '')
     ? 1000
     : /^(?:m|млн)/iu.test(match[2] ?? '')
       ? 1e6
       : /^b$/i.test(match[2] ?? '')
         ? 1e9
         : 1;
-  const result = Number(match[1]!.replace(/[\s,'’]/g, '')) * multiplier;
+  const numeric = match[1]!.replace(/[\s'’]/g, '');
+  const result =
+    Number(
+      multiplier === 1
+        ? numeric.replace(/[,.]/g, '')
+        : numeric.replace(',', '.'),
+    ) * multiplier;
   return Number.isSafeInteger(result) && result >= 0 ? result : null;
 }
 function machineDate(value: unknown): string | null {
@@ -293,6 +307,7 @@ export function parseSocialProfile(
   html: string,
   target: SocialTarget,
   country: CountryCode,
+  documents: SocialDocument[] = [],
 ): SocialProfile {
   const $ = load(html);
   const all = records(html);
@@ -300,6 +315,9 @@ export function parseSocialProfile(
   const ids = new Set(matched.map((node) => node.id).filter(Boolean));
   const associated = all.filter((node) => ids.has(node.id));
   const result: SocialProfile = {
+    address: null,
+    rating: null,
+    reviewsCount: null,
     name: null,
     category: null,
     description: null,
@@ -346,6 +364,13 @@ export function parseSocialProfile(
     if (hostTarget !== `${target.network}.com`) return;
     const path = new URL(url).pathname;
     if (
+      /\/(?:comments?|c)\//i.test(path) ||
+      [...new URL(url).searchParams.keys()].some((key) =>
+        /comment|reply/i.test(key),
+      )
+    )
+      return;
+    if (
       !/(?:\/posts\/|\/p\/|\/reel\/|\/videos\/|\/feed\/update\/|\/pulse\/|\/activity-|story\.php|permalink\.php)/.test(
         path,
       )
@@ -361,12 +386,79 @@ export function parseSocialProfile(
       safe = webUrl(url.searchParams.get('u'));
     return safe && !socialTarget(safe) ? safe : null;
   };
+  const ownerMatches = (value: unknown) => {
+    const owner = object(value);
+    return (
+      sameTarget(owner.url ?? owner['@id'], target) ||
+      (owner.id != null &&
+        [...ids].some((id) => String(id) === String(owner.id))) ||
+      (target.network === 'instagram' &&
+        typeof owner.username === 'string' &&
+        owner.username.toLowerCase() === target.handle)
+    );
+  };
+  const owners = (node: RecordValue) =>
+    [
+      ...(Array.isArray(node.actors) ? node.actors : []),
+      node.owner,
+      node.user,
+      node.author,
+      object(node.feedback).owning_profile,
+    ].filter((value) => Object.keys(object(value)).length);
+  for (const node of all) {
+    if (/comment/i.test(String(node.__typename ?? node['@type']))) continue;
+    const sections = object(node.comet_sections);
+    const contentStory = object(object(sections.content).story);
+    const actors = [...owners(node), ...owners(contentStory)];
+    if (
+      !actors.length ||
+      !actors.every(ownerMatches) ||
+      node.sponsored_data ||
+      node.is_ad === true
+    )
+      continue;
+    const code = node.shortcode ?? node.code;
+    const postUrl =
+      node.permalink_url ??
+      node.url ??
+      node['@id'] ??
+      contentStory.url ??
+      (target.network === 'facebook' &&
+      typeof node.post_id === 'string' &&
+      /^[\w-]+$/.test(node.post_id)
+        ? `${target.canonicalUrl.includes('profile.php') ? `https://www.facebook.com/${target.handle}/` : target.canonicalUrl}posts/${node.post_id}`
+        : null);
+    addPost(
+      node.creation_time ??
+        node.taken_at_timestamp ??
+        node.taken_at ??
+        node.datePublished ??
+        node.publishedAt ??
+        node.createdAt,
+      postUrl ??
+        (target.network === 'instagram' &&
+        typeof code === 'string' &&
+        /^[\w-]+$/.test(code)
+          ? `https://www.instagram.com/p/${code}/`
+          : null),
+    );
+    const metadata = object(
+      object(object(sections.context_layout).story).comet_sections,
+    ).metadata;
+    for (const item of Array.isArray(metadata) ? metadata : []) {
+      const story = object(object(item).story);
+      if (owners(story).some((owner) => !ownerMatches(owner))) continue;
+      addPost(story.creation_time, story.url ?? story.permalink_url ?? postUrl);
+    }
+  }
   for (const node of [...new Set([...matched, ...associated])]) {
     result.name ??= first(node.full_name, node.name, node.localizedName);
     result.category ??= first(
       node.category_name,
       node.category,
       object(node.category).name,
+      object(Array.isArray(node.category_list) ? node.category_list[0] : null)
+        .name,
     );
     result.description ??= first(
       node.biography,
@@ -375,7 +467,12 @@ export function parseSocialProfile(
       object(node.summary).text,
     );
     result.website ??=
-      externalUrl(node.external_url ?? node.website ?? node.websiteUrl) ??
+      externalUrl(
+        node.external_url ??
+          node.website ??
+          node.websiteUrl ??
+          object(Array.isArray(node.bio_links) ? node.bio_links[0] : null).url,
+      ) ??
       (typeof node.url === 'string' && !socialTarget(node.url)
         ? webUrl(node.url)
         : null);
@@ -400,7 +497,43 @@ export function parseSocialProfile(
       node.employeeCountRange,
       object(node.numberOfEmployees).value,
     );
-    const address = object(node.address ?? node.headquarters);
+    let address = object(
+      node.address ?? node.headquarters ?? node.business_address,
+    );
+    if (typeof node.business_address_json === 'string') {
+      try {
+        address = object(JSON.parse(node.business_address_json));
+      } catch {
+        /* Invalid address is not evidence. */
+      }
+    }
+    result.address ??= first(
+      typeof node.address === 'string' ? node.address : null,
+      [
+        address.streetAddress ?? address.street_address,
+        address.addressLocality ?? address.city_name,
+        address.postalCode ?? address.zip,
+        address.addressCountry,
+      ]
+        .filter((value) => typeof value === 'string')
+        .join(', '),
+    );
+    const rating = object(node.aggregateRating);
+    const ratingValue =
+      rating.ratingValue ??
+      node.rating_value ??
+      node.overall_star_rating ??
+      node.rating;
+    result.rating ??=
+      typeof ratingValue === 'number' && Number.isFinite(ratingValue)
+        ? String(ratingValue)
+        : text(ratingValue);
+    result.reviewsCount ??= count(
+      rating.reviewCount ??
+        node.reviews_count ??
+        node.review_count ??
+        node.rating_count,
+    );
     result.headquarters ??= first(
       typeof node.headquarters === 'string' ? node.headquarters : null,
       [address.addressLocality, address.addressRegion, address.addressCountry]
@@ -436,12 +569,14 @@ export function parseSocialProfile(
       : []) {
       const value = object(object(context).text).text;
       if (typeof value === 'string') {
-        const match = value.match(/^(.+?)\s+(followers|following)$/i);
+        const match = value.match(
+          /^(.+?)\s+(followers|following|підписників|підписники|читачів|подписчиков|подписчики|obserwujących|abonnés|seguidores|підписки|подписки)$/iu,
+        );
         if (match)
           result[
-            match[2]!.toLowerCase() === 'followers'
-              ? 'followers'
-              : 'followingCount'
+            /^(?:following|підписки|подписки)$/iu.test(match[2]!)
+              ? 'followingCount'
+              : 'followers'
           ] ??= count(match[1]);
       }
     }
@@ -464,9 +599,20 @@ export function parseSocialProfile(
               object(tile.timeline_context_item).renderer,
             ).context_item;
             const title = text(object(object(context).title).text);
-            if (title?.startsWith('Page · '))
-              result.category ??= title.slice(7);
+            if (title?.match(/^(?:Page|Сторінка|Страница)\s*·\s*/iu))
+              result.category ??= title.replace(
+                /^(?:Page|Сторінка|Страница)\s*·\s*/iu,
+                '',
+              );
             result.website ??= externalUrl(object(context).url);
+            const reviews = title?.match(
+              /(\d[\d\s,.]*\s*(?:тис\.?|тыс\.?|k)?)\s*(?:reviews|відгук\p{L}*|отзыв\p{L}*)/iu,
+            );
+            result.reviewsCount ??= count(reviews?.[1]);
+            const stars = title?.match(
+              /(?:rating|оцінка|рейтинг)\s*[:·]?\s*(\d(?:[.,]\d+)?)/iu,
+            );
+            result.rating ??= stars?.[1]?.replace(',', '.') ?? null;
             addEmail(title);
             if (title)
               findPhoneNumbersInText(title, country).forEach((match) =>
@@ -525,7 +671,14 @@ export function parseSocialProfile(
     sameTarget(metaUrl, target) ||
     (target.network === 'instagram' &&
       metaTitle.toLowerCase().includes(`(@${target.handle})`));
-  if (metaMatches || matched.length) {
+  const headerMatches = $(
+    'main header a[href],main h1 a[href],[role="main"] header a[href],[role="main"] h1 a[href]',
+  )
+    .toArray()
+    .some((element) =>
+      sameTarget(webUrl($(element).attr('href'), target.canonicalUrl), target),
+    );
+  if (metaMatches || (!metaUrl && (matched.length || headerMatches))) {
     const description =
       $('meta[property="og:description"]').attr('content') ??
       $('meta[name="description"]').attr('content');
@@ -533,52 +686,199 @@ export function parseSocialProfile(
       metaTitle
         .replace(/\s*\(@[\w.]+\).*$/, '')
         .replace(/\s*[|·–-]\s*(?:Facebook|Instagram|LinkedIn).*$/i, ''),
-      $('main h1').first().text(),
+      $('main h1,[role="main"] h1').first().text(),
     );
     result.description ??= first(description);
     for (const [field, label] of [
-      ['followers', 'followers'],
-      ['followingCount', 'following'],
-      ['postsCount', 'posts'],
+      [
+        'followers',
+        'followers|підписників|підписники|читачів|подписчиков|подписчики|obserwujących|abonnés|seguidores',
+      ],
+      ['followingCount', 'following|підписки|подписки'],
+      ['postsCount', 'posts|дописів|публікацій|публикаций'],
     ] as const) {
       const value = description?.match(
-        new RegExp(`([\\d][\\d\\s,.'’]*[kmb]?)\\s+${label}`, 'i'),
+        new RegExp(
+          `([\\d][\\d\\s,.'’]*(?:k|m|b|тис\\.?|тыс\\.?|млн\\.?)?)\\s+(?:${label})`,
+          'iu',
+        ),
       )?.[1];
       result[field] ??= count(value);
     }
-    const area = $('main').length
-      ? $('main').first().clone()
+    const area = $('main,[role="main"]').length
+      ? $('main,[role="main"]').first().clone()
       : $('body').clone();
     area
       .find(
-        'script,style,noscript,template,footer,[role="dialog"],[hidden],[aria-hidden="true"]',
+        'script,style,noscript,template,footer,nav,aside,form,[role="dialog"],[role="navigation"],[role="menu"],[hidden],[aria-hidden="true"]',
       )
       .remove();
     if (target.network === 'linkedin')
       area.find('dt').each((_, element) => {
         const label = $(element).text().trim().toLowerCase();
         const value = text($(element).next('dd').text());
-        if (label === 'industry') result.industry ??= value;
-        if (label === 'company size') result.companySize ??= value;
-        if (label === 'headquarters') result.headquarters ??= value;
-        if (label === 'website')
+        if (/^(?:industry|галузь|отрасль)$/u.test(label))
+          result.industry ??= value;
+        if (/^(?:company size|розмір компанії|размер компании)$/u.test(label))
+          result.companySize ??= value;
+        if (/^(?:headquarters|штаб-квартира)$/u.test(label))
+          result.headquarters ??= value;
+        if (/^(?:website|вебсайт|веб-сайт|сайт)$/u.test(label))
           result.website ??= externalUrl(
             $(element).next('dd').find('a[href]').attr('href'),
           );
-        if (label === 'founded' && /^\d{4}$/.test(value ?? ''))
+        if (
+          /^(?:founded|засновано|основана)$/u.test(label) &&
+          /^\d{4}$/.test(value ?? '') &&
+          Number(value) <= new Date().getUTCFullYear()
+        )
           result.foundedYear ??= Number(value);
       });
-    area
+    const details = area.clone();
+    details
+      .find('article,[role="article"],[data-post],[data-recommendations]')
+      .remove();
+    const header = details.find('header').first();
+    const lines = (scope: typeof details) => {
+      const copy = scope.clone();
+      copy.find('div,p,li,section,h1,h2,h3,span,br').append('\n');
+      return copy
+        .text()
+        .split('\n')
+        .map((line) => line.replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+    };
+    const profileLines = lines(details);
+    if (target.network === 'facebook') {
+      result.category ??=
+        profileLines
+          .map(
+            (line) =>
+              line.match(/^(?:Page|Сторінка|Страница)\s*·\s*(.+)/iu)?.[1],
+          )
+          .find(Boolean) ?? null;
+      const ratingLine = profileLines.find((line) =>
+        /recommend|рекоменду|rating|оцінка|рейтинг/iu.test(line),
+      );
+      result.rating ??=
+        ratingLine?.match(
+          /\d+(?:[.,]\d+)?\s*%\s*(?:recommend|рекоменду\p{L}*)/iu,
+        )?.[0] ??
+        ratingLine
+          ?.match(/(?:rating|оцінка|рейтинг)\s*[:·]?\s*(\d(?:[.,]\d+)?)/iu)?.[1]
+          ?.replace(',', '.') ??
+        null;
+      result.reviewsCount ??= count(
+        ratingLine?.match(
+          /(\d[\d\s,.]*\s*(?:тис\.?|тыс\.?|k)?)\s*(?:reviews|відгук\p{L}*|отзыв\p{L}*)/iu,
+        )?.[1],
+      );
+      result.description ??= first(details.find('p').first().text());
+    }
+    if (target.network === 'instagram' && header.length) {
+      const biography = header.clone();
+      biography.find('h1,h2,ul,button,[role="button"]').remove();
+      biography.find('a[href]').each((_, element) => {
+        const href = $(element).attr('href') ?? '';
+        if (/maps\.|\/explore\/locations\/|\/maps(?:\/|\?)/i.test(href)) {
+          result.address ??= text($(element).text());
+          $(element).remove();
+        } else if (!/^(?:mailto:|tel:)/i.test(href)) $(element).remove();
+      });
+      let bioLines = lines(biography).filter(
+        (line) =>
+          ![target.handle, result.name].includes(line) &&
+          !/^(?:follow|message|edit profile|підписатися|повідомлення|редагувати профіль)$/iu.test(
+            line,
+          ) &&
+          !/\d.*(?:followers|following|posts|підписник|підписки|допис|публікаці)/iu.test(
+            line,
+          ),
+      );
+      if (
+        (!result.name || result.name.toLowerCase() === target.handle) &&
+        bioLines.length >= 2
+      )
+        result.name = bioLines.shift()!;
+      if (
+        !result.category &&
+        bioLines.length >= 2 &&
+        /^[\p{L}\s/&-]{2,70}$/u.test(bioLines[0]!)
+      )
+        result.category = bioLines.shift()!;
+      bioLines = bioLines.filter((line) => line !== result.category);
+      if (
+        bioLines.length &&
+        (!result.description || result.description === description)
+      )
+        result.description = bioLines.join(' ');
+    }
+    result.category ??= first(
+      details
+        .find(
+          '[data-profile-category],[itemprop="category"],header [data-category]',
+        )
+        .first()
+        .text(),
+    );
+    result.address ??= first(
+      details
+        .find('[data-profile-address],[itemprop="address"]')
+        .first()
+        .text(),
+    );
+    result.description ??= first(
+      details
+        .find('[data-profile-biography],[itemprop="description"]')
+        .first()
+        .text(),
+    );
+    result.website ??= externalUrl(
+      details
+        .find(
+          '[data-profile-website] a[href],a[data-profile-website],header a[href*="l.instagram.com/"]',
+        )
+        .first()
+        .attr('href'),
+    );
+    if (target.network !== 'linkedin')
+      details.find('a[href]').each((_, element) => {
+        const label = $(element).text().trim();
+        if (
+          label &&
+          /^(?:https?:\/\/|www\.)?[^\s/]+\.[a-z]{2,}(?:\/|$)/i.test(label)
+        )
+          result.website ??= externalUrl(
+            webUrl($(element).attr('href'), target.canonicalUrl),
+          );
+      });
+    for (const [field, labels] of [
+      ['followers', 'followers|підписників|читачів|подписчиков|obserwujących'],
+      ['followingCount', 'following|підписки|подписки'],
+      ['postsCount', 'posts|дописів|публікацій|публикаций'],
+    ] as const) {
+      const value = (
+        target.network === 'facebook' ? profileLines.join(' ') : header.text()
+      ).match(
+        new RegExp(
+          `(\\d[\\d\\s,.'’]*(?:k|m|b|тис\\.?|тыс\\.?|млн\\.?)?)\\s+(?:${labels})`,
+          'iu',
+        ),
+      )?.[1];
+      result[field] ??= count(value);
+    }
+    details
       .find('a[href^="tel:"]')
       .each((_, element) => addPhone($(element).attr('href')));
-    area
+    details
       .find('a[href^="mailto:"]')
       .each((_, element) =>
         addEmail($(element).attr('href')?.slice(7).split('?')[0]),
       );
     const bio = [
       result.description,
-      area.find('[data-profile-biography],[itemprop="description"]').text(),
+      details.find('[data-profile-biography],[itemprop="description"]').text(),
+      target.network === 'facebook' ? profileLines.join(' ') : null,
     ]
       .filter(Boolean)
       .join(' ');
@@ -587,9 +887,25 @@ export function parseSocialProfile(
       addPhone(match.number.number),
     );
     area.find('time[datetime]').each((_, element) => {
+      const article = $(element).closest('article,[role="article"]');
+      const author = article
+        .find(
+          '[rel="author"],a[data-post-author],a[data-profile-author],a.update-components-actor__meta-link,a.feed-shared-actor__container-link',
+        )
+        .first()
+        .attr('href');
+      if (author && !sameTarget(webUrl(author, target.canonicalUrl), target))
+        return;
       const link =
         $(element).closest('a[href]').attr('href') ??
         $(element).closest('article').find('a[href]').first().attr('href');
+      if (
+        target.network === 'facebook' &&
+        !author &&
+        !sameTarget(webUrl(link, target.canonicalUrl), target)
+      )
+        return;
+      if (target.network === 'linkedin' && !author) return;
       addPost($(element).attr('datetime'), link);
     });
     for (const node of all.filter((node) =>
@@ -598,6 +914,119 @@ export function parseSocialProfile(
       const author = object(node.author);
       if (sameTarget(author.url ?? author['@id'], target))
         addPost(node.datePublished, node.url ?? node['@id']);
+    }
+  }
+  for (const document of documents) {
+    const safe = webUrl(document.url);
+    if (!safe) continue;
+    const doc = load(document.html);
+    const canonical =
+      doc('meta[property="og:url"]').attr('content') ??
+      doc('link[rel="canonical"]').attr('href');
+    if (
+      (target.network === 'linkedin' || target.network === 'facebook') &&
+      sameTarget(safe, target)
+    ) {
+      if (canonical && !sameTarget(canonical, target)) continue;
+      const extra = parseSocialProfile(
+        canonical
+          ? document.html
+          : `<meta property="og:url" content="${target.canonicalUrl}">${document.html}`,
+        target,
+        country,
+      );
+      for (const field of [
+        'name',
+        'category',
+        'description',
+        'website',
+        'address',
+        'rating',
+        'reviewsCount',
+        'followers',
+        'postsCount',
+        'followingCount',
+        'industry',
+        'companySize',
+        'headquarters',
+        'foundedYear',
+      ] as const)
+        if (result[field] == null && extra[field] != null)
+          Object.assign(result, { [field]: extra[field] });
+      extra.phones.forEach(addPhone);
+      extra.emails.forEach(addEmail);
+      extra.posts.forEach((post) => addPost(post.date, post.url));
+    } else if (target.network === 'instagram') {
+      const url = new URL(safe);
+      if (
+        !/^(?:www\.)?instagram\.com$/.test(url.hostname) ||
+        !/^\/(?:p|reel)\/[\w-]+\/?$/.test(url.pathname)
+      )
+        continue;
+      const samePost = (value: unknown) => {
+        const candidate = webUrl(value, target.canonicalUrl);
+        return (
+          candidate &&
+          new URL(candidate).hostname.replace(/^www\./, '') ===
+            'instagram.com' &&
+          new URL(candidate).pathname.replace(/\/$/, '') ===
+            url.pathname.replace(/\/$/, '')
+        );
+      };
+      if (canonical && !samePost(canonical)) continue;
+      const referenced =
+        (metaMatches || matched.length || headerMatches) &&
+        $('main a[href],[role="main"] a[href]')
+          .toArray()
+          .some(
+            (element) =>
+              !$(element).closest('nav,aside,[data-recommendations]').length &&
+              samePost($(element).attr('href')),
+          );
+      const docRecords = records(document.html);
+      for (const node of docRecords) {
+        const actors = owners(node);
+        const code = node.shortcode ?? node.code;
+        if (
+          actors.length &&
+          actors.every(ownerMatches) &&
+          samePost(
+            node.permalink_url ??
+              node.url ??
+              (typeof code === 'string' ? `/p/${code}/` : null),
+          )
+        )
+          addPost(node.taken_at_timestamp ?? node.taken_at, safe);
+      }
+      doc(
+        'main article time[datetime],[role="main"] article time[datetime]',
+      ).each((_, element) => {
+        const article = doc(element).closest('article');
+        if (doc(element).closest('[data-comment],aside,nav').length) return;
+        const author = article
+          .find(
+            '[rel="author"],a[data-post-author],a[data-profile-author],header a[href]',
+          )
+          .first()
+          .attr('href');
+        if (author ? !sameTarget(webUrl(author, safe), target) : !referenced)
+          return;
+        const timeLink = doc(element).closest('a[href]').attr('href');
+        if (timeLink && !samePost(timeLink)) return;
+        // Comment/reply permalinks can equal the post URL. Scope list items to
+        // this article so an outer feed list item does not hide a real post time.
+        if (doc(element).parentsUntil('article', 'li,[role="listitem"]').length)
+          return;
+        const foreign = docRecords.some((node) => {
+          const code = node.shortcode ?? node.code;
+          return (
+            typeof code === 'string' &&
+            samePost(`/p/${code}/`) &&
+            owners(node).some((actor) => !ownerMatches(actor))
+          );
+        });
+        if (!foreign) addPost(doc(element).attr('datetime'), safe);
+      });
     }
   }
   result.posts.sort((a, b) => b.date.localeCompare(a.date));
@@ -631,7 +1060,7 @@ export function detectSocialBlock(
     $(
       'iframe[src*="captcha"],input[name="captcha_response"],.g-recaptcha,.h-captcha',
     ).length ||
-    /verify (?:that )?you are human|confirm (?:that )?you(?:'re| are) human|complete (?:the )?(?:captcha|security check)|checking your browser/i.test(
+    /verify (?:that )?you are human|confirm (?:that )?you(?:'re| are) human|complete (?:the )?(?:captcha|security check)|checking your browser|підтвердіть,?\s+що це ви/iu.test(
       visible,
     )
   )
@@ -658,7 +1087,7 @@ export function detectSocialBlock(
         ).length > 0,
     );
   const inferred = target ?? socialTarget(url);
-  const publicMain = $('main').clone();
+  const publicMain = $('main,[role="main"]').clone();
   publicMain.find('form,script,style,[role="dialog"]').remove();
   const companyContent =
     publicMain.find('h1').length > 0 &&
@@ -670,7 +1099,8 @@ export function detectSocialBlock(
     (inferred &&
       (profiles(records(html), inferred).length > 0 ||
         (sameTarget($('meta[property="og:url"]').attr('content'), inferred) &&
-          $('main h1,main header').length > 0)));
+          $('main h1,main header,[role="main"] h1,[role="main"] header')
+            .length > 0)));
   if (
     !hasProfile &&
     (loginForm ||

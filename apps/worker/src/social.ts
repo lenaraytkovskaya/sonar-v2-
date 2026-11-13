@@ -10,6 +10,13 @@ import {
 import { sonarPool } from '@sonar/db';
 import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
 import { saveSocialProfile, type SocialPayload } from '@sonar/db/social';
+import {
+  acquireSocialFetchSession,
+  releaseSocialFetchSession,
+  reserveSocialFetchSession,
+  pauseSocialFetchSession,
+  type SocialFetchSession,
+} from '@sonar/db/social-accounts';
 import { enqueueCompanyScores } from '@sonar/db/scoring';
 import { boss, runTask, type TaskOutcome } from '@sonar/db/tasks';
 import {
@@ -25,6 +32,7 @@ type Runtime = {
   pauseUntil?: string;
   blocked?: boolean;
   reason?: string;
+  blockCode?: string;
 };
 type Settings = Record<string, unknown>;
 const reason = (code: string) =>
@@ -110,6 +118,7 @@ export async function runSocialFetch(
     );
   const client = await sonarPool.connect();
   let locked = false;
+  let session: SocialFetchSession | null = null;
   const lockKey = `social.network:${target.network}`;
   try {
     const {
@@ -165,10 +174,26 @@ export async function runSocialFetch(
     if (previous?.result?.billingPending)
       return paused('billing_uncertain', new BillingUncertain().message);
     if (!previous?.billed) {
+      const selected = await acquireSocialFetchSession(
+        client,
+        target.network,
+        number(
+          config,
+          `social.${target.network}.session_fetch_daily_limit`,
+          1,
+          100000,
+        ),
+      );
+      session = selected && 'account' in selected ? selected : null;
+      const anonymousLoginWall =
+        runtime.blockCode === 'login_wall' ||
+        runtime.reason === reason('login_wall');
       const limit = socialLimit(
         config,
         target.network,
-        runtime,
+        selected && anonymousLoginWall
+          ? { ...runtime, blocked: false }
+          : runtime,
         !!payload.manual,
       );
       if (limit) return paused('social_network_paused', limit);
@@ -179,6 +204,13 @@ export async function runSocialFetch(
           runAt: new Date(next),
           reasonCode: 'social_gap',
           reasonUk: 'Очікування паузи між запитами соцмережі.',
+        };
+      if (selected && 'runAt' in selected)
+        return {
+          status: 'deferred',
+          runAt: selected.runAt,
+          reasonCode: 'social_session_gap',
+          reasonUk: 'Очікування паузи між читаннями акаунта соцмережі.',
         };
     }
     const {
@@ -205,9 +237,24 @@ export async function runSocialFetch(
     try {
       response = await runBudgetedRequest(
         'iproyal',
-        cost,
+        cost *
+          (session
+            ? { instagram: 5, facebook: 2, linkedin: 3 }[target.network] + 1
+            : 1),
         request.id,
         async () => {
+          if (session)
+            await reserveSocialFetchSession(
+              client,
+              session.account.id,
+              request.id,
+              number(
+                config,
+                `social.${target.network}.session_fetch_gap_seconds`,
+                0,
+                86400,
+              ),
+            );
           const now = new Date();
           await client.query(
             'update settings set value=$2,updated_at=now() where key=$1',
@@ -226,12 +273,18 @@ export async function runSocialFetch(
           );
           // Once the proxy is used, even a blocked or failed page consumes paid traffic.
           let page: SocialPage;
+          let units = 0;
+          let method: 'session' | 'anonymous' = session
+            ? 'session'
+            : 'anonymous';
           try {
             page = await fetchPage(
               target,
-              proxies[(runtime.count ?? 0) % proxies.length]!,
+              session?.session.proxy ??
+                proxies[(runtime.count ?? 0) % proxies.length]!,
               timeout,
               String(config['scanner.user_agent'] ?? 'SonarBot/1.0'),
+              session?.session,
             );
           } catch {
             page = {
@@ -240,6 +293,45 @@ export async function runSocialFetch(
               status: 0,
               error: 'network_error',
             };
+          }
+          units += page.usedProxy === false ? 0 : (page.proxyUnits ?? 1);
+          const sessionBlock = detectSocialBlock(
+            page.html,
+            page.url,
+            page.status,
+            target,
+          );
+          const sessionBlocked =
+            page.error === 'session_invalid' ||
+            ['captcha', 'login_wall', 'forbidden', 'rate_limit'].includes(
+              sessionBlock ?? '',
+            );
+          // Rate limits pause the network; changing context or proxy would bypass them.
+          if (
+            session &&
+            sessionBlock !== 'rate_limit' &&
+            (page.error || sessionBlocked)
+          ) {
+            if (sessionBlocked)
+              await pauseSocialFetchSession(client, session.account.id);
+            // The fallback is a fresh anonymous context and shares this receipt.
+            method = 'anonymous';
+            try {
+              page = await fetchPage(
+                target,
+                proxies[(runtime.count ?? 0) % proxies.length]!,
+                timeout,
+                String(config['scanner.user_agent'] ?? 'SonarBot/1.0'),
+              );
+            } catch {
+              page = {
+                html: '',
+                url: target.canonicalUrl,
+                status: 0,
+                error: 'network_error',
+              };
+            }
+            units += page.usedProxy === false ? 0 : (page.proxyUnits ?? 1);
           }
           const block = detectSocialBlock(
             page.html,
@@ -257,11 +349,15 @@ export async function runSocialFetch(
                 page.html,
                 target,
                 company?.country_code as CountryCode,
+                page.documents,
               );
+          if (profile) profile.method = method;
           if (
             profile &&
-            !Object.values(profile).some((value) =>
-              Array.isArray(value) ? value.length > 0 : value !== null,
+            !Object.entries(profile).some(
+              ([key, value]) =>
+                key !== 'method' &&
+                (Array.isArray(value) ? value.length > 0 : value !== null),
             )
           )
             failure = 'profile_missing';
@@ -269,8 +365,8 @@ export async function runSocialFetch(
             id: request.id,
             model: 'iproyal',
             text: JSON.stringify(failure ? { failure } : { profile }),
-            costUsd: page.usedProxy === false ? 0 : cost,
-            units: page.usedProxy === false ? 0 : 1,
+            costUsd: cost * units,
+            units,
             costBasis: 'estimated_tariff',
           };
         },
@@ -315,6 +411,7 @@ export async function runSocialFetch(
             runtimeKey,
             JSON.stringify({
               blocked: true,
+              blockCode: data.failure,
               pauseUntil: new Date(Date.now() + pause * 60000).toISOString(),
               reason: reasonUk,
             }),
@@ -372,6 +469,7 @@ export async function runSocialFetch(
         'Не вдалося обробити соцмережу. Перевірте налаштування й повторіть.',
     };
   } finally {
+    if (session) await releaseSocialFetchSession(client, session.account.id);
     if (locked)
       await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [
         lockKey,

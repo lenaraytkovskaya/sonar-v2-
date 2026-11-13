@@ -184,6 +184,7 @@ export async function saveSocialProfile(
     for (const [kind, values] of [
       ['phone', profile.phones],
       ['email', profile.emails],
+      ['address', profile.address ? [profile.address] : []],
     ] as const)
       for (const value of values)
         await client.query(
