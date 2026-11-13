@@ -133,16 +133,10 @@ it('checks proxy budget before invoking paid traffic', async () => {
 });
 it('does not follow redirects outside the approved social origin and bounds proxy requests', async () => {
   const { readSocialDocuments } = await import('./social-browser.js');
-  const get = vi
-    .fn()
-    .mockResolvedValueOnce({
-      status: () => 200,
-      text: async () => 'User-agent: *\nAllow: /',
-    })
-    .mockResolvedValueOnce({
-      status: () => 302,
-      headers: () => ({ location: 'http://127.0.0.1/private' }),
-    });
+  const get = vi.fn().mockResolvedValueOnce({
+    status: () => 302,
+    headers: () => ({ location: 'http://127.0.0.1/private' }),
+  });
   const result = await readSocialDocuments(
     { get },
     payload.target,
@@ -150,19 +144,20 @@ it('does not follow redirects outside the approved social origin and bounds prox
     'SonarBot',
   );
   expect(result.error).toBe('network_error');
-  expect(get).toHaveBeenCalledTimes(2);
+  expect(get).toHaveBeenCalledTimes(1);
   expect(get.mock.calls.every((call) => call[1].maxRedirects === 0)).toBe(true);
 });
-it('never requests a robots-forbidden public profile', async () => {
+it('reads public company pages without consulting robots.txt (owner decision)', async () => {
   const { readSocialDocuments } = await import('./social-browser.js');
   const get = vi.fn().mockResolvedValue({
     status: () => 200,
-    text: async () => 'User-agent: *\nDisallow: /sonar/',
+    text: async () => '<html><title>Sonar</title></html>',
   });
   expect(
     await readSocialDocuments({ get }, payload.target, 1000, 'SonarBot'),
-  ).toMatchObject({ error: 'robots_denied' });
+  ).toMatchObject({ status: 200, html: expect.stringContaining('Sonar') });
   expect(get).toHaveBeenCalledOnce();
+  expect(String(get.mock.calls[0]?.[0])).not.toContain('robots.txt');
 });
 it('records zero cost when Chromium cannot start before any proxy traffic', async () => {
   vi.stubEnv('SOCIAL_PROXY_URLS', 'http://proxy.example:8000');

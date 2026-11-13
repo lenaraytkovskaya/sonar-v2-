@@ -53,6 +53,9 @@ services:
       migrate: { condition: service_completed_successfully }
   web:
     build: { context: .., dockerfile: docker/Dockerfile, target: web }
+    volumes:
+      # Private proxy list (host:port:user:password per line), never in git or images.
+      - ${SOCIAL_PROXY_HOST_FILE:-../iproyal-proxies.txt}:/run/secrets/social-proxies.txt:ro
     environment:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:-}
@@ -63,6 +66,7 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET (at least 32 characters)}
       APP_URL: ${APP_URL:?Set APP_URL}
       SOCIAL_PROXY_URLS: ${SOCIAL_PROXY_URLS:-}
+      SOCIAL_PROXY_FILE: /run/secrets/social-proxies.txt
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
     ports: ['127.0.0.1:58000:3000']
@@ -73,6 +77,8 @@ services:
     volumes:
       # Free-space check only: same filesystem as the data, without the repo root (.env).
       - ./:/host-disk:ro
+      # Private proxy list (host:port:user:password per line), never in git or images.
+      - ${SOCIAL_PROXY_HOST_FILE:-../iproyal-proxies.txt}:/run/secrets/social-proxies.txt:ro
     environment:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:-}
@@ -84,6 +90,7 @@ services:
       RESEND_API_TOKEN: ${RESEND_API_TOKEN:-}
       TWOCAPTCHA_API_KEY: ${TWOCAPTCHA_API_KEY:-}
       SOCIAL_PROXY_URLS: ${SOCIAL_PROXY_URLS:-}
+      SOCIAL_PROXY_FILE: /run/secrets/social-proxies.txt
       MONTHLY_BUDGET_USD: ${MONTHLY_BUDGET_USD:-50}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}

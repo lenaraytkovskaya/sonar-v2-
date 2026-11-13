@@ -1,4 +1,37 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+/**
+ * Proxy list for social networks: SOCIAL_PROXY_URLS (comma separated URLs) or, when it is empty,
+ * the private file mounted at SOCIAL_PROXY_FILE with one proxy per line, either a URL or the
+ * IPRoyal form host:port:user:password. Credentials never leave this function in logs.
+ */
+export function socialProxyList(
+  env: Record<string, string | undefined> = process.env,
+  read: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+): string {
+  if (env.SOCIAL_PROXY_URLS?.trim()) return env.SOCIAL_PROXY_URLS;
+  let text = '';
+  try {
+    text = read(env.SOCIAL_PROXY_FILE || '/run/secrets/social-proxies.txt');
+  } catch {
+    return '';
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      if (/^https?:\/\//i.test(line)) return line;
+      const [host, port, user, ...rest] = line.split(':');
+      const password = rest.join(':');
+      if (!host || !port) return line;
+      return user
+        ? `http://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}`
+        : `http://${host}:${port}`;
+    })
+    .join(',');
+}
 import {
   decryptTelegramSession,
   encryptTelegramSession,
@@ -123,7 +156,7 @@ export function normalizeSocialCookies(
   });
 }
 export function socialSessionProxies(
-  raw = process.env.SOCIAL_PROXY_URLS ?? '',
+  raw = socialProxyList(),
 ): SocialSessionProxy[] {
   return raw
     .split(',')

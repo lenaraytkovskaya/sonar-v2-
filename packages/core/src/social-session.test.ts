@@ -6,6 +6,7 @@ import {
   SocialSendError,
   socialProxyFingerprint,
   socialSessionProxies,
+  socialProxyList,
 } from './social-session.js';
 
 const secret = 'social-test-auth-secret-with-at-least-32-characters';
@@ -110,5 +111,32 @@ describe('social session secrets and fixed proxy binding', () => {
       expect(error).toBeInstanceOf(SocialSendError);
       expect(String(error)).not.toMatch(/credential|private|example.test/);
     }
+  });
+});
+
+describe('socialProxyList', () => {
+  it('prefers SOCIAL_PROXY_URLS and reads the IPRoyal file format otherwise', () => {
+    expect(socialProxyList({ SOCIAL_PROXY_URLS: 'http://a:b@h:1' })).toBe(
+      'http://a:b@h:1',
+    );
+    const read = () =>
+      '# comment\nproxy.example:12321:user@x:p:ss\n\nhttp://u:p@other.example:80\n';
+    expect(socialProxyList({ SOCIAL_PROXY_FILE: '/f' }, read)).toBe(
+      'http://user%40x:p%3Ass@proxy.example:12321,http://u:p@other.example:80',
+    );
+    expect(
+      socialSessionProxies(
+        socialProxyList({ SOCIAL_PROXY_FILE: '/f' }, read),
+      )[0],
+    ).toMatchObject({
+      server: 'http://proxy.example:12321',
+      username: 'user@x',
+      password: 'p:ss',
+    });
+    expect(
+      socialProxyList({}, () => {
+        throw new Error('missing');
+      }),
+    ).toBe('');
   });
 });

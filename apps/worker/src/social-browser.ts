@@ -4,7 +4,8 @@ import {
   type APIRequestContext,
   type BrowserContext,
 } from 'playwright';
-import { robotsAllows, type SocialTarget } from '@sonar/core';
+import { type SocialTarget } from '@sonar/core';
+import { socialProxyList } from '@sonar/core/social-session';
 export type SocialProxy = {
   server: string;
   username?: string;
@@ -23,9 +24,7 @@ export async function closeSocialBrowser() {
   sharedBrowser = undefined;
   if (browser) await (await browser).close();
 }
-export function socialProxies(
-  value = process.env.SOCIAL_PROXY_URLS ?? '',
-): SocialProxy[] {
+export function socialProxies(value = socialProxyList()): SocialProxy[] {
   return value
     .split(',')
     .map((part) => part.trim())
@@ -124,19 +123,13 @@ export async function readSocialDocuments(
   });
   const origin = new URL(target.canonicalUrl).origin;
   const options = { timeout: timeoutMs, maxRedirects: 0 };
-  const robots = await request.get(`${origin}/robots.txt`, options);
-  const status = robots.status();
-  if ([401, 403, 429].includes(status))
-    return { html: '', url: target.canonicalUrl, status };
-  if (![200, 404, 410].includes(status)) return empty('robots_unavailable');
-  const rules = status === 200 ? await robots.text() : '';
-  if (/^\s*</.test(rules)) return empty('robots_unavailable');
+  // Owner decision (13.11.2026): public company pages are read regardless of the networks'
+  // robots.txt. Login walls, CAPTCHA and rate limits still stop the request (see social.ts).
+  void userAgent;
   let url = new URL(target.canonicalUrl);
   for (let index = 0; index < 2; index++) {
     if (url.origin !== origin || url.username || url.password)
       return empty('network_error');
-    if (!robotsAllows(rules, url.href, userAgent))
-      return empty('robots_denied');
     const response = await request.get(url.href, options);
     if ([301, 302, 303, 307, 308].includes(response.status())) {
       const location = response.headers().location;
