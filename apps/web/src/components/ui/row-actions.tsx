@@ -58,6 +58,7 @@ export function RowActions({
           variant="ghost"
           className="size-11 shrink-0 p-2"
           aria-label={label}
+          aria-haspopup="menu"
           title={label}
           disabled={disabled}
         >

@@ -60,7 +60,7 @@ export default async function Page({
                   ? scoreTone(
                       data.monthlyLimitUsd > 0
                         ? (data.remainingUsd / data.monthlyLimitUsd) * 100
-                        : null,
+                        : 0,
                     ).text
                   : '')
               }
@@ -140,11 +140,11 @@ export default async function Page({
                   className={
                     'p-2 tabular-nums ' +
                     scoreTone(
-                      service.remainingUsd !== null &&
-                        service.limitUsd !== null &&
-                        service.limitUsd > 0
-                        ? (service.remainingUsd / service.limitUsd) * 100
-                        : null,
+                      service.remainingUsd === null || service.limitUsd === null
+                        ? null
+                        : service.limitUsd > 0
+                          ? (service.remainingUsd / service.limitUsd) * 100
+                          : 0,
                     ).text
                   }
                 >
