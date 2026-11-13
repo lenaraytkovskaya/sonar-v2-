@@ -20,6 +20,10 @@
       "types": "./dist/budget.d.ts",
       "default": "./dist/budget.js"
     },
+    "./metrics": {
+      "types": "./dist/metrics.d.ts",
+      "default": "./dist/metrics.js"
+    },
     "./campaigns": {
       "types": "./dist/campaigns.d.ts",
       "default": "./dist/campaigns.js"

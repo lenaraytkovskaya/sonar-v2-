@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { uk } from '@/i18n/uk';
-import { Card, PageHeader } from '@/components/shared';
+import { Card } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, type ScanResult } from './shared';
 type Task = {
@@ -163,7 +163,6 @@ export function TaskOverview() {
   };
   return (
     <>
-      <PageHeader {...uk.pages.overview} />
       <Card className="mb-4 p-4 text-sm">
         {uk.email.sentToday}: <strong>{sentToday}</strong>
       </Card>

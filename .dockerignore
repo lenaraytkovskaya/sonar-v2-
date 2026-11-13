@@ -1,4 +1,5 @@
 .git
+backups
 **/node_modules
 **/.next
 **/dist

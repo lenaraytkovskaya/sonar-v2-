@@ -1,16 +1,13 @@
-import { getSession } from '@/lib/auth';
+import { apiUser, validId } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
-import { isAllowedRequestOrigin } from '@/lib/request-origin';
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const user = (await getSession()).user;
+  const user = await apiUser(request, true);
   if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
-  if (!isAllowedRequestOrigin(request.headers, process.env.APP_URL))
-    return Response.json({ error: uk.unauthorized }, { status: 403 });
   const { id } = await context.params;
-  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
+  if (!validId(id))
     return Response.json({ error: uk.tasks.missing }, { status: 400 });
   const { sonarPool } = await import('@sonar/db');
   if (
