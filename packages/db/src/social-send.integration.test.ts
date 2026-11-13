@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, expect, it, vi } from 'vitest';
 import { SocialSendError } from '@sonar/core/social-session';
+import { campaignSchema } from '@sonar/core';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
   'queues only human social replies and guards attempts, limits, sessions and refusals',
@@ -49,8 +50,16 @@ it.skipIf(!enabled)(
         [user, `${user}@invalid.test`],
       );
       await sonarPool.query(
-        `insert into campaigns(id,name,country_code,language_code,cities,queries,offer,budget_usd,channels,scoring_weights,send_mode,status) values($1,'Social send','PL','uk','{}','{}','test',1,'{"social":true}','{}','auto','active')`,
-        [campaign],
+        `insert into campaigns(id,name,country_code,language_code,cities,queries,offer,budget_usd,channels,scoring_weights,send_mode,status) values($1,'Social send','PL','uk','{}','{}','test',1,$2,'{}','auto','active')`,
+        [
+          campaign,
+          campaignSchema.shape.channels.parse({
+            email: false,
+            telegram: false,
+            whatsapp: false,
+            forms: false,
+          }),
+        ],
       );
       await sonarPool.query(
         "insert into companies(id,place_id,name,country_code) values($1::uuid,$1::uuid::text,'Social send','PL')",
@@ -100,7 +109,22 @@ it.skipIf(!enabled)(
         first = await create(key);
       expect(await create(key)).toEqual(first);
       await expect(create(key, 'manual')).rejects.toThrow('Ключ повідомлення');
-      await Promise.all([send(first.id, sender), send(first.id, sender)]);
+      await sonarPool.query(
+        "update campaigns set status='paused' where id=$1",
+        [campaign],
+      );
+      expect(await send(first.id, sender)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'campaign_inactive',
+      });
+      expect(sender).not.toHaveBeenCalled();
+      await sonarPool.query(
+        "update campaigns set status='active' where id=$1",
+        [campaign],
+      );
+      expect(
+        await Promise.all([send(first.id, sender), send(first.id, sender)]),
+      ).toMatchObject([{ status: 'done' }, { status: 'done' }]);
       expect(sender).toHaveBeenCalledTimes(1);
       expect(
         (
@@ -123,6 +147,21 @@ it.skipIf(!enabled)(
         status: 'deferred',
         reasonCode: 'outside_send_hours',
       });
+      await sonarPool.query(
+        "update settings set value=$1 where key='send.hours'",
+        [JSON.stringify({ start: 9, end: 18, days: [1, 2, 3, 4, 5] })],
+      );
+      expect(
+        await send(limited.id, sender, new Date('2026-11-13T18:00:00Z')),
+      ).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'outside_send_hours',
+        runAt: new Date('2026-11-16T08:00:00Z'),
+      });
+      await sonarPool.query(
+        "update settings set value=$1 where key='send.hours'",
+        [JSON.stringify({ start: 0, end: 24, days: [0, 1, 2, 3, 4, 5, 6] })],
+      );
       await sonarPool.query(
         'update channel_accounts set next_send_at=null,daily_limit=1 where id=$1',
         [account],
@@ -207,6 +246,17 @@ it.skipIf(!enabled)(
         }),
       ).toMatchObject({ status: 'skipped' });
       await reset();
+      const automatic = await create();
+      await sonarPool.query(
+        'update messages set created_by=null,approved_by=null where id=$1',
+        [automatic.id],
+      );
+      const automaticSender = vi.fn();
+      expect(await send(automatic.id, automaticSender)).toMatchObject({
+        status: 'skipped',
+        reasonCode: 'manual_submission_required',
+      });
+      expect(automaticSender).not.toHaveBeenCalled();
       const blocked = await create();
       await sonarPool.query(
         "insert into do_not_contact(company_id,kind,value_normalized,reason) values($1::uuid,'company',$1::uuid::text,'Test refusal')",
