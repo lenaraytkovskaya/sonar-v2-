@@ -13,6 +13,7 @@ export type EmailRequest = {
   subject: string;
   body: string;
   idempotencyKey: string;
+  headers?: Record<string, string>;
 };
 export async function sendResendEmail(
   message: EmailRequest,
@@ -52,7 +53,10 @@ export async function sendResendEmail(
         subject: message.subject,
         text: message.body,
         html: `<div>${escape(message.body).replace(/\r?\n/g, '<br>')}</div>`,
-        headers: { 'List-Unsubscribe': `<mailto:${message.from}>` },
+        headers: {
+          'List-Unsubscribe': `<mailto:${message.from}>`,
+          ...message.headers,
+        },
       }),
       signal: AbortSignal.timeout(30000),
     });

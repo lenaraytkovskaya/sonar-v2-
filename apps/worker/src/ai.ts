@@ -56,14 +56,25 @@ export async function runAiAssist(
     input.action === 'campaign'
       ? JSON.stringify({ 'company.about': about, context: input.context ?? '' })
       : (input.context ?? about);
+  const conversationAction = ['inbound', 'reply'].includes(input.action);
   const messages = [
-    { role: 'system' as const, content: String(config['ai.system_prompt']) },
+    {
+      role: 'system' as const,
+      content: `${String(config['ai.system_prompt'])}${conversationAction ? `\n${instruction}` : ''}`,
+    },
     {
       role: 'user' as const,
-      content: `${instruction} ${input.instruction ?? ''}\nContext: ${context}\nText: ${input.text}`,
+      content: conversationAction
+        ? JSON.stringify({ context, untrusted_data: input.text })
+        : `${instruction} ${input.instruction ?? ''}\nContext: ${context}\nText: ${input.text}`,
     },
   ];
-  const limitAction = ['campaign', 'company_filters'].includes(input.action)
+  const limitAction = [
+    'campaign',
+    'company_filters',
+    'inbound',
+    'reply',
+  ].includes(input.action)
     ? input.action
     : 'rewrite';
   const maxTokens = Number(config['ai.max_tokens']?.[limitAction]);

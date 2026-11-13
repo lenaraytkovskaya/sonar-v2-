@@ -71,6 +71,7 @@ export type EmailRequest = {
   subject: string;
   body: string;
   idempotencyKey: string;
+  headers?: Record<string, string>;
 };
 export type EmailSender = (request: EmailRequest) => Promise<string>;
 const validEmail = (value: string) =>
@@ -228,10 +229,17 @@ async function whatsappContacts(
 }
 export async function isContactBlocked(
   c: Pick<PoolClient, 'query'>,
-  companyId: string,
+  companyId: string | null,
   address = '',
   country?: CountryCode,
 ): Promise<boolean> {
+  const {
+    rows: [direct],
+  } = await c.query(
+    `select exists(select 1 from do_not_contact where (company_id=$1 or (kind='company' and value_normalized=$1::text)) or lower(value_normalized)=lower($2) or (kind='domain' and value_normalized=lower(split_part($2,'@',2)))) as blocked`,
+    [companyId, address],
+  );
+  if (direct.blocked) return true;
   const whatsappTo = normalizeWhatsAppRecipient(address, country);
   if (whatsappTo) {
     const { rows } = await c.query(
@@ -498,7 +506,7 @@ export async function createCompanyMessage(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,channel) do update set contact_id=excluded.contact_id returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, contact.id, channel],
     );
     const status = messageStatusForMode(
@@ -716,7 +724,7 @@ export async function sendEmailMessage(
     const {
       rows: [identity],
     } = await c.query(
-      'select m.account_id,v.company_id from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
+      'select m.account_id,v.company_id,m.channel,m.to_value from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
       [messageId],
     );
     if (!identity)
@@ -732,17 +740,21 @@ export async function sendEmailMessage(
     );
     locked = true;
     accountLockId = identity.account_id;
-    companyLockId = identity.company_id;
-    await c.query(
-      "select pg_advisory_lock(hashtextextended('company-contact:'||$1::text,0))",
-      [companyLockId],
-    );
-    companyLocked = true;
+    companyLockId =
+      identity.company_id ??
+      `recipient:${identity.channel}:${identity.to_value.toLowerCase()}`;
+    if (companyLockId) {
+      await c.query(
+        "select pg_advisory_lock(hashtextextended('company-contact:'||$1::text,0))",
+        [companyLockId],
+      );
+      companyLocked = true;
+    }
     await c.query('begin');
     const {
       rows: [m],
     } = await c.query(
-      `select m.*,v.company_id,v.campaign_id,a.send_mode,a.channels,a.status as campaign_status,a.country_code from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id join companies co on co.id=v.company_id where m.id=$1 for update of m for share of a,co`,
+      `select m.*,v.company_id,v.campaign_id,case when m.source='reply' then 'manual' else a.send_mode end as send_mode,coalesce(a.channels,jsonb_build_object(m.channel,true)) as channels,coalesce(a.status,'active') as campaign_status,a.country_code from messages m join conversations v on v.id=m.conversation_id left join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
       [messageId],
     );
     const finish = async (outcome: TaskOutcome, reason?: string) => {
@@ -797,8 +809,9 @@ export async function sendEmailMessage(
         m.country_code,
       );
       if (
-        !contacts.length ||
-        contacts.every((r) => r.meta.whatsapp_unavailable)
+        (m.source !== 'reply' && !contacts.length) ||
+        (contacts.length > 0 &&
+          contacts.every((r) => r.meta.whatsapp_unavailable))
       )
         return finish(
           terminal(
@@ -820,8 +833,9 @@ export async function sendEmailMessage(
     if (channel === 'telegram') {
       const contacts = await telegramContacts(c, m.company_id, m.to_value);
       if (
-        !contacts.length ||
-        contacts.every((r) => r.meta.telegram_unavailable)
+        (m.source !== 'reply' && !contacts.length) ||
+        (contacts.length > 0 &&
+          contacts.every((r) => r.meta.telegram_unavailable))
       )
         return finish(
           terminal(
@@ -856,6 +870,23 @@ export async function sendEmailMessage(
           `Активуйте кампанію та увімкніть ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
         ),
       );
+    if (m.send_mode === 'auto' && m.idempotency_key.startsWith('outreach:')) {
+      const {
+        rows: [score],
+      } = await c.query(
+        `select coalesce(s.score,-1)>=a.min_score as eligible from campaigns a left join company_scores s on s.campaign_id=a.id and s.company_id=$2 where a.id=$1`,
+        [m.campaign_id, m.company_id],
+      );
+      if (!score?.eligible) {
+        const reason =
+          'Оцінка компанії нижча за поріг кампанії. Автоматичне надсилання призупинено.';
+        await c.query('update messages set reason_uk=$2 where id=$1', [
+          messageId,
+          reason,
+        ]);
+        return finish(terminal('paused', 'score_below_threshold', reason));
+      }
+    }
     if (m.send_mode === 'manual' && !m.created_by && !m.approved_by) {
       await c.query(
         "update messages set status='draft',reason_uk='Надішліть повідомлення вручну.' where id=$1",
@@ -927,7 +958,9 @@ export async function sendEmailMessage(
       "select key,value from settings where key like 'send.%'",
     );
     const config = Object.fromEntries(settings.map((s) => [s.key, s.value]));
-    const zone = config['send.time_zones']?.[m.country_code];
+    const zone = m.country_code
+      ? config['send.time_zones']?.[m.country_code]
+      : config['send.inbound_time_zone'];
     let at: Date;
     const gapPrefix = channel === 'whatsapp' ? 'send.whatsapp' : 'send';
     const min = Number(config[`${gapPrefix}.min_gap_seconds`]),
@@ -980,17 +1013,41 @@ export async function sendEmailMessage(
         ),
       );
     }
+    const rfcMessageId =
+      m.rfc_message_id ?? `<sonar-${m.id}@${account.address.split('@')[1]}>`;
+    const {
+      rows: [parent],
+    } =
+      channel === 'email' && m.source === 'reply'
+        ? await c.query(
+            "select rfc_message_id from messages where conversation_id=$1 and direction='in' and rfc_message_id is not null order by created_at desc,id desc limit 1",
+            [m.conversation_id],
+          )
+        : { rows: [] };
     const request: EmailRequest = m.request_snapshot ?? {
       from: account.address,
       to: m.to_value,
       subject: m.subject,
       body: m.body,
       idempotencyKey: m.idempotency_key,
+      ...(channel === 'email'
+        ? {
+            headers: {
+              'Message-ID': rfcMessageId,
+              ...(parent
+                ? {
+                    'In-Reply-To': parent.rfc_message_id,
+                    References: parent.rfc_message_id,
+                  }
+                : {}),
+            },
+          }
+        : {}),
     };
     if (!m.first_attempt_at) {
       await c.query(
-        'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1',
-        [messageId, now, request],
+        "update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null,rfc_message_id=case when channel='email' then $4 else null end where id=$1",
+        [messageId, now, request, rfcMessageId],
       );
     }
     if (m.quota_day !== day)

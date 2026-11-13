@@ -7,7 +7,8 @@ export async function middleware(request: NextRequest) {
   if (
     path === '/login' ||
     path === '/api/health' ||
-    path.startsWith('/api/webhooks/')
+    path === '/api/webhooks/resend' ||
+    path === '/api/webhooks/waha'
   )
     return NextResponse.next();
   const options = sessionOptions();

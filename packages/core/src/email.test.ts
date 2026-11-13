@@ -112,3 +112,21 @@ describe('sending schedule and campaign modes', () => {
     expect(messageStatusForMode('auto')).toBe('queued');
   });
 });
+
+it('forwards RFC email threading headers alongside unsubscribe metadata', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(Response.json({ id: 'provider' }));
+  const headers = {
+    'Message-ID': '<sonar-task@example.test>',
+    'In-Reply-To': '<parent@example.test>',
+    References: '<parent@example.test>',
+  };
+  await sendResendEmail({ ...message, headers }, 'stub-token', fetcher);
+  expect(
+    JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).headers,
+  ).toMatchObject({
+    ...headers,
+    'List-Unsubscribe': '<mailto:sonar@example.test>',
+  });
+});

@@ -13,7 +13,9 @@ export const campaignSchema = z
     language_code: z.string().regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/),
     cities: z.array(text).max(100),
     queries: z.array(text).max(100),
-    offer: z.string().max(20000),
+    offer: z.string().max(20000).default(''),
+    outreach_goal: z.string().max(20000).default(''),
+    min_score: z.number().finite().min(0).max(100).default(40),
     batch_size: z.union([
       z.literal(20),
       z.literal(50),
@@ -29,7 +31,7 @@ export const campaignSchema = z
         forms: z.boolean(),
       })
       .strict(),
-    send_mode: z.enum(['auto', 'approval', 'manual']),
+    send_mode: z.enum(['auto', 'approval', 'manual']).default('manual'),
     scoring_weights: z.record(
       z.string().min(1).max(80),
       z.number().int().min(0).max(100),
@@ -46,6 +48,7 @@ export const campaignSuggestionSchema = campaignSchema
     cities: true,
     queries: true,
     offer: true,
+    outreach_goal: true,
   })
   .extend({
     cities: z.array(text).min(1).max(100),
@@ -133,6 +136,7 @@ export function applyCampaignSuggestion(
     ...fields,
     // An empty suggested offer never wipes a message the person already wrote.
     offer: !needs_about && fields.offer.trim() ? fields.offer : form.offer,
+    outreach_goal: fields.outreach_goal?.trim() || form.outreach_goal || '',
     queries: cleanCampaignQueries(fields.queries, fields.cities),
   };
 }

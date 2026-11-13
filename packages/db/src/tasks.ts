@@ -103,7 +103,7 @@ export async function enqueueTask(
         where idempotency_key=$1 and type='company.analyze' and status='skipped' and reason_code='score_below_threshold'
         and coalesce(result->>'billingPending','false')<>'true' and not exists(select 1 from spend_events where task_id=t.id)
         and exists(select 1 from company_scores s where s.company_id=(t.payload->>'companyId')::uuid and s.campaign_id=(t.payload->>'campaignId')::uuid
-          and s.score >= (select (value::text)::numeric from settings where key='analysis.min_score')) returning id`,
+          and s.score >= (select min_score from campaigns where id=s.campaign_id)) returning id`,
         [key],
       );
       id = resumed[0]?.id;

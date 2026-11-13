@@ -147,10 +147,12 @@ export const campaigns = pgTable(
     cities: text('cities').array().notNull(),
     queries: text('queries').array().notNull(),
     offer: text('offer').notNull(),
+    outreachGoal: text('outreach_goal').notNull().default(''),
+    minScore: numeric('min_score').notNull().default('40'),
     batchSize: integer('batch_size').notNull().default(20),
     budgetUsd: numeric('budget_usd', { precision: 20, scale: 10 }).notNull(),
     channels: jsonb('channels').notNull(),
-    sendMode: sendMode('send_mode').notNull().default('approval'),
+    sendMode: sendMode('send_mode').notNull().default('manual'),
     scoringWeights: jsonb('scoring_weights').notNull(),
     scoringRevision: integer('scoring_revision').notNull().default(0),
     status: campaignStatus('status').notNull().default('draft'),
@@ -164,6 +166,7 @@ export const campaigns = pgTable(
   },
   (t) => [
     check('campaign_budget_nonnegative', sql`${t.budgetUsd} >= 0`),
+    check('campaign_min_score', sql`${t.minScore} between 0 and 100`),
     check('campaign_batch_size', sql`${t.batchSize} in (20,50,100,200)`),
   ],
 );
@@ -431,13 +434,11 @@ export const conversations = pgTable(
   'conversations',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id),
-    campaignId: uuid('campaign_id')
-      .notNull()
-      .references(() => campaigns.id),
+    companyId: uuid('company_id').references(() => companies.id),
+    campaignId: uuid('campaign_id').references(() => campaigns.id),
     contactId: uuid('contact_id').references(() => contacts.id),
+    accountId: uuid('account_id').references(() => channelAccounts.id),
+    peerValue: text('peer_value'),
     status: text('status').notNull().default('open'),
     channel: text('channel').notNull().default('email'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -445,9 +446,13 @@ export const conversations = pgTable(
       .defaultNow(),
   },
   (t) => [
-    unique('conversation_company_campaign_channel').on(
+    uniqueIndex('conversation_inbound_peer')
+      .on(t.accountId, t.channel, t.peerValue)
+      .where(sql`${t.peerValue} is not null`),
+    unique('conversation_company_campaign_contact_channel').on(
       t.companyId,
       t.campaignId,
+      t.contactId,
       t.channel,
     ),
   ],
@@ -459,10 +464,9 @@ export const messages = pgTable(
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => conversations.id),
-    accountId: uuid('account_id')
-      .notNull()
-      .references(() => channelAccounts.id),
+    accountId: uuid('account_id').references(() => channelAccounts.id),
     direction: text('direction').notNull().default('out'),
+    source: text('source').notNull().default('generated'),
     channel: text('channel').notNull().default('email'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     toValue: text('to_value').notNull(),
@@ -476,6 +480,10 @@ export const messages = pgTable(
     firstAttemptAt: timestamp('first_attempt_at', { withTimezone: true }),
     quotaDay: text('quota_day'),
     providerId: text('provider_id'),
+    rfcMessageId: text('rfc_message_id'),
+    classification: text('classification'),
+    needsHuman: boolean('needs_human').notNull().default(false),
+    readAt: timestamp('read_at', { withTimezone: true }),
     approvedBy: uuid('approved_by').references(() => users.id),
     approvedAt: timestamp('approved_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id),
@@ -486,14 +494,21 @@ export const messages = pgTable(
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
   (t) => [
+    uniqueIndex('message_inbound_provider')
+      .on(t.channel, t.accountId, t.providerId)
+      .where(sql`${t.direction} = 'in'`),
+    check(
+      'message_classification',
+      sql`${t.classification} in ('interest','question','price','contract','complaint','refusal','autoreply')`,
+    ),
     check('message_direction', sql`${t.direction} in ('out','in')`),
     check(
       'message_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','form','social','call')`,
     ),
     check(
       'message_status',
-      sql`${t.status} in ('draft','awaiting_approval','awaiting_manual','queued','sent','delivered','read','failed')`,
+      sql`${t.status} in ('draft','awaiting_approval','awaiting_manual','queued','sent','delivered','read','failed','skipped')`,
     ),
   ],
 );

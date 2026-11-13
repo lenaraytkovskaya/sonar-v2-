@@ -44,6 +44,10 @@
       "types": "./dist/analysis.d.ts",
       "default": "./dist/analysis.js"
     },
+    "./outreach": {
+      "types": "./dist/outreach.d.ts",
+      "default": "./dist/outreach.js"
+    },
     "./email": {
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"
@@ -63,6 +67,10 @@
     "./whatsapp": {
       "types": "./dist/whatsapp.d.ts",
       "default": "./dist/whatsapp.js"
+    },
+    "./inbound": {
+      "types": "./dist/inbound.d.ts",
+      "default": "./dist/inbound.js"
     }
   },
   "files": [

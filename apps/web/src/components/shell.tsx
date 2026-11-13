@@ -96,6 +96,7 @@ export function Shell({
             <Icon aria-hidden="true" className="size-5" />
             {uk.pages[key].title}
             {key === 'overview' && <FailureBadge />}
+            {key === 'inbox' && <FailureBadge inbox />}
           </Link>
         );
       })}

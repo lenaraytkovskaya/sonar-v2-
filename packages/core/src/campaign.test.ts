@@ -46,6 +46,7 @@ it('accepts structured AI JSON and rejects prose, markdown and incomplete sugges
   expect(parseCampaignSuggestion(JSON.stringify(suggestion))).toEqual({
     ...suggestion,
     needs_about: false,
+    outreach_goal: '',
   });
   for (const text of [
     'broken',
@@ -134,4 +135,22 @@ it('applies cleaned suggestions without leaking metadata into the strict campaig
   expect(campaignSchema.safeParse(result).success).toBe(true);
   expect(result).not.toHaveProperty('needs_about');
   expect(input.offer).toBe(suggestion.offer);
+});
+
+it('defaults new campaigns to manual and validates outreach thresholds', () => {
+  const { send_mode: _mode, ...input } = form;
+  void _mode;
+  const parsed = campaignSchema.parse(input);
+  expect(parsed.send_mode).toBe('manual');
+  expect(parsed.min_score).toBe(40);
+  expect(campaignSchema.safeParse({ ...form, min_score: 101 }).success).toBe(
+    false,
+  );
+  const filled = applyCampaignSuggestion(
+    parsed,
+    parseCampaignSuggestion(
+      JSON.stringify({ ...suggestion, outreach_goal: 'Познайомитися' }),
+    ),
+  );
+  expect(filled.outreach_goal).toBe('Познайомитися');
 });
