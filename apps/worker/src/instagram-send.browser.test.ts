@@ -41,7 +41,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         inputs.push(value);
       });
       await context.addInitScript({
-        content: `window.fixtureOptions = ${JSON.stringify(options)}; document.addEventListener('input', event => window.fixtureInput(event.target.id || event.target.getAttribute('role') || event.target.tagName.toLowerCase()));`,
+        content: `window.fixtureOptions = ${JSON.stringify({ ...options, sanitizedMarkup: options.sanitizedMenu ? capturedMenu : undefined })}; document.addEventListener('input', event => window.fixtureInput(event.target.id || event.target.getAttribute('role') || event.target.tagName.toLowerCase()));`,
       });
       // Every request is fulfilled or aborted locally; DNS is also disabled at launch.
       await context.route('**/*', async (route) => {
@@ -135,7 +135,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         adapter.send(
           { id: 'fixture', channel: 'instagram', settings: {} },
           { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
-          250,
+          Number(options.timeoutMs ?? 250),
           'https://instagram.com/fixture_company/',
           typeof options.body === 'string' ? options.body : 'Synthetic message',
           mark,
@@ -184,6 +184,20 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { menuItem: true },
       { menuLink: true },
       { directAvailable: true },
+      { existingMenu: true },
+      { existingMenu: true, harmlessMenu: true, sanitizedMenu: true },
+      { existingMenu: true, sanitizedMenu: true },
+      { existingMenu: true, controls: true, menuDialog: true },
+      { existingMenu: true, menuDialog: true, bodyScrollLock: true },
+      { existingMenu: true, menuDialog: true, menuAncestorAriaHidden: true },
+      {
+        existingMenu: true,
+        sanitizedMenu: true,
+        bodyScrollLock: true,
+        menuAncestorAriaHidden: true,
+      },
+      { reuseHidden: true, controls: true },
+      { existingMenu: true, delayedActionChange: 'enable', timeoutMs: 1000 },
     ])('uses the profile overflow portal safely (%j)', async (options) => {
       const f = await fixture({ overflow: true, ...options });
       try {
@@ -207,7 +221,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ['wrongOptionsScope', 'messagebutton'],
       ['unknownOptions', 'messagebutton'],
       ['duplicateOptions', 'messagebutton'],
-      ['existingMenu', 'messagebutton'],
+      ['dangerousOverlay', 'messagebutton'],
+      ['alreadyExpanded', 'messagebutton'],
+      ['noExpandedTransition', 'messagebutton'],
+      ['wrongPopupRole', 'messagebutton'],
+      ['reuseHidden', 'messagebutton'],
+      ['menuRecipientMismatch', 'messagebutton'],
       ['wrongMenu', 'messagebutton'],
       ['duplicateMenu', 'messagebutton'],
       ['duplicateMenuAction', 'messagebutton'],
@@ -229,7 +248,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'wrongOptionsScope',
             'unknownOptions',
             'duplicateOptions',
-            'existingMenu',
+            'dangerousOverlay',
+            'alreadyExpanded',
           ].includes(option!)
             ? []
             : ['wrongRecipient', 'groupRecipient'].includes(option!)
@@ -284,8 +304,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     });
     it.each([
       [
-        'existingMenu',
-        '[branch=preexisting_popup; menus=1; dialogs=0; options=1]',
+        'dangerousOverlay',
+        '[branch=preexisting_popup; menus=0; dialogs=1; options=1]',
       ],
       [
         'outerDialog',
@@ -312,6 +332,115 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             /fixture_company|Synthetic message|https:|cookie/i,
           );
           expect(f.events).toEqual([]);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      ['reuseVisible', 'popup_changed'],
+      ['mutateExisting', 'popup_changed'],
+      ['duplicateMenu', 'popup_ambiguous'],
+      ['wrongControls', 'popup_association'],
+    ])(
+      'rejects stale/foreign popup provenance %s without selecting a decoy',
+      async (option, branch) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          controls: true,
+          [option!]: true,
+        });
+        try {
+          const error = await f.send().catch((error) => error);
+          expect(error).toMatchObject({
+            code: 'unavailable',
+            stage: 'messagebutton',
+            errorKind: 'unconfirmed',
+            reasonUk: expect.stringContaining(`[branch=${branch};`),
+          });
+          expect(error.reasonUk).not.toMatch(
+            /fixture_company|Synthetic message|https:|cookie/i,
+          );
+          expect(f.events).toEqual(['options']);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['pointerenter', 'focus', 'pointerdown'])(
+      'allows cosmetic React interaction changes on %s',
+      async (interactionStyle) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          interactionStyle,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.events).toEqual(['options', 'open', 'mark', 'send']);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.inputs).toEqual(['textbox']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      'block',
+      'label',
+      'move',
+      'role',
+      'popup',
+      'replace',
+      'disable',
+      'hide',
+    ])(
+      'blocks %s changed by document capture before the target handler',
+      async (documentCaptureChange) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          documentCaptureChange,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            stage: 'messagebutton',
+            reasonUk: expect.stringContaining('[branch=popup_changed;'),
+          });
+          expect(f.events).toEqual(['options', 'document-capture']);
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['block', 'label', 'move', 'role', 'popup', 'replace'])(
+      'cancels the pinned action if %s changes while click waits for enabled',
+      async (change) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          delayedActionChange: change,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            stage: 'messagebutton',
+            errorKind: 'unconfirmed',
+            reasonUk: expect.stringContaining('[branch=popup_changed;'),
+          });
+          expect(f.events).toEqual(['options']);
           expect(f.inputs).toEqual([]);
           expect(f.mark).not.toHaveBeenCalled();
         } finally {

@@ -93,8 +93,17 @@ function stagedFailure(
     { stage, errorKind },
   );
 }
+type PopupFailureBranch =
+  | 'preexisting_popup'
+  | 'options_count'
+  | 'options_state'
+  | 'popup_missing'
+  | 'popup_ambiguous'
+  | 'popup_changed'
+  | 'popup_association'
+  | 'popup_action';
 async function messageButtonFailure(
-  branch: 'preexisting_popup' | 'options_count',
+  branch: PopupFailureBranch,
   page: Page,
   options: Locator,
 ) {
@@ -247,30 +256,290 @@ async function sendInstagram(
     const direct = profile.locator(directAction);
     if (await direct.count()) await direct.click();
     else {
-      // A portal is outside the verified header. Require a newly visible, unique
-      // popup after clicking that header's own options, never a pre-existing menu.
-      const popup = page.locator(
-        '[role="menu"]:visible, [role="dialog"]:visible',
-      );
       const options = profile.locator(optionsAction);
-      if (await popup.count())
-        throw await messageButtonFailure('preexisting_popup', page, options);
       if ((await options.count()) !== 1)
         throw await messageButtonFailure('options_count', page, options);
-      await options.click();
-      await popup.waitFor({ state: 'visible' });
-      await assertSession();
-      if (
-        socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
-        target.canonicalUrl.toLowerCase()
-      )
-        throw stagedFailure(stage, 'mismatch');
-      await popup
-        .getByRole('menuitem', { name: menuMessageLabel })
-        .or(popup.getByRole('button', { name: menuMessageLabel }))
-        .or(popup.getByRole('link', { name: menuMessageLabel }))
-        .filter({ visible: true })
-        .click();
+      // Pin the verified trigger and snapshot identities BEFORE the click. A
+      // visible menu is never eligible, even if its contents are replaced later.
+      const trigger = await options.elementHandle();
+      const profileNode = await profile.elementHandle();
+      if (!trigger || !profileNode) throw stagedFailure(stage, 'unconfirmed');
+      const snapshot = await trigger.evaluateHandle((node) => {
+        const selector = '[role="menu"], [role="dialog"], [role="alertdialog"]';
+        const visible = (element: Element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            getComputedStyle(element).visibility !== 'hidden'
+          );
+        };
+        const existing = Array.from(document.querySelectorAll(selector));
+        const baseline = existing.filter(visible);
+        const role = node.getAttribute('aria-haspopup');
+        const expected = role === 'true' ? 'menu' : role;
+        const controls = node.getAttribute('aria-controls');
+        // Keep only semantics in page memory, never serialized DOM. CSS classes,
+        // inline styling and decorative wrappers may change during interaction.
+        const semantic = (element: Element) => {
+          const text = (value: string | null) =>
+            value?.replace(/\s+/g, ' ').trim();
+          return JSON.stringify([
+            element.tagName,
+            element.id,
+            element.getAttribute('role'),
+            element.getAttribute('href'),
+            text(element.textContent),
+            [
+              element,
+              ...Array.from(
+                element.querySelectorAll(
+                  '[role], [aria-label], [aria-labelledby], [aria-hidden], a[href]',
+                ),
+              ),
+            ].map((label) => [
+              label.getAttribute('role'),
+              label.getAttribute('href'),
+              label.getAttribute('aria-hidden'),
+              label.getAttribute('aria-label'),
+              label
+                .getAttribute('aria-labelledby')
+                ?.split(/\s+/)
+                .map((id) => {
+                  const referenced = document.getElementById(id);
+                  return [
+                    id,
+                    text(referenced?.textContent ?? null),
+                    referenced?.getAttribute('aria-label'),
+                  ];
+                }),
+            ]),
+          ]);
+        };
+        const baselineSemantics = baseline.map(semantic);
+        let openedPopup: Element | undefined;
+        const initial: PopupFailureBranch | null = baseline.some(
+          (old) =>
+            old.getAttribute('role') !== 'menu' ||
+            old.getAttribute('aria-modal') === 'true' ||
+            old.contains(node),
+        )
+          ? 'preexisting_popup'
+          : node.getAttribute('aria-expanded') !== 'false' ||
+              !['menu', 'dialog'].includes(expected ?? '') ||
+              (controls !== null && (!controls || /\s/.test(controls)))
+            ? 'options_state'
+            : null;
+        const candidates = () =>
+          Array.from(document.querySelectorAll(selector)).filter(
+            (element) => visible(element) && !baseline.includes(element),
+          );
+        const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
+          if (initial) return initial;
+          if (
+            baseline.some(
+              (old, index) =>
+                !old.isConnected ||
+                !visible(old) ||
+                semantic(old) !== baselineSemantics[index],
+            )
+          )
+            return 'popup_changed';
+          if (
+            !node.isConnected ||
+            node.getAttribute('aria-haspopup') !== role ||
+            node.getAttribute('aria-controls') !== controls
+          )
+            return 'popup_association';
+          const opened = candidates();
+          if (opened.length > 1) return 'popup_ambiguous';
+          if (!opened.length || node.getAttribute('aria-expanded') === 'false')
+            return 'pending';
+          if (node.getAttribute('aria-expanded') !== 'true')
+            return 'popup_association';
+          const popup = opened[0]!;
+          if (
+            popup.getAttribute('role') !== expected ||
+            popup.contains(node) ||
+            (existing.includes(popup) && controls === null) ||
+            (controls !== null &&
+              (popup.id !== controls ||
+                Array.from(document.querySelectorAll('[id]')).filter(
+                  (element) => element.id === controls,
+                ).length !== 1))
+          )
+            return 'popup_association';
+          if (openedPopup && openedPopup !== popup) return 'popup_changed';
+          openedPopup = popup;
+          return 'ready';
+        };
+        let blocked = false;
+        let actionValid = () => true;
+        let removeGuard = () => {};
+        const guardAction = (popup: Element, action: Element) => {
+          const id = popup.id;
+          const parent = action.parentElement;
+          const approved = semantic(action);
+          actionValid = () =>
+            inspect() === 'ready' &&
+            candidates()[0] === popup &&
+            popup.id === id &&
+            popup.contains(action) &&
+            action.parentElement === parent &&
+            visible(action) &&
+            !action.matches(':disabled') &&
+            action.closest(
+              '[aria-disabled="true"], [aria-hidden="true"], [inert]',
+            ) === null &&
+            semantic(action) === approved;
+          const guard = (event: Event) => {
+            const onAction = event.composedPath().includes(action);
+            if (event.currentTarget === window && !onAction) return;
+            blocked ||=
+              !onAction ||
+              !actionValid() ||
+              (event instanceof MouseEvent &&
+                !action.contains(
+                  document.elementFromPoint(event.clientX, event.clientY),
+                ));
+            if (blocked) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          };
+          const events = [
+            'pointerdown',
+            'mousedown',
+            'pointerup',
+            'mouseup',
+            'click',
+          ];
+          // The popup capture boundary runs AFTER document capture (including
+          // React handlers), before target/bubble handlers. Window alone is too
+          // early. Keep it as well to catch an action moved outside the popup.
+          // This is a UI consistency guard, not a sandbox: third-party JS can
+          // still change behavior inside its own later/final event handlers.
+          for (const boundary of [window, popup])
+            for (const event of events)
+              boundary.addEventListener(event, guard, {
+                capture: true,
+                passive: false,
+              });
+          removeGuard = () => {
+            for (const boundary of [window, popup])
+              for (const event of events)
+                boundary.removeEventListener(event, guard, true);
+          };
+        };
+        return {
+          initial,
+          inspect,
+          candidates,
+          guardAction,
+          wasBlocked: () => blocked,
+          actionValid: () => actionValid(),
+          cleanup: () => removeGuard(),
+        };
+      });
+      try {
+        const initial = await snapshot.evaluate((state) => state.initial);
+        if (initial) throw await messageButtonFailure(initial, page, options);
+        await trigger.click();
+        try {
+          await page.waitForFunction(
+            (state) => state.inspect() !== 'pending',
+            snapshot,
+          );
+        } catch {
+          throw await messageButtonFailure('popup_missing', page, options);
+        }
+        await assertSession();
+        if (
+          socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+            target.canonicalUrl.toLowerCase() ||
+          !(await profile.evaluate(
+            (node, original) => node === original,
+            profileNode,
+          )) ||
+          (await profile.locator(optionsAction).count()) !== 1 ||
+          !(await options.evaluate(
+            (node, original) => node === original,
+            trigger,
+          ))
+        )
+          throw stagedFailure(stage, 'mismatch');
+        const assertPopup = async () => {
+          const status = await snapshot.evaluate((state) => state.inspect());
+          if (status !== 'ready')
+            throw await messageButtonFailure(
+              status === 'pending' ? 'popup_missing' : status,
+              page,
+              options,
+            );
+        };
+        await assertPopup();
+        const popup = await snapshot.evaluateHandle(
+          (state) => state.candidates()[0]!,
+        );
+        // Pin identities here; the dispatch guard below also checks provenance
+        // after Playwright's actionability wait and document capture handlers.
+        const actions = page
+          .getByRole('menuitem', { name: menuMessageLabel })
+          .or(page.getByRole('button', { name: menuMessageLabel }))
+          .or(page.getByRole('link', { name: menuMessageLabel }))
+          .filter({ visible: true });
+        const handles = await actions.elementHandles();
+        const matching = [];
+        for (const action of handles) {
+          if (
+            await popup.evaluate(
+              (node, action) => node.contains(action),
+              action,
+            )
+          )
+            matching.push(action);
+        }
+        if (matching.length !== 1)
+          throw await messageButtonFailure('popup_action', page, options);
+        await assertPopup();
+        if (
+          !(await actions.evaluateAll(
+            (nodes, { state, popup, action }) => {
+              const pinned = nodes.find((node) => node === action);
+              if (
+                state.inspect() !== 'ready' ||
+                state.candidates()[0] !== popup ||
+                nodes.filter((node) => popup.contains(node)).length !== 1 ||
+                !popup.contains(action) ||
+                !pinned
+              )
+                return false;
+              state.guardAction(popup, pinned);
+              return true;
+            },
+            { state: snapshot, popup, action: matching[0]! },
+          ))
+        )
+          throw await messageButtonFailure('popup_changed', page, options);
+        let clickError: unknown;
+        try {
+          await matching[0]!.click();
+        } catch (error) {
+          clickError = error;
+        }
+        if (
+          await snapshot.evaluate(
+            (state, failed) =>
+              state.wasBlocked() || (failed && !state.actionValid()),
+            Boolean(clickError),
+          )
+        )
+          throw await messageButtonFailure('popup_changed', page, options);
+        if (clickError) throw clickError;
+      } finally {
+        await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
+        await snapshot.dispose();
+      }
     }
     await assertSession();
     stage = 'dialog';
