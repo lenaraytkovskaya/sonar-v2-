@@ -1,5 +1,9 @@
 import { registerInboundTasks } from './inbound.js';
 import { registerSocialTasks, closeSocialBrowser } from './social.js';
+import {
+  registerSocialSessionTasks,
+  closeSocialSendBrowser,
+} from './social-send.js';
 import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
 import { registerAnalysisTasks } from './analysis.js';
@@ -34,6 +38,7 @@ const started = (async () => {
   await registerProzorroTasks();
   await registerRegistryTasks();
   await registerSocialTasks();
+  await registerSocialSessionTasks();
   await registerSiteTasks();
   await boss.createQueue('sonar.registry.schedule');
   await runTask('system.registry_ping', async () => {
@@ -66,6 +71,7 @@ async function stop() {
   await closeTelegramClients();
   await closeTaskQueue();
   await closeSocialBrowser();
+  await closeSocialSendBrowser();
   await Promise.all([sonarPool.end(), registryPool.end()]);
 }
 for (const signal of ['SIGTERM', 'SIGINT'])

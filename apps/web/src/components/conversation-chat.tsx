@@ -104,11 +104,17 @@ export function ConversationChat({ initial }: { initial: Chat }) {
   if (!conversation) return null;
   const generating =
     task !== null && ['queued', 'running'].includes(task.status);
-  const manual = ['form', 'social', 'call'].includes(conversation.channel);
+  const social = conversation.channel === 'social';
+  const manual =
+    ['form', 'call'].includes(conversation.channel) ||
+    (social && !data.socialAvailable);
   const canReply =
-    manual || ['email', 'telegram', 'whatsapp'].includes(conversation.channel);
+    manual ||
+    social ||
+    ['email', 'telegram', 'whatsapp'].includes(conversation.channel);
   const link =
-    ['form', 'social'].includes(conversation.channel) && /^https?:/ //i.test(conversation.contactValue ?? '')
+    ['form', 'social'].includes(conversation.channel) &&
+    /^https?:\/\//i.test(conversation.contactValue ?? '')
       ? conversation.contactValue
       : null;
   return (
@@ -150,6 +156,14 @@ export function ConversationChat({ initial }: { initial: Chat }) {
               conversation.campaignSendMode === 'approval'
             }
             act={act}
+            onUseText={
+              social && data.socialAvailable
+                ? (text) => {
+                    setBody(text);
+                    document.getElementById('reply-body')?.focus();
+                  }
+                : undefined
+            }
           />
         ))}
       </div>
@@ -164,7 +178,14 @@ export function ConversationChat({ initial }: { initial: Chat }) {
               {generating ? uk.outreach.generating : uk.inbound.suggest}
             </Button>
           )}
-          {link && (
+          {social && (
+            <p className="text-sm text-muted-foreground">
+              {data.socialAvailable
+                ? uk.socialAccounts.browser
+                : uk.socialAccounts.manual}
+            </p>
+          )}
+          {link && manual && (
             <p className="text-sm">
               <a
                 href={link}
@@ -211,7 +232,19 @@ export function ConversationChat({ initial }: { initial: Chat }) {
               !body.trim() ||
               (conversation.channel === 'email' && !subject.trim())
             }
-            onClick={() => void act('reply', { body, subject })}
+            onClick={() =>
+              void act('reply', {
+                body,
+                subject,
+                ...(social
+                  ? {
+                      socialDelivery: data.socialAvailable
+                        ? 'browser'
+                        : 'manual',
+                    }
+                  : {}),
+              })
+            }
           >
             {conversation.channel === 'call'
               ? uk.outreach.logCall

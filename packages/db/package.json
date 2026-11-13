@@ -75,6 +75,10 @@
     "./social": {
       "types": "./dist/social.d.ts",
       "default": "./dist/social.js"
+    },
+    "./social-accounts": {
+      "types": "./dist/social-accounts.d.ts",
+      "default": "./dist/social-accounts.js"
     }
   },
   "files": [

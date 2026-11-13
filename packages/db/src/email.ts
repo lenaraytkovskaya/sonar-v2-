@@ -1,6 +1,8 @@
+import { SocialSendError } from '@sonar/core/social-session';
 import type { PoolClient } from 'pg';
 import {
   EmailSendError,
+  socialTarget,
   messageStatusForMode,
   normalizePhone,
   nextSendTime,
@@ -702,7 +704,11 @@ const deferred = (
   reasonCode: string,
   reasonUk: string,
 ): TaskOutcome => ({ status: 'deferred', runAt, reasonCode, reasonUk });
-export type SendAccount = { id: string; settings: Record<string, unknown> };
+export type SendAccount = {
+  id: string;
+  settings: Record<string, unknown>;
+  beforeSend?: () => Promise<void>;
+};
 export type ChannelSender = (
   request: EmailRequest,
   account?: SendAccount,
@@ -713,7 +719,7 @@ export async function sendEmailMessage(
   send: ChannelSender,
   now = new Date(),
   random = Math.random,
-  channel: 'email' | 'telegram' | 'whatsapp' = 'email',
+  channel: 'email' | 'telegram' | 'whatsapp' | 'social' = 'email',
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
@@ -801,6 +807,25 @@ export async function sendEmailMessage(
         ),
         'Компанія або адреса у списку «Не контактувати».',
       );
+    if (channel === 'social') {
+      if (m.first_attempt_at)
+        return finish(
+          terminal(
+            'paused',
+            'social_delivery_uncertain',
+            'Перевірте чат вручну',
+          ),
+          'Перевірте чат вручну',
+        );
+      if (m.source !== 'reply' || !m.created_by)
+        return finish(
+          terminal(
+            'skipped',
+            'manual_submission_required',
+            'Надішліть повідомлення вручну з діалогу.',
+          ),
+        );
+    }
     if (channel === 'whatsapp') {
       const contacts = await whatsappContacts(
         c,
@@ -867,7 +892,7 @@ export async function sendEmailMessage(
         terminal(
           'paused',
           'campaign_inactive',
-          `Активуйте кампанію та увімкніть ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
+          `Активуйте кампанію та увімкніть ${channel === 'social' ? 'соцмережі' : channel === 'whatsapp' ? 'WhatsApp' : channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
         ),
       );
     if (m.send_mode === 'auto' && m.idempotency_key.startsWith('outreach:')) {
@@ -936,6 +961,19 @@ export async function sendEmailMessage(
         );
       }
     }
+    if (
+      channel === 'social' &&
+      (!account ||
+        account.channel !== socialTarget(m.to_value)?.network ||
+        account.settings.sessionStatus !== 'valid')
+    )
+      return finish(
+        terminal(
+          'paused',
+          'social_session_invalid',
+          'Увійдіть знову (оновіть cookies)',
+        ),
+      );
     if (account.status !== 'active')
       return finish(
         terminal('paused', 'account_disabled', 'Акаунт каналу вимкнено.'),
@@ -955,14 +993,19 @@ export async function sendEmailMessage(
         'Потрібно звірити доставку в Resend.',
       );
     const { rows: settings } = await c.query(
-      "select key,value from settings where key like 'send.%'",
+      "select key,value from settings where key like 'send.%' or key like 'social.send.%'",
     );
     const config = Object.fromEntries(settings.map((s) => [s.key, s.value]));
     const zone = m.country_code
       ? config['send.time_zones']?.[m.country_code]
       : config['send.inbound_time_zone'];
     let at: Date;
-    const gapPrefix = channel === 'whatsapp' ? 'send.whatsapp' : 'send';
+    const gapPrefix =
+      channel === 'social'
+        ? 'social.send'
+        : channel === 'whatsapp'
+          ? 'send.whatsapp'
+          : 'send';
     const min = Number(config[`${gapPrefix}.min_gap_seconds`]),
       max = Number(config[`${gapPrefix}.max_gap_seconds`]);
     try {
@@ -1044,7 +1087,7 @@ export async function sendEmailMessage(
           }
         : {}),
     };
-    if (!m.first_attempt_at) {
+    if (!m.first_attempt_at && channel !== 'social') {
       await c.query(
         "update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null,rfc_message_id=case when channel='email' then $4 else null end where id=$1",
         [messageId, now, request, rfcMessageId],
@@ -1093,14 +1136,57 @@ export async function sendEmailMessage(
     };
     try {
       const providerId =
-        channel === 'telegram' || channel === 'whatsapp'
+        channel === 'telegram' || channel === 'whatsapp' || channel === 'social'
           ? await send(request, {
               id: account.id,
-              settings: { ...account.settings, countryCode: m.country_code },
+              settings: {
+                ...account.settings,
+                countryCode: m.country_code,
+                network: account.channel,
+              },
+              ...(channel === 'social'
+                ? {
+                    beforeSend: async () => {
+                      const result = await c.query(
+                        'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',
+                        [messageId, now, request],
+                      );
+                      if (!result.rowCount)
+                        throw new SocialSendError(
+                          'delivery_uncertain',
+                          'Перевірте чат вручну',
+                        );
+                    },
+                  }
+                : {}),
             })
           : await send(request);
       return await recordDelivery(providerId);
     } catch (error) {
+      if (channel === 'social') {
+        const reason =
+          error instanceof SocialSendError
+            ? error.reasonUk
+            : 'Перевірте чат вручну';
+        const code =
+          error instanceof SocialSendError ? error.code : 'delivery_uncertain';
+        await transaction(async (tx) => {
+          if (code === 'session_invalid')
+            await tx.query(
+              "update channel_accounts set status='paused',settings=settings || jsonb_build_object('sessionStatus','invalid','reasonUk',$2::text) where id=$1",
+              [account.id, 'Увійдіть знову (оновіть cookies)'],
+            );
+          await tx.query(
+            "update messages set status=case when $3 then 'queued' else 'failed' end,reason_uk=$2 where id=$1",
+            [messageId, reason, code === 'session_invalid'],
+          );
+        });
+        return terminal(
+          code === 'unavailable' ? 'skipped' : 'paused',
+          `social_${code}`,
+          reason,
+        );
+      }
       if (error instanceof WhatsAppSendError) {
         if (error.sessionInactive) {
           await transaction(async (tx) => {

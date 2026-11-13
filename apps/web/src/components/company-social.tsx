@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { socialTarget } from '@sonar/core';
 import type { getCompanySocial } from '@sonar/db/social';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
@@ -69,9 +71,11 @@ function PublicLink({
 export function CompanySocial({
   companyId,
   initial,
+  contacts,
 }: {
   companyId: string;
   initial: SocialData;
+  contacts: { id: string; kind: string; value: string }[];
 }) {
   const router = useRouter();
   const [data, setData] = useState(initial);
@@ -145,7 +149,28 @@ export function CompanySocial({
         >
           <h3 className="font-semibold">{uk.social.networks[row.network]}</h3>
           <p>
-            <PublicLink value={row.sourceUrl} />
+            <PublicLink value={row.sourceUrl} />{' '}
+            {contacts
+              .filter((contact) => {
+                const target =
+                  contact.kind === 'social'
+                    ? socialTarget(contact.value)
+                    : null;
+                return (
+                  target?.network === row.network &&
+                  target?.handle === row.target.handle
+                );
+              })
+              .slice(0, 1)
+              .map((contact) => (
+                <Link
+                  key={contact.id}
+                  className="ml-2 text-accent"
+                  href={`/inbox?contact=${contact.id}`}
+                >
+                  {uk.email.write}
+                </Link>
+              ))}
           </p>
           {row.task && (
             <p className="text-xs text-muted-foreground">

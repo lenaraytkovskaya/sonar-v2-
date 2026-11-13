@@ -408,7 +408,7 @@ export const channelAccounts = pgTable(
     check('account_daily_limit', sql`${t.dailyLimit} > 0`),
     check(
       'account_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','form','instagram','facebook','linkedin')`,
     ),
   ],
 );

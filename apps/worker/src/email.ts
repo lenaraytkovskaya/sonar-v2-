@@ -5,6 +5,7 @@ import { sonarPool } from '@sonar/db';
 import { runWhatsAppSend } from './whatsapp.js';
 import { runTelegramSend } from './telegram.js';
 import { runFormSend } from './form.js';
+import { runSocialSend } from './social-send.js';
 export async function runEmailSend(
   input: { messageId: string },
   taskId: string,
@@ -35,6 +36,7 @@ export async function registerEmailTasks() {
       'select c.channel from messages m join conversations c on c.id=m.conversation_id where m.id=$1',
       [input.messageId],
     );
+    if (message?.channel === 'social') return runSocialSend(input, id);
     if (message?.channel === 'whatsapp') return runWhatsAppSend(input, id);
     if (message?.channel === 'telegram') return runTelegramSend(input, id);
     return message?.channel === 'form'

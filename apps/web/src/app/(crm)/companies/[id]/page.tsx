@@ -271,6 +271,14 @@ export default async function Page({
               <span className="truncate">{contact.normalized}</span>
             )}
             <SourceLink url={contact.source_url} />
+            {contact.kind === 'social' && (
+              <Link
+                className="shrink-0 text-accent"
+                href={`/inbox?contact=${contact.id}`}
+              >
+                {uk.email.write}
+              </Link>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
             {
@@ -664,7 +672,11 @@ export default async function Page({
             )}
           </Section>
           <Section title={uk.social.title}>
-            <CompanySocial companyId={c.id} initial={social} />
+            <CompanySocial
+              companyId={c.id}
+              initial={social}
+              contacts={contacts}
+            />
           </Section>
           <Collapsible title={uk.prozorro.title} count={prozorro.count}>
             {prozorroContacts.map((contact) => (

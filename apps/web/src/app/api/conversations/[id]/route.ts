@@ -62,7 +62,9 @@ export async function POST(request: Request, context: Context) {
         !data.body.trim() ||
         data.body.length > 20000 ||
         typeof data.subject !== 'string' ||
-        data.subject.length > 998
+        data.subject.length > 998 ||
+        (chat.conversation.channel === 'social' &&
+          !['browser', 'manual'].includes(data.socialDelivery))
       )
         return invalid();
       return db.queueConversationReply(
@@ -71,6 +73,9 @@ export async function POST(request: Request, context: Context) {
           body: data.body,
           subject: data.subject,
           requestId: data.requestId,
+          ...(chat.conversation.channel === 'social'
+            ? { socialDelivery: data.socialDelivery }
+            : {}),
         },
         user.id,
       );
