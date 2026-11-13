@@ -154,7 +154,10 @@ export function ConversationChat({ initial }: { initial: Chat }) {
     ['form', 'social'].includes(conversation.channel) &&
     /^https?:\/\//i.test(conversation.contactValue ?? '')
       ? conversation.contactValue
-      : null;
+      : conversation.channel === 'call' &&
+          /^\+[1-9]\d{1,14}$/.test(conversation.contactValue ?? '')
+        ? `tel:${conversation.contactValue}`
+        : null;
   const send = () => {
     if (
       pending ||
@@ -300,9 +303,12 @@ export function ConversationChat({ initial }: { initial: Chat }) {
                 rel="noreferrer"
                 className="text-accent"
               >
-                {uk.outreach.openContact}
-              </a>{' '}
-              · {uk.outreach.manualHint}
+                {conversation.channel === 'call'
+                  ? uk.outreach.openCall
+                  : uk.outreach.openContact}
+              </a>
+              {conversation.channel !== 'call' &&
+                ` · ${uk.outreach.manualHint}`}
             </p>
           )}
           {conversation.channel === 'email' && (

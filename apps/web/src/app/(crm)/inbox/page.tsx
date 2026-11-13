@@ -64,6 +64,7 @@ export default async function Page({
         description={uk.pages.inbox.description}
       />
       <FilterPanel
+        key={JSON.stringify(filters)}
         count={Object.values(filters).filter(Boolean).length}
         resetHref="/inbox"
       >

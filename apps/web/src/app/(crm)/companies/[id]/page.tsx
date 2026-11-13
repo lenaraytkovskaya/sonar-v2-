@@ -232,7 +232,9 @@ export default async function Page({
       )?.id;
     if (!contactId) return undefined;
     const conversation = messaging.conversations.find(
-      (row) => row.contactId === contactId,
+      (row) =>
+        row.contactId === contactId &&
+        (!selectedCampaign || row.campaignId === selectedCampaign),
     );
     if (conversation) return `/inbox?conversation=${conversation.id}`;
     const query = new URLSearchParams({ contact: contactId });

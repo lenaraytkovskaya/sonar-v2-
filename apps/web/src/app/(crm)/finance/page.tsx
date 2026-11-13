@@ -29,7 +29,11 @@ export default async function Page({
   return (
     <>
       <PageHeader {...uk.pages.finance} />
-      <FilterPanel count={month === selected ? 1 : 0} resetHref="/finance">
+      <FilterPanel
+        key={`${selected}:${month === selected}`}
+        count={month === selected ? 1 : 0}
+        resetHref="/finance"
+      >
         <form className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-sm">
             {t.month}

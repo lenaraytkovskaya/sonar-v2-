@@ -53,7 +53,13 @@ export function FilterPanel({
             </Link>
           ) : (
             onReset && (
-              <Button variant="outline" onClick={onReset}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setOpen(false);
+                  onReset();
+                }}
+              >
                 <RotateCcw aria-hidden="true" className="size-3.5" />
                 {uk.filters.reset}
               </Button>

@@ -199,6 +199,7 @@ export const uk = {
     skip: 'Пропустити',
     noCampaign: 'Додайте компанію до кампанії.',
     callNote: 'Нотатка про дзвінок',
+    openCall: 'Відкрити номер',
     logCall: 'Зберегти дзвінок',
     source: 'Джерело',
     incoming: 'Вхідне',
