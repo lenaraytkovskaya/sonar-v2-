@@ -22,6 +22,29 @@ export const whatsappError = (error: unknown): WhatsAppSendError =>
         'Не вдалося виконати запит WhatsApp.',
       );
 
+/**
+ * WAHA engines answer sendText differently: WEBJS gives {id:{_serialized}}, NOWEB/GOWS give
+ * the raw message {key:{id}} (a real message was delivered while the old check only took a
+ * string id).
+ */
+export function whatsappMessageId(
+  sent: Record<string, unknown>,
+): string | null {
+  const id = sent.id as unknown;
+  if (typeof id === 'string' && id) return id;
+  if (id && typeof id === 'object') {
+    const serialized = (id as { _serialized?: unknown; id?: unknown })
+      ._serialized;
+    if (typeof serialized === 'string' && serialized) return serialized;
+    const inner = (id as { id?: unknown }).id;
+    if (typeof inner === 'string' && inner) return inner;
+  }
+  const key = (sent.key ??
+    (sent._data as { key?: unknown } | undefined)?.key) as
+    { id?: unknown } | undefined;
+  if (typeof key?.id === 'string' && key.id) return key.id;
+  return null;
+}
 export function normalizeWhatsAppRecipient(
   raw: string,
   defaultCountry?: CountryCode,
@@ -280,12 +303,13 @@ export function createWhatsAppAdapter(
         { session: 'default', chatId: contact.chatId, text: input.body },
         true,
       );
-      if (typeof sent.id !== 'string' || !sent.id)
+      const messageId = whatsappMessageId(sent);
+      if (!messageId)
         throw new WhatsAppSendError(
           'send_ambiguous',
           'Результат надсилання WhatsApp невідомий. Перевірте чат перед повтором.',
         );
-      return { messageId: sent.id };
+      return { messageId };
     },
   };
 }

@@ -111,8 +111,9 @@ describe('Telegram transport', () => {
     expect(await adapter.send(delivery)).toBe('42');
     expect(factory).toHaveBeenCalledTimes(1);
     expect(
-      client.invoke.mock.calls.slice(0, 4).map(([r]) => r.className),
+      client.invoke.mock.calls.slice(0, 5).map(([r]) => r.className),
     ).toEqual([
+      'contacts.ResolvePhone',
       'contacts.GetContacts',
       'contacts.ImportContacts',
       'messages.SendMessage',
@@ -126,6 +127,28 @@ describe('Telegram transport', () => {
     );
     await adapter.closeAll();
     expect(client.destroy).toHaveBeenCalledTimes(1);
+  });
+  it('resolves a phone directly and sends without importing a contact', async () => {
+    const { adapter, client } = mockClient((r) =>
+      r instanceof Api.contacts.ResolvePhone
+        ? new Api.contacts.ResolvedPeer({
+            peer: new Api.PeerUser({ userId: user.id }),
+            chats: [],
+            users: [user],
+          })
+        : new Api.UpdateShortSentMessage({
+            id: 43,
+            pts: 1,
+            ptsCount: 1,
+            date: 1,
+          }),
+    );
+    expect(await adapter.send(delivery)).toBe('43');
+    expect(client.invoke.mock.calls.map(([r]) => r.className)).toEqual([
+      'contacts.ResolvePhone',
+      'messages.SendMessage',
+    ]);
+    await adapter.closeAll();
   });
   it('preserves an existing contact and sends usernames without importing', async () => {
     const { adapter, client } = mockClient((r) =>
@@ -142,11 +165,12 @@ describe('Telegram transport', () => {
     );
     await adapter.send(delivery);
     expect(client.invoke.mock.calls.map(([r]) => r.className)).toEqual([
+      'contacts.ResolvePhone',
       'contacts.GetContacts',
       'contacts.ImportContacts',
       'messages.SendMessage',
     ]);
-    const request = client.invoke.mock.calls[1]?.[0];
+    const request = client.invoke.mock.calls[2]?.[0];
     expect(
       request instanceof Api.contacts.ImportContacts && request.contacts[0],
     ).toMatchObject({ firstName: 'Original', lastName: '' });
