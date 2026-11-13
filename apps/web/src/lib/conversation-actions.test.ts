@@ -82,6 +82,42 @@ beforeEach(() => {
 });
 
 describe('conversation API boundaries', () => {
+  it('requires an explicit social delivery choice so a manual mark cannot silently queue a send', async () => {
+    chat.mockResolvedValue({
+      conversation: { id, channel: 'social' },
+      messages: [],
+      blocked: false,
+      socialAvailable: true,
+    });
+    const body = {
+      action: 'reply',
+      requestId: foreign,
+      body: 'Reply',
+      subject: '',
+    };
+    expect((await POST(request(body), context)).status).toBe(400);
+    expect(
+      (await POST(request({ ...body, socialDelivery: 'unexpected' }), context))
+        .status,
+    ).toBe(400);
+    expect(reply).not.toHaveBeenCalled();
+    for (const socialDelivery of ['browser', 'manual']) {
+      expect(
+        (await POST(request({ ...body, socialDelivery }), context)).status,
+      ).toBe(200);
+      expect(reply).toHaveBeenLastCalledWith(
+        {
+          conversationId: id,
+          requestId: foreign,
+          body: 'Reply',
+          subject: '',
+          socialDelivery,
+        },
+        'actor',
+      );
+    }
+  });
+
   it('rejects unauthenticated reads and writes, and cross-origin writes', async () => {
     session.mockResolvedValue({});
     expect((await GET(get(), context)).status).toBe(401);

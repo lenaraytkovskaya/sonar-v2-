@@ -26,12 +26,14 @@ export function Draft({
   pending,
   approval,
   act,
+  onUseText,
 }: {
   message: Message;
   blocked: boolean;
   pending: boolean;
   approval: boolean;
   act: Action;
+  onUseText?: (body: string) => void;
 }) {
   const [subject, setSubject] = useState(message.subject),
     [body, setBody] = useState(message.body);
@@ -104,7 +106,7 @@ export function Draft({
             />
             <AiAssist text={body} onApply={setBody} />
           </div>
-          {manual && (
+          {manual && !onUseText && (
             <p className="text-xs text-muted-foreground">
               {uk.outreach.manualHint}
             </p>
@@ -133,9 +135,13 @@ export function Draft({
                 </Button>
                 <Button
                   disabled={pending || !body.trim()}
-                  onClick={() => void proceed('manual')}
+                  onClick={() =>
+                    onUseText ? onUseText(body) : void proceed('manual')
+                  }
                 >
-                  {uk.outreach.manualSent}
+                  {onUseText
+                    ? uk.socialAccounts.useText
+                    : uk.outreach.manualSent}
                 </Button>
               </>
             ) : (

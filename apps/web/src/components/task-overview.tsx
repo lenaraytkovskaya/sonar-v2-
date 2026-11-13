@@ -129,6 +129,8 @@ export function TaskOverview() {
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
       'site.scan': uk.scanner.title,
+      'social.fetch': uk.social.title,
+      'social.request': uk.social.title,
       'company.score': uk.company.score,
       'company.analyze': uk.analysis.title,
       'message.send': uk.email.title,
@@ -342,7 +344,9 @@ export function TaskOverview() {
                     {uk.tasks.reconcile}
                   </Button>
                 )
-              ) : task.type.startsWith('whatsapp.account.') ? (
+              ) : task.type === 'social.request' ? null : task.type.startsWith(
+                  'whatsapp.account.',
+                ) ? (
                 <Button asChild>
                   <Link href="/channels">{uk.pages.channels.title}</Link>
                 </Button>

@@ -99,6 +99,24 @@ describe('website extraction from authored HTML fixtures', () => {
       'tiktok',
     ]);
   });
+  it('discovers social aliases and profile sections without collecting people', () => {
+    const links = [
+      'https://fb.me/garage/about',
+      'https://instagr.am/garage/?igsh=tracking',
+      'https://ua.linkedin.com/showcase/garage/posts/',
+      'https://linkedin.com/in/person',
+      'https://facebook.com/people/person/123',
+    ];
+    const found = extractSitePage(
+      links.map((url) => `<a href="${url}">Profile</a>`).join(''),
+      context,
+    ).contacts;
+    expect(found.map((contact) => contact.value)).toEqual([
+      'https://www.facebook.com/garage/',
+      'https://www.instagram.com/garage/',
+      'https://www.linkedin.com/showcase/garage/',
+    ]);
+  });
   it('reads JSON-LD graph, preserves address fact and ranks structural phones', () => {
     const result = page('07-schema');
     expect(result.contacts.find((c) => c.kind === 'phone')).toMatchObject({
@@ -373,7 +391,7 @@ describe('feedback forms and clean links', () => {
     ).contacts.map((contact) => contact.value);
     expect(links).toEqual([
       'https://www.tiktok.com/@fine.auto',
-      'https://instagram.com/garage/',
+      'https://www.instagram.com/garage/',
       'https://www.facebook.com/profile.php?id=615',
       'https://t.me/garage',
     ]);

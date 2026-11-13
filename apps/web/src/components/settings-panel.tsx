@@ -11,6 +11,12 @@ import { ModelPicker } from './model-picker';
 import { RegistryPhoneSync } from './registry-phone-sync';
 import { ProzorroSync } from './prozorro-sync';
 import {
+  socialFields,
+  socialKeys,
+  validSocialSettings,
+  type SocialSettings,
+} from '@/lib/social-settings';
+import {
   scannerFields,
   scannerKeys,
   validScannerSettings,
@@ -21,6 +27,7 @@ export function SettingsPanel() {
     [profiles, setProfiles] = useState<GoogleProfile[]>([]),
     [googleDays, setGoogleDays] = useState(365),
     [scanner, setScanner] = useState<ScannerSettings>({}),
+    [social, setSocial] = useState<SocialSettings>({}),
     [cheap, setCheap] = useState(''),
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
@@ -41,6 +48,13 @@ export function SettingsPanel() {
     setAnalysisPrompt(data['analysis.prompt'] ?? '');
     setProfiles(data['google.field_profiles'] ?? []);
     setGoogleDays(data['retention.google_days'] ?? 365);
+    setSocial(
+      Object.fromEntries(
+        socialKeys
+          .filter((key) => data[key] !== undefined)
+          .map((key) => [key, data[key]]),
+      ),
+    );
     setScanner(
       Object.fromEntries(
         scannerKeys
@@ -79,6 +93,7 @@ export function SettingsPanel() {
           googleProfiles: profiles,
           googleDays,
           scanner,
+          social,
         }),
       });
       if (!response.ok) throw Error(uk.ai.invalid);
@@ -95,6 +110,51 @@ export function SettingsPanel() {
       <div className="grid items-start gap-6 xl:grid-cols-2">
         <RegistryPhoneSync />
         <ProzorroSync />
+        <Card className="space-y-4 p-6">
+          <h2 className="font-heading text-base font-bold">
+            {uk.social.title}
+          </h2>
+          <label className="flex min-h-9 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={social['social.enabled'] === true}
+              onChange={(event) =>
+                setSocial({ ...social, 'social.enabled': event.target.checked })
+              }
+            />
+            {uk.social.enabled}
+          </label>
+          {Object.entries(socialFields).map(([key, range]) => (
+            <label key={key} className="block space-y-2">
+              <span>
+                {uk.social.settings[key as keyof typeof uk.social.settings]}
+              </span>
+              <Input
+                type="number"
+                {...range}
+                value={typeof social[key] === 'number' ? social[key] : ''}
+                onChange={(event) =>
+                  setSocial({ ...social, [key]: event.target.valueAsNumber })
+                }
+              />
+            </label>
+          ))}
+          <p className="text-sm text-muted-foreground">
+            {uk.social.settingsHint}
+          </p>
+          <AiAssist
+            text={JSON.stringify(social, null, 2)}
+            onApply={(text) => {
+              try {
+                const value = JSON.parse(text);
+                if (!validSocialSettings(value)) throw Error();
+                setSocial(value);
+              } catch {
+                setMessage(uk.ai.invalid);
+              }
+            }}
+          />
+        </Card>
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-base font-bold">{uk.ai.title}</h2>
           <p className="text-sm text-muted-foreground">{uk.ai.price}</p>

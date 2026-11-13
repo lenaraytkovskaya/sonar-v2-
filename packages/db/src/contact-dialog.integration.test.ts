@@ -6,6 +6,10 @@ it.skipIf(!enabled)(
   async () => {
     const db = await import('./index.js');
     const inbound = await import('./inbound.js');
+    const { PgBoss } = await import('pg-boss');
+    const queue = new PgBoss(process.env.DATABASE_URL!);
+    await queue.start();
+    await queue.createQueue('message.send');
     const [company, campaign, account, email, form] = Array.from(
       { length: 5 },
       () => randomUUID(),
@@ -61,6 +65,7 @@ it.skipIf(!enabled)(
       );
       expect(marked.status).toBe('sent');
     } finally {
+      await queue.stop();
       await db.sonarPool.query(
         "delete from tasks where payload->>'messageId' in (select id::text from messages where conversation_id in (select id from conversations where company_id=$1))",
         [company],

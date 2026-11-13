@@ -32,3 +32,5 @@ export * from './platforms.js';
 export * from './outreach.js';
 
 export * from './inbound.js';
+
+export * from './social.js';

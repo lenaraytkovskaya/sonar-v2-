@@ -218,6 +218,7 @@ export async function retryTask(id: string, userId: string) {
     if (
       !original ||
       original.result?.billingPending ||
+      original.type === 'social.request' ||
       original.type.startsWith('whatsapp.account.')
     )
       return false;
@@ -239,6 +240,12 @@ export async function retryTask(id: string, userId: string) {
         client,
       );
       return true;
+    }
+    if (original.type === 'social.fetch') {
+      if (!['failed', 'paused', 'skipped'].includes(original.status))
+        return false;
+      const { prepareSocialRetry } = await import('./social.js');
+      if (!(await prepareSocialRetry(client, original))) return false;
     }
     const { rows: settled } = await client.query(
       "select id from spend_events where task_id=$1 and (meta ? 'error' or meta ? 'reconciliation')",

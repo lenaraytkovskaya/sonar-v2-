@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { socialTarget } from '@sonar/core';
 import { normalizeTelegramRecipient } from '@sonar/core/telegram';
 import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
 import { sonarPool } from './index.js';
@@ -295,10 +296,30 @@ export async function getConversationChat(
   const recipient =
     [...messages].reverse().find((m) => m.direction === 'in')?.toValue ??
     messages[0]?.toValue ??
+    conversation?.contactValue ??
     '';
+  const target =
+    conversation?.channel === 'social'
+      ? socialTarget(conversation.contactValue)
+      : null;
+  const network =
+    target &&
+    target.kind !== 'unsupported' &&
+    (target.network !== 'linkedin' || target.kind === 'company')
+      ? target.network
+      : null;
+  const socialAvailable = network
+    ? ((
+        await sonarPool.query(
+          "select exists(select 1 from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid') as available",
+          [network],
+        )
+      ).rows[0].available as boolean)
+    : false;
   return {
     conversation,
     messages,
+    socialAvailable,
     blocked: conversation
       ? await isContactBlocked(sonarPool, conversation.companyId, recipient)
       : false,
@@ -422,7 +443,11 @@ export async function ensureContactConversation(
 }
 async function reply(
   conversationId: string,
-  draft: { subject?: string; body: string },
+  draft: {
+    subject?: string;
+    body: string;
+    socialDelivery?: 'browser' | 'manual';
+  },
   key: string,
   userId: string | null,
   queued: boolean,
@@ -445,7 +470,11 @@ async function reply(
       !['email', 'telegram', 'whatsapp', ...manualChannels].includes(v.channel)
     )
       invalid('Цей діалог не підтримує відповіді.');
-    const manual = manualChannels.includes(v.channel);
+    const socialBrowser =
+      v.channel === 'social' && draft.socialDelivery === 'browser';
+    if (socialBrowser && (!queued || !userId))
+      invalid('Надішліть повідомлення вручну з діалогу.');
+    const manual = manualChannels.includes(v.channel) && !socialBrowser;
     if (v.company_id)
       await c.query(
         "select pg_advisory_xact_lock(hashtextextended('company-contact:'||$1::text,0))",
@@ -476,12 +505,13 @@ async function reply(
             : (contact?.normalized ?? contact?.value);
       const {
         rows: [account],
-      } = manual
-        ? { rows: [{ id: null }] }
-        : await c.query(
-            "select id from channel_accounts where channel=$1 and status='active' order by created_at,id limit 1",
-            [v.channel],
-          );
+      } =
+        manual || socialBrowser
+          ? { rows: [{ id: null }] }
+          : await c.query(
+              "select id from channel_accounts where channel=$1 and status='active' order by created_at,id limit 1",
+              [v.channel],
+            );
       if (!to) invalid('Не вдалося визначити адресу контакту.');
       if (!account) invalid('Підключіть активний акаунт для цього каналу.');
       last = { account_id: account.id, to_value: to, subject: '' };
@@ -491,17 +521,35 @@ async function reply(
     const {
       rows: [prior],
     } = await c.query(
-      'select id,status,conversation_id,body from messages where idempotency_key=$1',
+      'select id,status,conversation_id,body,source from messages where idempotency_key=$1',
       [key],
     );
     if (prior) {
       if (
         prior.conversation_id !== conversationId ||
-        prior.body !== draft.body.trim()
+        prior.body !== draft.body.trim() ||
+        (v.channel === 'social' && (prior.source === 'reply') !== socialBrowser)
       )
         invalid('Ключ повідомлення вже використано для іншого запиту.');
       return { id: String(prior.id), status: String(prior.status) };
     }
+    if (socialBrowser) {
+      const target = socialTarget(last.to_value);
+      if (
+        !target ||
+        target.kind === 'unsupported' ||
+        (target.network === 'linkedin' && target.kind !== 'company')
+      )
+        invalid('Цей профіль не підтримує надсилання повідомлень.');
+      const {
+        rows: [account],
+      } = await c.query(
+        "select id from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid' order by created_at,id limit 1",
+        [target!.network],
+      );
+      if (!account) invalid('Підключіть активний акаунт для цієї соцмережі.');
+      last.account_id = account.id;
+    } else if (v.channel === 'social') last.account_id = null;
     const subject =
       draft.subject?.trim() ||
       last.subject ||
@@ -518,7 +566,7 @@ async function reply(
         subject,
         draft.body.trim(),
         // Forms and social networks are sent by a person; the message records that.
-        manual ? 'sent' : queued ? 'queued' : 'draft',
+        queued ? (manual ? 'sent' : 'queued') : 'draft',
         key,
         userId,
         queued,
@@ -556,6 +604,7 @@ export async function queueConversationReply(
     subject?: string;
     body: string;
     requestId: string;
+    socialDelivery?: 'browser' | 'manual';
   },
   userId: string,
 ) {

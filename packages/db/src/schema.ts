@@ -205,6 +205,9 @@ export const contactKind = pgEnum('contact_kind', [
   'website',
 ]);
 export const contactSource = pgEnum('contact_source', [
+  'facebook',
+  'instagram',
+  'linkedin',
   'google',
   'website',
   'registry',
@@ -320,7 +323,7 @@ export const companyFacts = pgTable(
   (t) => [
     check(
       'company_fact_source',
-      sql`${t.source} in ('google','website','registry','prozorro','manual','ai')`,
+      sql`${t.source} in ('google','website','registry','prozorro','manual','ai','facebook','instagram','linkedin')`,
     ),
     uniqueIndex('company_fact_unique').on(
       t.companyId,
@@ -405,7 +408,7 @@ export const channelAccounts = pgTable(
     check('account_daily_limit', sql`${t.dailyLimit} > 0`),
     check(
       'account_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','form','instagram','facebook','linkedin')`,
     ),
   ],
 );

@@ -1,4 +1,88 @@
 export const uk = {
+  socialAccounts: {
+    title: 'Акаунти соцмереж',
+    network: 'Соцмережа',
+    proxy: 'Проксі',
+    cookies: 'Сесія (cookies) — JSON',
+    add: 'Додати акаунт',
+    edit: 'Редагувати акаунт',
+    check: 'Перевірити вхід',
+    checkQueued: 'Перевірку сесії додано до черги.',
+    show: 'Показати cookies',
+    hide: 'Приховати cookies',
+    replaceCookies:
+      'Залиште поле порожнім, щоб зберегти поточну сесію. Нові cookies потребують перевірки.',
+    cookieHelp: 'Як експортувати cookies через Cookie-Editor',
+    cookiePrivacy:
+      'Cookies надають доступ до акаунта. Вони зберігаються зашифрованими й не передаються ІІ. Після збереження перевірте сесію та ввімкніть акаунт.',
+    cookieSteps: [
+      'Установіть розширення Cookie-Editor у своєму браузері.',
+      'Увійдіть у потрібний акаунт Instagram, Facebook або LinkedIn на офіційному сайті.',
+      'Відкрийте Cookie-Editor на сторінці цієї соцмережі та натисніть Export → JSON.',
+      'Вставте експортований JSON у поле cookies, оберіть проксі та збережіть акаунт.',
+      'Натисніть «Перевірити вхід». Після успішної перевірки акаунт стане активним.',
+    ],
+    noProxy: 'Адміністратор має налаштувати проксі перед додаванням акаунта.',
+    manual:
+      'Немає активного акаунта цієї соцмережі. Надішліть повідомлення вручну у профілі та позначте результат.',
+    browser:
+      'Повідомлення буде надіслано через активний акаунт цієї соцмережі в черзі.',
+    useText: 'Використати в повідомленні',
+    needsLogin: 'Потрібен вхід',
+    statuses: { active: 'Активний', paused: 'Пауза', disabled: 'Пауза' },
+  },
+  social: {
+    title: 'Соцмережі',
+    update: 'Оновити соцмережі',
+    empty: 'Публічні профілі Facebook, Instagram або LinkedIn ще не знайдено.',
+    error: 'Не вдалося оновити соцмережі. Спробуйте ще раз.',
+    checked: 'Перевірено',
+    enabled: 'Автоматично збирати публічні профілі під час збагачення',
+    settingsHint:
+      'Ручне оновлення доступне також без автоматичного збору. ІІ пропонує налаштування у форматі JSON; збереження застосує їх до наступних запитів.',
+    settings: {
+      'social.cost_per_request_usd': 'Вартість запиту проксі, USD',
+      'social.page_timeout_ms': 'Тайм-аут сторінки, мс',
+      'social.facebook.daily_limit': 'Facebook: запитів на день',
+      'social.facebook.min_gap_seconds':
+        'Facebook: інтервал між запитами, секунд',
+      'social.facebook.pause_minutes':
+        'Facebook: пауза після обмеження, хвилин',
+      'social.instagram.daily_limit': 'Instagram: запитів на день',
+      'social.instagram.min_gap_seconds':
+        'Instagram: інтервал між запитами, секунд',
+      'social.instagram.pause_minutes':
+        'Instagram: пауза після обмеження, хвилин',
+      'social.linkedin.daily_limit': 'LinkedIn: запитів на день',
+      'social.linkedin.min_gap_seconds':
+        'LinkedIn: інтервал між запитами, секунд',
+      'social.linkedin.pause_minutes':
+        'LinkedIn: пауза після обмеження, хвилин',
+    },
+    posts: 'Останні публікації',
+    post: 'Публікація',
+    networks: {
+      facebook: 'Facebook',
+      instagram: 'Instagram',
+      linkedin: 'LinkedIn',
+    },
+    fields: {
+      name: 'Назва',
+      category: 'Категорія',
+      description: 'Опис',
+      website: 'Сайт',
+      phones: 'Телефони',
+      emails: 'Email',
+      followers: 'Підписники',
+      postsCount: 'Публікації',
+      followingCount: 'Підписки',
+      industry: 'Галузь',
+      companySize: 'Розмір компанії',
+      headquarters: 'Головний офіс',
+      foundedYear: 'Рік заснування',
+      lastPostAt: 'Остання публікація',
+    },
+  },
   inbound: {
     unknownCompany: 'Без компанії',
     needsHuman: 'Потрібна людина',
@@ -153,6 +237,8 @@ export const uk = {
       'company.blocked': 'Позначено «Не контактувати»',
       'company.score': 'Розраховано скоринг',
       'company.analyze': 'Виконано аналіз ІІ',
+      'social.fetch.queued': 'Оновлення соцмереж додано до черги',
+      'social.fetch': 'Оновлено соцмережі',
       'ai.drafts.queued': 'Генерацію чернетки додано до черги',
       'outreach.draft.created': 'Створено персональну чернетку',
       'outreach.draft.edited': 'Чернетку відредаговано',
@@ -391,6 +477,9 @@ export const uk = {
       registry: 'Реєстр',
       prozorro: 'Prozorro',
       manual: 'Вручну',
+      facebook: 'Facebook',
+      instagram: 'Instagram',
+      linkedin: 'LinkedIn',
     },
     kinds: {
       email: 'Email',

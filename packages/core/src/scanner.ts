@@ -7,6 +7,7 @@ import { getDomain } from 'tldts';
 import { z } from 'zod';
 import { normalizePhone } from './index.js';
 import { normalizeRegistryName } from './registry.js';
+import { socialTarget } from './social.js';
 
 export interface SiteContact {
   kind:
@@ -232,6 +233,16 @@ export function linkedContact(
     return { kind: 'whatsapp', value: url.href, rank: 70 };
   if (host === 'invite.viber.com' && (path || url.searchParams.get('g2')))
     return { kind: 'viber', value: url.href, rank: 70 };
+  const social = socialTarget(url.href);
+  if (social)
+    return social.kind === 'unsupported'
+      ? null
+      : {
+          kind: 'social',
+          value: social.canonicalUrl,
+          rank: 40,
+          meta: { network: social.network },
+        };
   const networks = [
     'facebook.com',
     'instagram.com',

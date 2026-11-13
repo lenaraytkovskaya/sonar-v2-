@@ -24,7 +24,8 @@ it.skipIf(!enabled)(
       batch: randomUUID(),
       company: randomUUID(),
     };
-    const now = new Date('2026-11-12T10:00:00Z');
+    const now = new Date();
+    now.setUTCHours(10, 0, 0, 0);
     const keys = [
       'send.hours',
       'send.time_zones',
@@ -358,7 +359,7 @@ it.skipIf(!enabled)(
       account = await createAccount();
       const concurrentB = await create();
       await set('send.form_company_daily_limit', 1);
-      const nextDay = new Date('2026-11-13T10:00:00Z');
+      const nextDay = new Date(now.getTime() + 86400000);
       const outcomes = await Promise.all([
         send(concurrentA.id, sender, nextDay),
         send(concurrentB.id, sender, nextDay),

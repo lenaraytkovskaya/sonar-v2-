@@ -15,6 +15,10 @@
     "./whatsapp": {
       "types": "./dist/whatsapp.d.ts",
       "default": "./dist/whatsapp.js"
+    },
+    "./social-session": {
+      "types": "./dist/social-session.d.ts",
+      "default": "./dist/social-session.js"
     }
   },
   "files": [
