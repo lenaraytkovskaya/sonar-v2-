@@ -71,6 +71,10 @@
     "./inbound": {
       "types": "./dist/inbound.d.ts",
       "default": "./dist/inbound.js"
+    },
+    "./social": {
+      "types": "./dist/social.d.ts",
+      "default": "./dist/social.js"
     }
   },
   "files": [

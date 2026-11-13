@@ -1,4 +1,56 @@
 export const uk = {
+  social: {
+    title: 'Соцмережі',
+    update: 'Оновити соцмережі',
+    empty: 'Публічні профілі Facebook, Instagram або LinkedIn ще не знайдено.',
+    error: 'Не вдалося оновити соцмережі. Спробуйте ще раз.',
+    checked: 'Перевірено',
+    enabled: 'Автоматично збирати публічні профілі під час збагачення',
+    settingsHint:
+      'Ручне оновлення доступне також без автоматичного збору. ІІ пропонує налаштування у форматі JSON; збереження застосує їх до наступних запитів.',
+    settings: {
+      'social.cost_per_request_usd': 'Вартість запиту проксі, USD',
+      'social.page_timeout_ms': 'Тайм-аут сторінки, мс',
+      'social.facebook.daily_limit': 'Facebook: запитів на день',
+      'social.facebook.min_gap_seconds':
+        'Facebook: інтервал між запитами, секунд',
+      'social.facebook.pause_minutes':
+        'Facebook: пауза після обмеження, хвилин',
+      'social.instagram.daily_limit': 'Instagram: запитів на день',
+      'social.instagram.min_gap_seconds':
+        'Instagram: інтервал між запитами, секунд',
+      'social.instagram.pause_minutes':
+        'Instagram: пауза після обмеження, хвилин',
+      'social.linkedin.daily_limit': 'LinkedIn: запитів на день',
+      'social.linkedin.min_gap_seconds':
+        'LinkedIn: інтервал між запитами, секунд',
+      'social.linkedin.pause_minutes':
+        'LinkedIn: пауза після обмеження, хвилин',
+    },
+    posts: 'Останні публікації',
+    post: 'Публікація',
+    networks: {
+      facebook: 'Facebook',
+      instagram: 'Instagram',
+      linkedin: 'LinkedIn',
+    },
+    fields: {
+      name: 'Назва',
+      category: 'Категорія',
+      description: 'Опис',
+      website: 'Сайт',
+      phones: 'Телефони',
+      emails: 'Email',
+      followers: 'Підписники',
+      postsCount: 'Публікації',
+      followingCount: 'Підписки',
+      industry: 'Галузь',
+      companySize: 'Розмір компанії',
+      headquarters: 'Головний офіс',
+      foundedYear: 'Рік заснування',
+      lastPostAt: 'Остання публікація',
+    },
+  },
   inbound: {
     unknownCompany: 'Без компанії',
     needsHuman: 'Потрібна людина',
@@ -153,6 +205,8 @@ export const uk = {
       'company.blocked': 'Позначено «Не контактувати»',
       'company.score': 'Розраховано скоринг',
       'company.analyze': 'Виконано аналіз ІІ',
+      'social.fetch.queued': 'Оновлення соцмереж додано до черги',
+      'social.fetch': 'Оновлено соцмережі',
       'ai.drafts.queued': 'Генерацію чернетки додано до черги',
       'outreach.draft.created': 'Створено персональну чернетку',
       'outreach.draft.edited': 'Чернетку відредаговано',
@@ -391,6 +445,9 @@ export const uk = {
       registry: 'Реєстр',
       prozorro: 'Prozorro',
       manual: 'Вручну',
+      facebook: 'Facebook',
+      instagram: 'Instagram',
+      linkedin: 'LinkedIn',
     },
     kinds: {
       email: 'Email',

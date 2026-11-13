@@ -17,6 +17,7 @@ import {
   type SitePage,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
+import { enqueueCompanySocial } from '@sonar/db/social';
 import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
 import {
   boss,
@@ -650,6 +651,9 @@ export async function registerSiteTasks() {
     try {
       return await runSiteScan({ companyId }, id);
     } finally {
+      await enqueueCompanySocial(companyId, null).catch(() =>
+        console.warn('Не вдалося поставити збір соцмереж у чергу.'),
+      );
       // The registry step uses codes found on the site, so it always follows the scan.
       await continueEnrichment(companyId).catch((error) =>
         console.warn(

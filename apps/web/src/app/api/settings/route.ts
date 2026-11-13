@@ -1,4 +1,5 @@
 import { scannerKeys, validScannerSettings } from '@/lib/scanner-settings';
+import { socialKeys, validSocialSettings } from '@/lib/social-settings';
 import { profilesSchema } from '@sonar/core';
 import { apiUser } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
@@ -23,6 +24,7 @@ export async function GET(request: Request) {
         'prozorro.tender.progress',
         'prozorro.contract.progress',
         ...scannerKeys,
+        ...socialKeys,
       ],
     ],
   );
@@ -42,6 +44,7 @@ export async function POST(request: Request) {
         !data.analysisPrompt.trim() ||
         data.analysisPrompt.length > 20000)) ||
     (data.scanner !== undefined && !validScannerSettings(data.scanner)) ||
+    (data.social !== undefined && !validSocialSettings(data.social)) ||
     typeof data.about !== 'string' ||
     data.about.length > 20000 ||
     !Number.isFinite(data.budget) ||
@@ -83,6 +86,7 @@ export async function POST(request: Request) {
     }
     for (const [key, value] of Object.entries({
       ...(data.scanner ?? {}),
+      ...(data.social ?? {}),
       ...(data.analysisPrompt !== undefined
         ? { 'analysis.prompt': data.analysisPrompt }
         : {}),

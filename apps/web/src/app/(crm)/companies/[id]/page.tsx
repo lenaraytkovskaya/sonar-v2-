@@ -8,6 +8,7 @@ import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
+import { CompanySocial } from '@/components/company-social';
 import { SiteScan } from '@/components/site-scan';
 import { WebsiteCandidate } from '@/components/website-candidate';
 import { RegistryMatch } from '@/components/registry-match';
@@ -123,10 +124,12 @@ export default async function Page({
   const { getCompany } = await import('@sonar/db/companies');
   const { getCompanyChat } = await import('@sonar/db/outreach');
   const { getProzorroCompanySummary } = await import('@sonar/db/prozorro');
-  const [data, messaging, prozorro] = await Promise.all([
+  const { getCompanySocial } = await import('@sonar/db/social');
+  const [data, messaging, prozorro, social] = await Promise.all([
     getCompany(id),
     getCompanyChat(id),
     getProzorroCompanySummary(id),
+    getCompanySocial(id),
   ]);
   if (!data) notFound();
   const {
@@ -143,6 +146,7 @@ export default async function Page({
     (fact) =>
       fact.source !== 'registry' &&
       fact.source !== 'prozorro' &&
+      fact.kind !== 'social_profile' &&
       !['page_text', 'registry_rejected', 'website_candidate'].includes(
         fact.kind,
       ),
@@ -658,6 +662,9 @@ export default async function Page({
                 <LocalTime value={registryFacts[0].found_at} dateOnly />
               </p>
             )}
+          </Section>
+          <Section title={uk.social.title}>
+            <CompanySocial companyId={c.id} initial={social} />
           </Section>
           <Collapsible title={uk.prozorro.title} count={prozorro.count}>
             {prozorroContacts.map((contact) => (
