@@ -199,9 +199,14 @@ export type TelegramSendRequest = {
   idempotencyKey: string;
 };
 export function createTelegramAdapter(
-  config: { apiId?: string | number; apiHash?: string } = {},
+  config: {
+    apiId?: string | number;
+    apiHash?: string;
+    timeoutMs?: number;
+  } = {},
   factory: TelegramClientFactory = gramClient,
 ) {
+  const temporaryTimeoutMs = config.timeoutMs ?? 20000;
   const clients = new Map<string, Promise<TelegramConnection>>();
   function credentials(): Credentials {
     const apiId = Number(config.apiId ?? process.env.TELEGRAM_API_ID);
@@ -218,15 +223,41 @@ export function createTelegramAdapter(
     run: (client: TelegramConnection, auth: Credentials) => Promise<T>,
   ): Promise<T> {
     let client: TelegramConnection | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const auth = credentials();
       client = factory(session, auth);
-      await client.connect();
-      return await run(client, auth);
+      const connected = client;
+      // A login step must never hang: callers hold database resources while they wait.
+      return await Promise.race([
+        (async () => {
+          await connected.connect();
+          return run(connected, auth);
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new TelegramSendError(
+                  'telegram_timeout',
+                  'Telegram не відповів вчасно. Повторіть спробу.',
+                  true,
+                ),
+              ),
+            temporaryTimeoutMs,
+          );
+        }),
+      ]);
     } catch (error) {
       throw telegramError(error);
     } finally {
-      await client?.destroy().catch(() => {});
+      clearTimeout(timer);
+      // GramJS destroy can wait on its update loop after a login; do not block on it.
+      const closing = client?.destroy().catch(() => {});
+      await Promise.race([
+        closing,
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
     }
   }
   async function close(accountId: string) {
