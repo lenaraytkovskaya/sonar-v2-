@@ -104,9 +104,13 @@ export function ConversationChat({ initial }: { initial: Chat }) {
   if (!conversation) return null;
   const generating =
     task !== null && ['queued', 'running'].includes(task.status);
-  const canReply = ['email', 'telegram', 'whatsapp'].includes(
-    conversation.channel,
-  );
+  const manual = ['form', 'social', 'call'].includes(conversation.channel);
+  const canReply =
+    manual || ['email', 'telegram', 'whatsapp'].includes(conversation.channel);
+  const link =
+    ['form', 'social'].includes(conversation.channel) && /^https?:/ //i.test(conversation.contactValue ?? '')
+      ? conversation.contactValue
+      : null;
   return (
     <Card className="min-w-0 space-y-4 p-4">
       <h2 className="font-heading text-lg font-bold">
@@ -151,13 +155,28 @@ export function ConversationChat({ initial }: { initial: Chat }) {
       </div>
       {!data.blocked && canReply && (
         <div className="space-y-3 border-t border-border pt-3">
-          <Button
-            variant="outline"
-            disabled={pending || generating || !lastInbound}
-            onClick={() => void act('generate')}
-          >
-            {generating ? uk.outreach.generating : uk.inbound.suggest}
-          </Button>
+          {lastInbound && (
+            <Button
+              variant="outline"
+              disabled={pending || generating}
+              onClick={() => void act('generate')}
+            >
+              {generating ? uk.outreach.generating : uk.inbound.suggest}
+            </Button>
+          )}
+          {link && (
+            <p className="text-sm">
+              <a
+                href={link}
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent"
+              >
+                {uk.outreach.openContact}
+              </a>{' '}
+              · {uk.outreach.manualHint}
+            </p>
+          )}
           {conversation.channel === 'email' && (
             <div>
               <label htmlFor="reply-subject">{uk.email.subject}</label>
@@ -171,7 +190,11 @@ export function ConversationChat({ initial }: { initial: Chat }) {
             </div>
           )}
           <label className="block" htmlFor="reply-body">
-            {uk.inbound.reply}
+            {conversation.channel === 'call'
+              ? uk.outreach.callNote
+              : data.messages.length
+                ? uk.inbound.reply
+                : uk.inbound.firstMessage}
           </label>
           <textarea
             id="reply-body"
@@ -190,8 +213,28 @@ export function ConversationChat({ initial }: { initial: Chat }) {
             }
             onClick={() => void act('reply', { body, subject })}
           >
-            {uk.email.send}
+            {conversation.channel === 'call'
+              ? uk.outreach.logCall
+              : manual
+                ? uk.outreach.manualSent
+                : uk.email.send}
           </Button>
+          {link && (
+            <Button
+              type="button"
+              variant="outline"
+              className="ml-2"
+              disabled={!body.trim()}
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(body)
+                  .then(() => act('copied'))
+                  .catch(() => act('copyError'))
+              }
+            >
+              {uk.outreach.copy}
+            </Button>
+          )}
         </div>
       )}
       {task && (

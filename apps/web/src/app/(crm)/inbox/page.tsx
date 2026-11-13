@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { uk } from '@/i18n/uk';
 import { validId } from '@/lib/api-access';
 import {
@@ -21,11 +22,21 @@ export default async function Page({
     channel?: string;
     status?: string;
     conversation?: string;
+    contact?: string;
     needsHuman?: string;
     unread?: string;
   }>;
 }) {
   const query = await searchParams;
+  // A click on a company contact lands here: open (or start) that contact's dialog.
+  if (validId(query.contact)) {
+    const { ensureContactConversation } = await import('@sonar/db/inbound');
+    const conversationId = await ensureContactConversation(
+      query.contact,
+      validId(query.campaignId) ? query.campaignId : undefined,
+    ).catch(() => null);
+    if (conversationId) redirect(`/inbox?conversation=${conversationId}`);
+  }
   const filters = {
     campaignId: validId(query.campaignId) ? query.campaignId : undefined,
     channel: channels.includes(query.channel ?? '') ? query.channel : undefined,

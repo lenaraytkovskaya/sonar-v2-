@@ -5,6 +5,7 @@ export const uk = {
     unread: 'Непрочитані',
     suggest: 'Запропонувати відповідь',
     reply: 'Відповідь',
+    firstMessage: 'Повідомлення',
     classify: 'Розбір вхідного повідомлення',
     received: 'Отримано',
     telegramUser: 'Користувач Telegram',
