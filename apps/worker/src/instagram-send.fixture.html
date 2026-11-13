@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8" />
+<nav><a href="/direct/inbox/">Inbox</a></nav>
+<main>
+  <header>
+    <h2>fixture_company</h2>
+    <button>Повідомлення</button>
+  </header>
+</main>
+<script>
+  const f = window.fixtureOptions || {};
+  const main = document.querySelector('main');
+  if (f.checkpoint) history.replaceState({}, '', '/challenge/');
+  if (f.noSession) document.querySelector('nav').remove();
+  if (f.wrongProfile) main.querySelector('h2').textContent = 'other';
+  if (f.messageLink)
+    main.querySelector('button').outerHTML =
+      '<a href="#" role="link">Message</a>';
+  if (f.login) main.innerHTML = '<input type="password">';
+  else if (f.captcha)
+    main.innerHTML = '<div data-testid="captcha">Captcha</div>';
+  else if (f.noMessage) main.querySelector('button').remove();
+  else if (f.domRateLimit)
+    main.innerHTML = '<div role="alert">Try again later</div>';
+  else
+    main.querySelector('button, a').onclick = (event) => {
+      event.preventDefault();
+      window.fixtureEvent('open');
+      if (f.noDialog) return;
+      const open = () => {
+        history.pushState({}, '', '/direct/t/fixture-thread/');
+        main.innerHTML = `<header><a href="/${f.wrongRecipient ? 'other' : 'fixture_company'}/">Recipient</a></header>
+      <section id="messages"></section>
+      ${f.noComposer ? '<textarea placeholder="Search" id="internal-decoy"></textarea>' : f.textarea ? '<textarea placeholder="Повідомлення..."></textarea>' : '<div contenteditable="true" role="textbox" aria-label="Message"></div>'}`;
+        if (f.sidebarOnlyRecipient) {
+          main.querySelector('header').innerHTML =
+            '<span>Unconfirmed recipient</span>';
+          main.insertAdjacentHTML(
+            'beforeend',
+            '<aside><header><a href="/fixture_company/">Sidebar target</a></header></aside>',
+          );
+        }
+        if (f.groupRecipient)
+          main
+            .querySelector('header')
+            .insertAdjacentHTML(
+              'beforeend',
+              '<a href="/other/">Other recipient</a>',
+            );
+        if (f.existingMessage)
+          main.querySelector('#messages').innerHTML =
+            '<div aria-label="You sent"><span>Synthetic message</span></div>';
+        if (f.wrongRecipient)
+          document.body.insertAdjacentHTML(
+            'beforeend',
+            '<aside><a href="/fixture_company/">Sidebar target</a></aside>',
+          );
+        if (f.duplicateComposer)
+          main.insertAdjacentHTML(
+            'beforeend',
+            '<textarea placeholder="Message"></textarea>',
+          );
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<textarea id="decoy" placeholder="Search"></textarea>',
+        );
+        const composer = main.querySelector(
+          '[contenteditable], textarea:not([id])',
+        );
+        if (composer)
+          composer.onkeydown = (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            window.fixtureEvent('send');
+            if (f.postLogin) main.innerHTML = '<input type="password">';
+            else if (!f.noConfirmation) {
+              const row = document.createElement('div');
+              row.setAttribute('aria-label', 'You sent');
+              row.textContent = composer.value ?? composer.textContent;
+              main.querySelector('#messages').append(row);
+            }
+          };
+      };
+      if (f.delayedDialog) setTimeout(open, 60);
+      else open();
+    };
+</script>

@@ -42,12 +42,218 @@ function failure(
     }[code],
   );
 }
+type SendStage =
+  | 'navigation'
+  | 'session'
+  | 'profile'
+  | 'messagebutton'
+  | 'dialog'
+  | 'composer'
+  | 'attempt'
+  | 'confirmation';
+type SendErrorKind =
+  | 'timeout'
+  | 'restricted'
+  | 'http_429'
+  | 'http_error'
+  | 'mismatch'
+  | 'unconfirmed'
+  | 'unexpected';
+function stagedFailure(
+  stage: SendStage,
+  errorKind: SendErrorKind,
+  code: SocialSendError['code'] = 'unavailable',
+) {
+  const reason = {
+    navigation: 'Не вдалося відкрити сторінку Instagram.',
+    session:
+      'Сесію Instagram не підтверджено. Перевірте вхід та обмеження акаунта.',
+    profile: 'Профіль одержувача Instagram не підтверджено.',
+    messagebutton: 'Кнопку «Повідомлення» у профілі Instagram не підтверджено.',
+    dialog: 'Діалог Instagram з потрібним одержувачем не підтверджено.',
+    composer:
+      'Поле повідомлення в підтвердженому діалозі Instagram недоступне або неоднозначне.',
+    attempt: 'Не вдалося підтвердити безпечну спробу надсилання.',
+    confirmation:
+      'Доставку Instagram не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично.',
+  }[stage];
+  // Only allowlisted stage/kind values are retained, never Playwright messages or URLs.
+  return Object.assign(
+    new SocialSendError(code, `[${stage}/${errorKind}] ${reason}`),
+    { stage, errorKind },
+  );
+}
+const composerLabel =
+  /^(?:message|повідомлення|сообщение|написати повідомлення|напишіть повідомлення|написать сообщение)(?:…|\.{3})?$/i;
+const conversationHeaders =
+  ':is(header, [role="banner"]):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"]) *)';
+async function instagramDialog(page: Page, handle: string) {
+  await page.waitForURL(
+    /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
+  );
+  // A sidebar profile link is not evidence of the active recipient.
+  const recipient = page
+    .locator(conversationHeaders)
+    .locator(`a[href="/${handle}/" i]`);
+  const dialog = page
+    .locator('[role="dialog"]:visible, main:visible, [role="main"]:visible')
+    .filter({ has: recipient });
+  await dialog.waitFor({ state: 'visible' });
+  const links = await dialog
+    .locator(conversationHeaders)
+    .locator('a[href]')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('href')),
+    );
+  for (const href of links) {
+    const profile = href && socialTarget(new URL(href, page.url()).href);
+    if (
+      profile &&
+      profile.network === 'instagram' &&
+      profile.kind !== 'unsupported' &&
+      profile.handle !== handle
+    )
+      throw stagedFailure('dialog', 'mismatch');
+  }
+  return dialog;
+}
+async function sendInstagram(
+  page: Page,
+  target: { canonicalUrl: string; handle: string },
+  timeoutMs: number,
+  body: string,
+  beforeSend: () => Promise<void>,
+) {
+  let stage: SendStage = 'navigation';
+  let attempted = false;
+  let restricted = false;
+  page.on('response', (response) => {
+    if ([401, 403, 429].includes(response.status())) restricted = true;
+  });
+  const assertSession = async () => {
+    const previous = stage;
+    stage = 'session';
+    if (restricted) throw stagedFailure(stage, 'restricted', 'session_invalid');
+    await assertSocialSession(page, 'instagram');
+    if (
+      await page
+        .locator('[role="alert"], [role="alertdialog"]')
+        .filter({
+          hasText:
+            /^(?:Try again later|Too many requests|Забагато запитів|Спробуйте пізніше|Слишком много запросов|Попробуйте позже)$/i,
+        })
+        .count()
+    )
+      throw stagedFailure('session', 'restricted', 'session_invalid');
+    stage = previous;
+  };
+  try {
+    const response = await page.goto(target.canonicalUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: timeoutMs,
+    });
+    if (response && response.status() >= 400)
+      throw stagedFailure(
+        stage,
+        response.status() === 429 ? 'http_429' : 'http_error',
+        [401, 403, 429].includes(response.status())
+          ? 'session_invalid'
+          : 'unavailable',
+      );
+    await assertSession();
+    stage = 'profile';
+    if (
+      socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+      target.canonicalUrl.toLowerCase()
+    )
+      throw stagedFailure(stage, 'mismatch');
+    const name = new RegExp(
+      `^${target.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+      'i',
+    );
+    const profile = page
+      .locator('main header, [role="main"] header')
+      .filter({ has: page.getByRole('heading', { name }) });
+    await profile.waitFor({ state: 'visible' });
+    stage = 'messagebutton';
+    await profile
+      .getByRole('button', { name: messageLabel })
+      .or(profile.getByRole('link', { name: messageLabel }))
+      .click();
+    await assertSession();
+    stage = 'dialog';
+    const dialog = await instagramDialog(page, target.handle);
+    const dialogUrl = page.url();
+    const verifyDialog = async () => {
+      await assertSession();
+      stage = 'dialog';
+      await instagramDialog(page, target.handle);
+      if (page.url() !== dialogUrl) throw stagedFailure(stage, 'mismatch');
+    };
+    stage = 'composer';
+    const composer = dialog
+      .getByRole('textbox', { name: composerLabel })
+      .or(dialog.getByPlaceholder(composerLabel))
+      .filter({ visible: true });
+    await composer.fill(body);
+    const ownMessages = dialog
+      .locator(outgoing.instagram)
+      .filter({ has: page.getByText(body, { exact: true }) });
+    const count = await ownMessages.count();
+    await verifyDialog();
+    stage = 'attempt';
+    await beforeSend();
+    attempted = true;
+    await verifyDialog();
+    stage = 'confirmation';
+    await composer.press('Enter');
+    await ownMessages
+      .nth(count)
+      .waitFor({ state: 'visible', timeout: timeoutMs });
+    await verifyDialog();
+    stage = 'confirmation';
+    return await confirmedDialogUrl(page, 'instagram');
+  } catch (caught) {
+    let error = caught;
+    if (stage !== 'navigation') {
+      try {
+        await assertSession();
+      } catch (sessionError) {
+        error = sessionError;
+      }
+    }
+    const kind =
+      (error instanceof Error && error.name === 'TimeoutError') ||
+      (error instanceof SocialSendError &&
+        'errorKind' in error &&
+        error.errorKind === 'timeout')
+        ? 'timeout'
+        : 'unexpected';
+    if (error instanceof SocialSendError && error.code === 'session_invalid')
+      throw 'stage' in error
+        ? error
+        : stagedFailure(
+            'session',
+            kind === 'timeout' ? kind : 'unconfirmed',
+            'session_invalid',
+          );
+    if (attempted || stage === 'attempt')
+      throw stagedFailure(stage, kind, 'delivery_uncertain');
+    if (error instanceof SocialSendError && 'stage' in error) throw error;
+    throw stagedFailure(stage, kind);
+  }
+}
 export async function assertSocialSession(page: Page, network: SocialNetwork) {
   const url = new URL(page.url());
   if (
-    !url.hostname.endsWith(`.${network}.com`) &&
-    url.hostname !== `${network}.com` &&
-    !(network === 'facebook' && /^(www\.)?messenger\.com$/.test(url.hostname))
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    (!url.hostname.endsWith(`.${network}.com`) &&
+      url.hostname !== `${network}.com` &&
+      !(
+        network === 'facebook' && /^(www\.)?messenger\.com$/.test(url.hostname)
+      ))
   )
     throw failure('session_invalid');
   if (
@@ -78,8 +284,13 @@ export async function assertSocialSession(page: Page, network: SocialNetwork) {
   }[network];
   try {
     await page.locator(authenticated).first().waitFor({ state: 'visible' });
-  } catch {
-    throw failure('session_invalid');
+  } catch (error) {
+    throw Object.assign(failure('session_invalid'), {
+      errorKind:
+        error instanceof Error && error.name === 'TimeoutError'
+          ? 'timeout'
+          : 'unconfirmed',
+    });
   }
 }
 async function confirmedDialogUrl(page: Page, network: SocialNetwork) {
@@ -215,10 +426,14 @@ export function createSocialSendBrowser(
         (target.network === 'linkedin' && target.kind !== 'company') ||
         target.kind === 'unsupported'
       )
-        throw failure('unavailable');
+        throw account.channel === 'instagram'
+          ? stagedFailure('profile', 'unconfirmed')
+          : failure('unavailable');
       let attempted = false;
       try {
         return await withPage(account, session, timeoutMs, async (page) => {
+          if (account.channel === 'instagram')
+            return sendInstagram(page, target, timeoutMs, body, beforeSend);
           await page.goto(target.canonicalUrl, {
             waitUntil: 'domcontentloaded',
             timeout: timeoutMs,
@@ -234,14 +449,9 @@ export function createSocialSendBrowser(
               .count())
           )
             throw failure('unavailable');
-          if (
-            account.channel === 'instagram' ||
-            account.channel === 'facebook'
-          ) {
+          if (account.channel === 'facebook') {
             await page.goto(
-              account.channel === 'instagram'
-                ? `https://ig.me/m/${encodeURIComponent(target.handle)}`
-                : `https://m.me/${encodeURIComponent(target.handle)}`,
+              `https://m.me/${encodeURIComponent(target.handle)}`,
               { waitUntil: 'domcontentloaded', timeout: timeoutMs },
             );
           } else {
@@ -269,12 +479,7 @@ export function createSocialSendBrowser(
           await beforeSend();
           attempted = true;
           try {
-            if (account.channel === 'instagram') await composer.press('Enter');
-            else
-              await page
-                .getByRole('button', { name: sendLabel })
-                .last()
-                .click();
+            await page.getByRole('button', { name: sendLabel }).last().click();
           } catch {
             await assertSocialSession(page, account.channel);
             throw failure('delivery_uncertain');
@@ -291,6 +496,10 @@ export function createSocialSendBrowser(
           return confirmedDialogUrl(page, account.channel);
         });
       } catch (error) {
+        if (account.channel === 'instagram') {
+          if (error instanceof SocialSendError && 'stage' in error) throw error;
+          throw stagedFailure('session', 'unexpected', 'session_invalid');
+        }
         if (
           error instanceof SocialSendError &&
           error.code === 'session_invalid'
