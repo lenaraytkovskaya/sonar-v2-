@@ -366,6 +366,60 @@ export async function enqueueReply(
   );
   return { ...task, created: !!id };
 }
+const manualChannels = ['form', 'social', 'call'];
+/**
+ * Finds or opens the dialog for a contact so a person can write by hand from the inbox.
+ * A phone opens WhatsApp (or Telegram) when such an account is active, otherwise a call log.
+ */
+export async function ensureContactConversation(
+  contactId: string,
+  campaignId?: string,
+) {
+  return transaction(async (c) => {
+    const {
+      rows: [contact],
+    } = await c.query(
+      'select id,company_id,kind::text as kind from contacts where id=$1',
+      [contactId],
+    );
+    if (!contact) invalid('Контакт не знайдено.');
+    const {
+      rows: [campaign],
+    } = await c.query(
+      'select campaign_id from campaign_companies where company_id=$1 and ($2::uuid is null or campaign_id=$2::uuid) order by added_at desc limit 1',
+      [contact.company_id, campaignId ?? null],
+    );
+    if (!campaign) invalid('Додайте компанію до кампанії.');
+    let channel: string | null = [
+      'email',
+      'telegram',
+      'whatsapp',
+      ...manualChannels,
+    ].includes(contact.kind)
+      ? contact.kind
+      : null;
+    if (contact.kind === 'phone') {
+      const {
+        rows: [active],
+      } = await c.query(
+        "select channel from channel_accounts where channel in ('whatsapp','telegram') and status='active' order by channel='whatsapp' desc limit 1",
+      );
+      channel = active?.channel ?? 'call';
+    }
+    if (!channel) invalid('Цей контакт не підтримує переписку.');
+    await c.query(
+      'insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict do nothing',
+      [contact.company_id, campaign.campaign_id, contactId, channel],
+    );
+    const {
+      rows: [conversation],
+    } = await c.query(
+      'select id from conversations where company_id=$1 and campaign_id=$2 and contact_id=$3 and channel=$4',
+      [contact.company_id, campaign.campaign_id, contactId, channel],
+    );
+    return String(conversation.id);
+  });
+}
 async function reply(
   conversationId: string,
   draft: { subject?: string; body: string },
@@ -386,19 +440,52 @@ async function reply(
     } = await c.query('select * from conversations where id=$1 for update', [
       conversationId,
     ]);
-    if (!v || !['email', 'telegram', 'whatsapp'].includes(v.channel))
+    if (
+      !v ||
+      !['email', 'telegram', 'whatsapp', ...manualChannels].includes(v.channel)
+    )
       invalid('Цей діалог не підтримує відповіді.');
+    const manual = manualChannels.includes(v.channel);
     if (v.company_id)
       await c.query(
         "select pg_advisory_xact_lock(hashtextextended('company-contact:'||$1::text,0))",
         [v.company_id],
       );
-    const {
+    let {
       rows: [last],
     } = await c.query(
       "select account_id,to_value,subject from messages where conversation_id=$1 order by (direction='in') desc,created_at desc,id desc limit 1",
       [conversationId],
     );
+    // First message written by hand: recipient from the contact, sender = the active account.
+    if (!last && v.contact_id) {
+      const {
+        rows: [contact],
+      } = await c.query(
+        'select ct.normalized,ct.value,co.country_code from contacts ct join companies co on co.id=ct.company_id where ct.id=$1',
+        [v.contact_id],
+      );
+      const to =
+        v.channel === 'telegram'
+          ? normalizeTelegramRecipient(contact?.normalized ?? '')
+          : v.channel === 'whatsapp'
+            ? normalizeWhatsAppRecipient(
+                contact?.normalized ?? '',
+                contact?.country_code,
+              )
+            : (contact?.normalized ?? contact?.value);
+      const {
+        rows: [account],
+      } = manual
+        ? { rows: [{ id: null }] }
+        : await c.query(
+            "select id from channel_accounts where channel=$1 and status='active' order by created_at,id limit 1",
+            [v.channel],
+          );
+      if (!to) invalid('Не вдалося визначити адресу контакту.');
+      if (!account) invalid('Підключіть активний акаунт для цього каналу.');
+      last = { account_id: account.id, to_value: to, subject: '' };
+    }
     if (!last || (await isContactBlocked(c, v.company_id, last.to_value)))
       invalid('Контакт у списку «Не контактувати».');
     const {
@@ -422,7 +509,7 @@ async function reply(
     const {
       rows: [m],
     } = await c.query(
-      `insert into messages(conversation_id,account_id,channel,source,to_value,subject,body,status,idempotency_key,created_by,approved_by,approved_at,scheduled_at) values($1,$2,$3,'reply',$4,$5,$6,$7,$8,$9,$9,case when $10 then now() end,case when $10 then now() end) returning id,status`,
+      `insert into messages(conversation_id,account_id,channel,source,to_value,subject,body,status,idempotency_key,created_by,approved_by,approved_at,scheduled_at,sent_at) values($1,$2,$3,$11,$4,$5,$6,$7,$8,$9,$9,case when $10 then now() end,case when $10 then now() end,case when $7='sent' then now() end) returning id,status`,
       [
         conversationId,
         last.account_id,
@@ -430,13 +517,15 @@ async function reply(
         last.to_value,
         subject,
         draft.body.trim(),
-        queued ? 'queued' : 'draft',
+        // Forms and social networks are sent by a person; the message records that.
+        manual ? 'sent' : queued ? 'queued' : 'draft',
         key,
         userId,
         queued,
+        manual ? 'manual' : 'reply',
       ],
     );
-    if (queued)
+    if (queued && !manual)
       await enqueueTask(
         'message.send',
         `message.send:${m.id}`,
