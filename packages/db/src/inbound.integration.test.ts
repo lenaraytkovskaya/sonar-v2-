@@ -42,7 +42,7 @@ beforeAll(async () => {
     [accountId, otherAccountId],
   );
   await db.sonarPool.query(
-    "insert into companies(id,name,country_code,status) values($1,'Inbound test','PL','contacted')",
+    "insert into companies(id,place_id,name,country_code,status) values($1::uuid,'manual:'||$1::text,'Inbound test','PL','contacted')",
     [companyId],
   );
   await db.sonarPool.query(

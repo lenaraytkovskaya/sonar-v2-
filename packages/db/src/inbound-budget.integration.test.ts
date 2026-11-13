@@ -36,7 +36,7 @@ it.skipIf(!enabled)(
         [conversationId, campaignId, unknownId],
       );
       await sonarPool.query(
-        "insert into messages(id,conversation_id,direction,to_value,subject,body,idempotency_key) values($1,$2,'in','test@example.invalid','Topic','Hello',$1::text)",
+        "insert into messages(id,conversation_id,direction,to_value,subject,body,idempotency_key) values($1::uuid,$2,'in','test@example.invalid','Topic','Hello',$1::text)",
         [messageId, conversationId],
       );
       for (const [index, type, payload] of [
@@ -46,7 +46,7 @@ it.skipIf(!enabled)(
         [3, 'ai.reply', { conversationId: unknownId }],
       ] as const)
         await sonarPool.query(
-          'insert into tasks(id,type,idempotency_key,payload) values($1,$2,$1::text,$3)',
+          'insert into tasks(id,type,idempotency_key,payload) values($1::uuid,$2,$1::text,$3)',
           [ids[index], type, payload],
         );
       await runBudgetedRequest('openrouter', 0.0006, ids[0]!, paid);

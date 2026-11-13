@@ -433,7 +433,7 @@ it.skipIf(!enabled)(
         outreach.sendOutreachDraft(saved[0]!.id, userId),
       ).rejects.toThrow('Не контактувати');
       await db.sonarPool.query(
-        "insert into do_not_contact(company_id,kind,value_normalized,reason) values($1,'company',$1::text,'Test refusal')",
+        "insert into do_not_contact(company_id,kind,value_normalized,reason) values($1::uuid,'company',$1::text,'Test refusal')",
         [companyId],
       );
       await expect(
