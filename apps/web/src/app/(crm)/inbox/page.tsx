@@ -2,13 +2,9 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { uk } from '@/i18n/uk';
 import { ChannelIcon } from '@/components/channel-icon';
-import { StatusBadge } from '@/components/shared';
+import { FilterPanel } from '@/components/filter-panel';
 import { validId } from '@/lib/api-access';
-import {
-  channelLabel,
-  contactLabel,
-  messageStatus,
-} from '@/lib/outreach-labels';
+import { channelLabel, messageStatus } from '@/lib/outreach-labels';
 import { cn } from '@/lib/utils';
 import { Card, PageHeader } from '@/components/shared';
 import { ConversationChat } from '@/components/conversation-chat';
@@ -67,74 +63,79 @@ export default async function Page({
         title={uk.pages.inbox.title}
         description={uk.pages.inbox.description}
       />
-      <form className="mb-4 flex flex-wrap gap-3">
-        <select
-          aria-label={uk.company.campaign}
-          name="campaignId"
-          defaultValue={filters.campaignId ?? ''}
-          className={selectClass}
-        >
-          <option value="">
-            {uk.company.campaign}: {uk.company.all}
-          </option>
-          {inbox.campaigns.map((campaign) => (
-            <option key={campaign.id} value={campaign.id}>
-              {campaign.name}
+      <FilterPanel
+        count={Object.values(filters).filter(Boolean).length}
+        resetHref="/inbox"
+      >
+        <form className="flex flex-wrap gap-3">
+          <select
+            aria-label={uk.company.campaign}
+            name="campaignId"
+            defaultValue={filters.campaignId ?? ''}
+            className={selectClass}
+          >
+            <option value="">
+              {uk.company.campaign}: {uk.company.all}
             </option>
-          ))}
-        </select>
-        <select
-          aria-label={uk.forms.channel}
-          name="channel"
-          defaultValue={filters.channel ?? ''}
-          className={selectClass}
-        >
-          <option value="">
-            {uk.forms.channel}: {uk.company.all}
-          </option>
-          {channels.map((channel) => (
-            <option key={channel} value={channel}>
-              {channelLabel(channel)}
+            {inbox.campaigns.map((campaign) => (
+              <option key={campaign.id} value={campaign.id}>
+                {campaign.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label={uk.forms.channel}
+            name="channel"
+            defaultValue={filters.channel ?? ''}
+            className={selectClass}
+          >
+            <option value="">
+              {uk.forms.channel}: {uk.company.all}
             </option>
-          ))}
-        </select>
-        <select
-          aria-label={uk.company.status}
-          name="status"
-          defaultValue={filters.status ?? ''}
-          className={selectClass}
-        >
-          <option value="">
-            {uk.company.status}: {uk.company.all}
-          </option>
-          {statuses.map((status) => (
-            <option key={status} value={status}>
-              {messageStatus(status)}
+            {channels.map((channel) => (
+              <option key={channel} value={channel}>
+                {channelLabel(channel)}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label={uk.company.status}
+            name="status"
+            defaultValue={filters.status ?? ''}
+            className={selectClass}
+          >
+            <option value="">
+              {uk.company.status}: {uk.company.all}
             </option>
-          ))}
-        </select>
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="needsHuman"
-            value="1"
-            defaultChecked={filters.needsHuman}
-          />
-          {uk.inbound.needsHuman}
-        </label>
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="unread"
-            value="1"
-            defaultChecked={filters.unread}
-          />
-          {uk.inbound.unread}
-        </label>
-        <Button type="submit">{uk.company.apply}</Button>
-      </form>
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,1fr)_minmax(0,2fr)]">
-        <Card className="min-w-0 overflow-hidden">
+            {statuses.map((status) => (
+              <option key={status} value={status}>
+                {messageStatus(status)}
+              </option>
+            ))}
+          </select>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="needsHuman"
+              value="1"
+              defaultChecked={filters.needsHuman}
+            />
+            {uk.inbound.needsHuman}
+          </label>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="unread"
+              value="1"
+              defaultChecked={filters.unread}
+            />
+            {uk.inbound.unread}
+          </label>
+          <Button type="submit">{uk.company.apply}</Button>
+        </form>
+      </FilterPanel>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(14rem,20rem)_minmax(0,1fr)]">
+        <Card className="min-w-0 max-h-64 overflow-y-auto lg:max-h-[calc(100dvh-13rem)]">
           {!inbox.conversations.length && (
             <p className="p-5 text-sm text-muted-foreground">
               {uk.pages.inbox.empty}
@@ -146,40 +147,38 @@ export default async function Page({
               href={conversationLink(row.id)}
               aria-current={selected?.id === row.id ? 'true' : undefined}
               className={cn(
-                'block space-y-1 border-b border-border p-4 text-sm last:border-b-0 hover:bg-raised',
+                'block space-y-1 border-b border-border p-3 text-sm last:border-b-0 hover:bg-raised',
                 selected?.id === row.id && 'bg-chip',
               )}
             >
-              <p className="flex items-center gap-2 font-semibold">
-                {row.companyName || uk.inbound.unknownCompany}
-                {row.unreadCount > 0 && (
-                  <span className="rounded-full bg-err-bg px-2 text-err">
-                    {row.unreadCount}
-                  </span>
-                )}
-              </p>
-              {row.needsHuman && (
-                <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
-              )}
-              <p className="break-words">
+              <div className="flex items-center gap-2">
                 <ChannelIcon
                   channel={row.channel}
                   value={row.contactValue ?? ''}
-                />{' '}
-                {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
-                {contactLabel(row.contactValue)}
-              </p>
-              <p className="line-clamp-2 text-muted-foreground">
+                />
+                <span className="min-w-0 flex-1 truncate font-semibold">
+                  {row.companyName || uk.inbound.unknownCompany}
+                </span>
+                {row.lastAt && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    <LocalTime value={row.lastAt} timeOnly />
+                  </span>
+                )}
+                {row.unreadCount > 0 && (
+                  <span
+                    aria-label={`${uk.inbound.unread}: ${row.unreadCount}`}
+                    className="size-2 shrink-0 rounded-full bg-accent"
+                  />
+                )}
+              </div>
+              <p className="truncate pl-6 text-xs text-muted-foreground">
                 {row.lastMessage || uk.email.noMessages}
               </p>
-              <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                {row.lastStatus && (
-                  <StatusBadge status={row.lastStatus}>
-                    {messageStatus(row.lastStatus)}
-                  </StatusBadge>
-                )}
-                {row.lastAt && <LocalTime value={row.lastAt} />}
-              </div>
+              {row.needsHuman && (
+                <p className="pl-6 text-xs text-wait">
+                  {uk.inbound.needsHuman}
+                </p>
+              )}
             </Link>
           ))}
         </Card>

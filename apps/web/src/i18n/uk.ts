@@ -150,7 +150,17 @@ export const uk = {
       lastPostAt: 'Остання публікація',
     },
   },
+  filters: { title: 'Фільтри', reset: 'Скинути', active: 'Активні фільтри' },
+  companyTabs: {
+    overview: 'Огляд',
+    contacts: 'Контакти',
+    analysis: 'Аналіз',
+    social: 'Соцмережі',
+    registries: 'Реєстри',
+    history: 'Історія',
+  },
   inbound: {
+    sendShortcut: 'Надіслати: Ctrl / ⌘ + Enter',
     unknownCompany: 'Без компанії',
     needsHuman: 'Потрібна людина',
     unread: 'Непрочитані',

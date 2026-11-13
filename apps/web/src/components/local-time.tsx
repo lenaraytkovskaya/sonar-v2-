@@ -8,24 +8,34 @@ import { useEffect, useState } from 'react';
 export function LocalTime({
   value,
   dateOnly = false,
+  timeOnly = false,
 }: {
   value: string | Date;
   dateOnly?: boolean;
+  timeOnly?: boolean;
 }) {
-  const format = () => {
+  const format = (utc = false) => {
+    const timeZone = utc ? 'UTC' : undefined;
     const date = new Date(value);
-    return dateOnly
-      ? date.toLocaleDateString('uk-UA')
-      : date.toLocaleString('uk-UA', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
+    return timeOnly
+      ? date.toLocaleTimeString('uk-UA', {
           hour: '2-digit',
           minute: '2-digit',
-        });
+          timeZone,
+        })
+      : dateOnly
+        ? date.toLocaleDateString('uk-UA', { timeZone })
+        : date.toLocaleString('uk-UA', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone,
+          });
   };
-  const [text, setText] = useState(format);
-  useEffect(() => setText(format()), [value, dateOnly]);
+  const [text, setText] = useState(() => format(true));
+  useEffect(() => setText(format()), [value, dateOnly, timeOnly]);
   return (
     <time dateTime={new Date(value).toISOString()} suppressHydrationWarning>
       {text}

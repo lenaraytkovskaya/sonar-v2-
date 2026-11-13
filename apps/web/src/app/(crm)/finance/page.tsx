@@ -1,3 +1,4 @@
+import { FilterPanel } from '@/components/filter-panel';
 import { Card, PageHeader, scoreTone } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { uk } from '@/i18n/uk';
@@ -28,21 +29,23 @@ export default async function Page({
   return (
     <>
       <PageHeader {...uk.pages.finance} />
-      <form className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="grid gap-1 text-sm">
-          {t.month}
-          <input
-            className="min-h-11 rounded-lg border border-border bg-surface px-3"
-            type="month"
-            name="month"
-            defaultValue={data.month}
-            required
-          />
-        </label>
-        <Button type="submit" className="min-h-11">
-          {t.apply}
-        </Button>
-      </form>
+      <FilterPanel count={month === selected ? 1 : 0} resetHref="/finance">
+        <form className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-sm">
+            {t.month}
+            <input
+              className="min-h-11 rounded-lg border border-border bg-surface px-3"
+              type="month"
+              name="month"
+              defaultValue={data.month}
+              required
+            />
+          </label>
+          <Button type="submit" className="min-h-11">
+            {t.apply}
+          </Button>
+        </form>
+      </FilterPanel>
       <p className="mb-4 text-sm text-muted-foreground">{t.periodHint}</p>
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[

@@ -1,14 +1,26 @@
 import { CompanyList } from '@/components/company-list';
-import { validId } from '@/lib/api-access';
+import { filtersFromParams } from '@sonar/core';
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ campaignId?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { campaignId } = await searchParams;
+  const query = await searchParams;
+  const params = new URLSearchParams(
+    Object.entries(query).flatMap(([key, value]) =>
+      typeof value === 'string' ? [[key, value]] : [],
+    ),
+  );
+  let initialFilters;
+  try {
+    initialFilters = filtersFromParams(params);
+  } catch {
+    initialFilters = {};
+  }
   return (
     <CompanyList
-      initialCampaignId={validId(campaignId) ? campaignId : undefined}
+      key={JSON.stringify(initialFilters)}
+      initialFilters={initialFilters}
     />
   );
 }
