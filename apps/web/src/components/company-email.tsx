@@ -399,7 +399,7 @@ export function CompanyChat({
             }}
           >
             <span className="block text-xs text-muted-foreground">
-              {channelLabel(row.kind)}
+              {channelLabel(row.kind, row.value)}
             </span>
             {row.normalized || row.value}
           </button>

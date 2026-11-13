@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
+import { socialNetwork } from '@/lib/outreach-labels';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -16,6 +17,8 @@ export function ManualEntry({
   initialCampaignId?: string;
 }) {
   const router = useRouter();
+  const [network, setNetwork] =
+    useState<keyof typeof uk.social.networks>('instagram');
   const [open, setOpen] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState('');
@@ -81,48 +84,43 @@ export function ManualEntry({
             }
           }}
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            {fields.map((key) => (
-              <div key={key}>
-                <label>
-                  {uk.manual.fields[key as keyof typeof uk.manual.fields]}
-                  <Input
-                    value={values[key]}
-                    required={['name', 'value', 'countryCode'].includes(key)}
-                    maxLength={
-                      key === 'countryCode'
-                        ? 2
-                        : key === 'name' || key === 'city'
-                          ? 200
-                          : 2000
-                    }
-                    onChange={(event) => update(key, event.target.value)}
-                  />
-                </label>
-                {key !== 'value' && (
-                  <AiAssist
-                    text={values[key] ?? ''}
-                    onApply={(text) => update(key, text)}
-                  />
-                )}
-              </div>
-            ))}
+          <div
+            className={companyId ? 'grid gap-4' : 'grid gap-4 sm:grid-cols-2'}
+          >
             <label>
               {companyId ? uk.company.type : uk.company.campaign}
               <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
+                className="min-h-[44px] w-full rounded-lg border border-border bg-surface p-2"
                 required
-                value={values[companyId ? 'kind' : 'campaignId']}
-                onChange={(event) =>
-                  update(companyId ? 'kind' : 'campaignId', event.target.value)
+                value={
+                  companyId && values.kind === 'social'
+                    ? network
+                    : values[companyId ? 'kind' : 'campaignId']
                 }
+                onChange={(event) => {
+                  const selected = event.target.value;
+                  if (companyId && selected in uk.social.networks) {
+                    if (values.kind !== 'social' || selected !== network)
+                      update('value', '');
+                    setNetwork(selected as keyof typeof uk.social.networks);
+                    update('kind', 'social');
+                  } else update(companyId ? 'kind' : 'campaignId', selected);
+                }}
               >
                 {companyId ? (
-                  Object.entries(uk.manual.kinds).map(([kind, label]) => (
-                    <option key={kind} value={kind}>
-                      {label}
-                    </option>
-                  ))
+                  Object.entries(uk.manual.kinds).flatMap(([kind, label]) =>
+                    kind === 'social' ? (
+                      Object.entries(uk.social.networks).map(([key, name]) => (
+                        <option key={key} value={key}>
+                          {name}
+                        </option>
+                      ))
+                    ) : (
+                      <option key={kind} value={kind}>
+                        {label}
+                      </option>
+                    ),
+                  )
                 ) : (
                   <>
                     <option value="">{uk.manual.chooseCampaign}</option>
@@ -135,6 +133,56 @@ export function ManualEntry({
                 )}
               </select>
             </label>
+            {fields.map((key) => (
+              <div key={key}>
+                <label>
+                  {key === 'value' && values.kind === 'social'
+                    ? `${uk.manual.socialProfile} · ${uk.social.networks[network]}`
+                    : uk.manual.fields[key as keyof typeof uk.manual.fields]}
+                  <Input
+                    className="min-h-[44px]"
+                    value={values[key]}
+                    placeholder={
+                      key === 'value'
+                        ? values.kind === 'social'
+                          ? uk.manual.socialPlaceholders[network]
+                          : uk.manual.contactPlaceholders[
+                              values.kind as keyof typeof uk.manual.contactPlaceholders
+                            ]
+                        : uk.manual.placeholders[
+                            key as keyof typeof uk.manual.placeholders
+                          ]
+                    }
+                    required={['name', 'value', 'countryCode'].includes(key)}
+                    maxLength={
+                      key === 'countryCode'
+                        ? 2
+                        : key === 'name' || key === 'city'
+                          ? 200
+                          : 2000
+                    }
+                    onChange={(event) => {
+                      update(key, event.target.value);
+                      if (key === 'value' && values.kind === 'social') {
+                        const detected = socialNetwork(event.target.value);
+                        if (detected) setNetwork(detected);
+                      }
+                    }}
+                  />
+                </label>
+                {key === 'value' && values.kind === 'social' && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {uk.manual.socialHint}
+                  </p>
+                )}
+                {key !== 'value' && (
+                  <AiAssist
+                    text={values[key] ?? ''}
+                    onApply={(text) => update(key, text)}
+                  />
+                )}
+              </div>
+            ))}
           </div>
           {error && (
             <p role="alert" className="text-err">

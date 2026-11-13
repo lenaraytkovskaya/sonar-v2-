@@ -129,7 +129,7 @@ export function ConversationChat({ initial }: { initial: Chat }) {
         )}
       </h2>
       <p className="break-words text-sm text-muted-foreground">
-        {channelLabel(conversation.channel)} ·{' '}
+        {channelLabel(conversation.channel, conversation.contactValue ?? '')} ·{' '}
         {contactLabel(conversation.contactValue)}
       </p>
       {conversation.needsHuman && (

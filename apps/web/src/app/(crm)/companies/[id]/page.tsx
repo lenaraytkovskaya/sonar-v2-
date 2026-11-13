@@ -1,3 +1,4 @@
+import { channelLabel } from '@/lib/outreach-labels';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { ExternalLink, MapPin, Star } from 'lucide-react';
@@ -249,7 +250,9 @@ export default async function Page({
         className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
       >
         <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
-          {uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
+          {contact.kind === 'social'
+            ? channelLabel(contact.kind, contact.value)
+            : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
