@@ -200,13 +200,17 @@ export function SocialAccounts({
         }}
       >
         <h3 className="font-semibold">
-          {editing ? uk.socialAccounts.edit : uk.socialAccounts.add}
+          {editing ? uk.socialAccounts.edit : uk.socialAccounts.add} ·{' '}
+          {uk.social.networks[network]}
         </h3>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label htmlFor="social-name">{uk.email.name}</label>
+            <label htmlFor="social-name">
+              {uk.email.name} · {uk.social.networks[network]}
+            </label>
             <Input
               id="social-name"
+              placeholder={uk.socialAccounts.namePlaceholders[network]}
               value={name}
               required
               maxLength={200}
@@ -273,12 +277,16 @@ export function SocialAccounts({
           </div>
         </div>
         <div>
-          <label htmlFor="social-cookies">{uk.socialAccounts.cookies}</label>
+          <label htmlFor="social-cookies">
+            {uk.socialAccounts.cookies} · {uk.social.networks[network]}
+          </label>
           <textarea
             id="social-cookies"
+            placeholder={uk.socialAccounts.cookiesPlaceholder}
+            aria-describedby="social-cookies-help"
             className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
             style={
-              visible
+              visible || !cookiesJson
                 ? undefined
                 : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
             }
@@ -289,7 +297,8 @@ export function SocialAccounts({
             value={cookiesJson}
             onChange={(event) => setCookiesJson(event.target.value)}
           />
-          <p className="text-xs text-muted-foreground">
+          <p id="social-cookies-help" className="text-xs text-muted-foreground">
+            {uk.socialAccounts.cookiesHint[network]}{' '}
             {editing
               ? uk.socialAccounts.replaceCookies
               : uk.socialAccounts.cookiePrivacy}

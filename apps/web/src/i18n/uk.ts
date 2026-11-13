@@ -8,6 +8,20 @@ export const uk = {
     proxyHelp:
       'Для акаунтів оберіть резервний проксі. Він не використовується для анонімного збору, навіть коли акаунти вимкнені або не підключені.',
     cookies: 'Сесія (cookies) — JSON',
+    namePlaceholders: {
+      instagram: 'Наприклад: Демокомпанія — Instagram',
+      facebook: 'Наприклад: Демокомпанія — Facebook',
+      linkedin: 'Наприклад: Демокомпанія — LinkedIn',
+    },
+    cookiesPlaceholder: 'Вставте повний JSON-масив cookies: [{…}, {…}]',
+    cookiesHint: {
+      instagram:
+        'Експортуйте cookies з instagram.com через Cookie-Editor → Export → JSON.',
+      facebook:
+        'Експортуйте cookies з facebook.com через Cookie-Editor → Export → JSON.',
+      linkedin:
+        'Експортуйте cookies з linkedin.com через Cookie-Editor → Export → JSON.',
+    },
     add: 'Додати акаунт',
     edit: 'Редагувати акаунт',
     check: 'Перевірити вхід',
@@ -227,6 +241,29 @@ export const uk = {
       countryCode: 'Країна (ISO-2)',
       value: 'Значення контакту',
       note: 'Примітка',
+    },
+    socialProfile: 'Посилання на профіль',
+    socialHint:
+      'Вставте повне посилання на профіль або сторінку вибраної соцмережі. Приклади вигадані.',
+    socialPlaceholders: {
+      instagram: 'https://www.instagram.com/example.company/',
+      facebook: 'https://www.facebook.com/example.company/',
+      linkedin: 'https://www.linkedin.com/company/example-company/',
+    },
+    contactPlaceholders: {
+      email: 'contact@example.com',
+      phone: '+380501234567',
+      telegram: 'https://t.me/example_company',
+      whatsapp: 'https://wa.me/380501234567',
+      viber: 'viber://chat?number=%2B380501234567',
+      form: 'https://example.com/contact',
+    },
+    placeholders: {
+      name: 'Наприклад: Демокомпанія',
+      website: 'https://example.com',
+      city: 'Наприклад: Київ',
+      countryCode: 'UA',
+      note: 'Наприклад: Сторінка відділу продажів',
     },
     kinds: {
       email: 'Email',

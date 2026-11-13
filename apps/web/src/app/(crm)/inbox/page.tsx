@@ -160,7 +160,8 @@ export default async function Page({
                 <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
               )}
               <p className="break-words">
-                {channelLabel(row.channel)} · {contactLabel(row.contactValue)}
+                {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
+                {contactLabel(row.contactValue)}
               </p>
               <p className="line-clamp-2 text-muted-foreground">
                 {row.lastMessage || uk.email.noMessages}
