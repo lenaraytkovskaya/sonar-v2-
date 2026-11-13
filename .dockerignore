@@ -12,3 +12,4 @@ wiki
 test-results
 playwright-report
 *.bundle
+*proxies.txt
