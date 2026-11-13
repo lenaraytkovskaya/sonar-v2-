@@ -1,6 +1,6 @@
 {
-  "id": "bbcd98db-e82a-4946-b18c-9cd3036d1142",
-  "prevId": "240f8b64-6184-4f7d-8d8e-0fc353f495e0",
+  "id": "37a00cf6-1fb8-4785-bc36-2cf353626ac8",
+  "prevId": "bbcd98db-e82a-4946-b18c-9cd3036d1142",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -475,6 +475,20 @@
           "primaryKey": false,
           "notNull": true
         },
+        "outreach_goal": {
+          "name": "outreach_goal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "min_score": {
+          "name": "min_score",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'40'"
+        },
         "batch_size": {
           "name": "batch_size",
           "type": "integer",
@@ -542,20 +556,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "outreach_goal": {
-          "name": "outreach_goal",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "''"
-        },
-        "min_score": {
-          "name": "min_score",
-          "type": "numeric",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'40'"
         }
       },
       "indexes": {},
@@ -578,13 +578,13 @@
           "name": "campaign_budget_nonnegative",
           "value": "\"campaigns\".\"budget_usd\" >= 0"
         },
-        "campaign_batch_size": {
-          "name": "campaign_batch_size",
-          "value": "\"campaigns\".\"batch_size\" in (20,50,100,200)"
-        },
         "campaign_min_score": {
           "name": "campaign_min_score",
           "value": "\"campaigns\".\"min_score\" between 0 and 100"
+        },
+        "campaign_batch_size": {
+          "name": "campaign_batch_size",
+          "value": "\"campaigns\".\"batch_size\" in (20,50,100,200)"
         }
       },
       "isRLSEnabled": false
@@ -1164,17 +1164,29 @@
           "name": "company_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "campaign_id": {
           "name": "campaign_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "contact_id": {
           "name": "contact_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "peer_value": {
+          "name": "peer_value",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1200,7 +1212,36 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "conversation_inbound_peer": {
+          "name": "conversation_inbound_peer",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "peer_value",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"conversations\".\"peer_value\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "conversations_company_id_companies_id_fk": {
           "name": "conversations_company_id_companies_id_fk",
@@ -1225,6 +1266,15 @@
           "tableFrom": "conversations",
           "tableTo": "contacts",
           "columnsFrom": ["contact_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "conversations_account_id_channel_accounts_id_fk": {
+          "name": "conversations_account_id_channel_accounts_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "channel_accounts",
+          "columnsFrom": ["account_id"],
           "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -1359,6 +1409,13 @@
           "notNull": true,
           "default": "'out'"
         },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'generated'"
+        },
         "channel": {
           "name": "channel",
           "type": "text",
@@ -1439,6 +1496,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "classification": {
+          "name": "classification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "needs_human": {
+          "name": "needs_human",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "read_at": {
+          "name": "read_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "approved_by": {
           "name": "approved_by",
           "type": "uuid",
@@ -1476,15 +1552,43 @@
           "primaryKey": false,
           "notNull": false
         },
-        "source": {
-          "name": "source",
+        "rfc_message_id": {
+          "name": "rfc_message_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'generated'"
+          "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "message_inbound_provider": {
+          "name": "message_inbound_provider",
+          "columns": [
+            {
+              "expression": "channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"messages\".\"direction\" = 'in'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "messages_conversation_id_conversations_id_fk": {
           "name": "messages_conversation_id_conversations_id_fk",
@@ -1533,6 +1637,10 @@
       },
       "policies": {},
       "checkConstraints": {
+        "message_classification": {
+          "name": "message_classification",
+          "value": "\"messages\".\"classification\" in ('interest','question','price','contract','complaint','refusal','autoreply')"
+        },
         "message_direction": {
           "name": "message_direction",
           "value": "\"messages\".\"direction\" in ('out','in')"

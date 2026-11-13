@@ -164,7 +164,9 @@ export async function pollTelegramQrLogin(
   adapter: Adapter = telegramAdapter,
   now = new Date(),
 ) {
-  return transaction(async (c) => {
+  // Read the pending login in a short transaction: the Telegram call below must not hold a
+  // database connection or row lock (a hung call once exhausted the pool).
+  const read = await transaction(async (c) => {
     const account = await lockAccount(c, id, userId),
       settings = account.settings;
     if (
@@ -173,17 +175,26 @@ export async function pollTelegramQrLogin(
       new Date(settings.expiresAt).getTime() <= now.getTime()
     )
       invalid('Сеанс входу закінчився. Почніть підключення знову.');
-    const login = JSON.parse(
-      decryptTelegramSession(settings.pending, secret()),
-    );
-    if (!login.qr || login.requiresPassword)
-      return {
-        id,
-        step: login.requiresPassword
-          ? ('password' as const)
-          : ('code' as const),
-      };
-    const result = await loginOperation(() => adapter.qrLogin(login.session));
+    return { settings, address: account.address as string };
+  });
+  const login = JSON.parse(
+    decryptTelegramSession(read.settings.pending, secret()),
+  );
+  if (!login.qr || login.requiresPassword)
+    return {
+      id,
+      step: login.requiresPassword ? ('password' as const) : ('code' as const),
+    };
+  const result = await loginOperation(() => adapter.qrLogin(login.session));
+  return transaction(async (c) => {
+    const account = await lockAccount(c, id, userId);
+    // Another poll finished or replaced this login meanwhile: keep its result.
+    if (account.status === 'active') return { id, step: 'done' as const };
+    if (
+      account.status !== 'pending' ||
+      account.settings.pending !== read.settings.pending
+    )
+      return { id, step: 'qr' as const };
     if (result.status === 'done') {
       await c.query(
         "update channel_accounts set status='active',address=$3,settings=$2 where id=$1",
@@ -192,7 +203,7 @@ export async function pollTelegramQrLogin(
           JSON.stringify({
             sessionEncrypted: encryptTelegramSession(result.session, secret()),
           }),
-          result.phone ?? account.address,
+          result.phone ?? read.address,
         ],
       );
       await logActivity(
@@ -208,7 +219,7 @@ export async function pollTelegramQrLogin(
     await c.query('update channel_accounts set settings=$2 where id=$1', [
       id,
       JSON.stringify({
-        ...settings,
+        ...read.settings,
         pending: encryptTelegramSession(
           JSON.stringify({
             ...login,

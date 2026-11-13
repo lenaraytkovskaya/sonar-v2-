@@ -44,9 +44,11 @@ export function TelegramAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       if (result.step === 'code' || result.step === 'password')
         setLogin({ id: result.id, step: result.step });
-      setQr(
-        result.step === 'qr' && result.qr
-          ? { id: result.id, image: result.qr }
+      setQr((current) =>
+        result.step === 'qr'
+          ? result.qr
+            ? { id: result.id, image: result.qr }
+            : current
           : null,
       );
       if (result.deliveryUk) setDelivery(result.deliveryUk);
@@ -57,7 +59,9 @@ export function TelegramAccounts({
       if (method === 'DELETE' && 'id' in fields && fields.id === login?.id)
         setLogin(null);
       if (method === 'DELETE') setQr(null);
-      router.refresh();
+      // QR polls run every few seconds; re-render the page only when something changed.
+      const polling = 'action' in fields && fields.action === 'qr-poll';
+      if (!polling || result.step !== 'qr') router.refresh();
     } catch (error) {
       setError(error instanceof Error ? error.message : uk.email.error);
     } finally {
