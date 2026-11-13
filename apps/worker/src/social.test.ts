@@ -56,9 +56,13 @@ afterEach(() => {
 });
 
 function prepareSocialFetch(overrides: Record<string, unknown> = {}) {
-  vi.stubEnv('SOCIAL_PROXY_URLS', 'http://anonymous.example:8000');
+  vi.stubEnv(
+    'SOCIAL_PROXY_URLS',
+    'http://reserved.example:8000,http://anonymous.example:8000',
+  );
   connect.mockResolvedValue({ query, release });
   const settings = {
+    'social.account_proxy_index': 0,
     'social.cost_per_request_usd': 0.001,
     'social.page_timeout_ms': 30000,
     'social.instagram.min_gap_seconds': 60,
@@ -259,6 +263,52 @@ it('pauses without a proxy before connecting to the database or starting a brows
   expect(connect).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
 });
+it.each([undefined, null, '0', -1, 1.5, 2])(
+  'fails closed for invalid reservation %s before billing',
+  async (value) => {
+    prepareSocialFetch({ 'social.account_proxy_index': value });
+    const fetch = vi.fn();
+    expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+      status: 'paused',
+      reasonCode: 'social_proxy_reservation_invalid',
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(budgeted).not.toHaveBeenCalled();
+  },
+);
+it('fails closed for an empty anonymous pool before billing, including duplicate credentials', async () => {
+  prepareSocialFetch();
+  vi.stubEnv(
+    'SOCIAL_PROXY_URLS',
+    'http://a:b@reserved.example:8000,http://c:d@reserved.example:8000',
+  );
+  const fetch = vi.fn();
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'social_anonymous_proxy_missing',
+  });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(budgeted).not.toHaveBeenCalled();
+});
+it('bills a failed session without invoking fallback when the anonymous pool is empty', async () => {
+  prepareSocialFetch();
+  vi.stubEnv('SOCIAL_PROXY_URLS', 'http://pinned.example:9000');
+  acquireSession.mockResolvedValue(authenticated);
+  const fetch = vi
+    .fn()
+    .mockResolvedValue({ ...publicPage, error: 'session_invalid' });
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'social_anonymous_proxy_missing',
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(pauseSession).toHaveBeenCalledOnce();
+  expect(budgeted).toHaveBeenCalledOnce();
+  expect(await budgeted.mock.results[0]?.value).toMatchObject({
+    costUsd: 0.001,
+    units: 1,
+  });
+});
 it('parses HTTP proxy credentials and reports malformed values without leaking credentials', () => {
   expect(
     socialProxies(
@@ -315,9 +365,13 @@ it('requires manual retry after protection pauses even after the pause expires a
   ).toBeNull();
 });
 it('checks proxy budget before invoking paid traffic', async () => {
-  vi.stubEnv('SOCIAL_PROXY_URLS', 'http://user:password@proxy.example:8000');
+  vi.stubEnv(
+    'SOCIAL_PROXY_URLS',
+    'http://reserved.example:8000,http://user:password@proxy.example:8000',
+  );
   connect.mockResolvedValue({ query, release });
   const settings = {
+    'social.account_proxy_index': 0,
     'social.cost_per_request_usd': 0.001,
     'social.page_timeout_ms': 30000,
     'social.instagram.min_gap_seconds': 60,
@@ -377,9 +431,13 @@ it('reads public company pages without consulting robots.txt (owner decision)', 
   expect(String(get.mock.calls[0]?.[0])).not.toContain('robots.txt');
 });
 it('records zero cost when Chromium cannot start before any proxy traffic', async () => {
-  vi.stubEnv('SOCIAL_PROXY_URLS', 'http://proxy.example:8000');
+  vi.stubEnv(
+    'SOCIAL_PROXY_URLS',
+    'http://reserved.example:8000,http://proxy.example:8000',
+  );
   connect.mockResolvedValue({ query, release });
   const settings = {
+    'social.account_proxy_index': 0,
     'social.cost_per_request_usd': 0.001,
     'social.page_timeout_ms': 30000,
     'social.instagram.min_gap_seconds': 60,

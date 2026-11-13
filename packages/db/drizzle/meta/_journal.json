@@ -232,6 +232,13 @@
       "when": 1794540000005,
       "tag": "0032_social_session_fetch",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794540000006,
+      "tag": "0033_social_proxy_reservation",
+      "breakpoints": true
     }
   ]
 }

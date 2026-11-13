@@ -14,16 +14,18 @@ const selectClass =
 export function SocialAccounts({
   accounts,
   proxyCount,
+  accountProxyIndex,
 }: {
   accounts: Account[];
   proxyCount: number;
+  accountProxyIndex: number | null;
 }) {
   const [current, setCurrent] = useState(accounts);
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [network, setNetwork] = useState<Account['network']>('instagram');
   const [dailyLimit, setDailyLimit] = useState('20');
-  const [proxyIndex, setProxyIndex] = useState('0');
+  const [proxyIndex, setProxyIndex] = useState(String(accountProxyIndex ?? ''));
   const [cookiesJson, setCookiesJson] = useState('');
   const [visible, setVisible] = useState(false);
   const [pending, setPending] = useState(false);
@@ -82,6 +84,7 @@ export function SocialAccounts({
     setCookiesJson('');
     setVisible(false);
     setDailyLimit('20');
+    setProxyIndex(String(accountProxyIndex ?? ''));
   };
   return (
     <Card className="space-y-4 p-5">
@@ -251,12 +254,20 @@ export function SocialAccounts({
               onChange={(event) => setProxyIndex(event.target.value)}
             >
               {Array.from({ length: proxyCount }, (_, index) => (
-                <option key={index} value={index}>
+                <option
+                  key={index}
+                  value={index}
+                  disabled={index !== accountProxyIndex}
+                >
                   {uk.socialAccounts.proxy} {index + 1}
+                  {index === accountProxyIndex
+                    ? uk.socialAccounts.reservedProxy
+                    : uk.socialAccounts.anonymousProxy}
                 </option>
               ))}
             </select>
-            {!proxyCount && (
+            <p className="text-sm text-muted">{uk.socialAccounts.proxyHelp}</p>
+            {accountProxyIndex === null && (
               <p className="text-sm text-wait">{uk.socialAccounts.noProxy}</p>
             )}
           </div>
@@ -292,7 +303,9 @@ export function SocialAccounts({
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={pending || !proxyCount}>{uk.forms.save}</Button>
+          <Button disabled={pending || accountProxyIndex === null}>
+            {uk.forms.save}
+          </Button>
           {editing && (
             <Button
               type="button"
