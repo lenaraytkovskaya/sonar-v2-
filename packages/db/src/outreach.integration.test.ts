@@ -466,7 +466,7 @@ it.skipIf(!enabled)(
       );
       try {
         await db.sonarPool.query(
-          "update settings set value='1000000' where key='budget.monthly_usd'",
+          "insert into settings(key,value) values('budget.monthly_usd','1000000') on conflict(key) do update set value=excluded.value",
         );
         await db.sonarPool.query(
           "update services set monthly_limit_usd=null where code='openrouter'",
@@ -476,8 +476,8 @@ it.skipIf(!enabled)(
         ).rejects.toMatchObject({ scope: 'campaign' });
       } finally {
         await db.sonarPool.query(
-          "update settings set value=$1 where key='budget.monthly_usd'",
-          [JSON.stringify(budget.value)],
+          "insert into settings(key,value) values('budget.monthly_usd',$1) on conflict(key) do update set value=excluded.value",
+          [JSON.stringify(budget?.value ?? 50)],
         );
         await db.sonarPool.query(
           "update services set monthly_limit_usd=$1 where code='openrouter'",
