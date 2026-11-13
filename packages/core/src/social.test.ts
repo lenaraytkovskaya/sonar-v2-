@@ -373,6 +373,41 @@ describe('parseSocialProfile', () => {
     });
     expect(profile.posts).toHaveLength(2);
   });
+  it.each([
+    ['<ul><li>', '</li></ul>'],
+    ['<div role="list"><div role="listitem">', '</div></div>'],
+    ['<ul><li><ul><li>', '</li></ul></li></ul>'],
+  ])(
+    'excludes Instagram comment and reply times linked to the same post inside %s',
+    (open, close) => {
+      const url = 'https://www.instagram.com/p/OWN/';
+      const comment = `${open}<a href="/commenter/">Commenter</a><a href="/p/OWN/"><time datetime="2026-11-13T10:00:00Z">Comment time</time></a>${close}`;
+      const publication =
+        '<a href="/p/OWN/"><time datetime="2026-01-01T10:00:00Z">Post time</time></a>';
+      const article = `<article><header><a href="/demo.studio/">demo.studio</a></header>${comment}${publication}</article>`;
+      // A list item wrapping the whole post is valid; only list items inside it are comments.
+      const profile = parseSocialProfile(
+        `<meta property="og:url" content="${instagram.canonicalUrl}"><main><a href="/p/OWN/">Post</a></main>`,
+        instagram,
+        'PL',
+        [
+          {
+            url,
+            html: `<meta property="og:url" content="${url}"><main><ul><li>${article}</li></ul></main>`,
+          },
+        ],
+      );
+      expect(profile.lastPostAt).toBe('2026-01-01T10:00:00.000Z');
+      expect(profile.posts).toEqual([
+        { date: '2026-01-01T10:00:00.000Z', url },
+      ]);
+      expect(
+        parseSocialProfile(fixture('instagram-session'), instagram, 'PL', [
+          { url, html: `<main>${article.replace(publication, '')}</main>` },
+        ]).lastPostAt,
+      ).toBeNull();
+    },
+  );
   it('rejects conflicting Instagram JSON owners even if the opened post displays the target author', () => {
     const html = `${fixture('instagram-post')}<script type="application/json">{"code":"LATEST","taken_at":1798761600,"user":{"username":"foreign"}}</script>`;
     expect(

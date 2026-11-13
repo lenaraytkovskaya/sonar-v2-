@@ -295,16 +295,26 @@ export async function runSocialFetch(
             };
           }
           units += page.usedProxy === false ? 0 : (page.proxyUnits ?? 1);
+          const sessionBlock = detectSocialBlock(
+            page.html,
+            page.url,
+            page.status,
+            target,
+          );
           const sessionBlocked =
             page.error === 'session_invalid' ||
             ['captcha', 'login_wall', 'forbidden', 'rate_limit'].includes(
-              detectSocialBlock(page.html, page.url, page.status, target) ?? '',
+              sessionBlock ?? '',
             );
-          if (session && (page.error || sessionBlocked)) {
+          // Rate limits pause the network; changing context or proxy would bypass them.
+          if (
+            session &&
+            sessionBlock !== 'rate_limit' &&
+            (page.error || sessionBlocked)
+          ) {
             if (sessionBlocked)
               await pauseSocialFetchSession(client, session.account.id);
-            // A failed authenticated session is never retried or sent through another
-            // proxy. The fallback is a fresh anonymous context and shares this receipt.
+            // The fallback is a fresh anonymous context and shares this receipt.
             method = 'anonymous';
             try {
               page = await fetchPage(

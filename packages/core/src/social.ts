@@ -1013,7 +1013,9 @@ export function parseSocialProfile(
           return;
         const timeLink = doc(element).closest('a[href]').attr('href');
         if (timeLink && !samePost(timeLink)) return;
-        if (doc(element).closest('li,[role="listitem"]').length && !timeLink)
+        // Comment/reply permalinks can equal the post URL. Scope list items to
+        // this article so an outer feed list item does not hide a real post time.
+        if (doc(element).parentsUntil('article', 'li,[role="listitem"]').length)
           return;
         const foreign = docRecords.some((node) => {
           const code = node.shortcode ?? node.code;

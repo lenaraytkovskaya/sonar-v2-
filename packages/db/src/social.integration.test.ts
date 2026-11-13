@@ -256,6 +256,197 @@ it.skipIf(!enabled)(
   },
   20000,
 );
+it.skipIf(!enabled)(
+  'preserves session HTTP 429 as a paid network pause without a second proxy fetch or invalid cookies',
+  async () => {
+    const { sonarPool } = await import('./index.js');
+    const { saveSocialAccount, withSocialSessionCheck } =
+      await import('./social-accounts.js');
+    const { socialTarget } = await import('@sonar/core');
+    const { runSocialFetch } =
+      await import('../../../apps/worker/src/social.js');
+    const actor = randomUUID(),
+      company = randomUUID();
+    const taskIds = [randomUUID(), randomUUID()];
+    const target = socialTarget('https://www.instagram.com/demo.studio/')!;
+    const payload = { companyId: company, target, manual: true };
+    const oldSecret = process.env.AUTH_SECRET,
+      oldProxies = process.env.SOCIAL_PROXY_URLS;
+    const { rows: settings } = await sonarPool.query(
+      "select key,value from settings where key like 'social.%' or key='budget.monthly_usd'",
+    );
+    process.env.AUTH_SECRET =
+      'social-rate-limit-integration-secret-at-least-32';
+    process.env.SOCIAL_PROXY_URLS =
+      'http://pinned.example:8000,http://anonymous.example:8000';
+    let accountId: string | undefined;
+    try {
+      await sonarPool.query(
+        "insert into users(id,email,name,password_hash) values($1,$2,'Rate limit test','unused')",
+        [actor, `${actor}@example.test`],
+      );
+      const saved = await saveSocialAccount(
+        {
+          network: 'instagram',
+          name: 'Rate limit test',
+          dailyLimit: 60,
+          proxyIndex: 0,
+          cookiesJson: JSON.stringify([
+            {
+              name: 'session',
+              value: 'synthetic',
+              domain: '.instagram.com',
+              session: true,
+            },
+          ]),
+        },
+        actor,
+      );
+      accountId = saved.id;
+      await withSocialSessionCheck(accountId, async () => ({ valid: true }));
+      await sonarPool.query(
+        "insert into companies(id,place_id,name,country_code) values($1::uuid,$1::text,'Rate limit test','UA')",
+        [company],
+      );
+      for (const id of taskIds)
+        await sonarPool.query(
+          "insert into tasks(id,type,idempotency_key,payload,status,subject_type,subject_id) values($1::uuid,'social.fetch',$1::text,$2,'running','company',$3)",
+          [id, JSON.stringify(payload), company],
+        );
+      await sonarPool.query(
+        "insert into settings(key,value) values('budget.monthly_usd','100') on conflict(key) do update set value=excluded.value",
+      );
+      await sonarPool.query(
+        "update settings set value=$1 where key='social.instagram.runtime'",
+        [
+          JSON.stringify({
+            day: new Date().toISOString().slice(0, 10),
+            count: 1,
+            blocked: false,
+          }),
+        ],
+      );
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          url: target.canonicalUrl,
+          html: 'Too many requests',
+          status: 429,
+          usedProxy: true,
+        })
+        .mockResolvedValue({
+          url: target.canonicalUrl,
+          status: 200,
+          usedProxy: true,
+          html: `<meta property="og:url" content="${target.canonicalUrl}"><meta property="og:title" content="Demo">`,
+        });
+      const before = Date.now();
+      const limited = await runSocialFetch(payload, taskIds[0]!, fetch);
+      const reasonUk =
+        'Соцмережа обмежила запити (429). Повторіть вручну після паузи.';
+      expect(limited).toEqual({
+        status: 'paused',
+        reasonCode: 'social_rate_limit',
+        reasonUk,
+      });
+      const {
+        rows: [account],
+      } = await sonarPool.query(
+        'select status,settings from channel_accounts where id=$1',
+        [accountId],
+      );
+      expect(account.status).toBe('active');
+      expect(account.settings).toMatchObject({
+        sessionStatus: 'valid',
+        sessionFetch: { count: 1 },
+      });
+      expect(account.settings.reasonUk).toBeNull();
+      const {
+        rows: [runtime],
+      } = await sonarPool.query(
+        "select value from settings where key='social.instagram.runtime'",
+      );
+      expect(runtime.value).toMatchObject({
+        count: 2,
+        blocked: true,
+        blockCode: 'rate_limit',
+        reason: reasonUk,
+      });
+      const pauseMinutes = Number(
+        settings.find((row) => row.key === 'social.instagram.pause_minutes')!
+          .value,
+      );
+      expect(Date.parse(runtime.value.pauseUntil)).toBeGreaterThanOrEqual(
+        before + pauseMinutes * 60000,
+      );
+      const { rows: receipts } = await sonarPool.query(
+        "select s.units,s.cost_usd,s.meta from spend_events s join tasks t on t.id=s.task_id where t.payload->>'parentId'=$1",
+        [taskIds[0]],
+      );
+      expect(receipts).toHaveLength(1);
+      expect(Number(receipts[0].units)).toBe(1);
+      expect(Number(receipts[0].cost_usd)).toBe(
+        Number(
+          settings.find((row) => row.key === 'social.cost_per_request_usd')!
+            .value,
+        ),
+      );
+      expect(JSON.parse(receipts[0].meta.response.text)).toEqual({
+        failure: 'rate_limit',
+      });
+      expect(await runSocialFetch(payload, taskIds[0]!, fetch)).toEqual(
+        limited,
+      );
+      expect(await runSocialFetch(payload, taskIds[1]!, fetch)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'social_network_paused',
+        reasonUk,
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch.mock.calls[0]?.[1]).toEqual({
+        server: 'http://pinned.example:8000',
+      });
+      expect(fetch.mock.calls[0]?.[4]).toMatchObject({ network: 'instagram' });
+      expect(
+        (
+          await sonarPool.query(
+            'select * from company_facts where company_id=$1',
+            [company],
+          )
+        ).rows,
+      ).toEqual([]);
+    } finally {
+      if (oldSecret === undefined) delete process.env.AUTH_SECRET;
+      else process.env.AUTH_SECRET = oldSecret;
+      if (oldProxies === undefined) delete process.env.SOCIAL_PROXY_URLS;
+      else process.env.SOCIAL_PROXY_URLS = oldProxies;
+      await sonarPool.query(
+        'delete from spend_events where task_id in (select id from tasks where subject_id=$1)',
+        [company],
+      );
+      await sonarPool.query('delete from tasks where subject_id=$1', [company]);
+      await sonarPool.query('delete from companies where id=$1', [company]);
+      if (accountId)
+        await sonarPool.query('delete from channel_accounts where id=$1', [
+          accountId,
+        ]);
+      await sonarPool.query('delete from activity_log where user_id=$1', [
+        actor,
+      ]);
+      await sonarPool.query('delete from users where id=$1', [actor]);
+      for (const setting of settings)
+        await sonarPool.query('update settings set value=$2 where key=$1', [
+          setting.key,
+          JSON.stringify(setting.value),
+        ]);
+      if (!settings.some((setting) => setting.key === 'budget.monthly_usd'))
+        await sonarPool.query(
+          "delete from settings where key='budget.monthly_usd'",
+        );
+    }
+  },
+  20000,
+);
 afterAll(async () => {
   if (enabled) {
     const { closeTaskQueue } = await import('./tasks.js');

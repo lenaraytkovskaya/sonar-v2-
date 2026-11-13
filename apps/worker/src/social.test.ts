@@ -123,31 +123,70 @@ it('reads through the selected account pinned proxy and records an independent s
   expect(releaseSession).toHaveBeenCalledWith(expect.anything(), 'account');
   expect(budgeted.mock.calls[0]?.[1]).toBe(0.006);
 });
-it('pauses precisely the invalid session and falls back anonymously under the same paid request', async () => {
-  prepareSocialFetch();
-  acquireSession.mockResolvedValue(authenticated);
-  const fetch = vi
-    .fn()
-    .mockResolvedValueOnce({
-      html: '',
-      url: 'https://www.instagram.com/accounts/login/',
-      status: 200,
-      usedProxy: true,
-    })
-    .mockResolvedValueOnce(publicPage);
-  const outcome = await runSocialFetch(payload, 'task', fetch);
-  expect(outcome).toMatchObject({
-    status: 'done',
-    result: { profile: { method: 'anonymous' }, costUsd: 0.002 },
-  });
-  expect(pauseSession).toHaveBeenCalledWith(expect.anything(), 'account');
-  expect(fetch.mock.calls[1]).toHaveLength(4);
-  expect(fetch.mock.calls[1]?.[1]).toEqual({
-    server: 'http://anonymous.example:8000',
-  });
-  expect(budgeted).toHaveBeenCalledOnce();
-  expect(reserveSession).toHaveBeenCalledOnce();
-});
+it.each(['accounts/login', 'checkpoint'])(
+  'pauses precisely the invalid session after %s and falls back anonymously under the same paid request',
+  async (path) => {
+    prepareSocialFetch();
+    acquireSession.mockResolvedValue(authenticated);
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        html: '',
+        url: `https://www.instagram.com/${path}/`,
+        status: 200,
+        usedProxy: true,
+      })
+      .mockResolvedValueOnce(publicPage);
+    const outcome = await runSocialFetch(payload, 'task', fetch);
+    expect(outcome).toMatchObject({
+      status: 'done',
+      result: { profile: { method: 'anonymous' }, costUsd: 0.002 },
+    });
+    expect(pauseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+    expect(fetch.mock.calls[1]).toHaveLength(4);
+    expect(fetch.mock.calls[1]?.[1]).toEqual({
+      server: 'http://anonymous.example:8000',
+    });
+    expect(budgeted).toHaveBeenCalledOnce();
+    expect(reserveSession).toHaveBeenCalledOnce();
+  },
+);
+it.each([
+  { status: 429, html: '' },
+  { status: 200, html: 'Please wait a few minutes before you try again' },
+])(
+  'preserves a session rate limit without anonymous fallback or invalidating cookies (%s)',
+  async (page) => {
+    prepareSocialFetch();
+    acquireSession.mockResolvedValue(authenticated);
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...page,
+        url: payload.target.canonicalUrl,
+        usedProxy: true,
+      })
+      .mockResolvedValueOnce(publicPage);
+    expect(await runSocialFetch(payload, 'task', fetch)).toEqual({
+      status: 'paused',
+      reasonCode: 'social_rate_limit',
+      reasonUk:
+        'Соцмережа обмежила запити (429). Повторіть вручну після паузи.',
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[1]).toEqual(authenticated.session.proxy);
+    expect(pauseSession).not.toHaveBeenCalled();
+    const pauseUpdate = query.mock.calls.find(([sql]) =>
+      sql.includes('value=value||'),
+    );
+    const pause = JSON.parse(pauseUpdate?.[1]?.[1]);
+    expect(pause).toMatchObject({ blocked: true, blockCode: 'rate_limit' });
+    expect(Date.parse(pause.pauseUntil)).toBeGreaterThan(Date.now());
+    expect(pause.reason).not.toContain('cookies');
+    expect(reserveSession).toHaveBeenCalledOnce();
+    expect(releaseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+  },
+);
 it('defers the account reading gap without billing or reserving and uses anonymous reads when no account is usable', async () => {
   prepareSocialFetch();
   const runAt = new Date(Date.now() + 90000);
