@@ -25,7 +25,7 @@ it.skipIf(!enabled)(
     }));
     try {
       await sonarPool.query(
-        "update settings set value='100' where key='budget.monthly_usd'",
+        "insert into settings(key,value) values('budget.monthly_usd','100') on conflict(key) do update set value=excluded.value",
       );
       await sonarPool.query(
         `insert into campaigns(id,name,country_code,language_code,cities,queries,offer,budget_usd,channels,scoring_weights) values($1,'Inbound budget','PL','pl','{}','{}','',0.001,'{}','{}')`,
@@ -59,7 +59,7 @@ it.skipIf(!enabled)(
       await runBudgetedRequest('openrouter', 0.0006, ids[2]!, paid);
       expect(paid).toHaveBeenCalledTimes(2);
       await sonarPool.query(
-        "update settings set value='0' where key='budget.monthly_usd'",
+        "insert into settings(key,value) values('budget.monthly_usd','0') on conflict(key) do update set value=excluded.value",
       );
       await expect(
         runBudgetedRequest('openrouter', 0.0006, ids[3]!, paid),
