@@ -34,10 +34,7 @@ export async function DELETE(request: Request) {
 async function handle(request: Request, method: string) {
   const user = await apiUser(request, method !== 'GET');
   if (!user) return respond({ error: uk.unauthorized }, 401);
-  const data =
-    method === 'GET'
-      ? { id: new URL(request.url).searchParams.get('id') }
-      : await request.json().catch(() => null);
+  const data = method === 'GET' ? null : await request.json().catch(() => null);
   const invalid = () => respond({ error: uk.ai.invalid }, 400);
   const whatsapp = await import('@sonar/db/whatsapp');
   const { EmailValidationError } = await import('@sonar/db/email');
@@ -56,9 +53,9 @@ async function handle(request: Request, method: string) {
         { name: data.name, dailyLimit: data.dailyLimit },
         user.id,
       );
-    } else {
+    } else if (method !== 'GET') {
       if (!validId(data?.id)) return invalid();
-      if (method === 'GET')
+      if (method === 'POST' && data.action === 'refresh')
         progress = await whatsapp.refreshWhatsAppAccount(data.id, user.id);
       else if (method === 'POST' && data.action === 'restart')
         progress = await whatsapp.restartWhatsAppAccount(data.id, user.id);

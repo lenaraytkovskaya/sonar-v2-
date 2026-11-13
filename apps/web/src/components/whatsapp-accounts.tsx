@@ -36,10 +36,13 @@ export function WhatsAppAccounts({
     const load = async () => {
       if (busy.current) return;
       try {
-        const response = await fetch(
-          `/api/whatsapp-accounts?id=${account.id}`,
-          { cache: 'no-store', signal: controller.signal },
-        );
+        const response = await fetch('/api/whatsapp-accounts', {
+          method: 'POST',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'refresh', id: account.id }),
+        });
         const result = await response.json();
         if (controller.signal.aborted || expected !== generation.current)
           return;

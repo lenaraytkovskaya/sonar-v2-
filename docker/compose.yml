@@ -17,6 +17,21 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+  backup:
+    image: postgres:17-bookworm
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - ../backups:/backups
+      - ../scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: [/bin/sh, -c]
+    command:
+      - 'while true; do /bin/sh /usr/local/bin/backup.sh || echo "Sonar backup failed" >&2; sleep 86400; done'
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
   migrate:
     build: { context: .., dockerfile: docker/Dockerfile, target: build }
     command: [pnpm, db:migrate]
