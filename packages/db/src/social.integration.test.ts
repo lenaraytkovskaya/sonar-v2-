@@ -5,7 +5,7 @@ it.skipIf(!enabled)(
   'deduplicates a shared profile globally, fans out provenance, caches billing and pauses paid protection failures',
   async () => {
     const { sonarPool } = await import('./index.js');
-    const { enqueueCompanySocial, getCompanySocial } =
+    const { enqueueCompanySocial, getCompanySocial, saveSocialProfile } =
       await import('./social.js');
     const { runSocialFetch } =
       await import('../../../apps/worker/src/social.js');
@@ -77,6 +77,34 @@ it.skipIf(!enabled)(
         status: 'done',
       });
       expect(fetch).toHaveBeenCalledOnce();
+      const { parseSocialProfile, socialTarget: targetFromUrl } =
+        await import('@sonar/core');
+      const target = targetFromUrl(url)!;
+      const enriched = {
+        ...parseSocialProfile('', target, 'UA'),
+        name: 'Sonar public company',
+        address: 'Тестова вулиця, 12',
+        emails: ['social@example.test'],
+        method: 'session' as const,
+      };
+      await saveSocialProfile(sonarPool, companyIds, target, enriched);
+      for (const id of companyIds) {
+        expect((await getCompanySocial(id)).profiles[0]?.profile).toMatchObject(
+          {
+            method: 'session',
+            address: enriched.address,
+            emails: enriched.emails,
+          },
+        );
+        expect(
+          (
+            await sonarPool.query(
+              "select kind,source,source_url from contacts where company_id=$1 and kind='address'",
+              [id],
+            )
+          ).rows,
+        ).toEqual([{ kind: 'address', source: 'instagram', source_url: url }]);
+      }
       for (const id of companyIds)
         expect((await getCompanySocial(id)).profiles[0]).toMatchObject({
           network: 'instagram',

@@ -32,6 +32,131 @@ export interface SocialSessionAccount {
   channel: SocialNetwork;
   settings: Record<string, unknown>;
 }
+export type SocialFetchSession = {
+  account: SocialSessionAccount;
+  session: ReturnType<typeof resolveSocialSession>;
+};
+type FetchRuntime = { day?: string; count?: number; nextAt?: string };
+
+/** The same account lock is held by sends, session checks and account edits. */
+export async function acquireSocialFetchSession(
+  c: PoolClient,
+  network: SocialNetwork,
+  dailyLimit: number,
+  now = new Date(),
+): Promise<SocialFetchSession | { runAt: Date } | null> {
+  const { rows } = await c.query<{ id: string }>(
+    "select id from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid' order by id",
+    [network],
+  );
+  let nextAt = Infinity;
+  for (const candidate of rows) {
+    const {
+      rows: [lock],
+    } = await c.query(
+      "select pg_try_advisory_lock(hashtextextended('channel-account:'||$1::text,0)) as locked",
+      [candidate.id],
+    );
+    if (!lock.locked) {
+      nextAt = Math.min(nextAt, now.getTime() + 1000);
+      continue;
+    }
+    let keep = false;
+    try {
+      const {
+        rows: [account],
+      } = await c.query<SocialSessionAccount & { status: string }>(
+        'select id,channel,settings,status from channel_accounts where id=$1',
+        [candidate.id],
+      );
+      if (
+        !account ||
+        account.status !== 'active' ||
+        account.settings.sessionStatus !== 'valid'
+      )
+        continue;
+      let session: ReturnType<typeof resolveSocialSession>;
+      try {
+        session = resolveSocialSession(account);
+      } catch {
+        await pauseSocialFetchSession(c, account.id);
+        continue;
+      }
+      const runtime = (account.settings.sessionFetch ?? {}) as FetchRuntime;
+      if (
+        runtime.day === now.toISOString().slice(0, 10) &&
+        (runtime.count ?? 0) >= dailyLimit
+      )
+        continue;
+      const next = Date.parse(runtime.nextAt ?? '');
+      if (next > now.getTime()) {
+        nextAt = Math.min(nextAt, next);
+        continue;
+      }
+      keep = true;
+      return { account, session };
+    } finally {
+      if (!keep) await releaseSocialFetchSession(c, candidate.id);
+    }
+  }
+  return Number.isFinite(nextAt) ? { runAt: new Date(nextAt) } : null;
+}
+export async function releaseSocialFetchSession(c: PoolClient, id: string) {
+  await c.query(
+    "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
+    [id],
+  );
+}
+export async function pauseSocialFetchSession(c: PoolClient, id: string) {
+  await c.query(
+    `update channel_accounts set status='paused',settings=settings||$2::jsonb where id=$1`,
+    [
+      id,
+      JSON.stringify({
+        sessionStatus: 'invalid',
+        checkedAt: new Date().toISOString(),
+        reasonUk: 'Увійдіть знову (оновіть cookies)',
+      }),
+    ],
+  );
+}
+/** Reserve only after the proxy budget is approved; task receipt makes retries idempotent. */
+export async function reserveSocialFetchSession(
+  c: PoolClient,
+  id: string,
+  requestId: string,
+  gapSeconds: number,
+  now = new Date(),
+) {
+  await c.query('begin');
+  try {
+    const {
+      rows: [task],
+    } = await c.query('select result from tasks where id=$1 for update', [
+      requestId,
+    ]);
+    if (!task) throw new Error('Unknown social request');
+    if (!task.result?.sessionFetchAccountId) {
+      await c.query(
+        `update channel_accounts set settings=jsonb_set(settings,'{sessionFetch}',jsonb_build_object('day',$2::text,'count',case when settings->'sessionFetch'->>'day'=$2 then coalesce((settings->'sessionFetch'->>'count')::int,0)+1 else 1 end,'nextAt',$3::text)) where id=$1`,
+        [
+          id,
+          now.toISOString().slice(0, 10),
+          new Date(now.getTime() + gapSeconds * 1000).toISOString(),
+        ],
+      );
+      await c.query(
+        "update tasks set result=coalesce(result,'{}'::jsonb)||jsonb_build_object('sessionFetchAccountId',$2::text) where id=$1",
+        [requestId, id],
+      );
+    } else if (task.result.sessionFetchAccountId !== id)
+      throw new Error('Social request already reserved another account');
+    await c.query('commit');
+  } catch (error) {
+    await c.query('rollback');
+    throw error;
+  }
+}
 const networks = ['facebook', 'instagram', 'linkedin'];
 const invalid = (reason: string): never => {
   throw new EmailValidationError(reason);

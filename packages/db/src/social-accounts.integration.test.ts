@@ -132,3 +132,159 @@ it.skipIf(!enabled)(
     }
   },
 );
+
+it.skipIf(!enabled)(
+  'reserves session reading separately from sends, shares the account lock and falls back after its daily limit or session pause',
+  async () => {
+    const { sonarPool } = await import('./index.js');
+    const accounts = await import('./social-accounts.js');
+    const actor = randomUUID(),
+      requestId = randomUUID(),
+      request2 = randomUUID();
+    const oldSecret = process.env.AUTH_SECRET,
+      oldProxies = process.env.SOCIAL_PROXY_URLS;
+    process.env.AUTH_SECRET = 'social-fetch-integration-secret-at-least-32';
+    process.env.SOCIAL_PROXY_URLS = 'http://pinned.example:8000';
+    const c = await sonarPool.connect(),
+      sender = await sonarPool.connect();
+    let accountId: string | undefined;
+    const now = new Date('2026-11-13T10:00:00Z');
+    try {
+      await sonarPool.query(
+        "insert into users(id,email,name,password_hash) values($1,$2,'Fetch account test','unused')",
+        [actor, `${actor}@example.test`],
+      );
+      const saved = await accounts.saveSocialAccount(
+        {
+          network: 'instagram',
+          name: 'Session fetch integration',
+          dailyLimit: 1,
+          proxyIndex: 0,
+          cookiesJson: JSON.stringify([
+            {
+              name: 'session',
+              value: 'private-cookie',
+              domain: '.instagram.com',
+              session: true,
+            },
+          ]),
+        },
+        actor,
+      );
+      accountId = saved.id;
+      await accounts.withSocialSessionCheck(saved.id, async () => ({
+        valid: true,
+      }));
+      await sonarPool.query(
+        "insert into tasks(id,type,idempotency_key,payload,status) values($1::uuid,'social.request',$1::text,'{}','running'),($2::uuid,'social.request',$2::text,'{}','running')",
+        [requestId, request2],
+      );
+      // Sends hold this exact lock for their provider call. Reads defer rather than sharing a session concurrently.
+      await sender.query(
+        "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+        [saved.id],
+      );
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'instagram', 1, now),
+      ).toMatchObject({ runAt: expect.any(Date) });
+      await sender.query(
+        "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
+        [saved.id],
+      );
+      const selected = await accounts.acquireSocialFetchSession(
+        c,
+        'instagram',
+        1,
+        now,
+      );
+      expect(selected).toMatchObject({
+        account: { id: saved.id },
+        session: { proxy: { server: 'http://pinned.example:8000' } },
+      });
+      expect(
+        (
+          await sender.query(
+            "select pg_try_advisory_lock(hashtextextended('channel-account:'||$1::text,0)) as locked",
+            [saved.id],
+          )
+        ).rows[0].locked,
+      ).toBe(false);
+      await accounts.reserveSocialFetchSession(c, saved.id, requestId, 90, now);
+      await accounts.reserveSocialFetchSession(c, saved.id, requestId, 90, now);
+      await accounts.releaseSocialFetchSession(c, saved.id);
+      const stored = (
+        await sonarPool.query(
+          'select settings,next_send_at from channel_accounts where id=$1',
+          [saved.id],
+        )
+      ).rows[0];
+      expect(stored.settings.sessionFetch).toEqual({
+        day: '2026-11-13',
+        count: 1,
+        nextAt: '2026-11-13T10:01:30.000Z',
+      });
+      expect(stored.next_send_at).toBeNull();
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'instagram', 1, now),
+      ).toBeNull();
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'instagram', 2, now),
+      ).toEqual({ runAt: new Date('2026-11-13T10:01:30Z') });
+      const tomorrow = new Date('2026-11-14T00:00:00Z');
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'instagram', 1, tomorrow),
+      ).toHaveProperty('account');
+      await accounts.reserveSocialFetchSession(
+        c,
+        saved.id,
+        request2,
+        90,
+        tomorrow,
+      );
+      await accounts.pauseSocialFetchSession(c, saved.id);
+      await accounts.releaseSocialFetchSession(c, saved.id);
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'instagram', 2, tomorrow),
+      ).toBeNull();
+      const paused = (
+        await sonarPool.query(
+          'select status,settings from channel_accounts where id=$1',
+          [saved.id],
+        )
+      ).rows[0];
+      expect(paused).toMatchObject({
+        status: 'paused',
+        settings: {
+          sessionStatus: 'invalid',
+          sessionFetch: { day: '2026-11-14', count: 1 },
+          reasonUk: 'Увійдіть знову (оновіть cookies)',
+        },
+      });
+      expect(
+        await accounts.acquireSocialFetchSession(c, 'facebook', 60, now),
+      ).toBeNull();
+    } finally {
+      if (accountId) {
+        await c.query('select pg_advisory_unlock_all()');
+        await sender.query('select pg_advisory_unlock_all()');
+      }
+      c.release();
+      sender.release();
+      await sonarPool.query('delete from tasks where id=any($1::uuid[])', [
+        [requestId, request2],
+      ]);
+      await sonarPool.query('delete from activity_log where user_id=$1', [
+        actor,
+      ]);
+      if (accountId)
+        await sonarPool.query('delete from channel_accounts where id=$1', [
+          accountId,
+        ]);
+      await sonarPool.query('delete from users where id=$1', [actor]);
+      if (oldSecret === undefined) delete process.env.AUTH_SECRET;
+      else process.env.AUTH_SECRET = oldSecret;
+      if (oldProxies === undefined) delete process.env.SOCIAL_PROXY_URLS;
+      else process.env.SOCIAL_PROXY_URLS = oldProxies;
+    }
+  },
+);

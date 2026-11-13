@@ -212,7 +212,7 @@ export function encryptSocialCookies(
 export function resolveSocialSession(
   account: { channel: SocialNetwork; settings: Record<string, unknown> },
   secret = process.env.AUTH_SECRET ?? '',
-  proxyUrls = process.env.SOCIAL_PROXY_URLS ?? '',
+  proxyUrls = socialProxyList(),
 ) {
   const settings = account.settings;
   const proxies = socialSessionProxies(proxyUrls);

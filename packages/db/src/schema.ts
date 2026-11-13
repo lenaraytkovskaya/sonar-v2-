@@ -195,6 +195,7 @@ export const companyStatus = pgEnum('company_status', [
   'do_not_contact',
 ]);
 export const contactKind = pgEnum('contact_kind', [
+  'address',
   'email',
   'phone',
   'telegram',

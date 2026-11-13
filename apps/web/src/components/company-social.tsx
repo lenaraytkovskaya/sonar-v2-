@@ -15,6 +15,8 @@ const fields = {
     'category',
     'description',
     'followers',
+    'rating',
+    'reviewsCount',
     'postsCount',
     'lastPostAt',
   ],
@@ -22,6 +24,7 @@ const fields = {
     'name',
     'category',
     'description',
+    'address',
     'followers',
     'followingCount',
     'postsCount',
@@ -41,7 +44,11 @@ const fields = {
 function safeUrl(value: string | null | undefined) {
   try {
     const url = new URL(value ?? '');
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+    return ['http:', 'https:'].includes(url.protocol) &&
+      !url.username &&
+      !url.password
+      ? url.href
+      : undefined;
   } catch {
     return undefined;
   }
@@ -188,7 +195,31 @@ export function CompanySocial({
                 </dt>
                 <dd className="min-w-0 whitespace-pre-wrap break-words">
                   {field === 'lastPostAt' && row.profile?.lastPostAt ? (
-                    <LocalTime value={row.profile.lastPostAt} dateOnly />
+                    safeUrl(
+                      row.profile.posts.find(
+                        (post) => post.date === row.profile?.lastPostAt,
+                      )?.url,
+                    ) ? (
+                      <a
+                        className="text-accent"
+                        href={safeUrl(
+                          row.profile.posts.find(
+                            (post) => post.date === row.profile?.lastPostAt,
+                          )?.url,
+                        )}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <LocalTime value={row.profile.lastPostAt} dateOnly />
+                      </a>
+                    ) : (
+                      <LocalTime value={row.profile.lastPostAt} dateOnly />
+                    )
+                  ) : typeof row.profile?.[field] === 'number' &&
+                    field !== 'foundedYear' ? (
+                    new Intl.NumberFormat('uk-UA').format(
+                      row.profile[field] as number,
+                    )
                   ) : (
                     (row.profile?.[field] ?? '—')
                   )}
@@ -212,6 +243,12 @@ export function CompanySocial({
               </div>
             ))}
           </dl>
+          <p className="text-xs text-muted-foreground">
+            {uk.social.fields.method}:{' '}
+            {row.profile
+              ? uk.social.methods[row.profile.method ?? 'anonymous']
+              : '—'}
+          </p>
           {!!row.profile?.posts.length && (
             <details>
               <summary className="cursor-pointer text-accent">

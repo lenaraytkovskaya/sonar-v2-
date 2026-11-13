@@ -234,9 +234,211 @@ describe('parseSocialProfile', () => {
       ).phones,
     ).toEqual(['+442079460123']);
   });
+  it('reads logged-in Facebook nested story timestamps and excludes foreign actors and comments', () => {
+    expect(
+      parseSocialProfile(fixture('facebook-session'), facebook, 'GB'),
+    ).toMatchObject({
+      category: 'Промислові послуги',
+      followers: 1500,
+      rating: '4.8',
+      reviewsCount: 37,
+      emails: [],
+      phones: [],
+      lastPostAt: '2026-03-01T00:00:00.000Z',
+      posts: [
+        {
+          date: '2026-03-01T00:00:00.000Z',
+          url: 'https://www.facebook.com/demo.tools/posts/LATEST',
+        },
+        {
+          date: '2026-01-01T00:00:00.000Z',
+          url: 'https://www.facebook.com/demo.tools/posts/PINNED',
+        },
+      ],
+    });
+  });
+  it.each([
+    ['1,5K', 1500],
+    ['1.5K', 1500],
+    ['1,5 тис.', 1500],
+    ['2,4 тыс.', 2400],
+    ['1,2 млн', 1200000],
+    ['1 234', 1234],
+    ['1.234', 1234],
+    ['1,234', 1234],
+  ])('parses localized follower count %s', (value, expected) => {
+    const node = {
+      __typename: 'Page',
+      url: facebook.canonicalUrl,
+      followers_count: value,
+    };
+    expect(
+      parseSocialProfile(
+        `<script type="application/json">${JSON.stringify(node)}</script>`,
+        facebook,
+        'UA',
+      ).followers,
+    ).toBe(expected);
+  });
+  it('merges Facebook contact About data without copying account controls', () => {
+    const profile = parseSocialProfile(
+      fixture('facebook-session'),
+      facebook,
+      'GB',
+      [
+        {
+          url: `${facebook.canonicalUrl}about_contact_and_basic_info`,
+          html: `<main><h1>Demo Tools</h1><a href="mailto:office@demo.invalid">Email</a><a href="tel:+442079460123">Call</a><nav><a href="mailto:account@wrong.invalid">Account</a></nav></main>`,
+        },
+      ],
+    );
+    expect(profile).toMatchObject({
+      emails: ['office@demo.invalid'],
+      phones: ['+442079460123'],
+    });
+  });
+  it('reads Facebook visible intro lines without embedded profile JSON or custom attributes', () => {
+    const html = `<meta property="og:url" content="${facebook.canonicalUrl}"><div role="main"><div><h1>Demo Tools</h1><span>5.4K followers • 1 following</span></div><section><h2>Intro</h2><p>Independent equipment service</p><div><span>Page · Car dealership</span></div><div><span>office@demo.invalid</span></div><div><span>+44 20 7946 0123</span></div><div><a href="https://l.facebook.com/l.php?u=https%3A%2F%2Fdemo.invalid%2F">demo.invalid</a></div><span>94% recommend (10 reviews)</span></section><nav>account@wrong.invalid</nav><article><p>Post author writes post@wrong.invalid +44 20 7946 0999</p></article></div>`;
+    expect(parseSocialProfile(html, facebook, 'GB')).toMatchObject({
+      name: 'Demo Tools',
+      category: 'Car dealership',
+      description: 'Independent equipment service',
+      followers: 5400,
+      followingCount: 1,
+      website: 'https://demo.invalid/',
+      emails: ['office@demo.invalid'],
+      phones: ['+442079460123'],
+      rating: '94% recommend',
+      reviewsCount: 10,
+    });
+  });
+  it('reads Instagram real header sections and links without embedded profile JSON or custom attributes', () => {
+    const html = `<meta property="og:url" content="${instagram.canonicalUrl}"><main><header><section><h2>demo.studio</h2><button>Follow</button><button>Message</button></section><section><ul><li><span>42</span> posts</li><li><span>2,5K</span> followers</li><li><span>12</span> following</li></ul></section><section><div><span>Demo Studio</span></div><div><span>Design studio</span></div><div><span>Branding and identity.</span><br><span>studio@demo.invalid +48 22 123 45 67</span></div><a href="https://www.instagram.com/explore/locations/123/example/">Example 12, Warsaw</a><a href="https://l.instagram.com/?u=https%3A%2F%2Fstudio.demo.invalid%2F">studio.demo.invalid</a></section></header><nav>account@wrong.invalid</nav><article><p>post@wrong.invalid</p></article></main>`;
+    expect(parseSocialProfile(html, instagram, 'PL')).toMatchObject({
+      name: 'Demo Studio',
+      category: 'Design studio',
+      description:
+        'Branding and identity. studio@demo.invalid +48 22 123 45 67',
+      address: 'Example 12, Warsaw',
+      website: 'https://studio.demo.invalid/',
+      followers: 2500,
+      followingCount: 12,
+      postsCount: 42,
+      emails: ['studio@demo.invalid'],
+      phones: ['+48221234567'],
+    });
+  });
+  it('uses Instagram profile data and opened permalink times, excluding comments and unrelated documents', () => {
+    const profile = parseSocialProfile(
+      fixture('instagram-session'),
+      instagram,
+      'PL',
+      [
+        {
+          url: 'https://www.instagram.com/p/LATEST/',
+          html: fixture('instagram-post'),
+        },
+        {
+          url: 'https://www.instagram.com/p/PINNED/',
+          html: fixture('instagram-post')
+            .replaceAll('LATEST', 'PINNED')
+            .replace('2026-06-01T10:00:00Z', '2026-01-01T10:00:00Z'),
+        },
+        {
+          url: 'https://www.instagram.com/p/FOREIGN/',
+          html: fixture('instagram-post')
+            .replaceAll('LATEST', 'FOREIGN')
+            .replaceAll('demo.studio', 'other.studio'),
+        },
+        {
+          url: 'https://www.instagram.com/p/UNRELATED/',
+          html: '<main><article><time datetime="2026-11-12">Today</time></article></main>',
+        },
+        {
+          url: 'https://evil.invalid/p/LATEST/',
+          html: fixture('instagram-post'),
+        },
+      ],
+    );
+    expect(profile).toMatchObject({
+      category: 'Дизайн-студія',
+      description: 'Design and branding',
+      address: 'Example 12, Warsaw, 00-001',
+      website: 'https://studio.demo.invalid/',
+      followers: 2500,
+      followingCount: 12,
+      postsCount: 42,
+      emails: ['studio@demo.invalid'],
+      lastPostAt: '2026-06-01T10:00:00.000Z',
+    });
+    expect(profile.posts).toHaveLength(2);
+  });
+  it('rejects conflicting Instagram JSON owners even if the opened post displays the target author', () => {
+    const html = `${fixture('instagram-post')}<script type="application/json">{"code":"LATEST","taken_at":1798761600,"user":{"username":"foreign"}}</script>`;
+    expect(
+      parseSocialProfile(fixture('instagram-session'), instagram, 'PL', [
+        { url: 'https://www.instagram.com/p/LATEST/', html },
+      ]).posts,
+    ).toEqual([]);
+  });
+  it('merges LinkedIn About and owned machine-dated posts, rejecting foreign company and relative dates', () => {
+    const profile = parseSocialProfile(
+      '<meta property="og:url" content="https://www.linkedin.com/company/demo-systems/">',
+      linkedin,
+      'PL',
+      [
+        {
+          url: `${linkedin.canonicalUrl}about/`,
+          html: fixture('linkedin-session'),
+        },
+        {
+          url: 'https://www.linkedin.com/company/other/about/',
+          html: fixture('linkedin-session').replaceAll('Demo Systems', 'Wrong'),
+        },
+        {
+          url: `${linkedin.canonicalUrl}posts/`,
+          html: '<meta property="og:url" content="https://www.linkedin.com/company/other/"><main><h1>Wrong</h1></main>',
+        },
+      ],
+    );
+    expect(profile).toMatchObject({
+      name: 'Demo Systems',
+      industry: 'Software Development',
+      companySize: '51-200 employees',
+      headquarters: 'Warsaw, PL',
+      website: 'https://demo.invalid/',
+      foundedYear: 2012,
+      followers: 3200,
+      emails: [],
+      lastPostAt: '2026-06-01T10:00:00.000Z',
+    });
+    expect(profile.posts).toHaveLength(1);
+  });
 });
 
 describe('detectSocialBlock', () => {
+  it('reads LinkedIn machine timestamps only for the company author', () => {
+    const html = `<script type="application/json">${JSON.stringify([
+      {
+        author: { url: linkedin.canonicalUrl },
+        createdAt: 1780308000000,
+        url: 'https://www.linkedin.com/feed/update/urn:li:activity:123/',
+      },
+      {
+        author: { url: 'https://www.linkedin.com/company/foreign/' },
+        createdAt: 1794477600000,
+        url: 'https://www.linkedin.com/feed/update/urn:li:activity:999/',
+      },
+      {
+        author: { url: linkedin.canonicalUrl },
+        publishedAt: '2w',
+        url: 'https://www.linkedin.com/feed/update/urn:li:activity:456/',
+      },
+    ])}</script>`;
+    const profile = parseSocialProfile(html, linkedin, 'UA');
+    expect(profile.lastPostAt).toBe('2026-06-01T10:00:00.000Z');
+    expect(profile.posts).toHaveLength(1);
+  });
   it('detects 403/429 without requiring an HTML message', () => {
     expect(detectSocialBlock('', instagram.canonicalUrl, 403)).toBe(
       'forbidden',
@@ -246,6 +448,13 @@ describe('detectSocialBlock', () => {
     );
   });
   it('detects CAPTCHA and login HTML and login redirects', () => {
+    expect(
+      detectSocialBlock(
+        '<main>Підтвердіть, що це ви</main>',
+        facebook.canonicalUrl,
+        200,
+      ),
+    ).toBe('captcha');
     expect(
       detectSocialBlock(fixture('captcha'), instagram.canonicalUrl, 200),
     ).toBe('captcha');
