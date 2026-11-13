@@ -91,6 +91,11 @@ describe('WhatsApp account API', () => {
     expect(connect).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(logout).not.toHaveBeenCalled();
+    expect(
+      (await POST(request({ action: 'refresh', id }, 'https://other.example')))
+        .status,
+    ).toBe(401);
+    expect(refresh).not.toHaveBeenCalled();
   });
   it('validates account identifiers and settings', async () => {
     for (const body of [
@@ -105,10 +110,9 @@ describe('WhatsApp account API', () => {
     expect((await PATCH(request({ id, dailyLimit: 1.5 }))).status).toBe(400);
     expect((await PATCH(request({ id }))).status).toBe(400);
     expect((await DELETE(request({ id: 'bad' }))).status).toBe(400);
-    expect(
-      (await GET(new Request('http://localhost/api/whatsapp-accounts?id=bad')))
-        .status,
-    ).toBe(400);
+    expect((await POST(request({ action: 'refresh', id: 'bad' }))).status).toBe(
+      400,
+    );
     expect(connect).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
@@ -132,8 +136,14 @@ describe('WhatsApp account API', () => {
       },
     });
   });
-  it('polls authenticated status and clears QR once connected', async () => {
+  it('lists accounts without refreshing provider state on GET', async () => {
     const response = await GET(read());
+    expect(await response.json()).toEqual({ accounts: [account] });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+  });
+  it('polls status through a protected mutation and clears QR once connected', async () => {
+    const response = await POST(request({ action: 'refresh', id }));
     expect(refresh).toHaveBeenCalledWith(id, 'actor');
     expect((await response.json()).progress).toEqual({
       id,
@@ -174,7 +184,7 @@ describe('WhatsApp account API', () => {
     refresh.mockRejectedValue(
       Error('Authorization private-key provider session'),
     );
-    const response = await GET(read());
+    const response = await POST(request({ action: 'refresh', id }));
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: uk.email.error });
   });

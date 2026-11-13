@@ -130,7 +130,9 @@ conversations, messages, handoffs, do_not_contact, templates, prompts, handoff_r
 Ubuntu 22.04, 8 ядер, 15 ГБ RAM, ~43 ГБ свободно. Docker 29 + Compose. На сервере есть другие проекты — трогать только своё.
 Новый Sonar: `/opt/sonar-v2`, порты только на 127.0.0.1, снаружи — nginx + HTTPS на `sonar.cryid.com`.
 Старый Sonar остановлен, кроме его Postgres (он станет `postgres` нового Sonar). Данные старого Sonar без ЄДР: `/root/old_sonar_without_edr.dump`.
-Бэкап: ежедневный pg_dump базы `sonar`, 7 последних.
+Бэкап: сервис `backup` ежедневно сохраняет pg_dump только базы `sonar` в `backups/sonar-YYYY-MM-DD_HH-MM-SS.dump`, хранение 14 дней; пароли — только из окружения.
+Восстановление в остановленную для приложения базу: `docker compose --env-file .env -f docker/compose.yml exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" --dbname=sonar --clean --if-exists --exit-on-error' < backups/sonar-YYYY-MM-DD_HH-MM-SS.dump`.
+Перед восстановлением остановить `web` и `worker`, после успешного завершения запустить их снова; база `registry` не затрагивается.
 
 ## 8. Решения после обсуждения (11.11.2026)
 
