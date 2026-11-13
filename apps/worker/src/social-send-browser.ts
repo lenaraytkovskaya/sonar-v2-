@@ -2,6 +2,7 @@ import {
   chromium,
   type Browser,
   type BrowserContext,
+  type Locator,
   type Page,
 } from 'playwright';
 import { SocialSendError } from '@sonar/core/social-session';
@@ -20,7 +21,6 @@ export type SocialBrowserSession = {
 const home = (network: SocialNetwork) => `https://www.${network}.com/`;
 const messageLabel =
   /^(?:message|send message|повідомлення|надіслати повідомлення|сообщение|отправить сообщение)$/i;
-// The screenshots establish the route, not these accessible names/roles.
 // Unsupported or ambiguous markup must fail closed rather than guess an ellipsis.
 const profileOptionsLabel =
   /^(?:options|more options|параметри|додаткові параметри|опції|настройки)$/i;
@@ -92,6 +92,23 @@ function stagedFailure(
     new SocialSendError(code, `[${stage}/${errorKind}] ${reason}`),
     { stage, errorKind },
   );
+}
+async function messageButtonFailure(
+  branch: 'preexisting_popup' | 'options_count',
+  page: Page,
+  options: Locator,
+) {
+  const error = stagedFailure('messagebutton', 'unconfirmed');
+  const [menus, dialogs, optionCount] = await Promise.all([
+    page.locator('[role="menu"]:visible').count(),
+    page.locator('[role="dialog"]:visible').count(),
+    options.count(),
+  ]);
+  // Bounded DOM counts and fixed keys only; never retain accessible names/text.
+  const count = (value: number) => (value > 1 ? '2+' : String(value));
+  error.reasonUk += ` [branch=${branch}; menus=${count(menus)}; dialogs=${count(dialogs)}; options=${count(optionCount)}]`;
+  error.message = error.reasonUk;
+  return error;
 }
 const composerLabel =
   /^(?:message|повідомлення|сообщение|написати повідомлення|напишіть повідомлення|написать сообщение)(?:…|\.{3})?$/i;
@@ -235,10 +252,11 @@ async function sendInstagram(
       const popup = page.locator(
         '[role="menu"]:visible, [role="dialog"]:visible',
       );
-      if (await popup.count()) throw stagedFailure(stage, 'unconfirmed');
       const options = profile.locator(optionsAction);
+      if (await popup.count())
+        throw await messageButtonFailure('preexisting_popup', page, options);
       if ((await options.count()) !== 1)
-        throw stagedFailure(stage, 'unconfirmed');
+        throw await messageButtonFailure('options_count', page, options);
       await options.click();
       await popup.waitFor({ state: 'visible' });
       await assertSession();
