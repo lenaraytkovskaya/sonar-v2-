@@ -199,6 +199,8 @@ it('replies directly to an inbound LID without treating it as a phone', async ()
     session: 'default',
     chatId: '12345678@lid',
     text: 'Hello',
+  });
+});
 describe('WAHA sendText response', () => {
   it('reads the message id from every engine format', () => {
     expect(whatsappMessageId({ id: 'true_1@c.us_A' })).toBe('true_1@c.us_A');
