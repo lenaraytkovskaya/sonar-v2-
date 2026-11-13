@@ -189,6 +189,35 @@ export function socialSessionProxies(
       }
     });
 }
+/** Original list indices belong to accounts; never filter or reorder that list. */
+export function socialReservedProxyIndex(
+  value: unknown,
+  count: number,
+): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value >= count
+  )
+    throw new Error(
+      'Налаштуйте резервний проксі акаунтів у БД (social.account_proxy_index).',
+    );
+  return value;
+}
+export function socialAnonymousProxies<T extends SocialSessionProxy>(
+  proxies: T[],
+  reservedIndex: unknown,
+): T[] {
+  const index = socialReservedProxyIndex(reservedIndex, proxies.length);
+  // Credentials and protocol variations must not reintroduce the reserved endpoint.
+  const endpoint = (proxy: SocialSessionProxy) => {
+    const url = new URL(proxy.server);
+    return `${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
+  };
+  const reserved = endpoint(proxies[index]!);
+  return proxies.filter((proxy) => endpoint(proxy) !== reserved);
+}
 export const socialProxyFingerprint = (proxy: SocialSessionProxy) =>
   createHash('sha256')
     .update(

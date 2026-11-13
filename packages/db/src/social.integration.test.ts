@@ -69,7 +69,8 @@ it.skipIf(!enabled)(
       } = await sonarPool.query('select payload from tasks where id=$1', [
         taskId,
       ]);
-      process.env.SOCIAL_PROXY_URLS = 'http://test:password@proxy.example:8000';
+      process.env.SOCIAL_PROXY_URLS =
+        'http://reserved.example:8000,http://test:password@proxy.example:8000';
       expect(await runSocialFetch(task.payload, taskId, fetch)).toMatchObject({
         status: 'done',
       });
@@ -446,6 +447,171 @@ it.skipIf(!enabled)(
     }
   },
   20000,
+);
+it.skipIf(!enabled)(
+  'keeps DB reservation before accounts, while paused, after stale binding and during fallback',
+  async () => {
+    const { sonarPool } = await import('./index.js');
+    const accounts = await import('./social-accounts.js');
+    const { runSocialFetch } =
+      await import('../../../apps/worker/src/social.js');
+    const { socialTarget } = await import('@sonar/core');
+    const actor = randomUUID(),
+      company = randomUUID();
+    const target = socialTarget(
+      `https://www.instagram.com/test${company.slice(0, 8)}/`,
+    )!;
+    const payload = { companyId: company, target, manual: true };
+    const { rows: settings } = await sonarPool.query(
+      "select key,value from settings where key like 'social.%' or key='budget.monthly_usd'",
+    );
+    vi.stubEnv(
+      'AUTH_SECRET',
+      'reservation-db-test-secret-at-least-32-characters',
+    );
+    vi.stubEnv(
+      'SOCIAL_PROXY_URLS',
+      'http://p1.example:8000,http://p2.example:8000,http://p3.example:8000,http://p4.example:8000,http://p5.example:8000,http://alias:credentials@P1.example:8000',
+    );
+    const page = {
+      html: `<meta property="og:url" content="${target.canonicalUrl}"><meta property="og:title" content="Test company">`,
+      url: target.canonicalUrl,
+      status: 200,
+      usedProxy: true,
+    };
+    const fetch = vi.fn().mockResolvedValue(page);
+    let accountId: string | undefined;
+    async function read() {
+      const id = randomUUID();
+      await sonarPool.query(
+        "insert into tasks(id,type,idempotency_key,payload,subject_type,subject_id,status) values($1::uuid,'social.fetch',$1::text,$2,'company',$3,'running')",
+        [id, JSON.stringify(payload), company],
+      );
+      expect(await runSocialFetch(payload, id, fetch)).toMatchObject({
+        status: 'done',
+      });
+    }
+    try {
+      expect(await accounts.getSocialAccountProxyIndex()).toBe(0);
+      await sonarPool.query(
+        "insert into users(id,email,name,password_hash) values($1,$2,'Reservation test','unused')",
+        [actor, `${actor}@example.test`],
+      );
+      await sonarPool.query(
+        "insert into companies(id,place_id,name,country_code) values($1::uuid,$1::text,'Reservation test','UA')",
+        [company],
+      );
+      await sonarPool.query(
+        "insert into settings(key,value) values('budget.monthly_usd','100') on conflict(key) do update set value=excluded.value",
+      );
+      await sonarPool.query(
+        "update settings set value='0' where key='social.instagram.min_gap_seconds'",
+      );
+      await sonarPool.query(
+        "update settings set value='{}' where key='social.instagram.runtime'",
+      );
+      await read(); // No account exists, but Proxy 1 is already reserved.
+      const input = {
+        network: 'instagram' as const,
+        name: 'Reservation test',
+        dailyLimit: 20,
+        proxyIndex: 0,
+        cookiesJson: JSON.stringify([
+          {
+            name: 'session',
+            value: 'synthetic',
+            domain: '.instagram.com',
+            session: true,
+          },
+        ]),
+      };
+      await expect(
+        accounts.saveSocialAccount({ ...input, proxyIndex: 1 }, actor),
+      ).rejects.toThrow('резервний проксі');
+      accountId = (await accounts.saveSocialAccount(input, actor)).id;
+      const {
+        rows: [original],
+      } = await sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [accountId],
+      );
+      await read(); // Paused/pending account cannot release the reservation.
+      await sonarPool.query(
+        "update channel_accounts set status='active',settings=settings||$2::jsonb where id=$1",
+        [
+          accountId,
+          JSON.stringify({ sessionStatus: 'valid', proxyFingerprint: 'stale' }),
+        ],
+      );
+      await read(); // Stale binding is paused, never reassigned or used anonymously.
+      expect(
+        (await accounts.listSocialAccounts()).find(
+          (row) => row.id === accountId,
+        ),
+      ).toMatchObject({ status: 'paused', proxyIndex: 0 });
+      await sonarPool.query(
+        'update channel_accounts set settings=$2 where id=$1',
+        [accountId, original.settings],
+      );
+      await accounts.withSocialSessionCheck(accountId, async () => ({
+        valid: true,
+      }));
+      fetch.mockResolvedValueOnce({ ...page, error: 'session_invalid' });
+      await read(); // Session on 1, fallback on the fourth anonymous endpoint.
+      expect(fetch.mock.calls.map((call) => call[1].server)).toEqual(
+        [2, 3, 4, 1, 5].map((index) => `http://p${index}.example:8000`),
+      );
+      const {
+        rows: [stored],
+      } = await sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [accountId],
+      );
+      expect(stored.settings.proxyIndex).toBe(0);
+      expect(stored.settings.proxyFingerprint).toBe(
+        original.settings.proxyFingerprint,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      for (const table of [
+        'spend_events',
+        'tasks',
+        'activity_log',
+        'company_facts',
+        'contacts',
+      ]) {
+        const condition =
+          table === 'spend_events'
+            ? 'task_id in(select id from tasks where subject_id=$1)'
+            : table === 'tasks'
+              ? 'subject_id=$1'
+              : table === 'activity_log'
+                ? 'entity_id=$1'
+                : 'company_id=$1::uuid';
+        await sonarPool.query(`delete from ${table} where ${condition}`, [
+          company,
+        ]);
+      }
+      await sonarPool.query('delete from activity_log where user_id=$1', [
+        actor,
+      ]);
+      if (accountId)
+        await sonarPool.query('delete from channel_accounts where id=$1', [
+          accountId,
+        ]);
+      await sonarPool.query('delete from companies where id=$1', [company]);
+      await sonarPool.query('delete from users where id=$1', [actor]);
+      for (const setting of settings)
+        await sonarPool.query('update settings set value=$2 where key=$1', [
+          setting.key,
+          JSON.stringify(setting.value),
+        ]);
+      if (!settings.some((row) => row.key === 'budget.monthly_usd'))
+        await sonarPool.query(
+          "delete from settings where key='budget.monthly_usd'",
+        );
+    }
+  },
 );
 afterAll(async () => {
   if (enabled) {

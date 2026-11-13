@@ -11,22 +11,31 @@ export default async function Page() {
   const { listManualFormMessages } = await import('@sonar/db/forms');
   const { listTelegramAccounts } = await import('@sonar/db/telegram');
   const { listWhatsAppAccounts } = await import('@sonar/db/whatsapp');
-  const { listSocialAccounts, getSocialProxyCount } =
-    await import('@sonar/db/social-accounts');
-  const [email, forms, manual, telegram, whatsapp, social] = await Promise.all([
-    listEmailAccounts(),
-    listFormAccounts(),
-    listManualFormMessages(),
-    listTelegramAccounts(),
-    listWhatsAppAccounts(),
-    listSocialAccounts(),
-  ]);
+  const {
+    listSocialAccounts,
+    getSocialProxyCount,
+    getSocialAccountProxyIndex,
+  } = await import('@sonar/db/social-accounts');
+  const [email, forms, manual, telegram, whatsapp, social, accountProxyIndex] =
+    await Promise.all([
+      listEmailAccounts(),
+      listFormAccounts(),
+      listManualFormMessages(),
+      listTelegramAccounts(),
+      listWhatsAppAccounts(),
+      listSocialAccounts(),
+      getSocialAccountProxyIndex(),
+    ]);
   return (
     <>
       <PageHeader {...uk.pages.channels} />
       <div className="space-y-5">
         <EmailAccounts accounts={email} />
-        <SocialAccounts accounts={social} proxyCount={getSocialProxyCount()} />
+        <SocialAccounts
+          accounts={social}
+          proxyCount={getSocialProxyCount()}
+          accountProxyIndex={accountProxyIndex}
+        />
         <TelegramAccounts
           accounts={telegram}
           configured={

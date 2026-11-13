@@ -5,6 +5,7 @@ import {
   resolveSocialSession,
   socialProxyFingerprint,
   socialSessionProxies,
+  socialReservedProxyIndex,
   SocialSendError,
 } from '@sonar/core/social-session';
 import type { SocialNetwork } from '@sonar/core';
@@ -169,7 +170,9 @@ const secret = () => {
     invalid('Налаштуйте AUTH_SECRET на сервері (щонайменше 32 символи).');
   return value!;
 };
-const proxySettings = (index: number) => {
+const proxySettings = async (index: number) => {
+  if (index !== (await getSocialAccountProxyIndex()))
+    invalid('Виберіть резервний проксі акаунтів.');
   let proxies;
   try {
     proxies = socialSessionProxies();
@@ -184,6 +187,18 @@ const proxySettings = (index: number) => {
     proxyFingerprint: socialProxyFingerprint(proxy!),
   };
 };
+export async function getSocialAccountProxyIndex(): Promise<number | null> {
+  const {
+    rows: [setting],
+  } = await sonarPool.query(
+    "select value from settings where key='social.account_proxy_index'",
+  );
+  try {
+    return socialReservedProxyIndex(setting?.value, getSocialProxyCount());
+  } catch {
+    return null;
+  }
+}
 export function getSocialProxyCount(): number {
   try {
     return socialSessionProxies().length;
@@ -242,7 +257,7 @@ export async function saveSocialAccount(
     !validLimit(input.dailyLimit)
   )
     invalid('Вкажіть соцмережу, назву та додатний денний ліміт.');
-  const pinned = proxySettings(input.proxyIndex);
+  const pinned = await proxySettings(input.proxyIndex);
   return transaction(async (c) => {
     const existing = input.id ? await lock(c, input.id, userId) : undefined;
     if (existing && existing.channel !== input.network)
@@ -320,7 +335,7 @@ export async function updateSocialAccount(
     const settings = {
       ...account.settings,
       ...(input.proxyIndex !== undefined
-        ? proxySettings(input.proxyIndex)
+        ? await proxySettings(input.proxyIndex)
         : {}),
       ...(input.cookiesJson !== undefined
         ? {

@@ -7,6 +7,7 @@ import {
   type SocialTarget,
   type PaidResponse,
 } from '@sonar/core';
+import { socialAnonymousProxies } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
 import { saveSocialProfile, type SocialPayload } from '@sonar/db/social';
@@ -47,6 +48,8 @@ const reason = (code: string) =>
     robots_unavailable: 'Не вдалося перевірити robots.txt соцмережі.',
     profile_missing: 'На публічній сторінці немає підтверджених даних профілю.',
     network_error: 'Не вдалося завантажити публічну сторінку соцмережі.',
+    anonymous_proxy_missing:
+      'Немає проксі для анонімного збору. Резервний проксі акаунтів не використовується. Додайте окремі проксі на сервері.',
   })[code] ?? 'Не вдалося прочитати сторінку соцмережі.';
 export function socialLimit(
   config: Settings,
@@ -141,6 +144,18 @@ export async function runSocialFetch(
     const config: Settings = Object.fromEntries(
       rows.map((row) => [row.key, row.value]),
     );
+    let anonymousProxies;
+    try {
+      anonymousProxies = socialAnonymousProxies(
+        proxies,
+        config['social.account_proxy_index'],
+      );
+    } catch {
+      return paused(
+        'social_proxy_reservation_invalid',
+        'Налаштуйте резервний проксі акаунтів у БД (social.account_proxy_index).',
+      );
+    }
     const cost = number(config, 'social.cost_per_request_usd', 0, 100);
     const timeout = number(config, 'social.page_timeout_ms', 100, 120000);
     const gap = number(
@@ -213,6 +228,11 @@ export async function runSocialFetch(
           reasonUk: 'Очікування паузи між читаннями акаунта соцмережі.',
         };
     }
+    if (!previous?.billed && !session && !anonymousProxies.length)
+      return paused(
+        'social_anonymous_proxy_missing',
+        reason('anonymous_proxy_missing'),
+      );
     const {
       rows: [request],
     } = await client.query(
@@ -281,7 +301,9 @@ export async function runSocialFetch(
             page = await fetchPage(
               target,
               session?.session.proxy ??
-                proxies[(runtime.count ?? 0) % proxies.length]!,
+                anonymousProxies[
+                  (runtime.count ?? 0) % anonymousProxies.length
+                ]!,
               timeout,
               String(config['scanner.user_agent'] ?? 'SonarBot/1.0'),
               session?.session,
@@ -314,12 +336,24 @@ export async function runSocialFetch(
           ) {
             if (sessionBlocked)
               await pauseSocialFetchSession(client, session.account.id);
+            // Keep the paid session receipt even when no safe fallback is available.
+            if (!anonymousProxies.length)
+              return {
+                id: request.id,
+                model: 'iproyal',
+                text: JSON.stringify({ failure: 'anonymous_proxy_missing' }),
+                costUsd: cost * units,
+                units,
+                costBasis: 'estimated_tariff',
+              };
             // The fallback is a fresh anonymous context and shares this receipt.
             method = 'anonymous';
             try {
               page = await fetchPage(
                 target,
-                proxies[(runtime.count ?? 0) % proxies.length]!,
+                anonymousProxies[
+                  (runtime.count ?? 0) % anonymousProxies.length
+                ]!,
                 timeout,
                 String(config['scanner.user_agent'] ?? 'SonarBot/1.0'),
               );
@@ -418,7 +452,9 @@ export async function runSocialFetch(
           ],
         );
       return {
-        status: ['captcha', 'rate_limit'].includes(data.failure)
+        status: ['captcha', 'rate_limit', 'anonymous_proxy_missing'].includes(
+          data.failure,
+        )
           ? 'paused'
           : 'skipped',
         reasonCode: `social_${data.failure}`,
