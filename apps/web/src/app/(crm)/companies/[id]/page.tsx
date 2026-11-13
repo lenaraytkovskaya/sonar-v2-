@@ -111,10 +111,14 @@ export default async function Page({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ campaignId?: string; tab?: string }>;
+  searchParams: Promise<{
+    campaignId?: string;
+    tab?: string;
+    contact?: string;
+  }>;
 }) {
   const { id } = await params;
-  const { campaignId, tab } = await searchParams;
+  const { campaignId, tab, contact: contactParam } = await searchParams;
   const contactTab = tab === 'contact';
   const selectedCampaign = validId(campaignId) ? campaignId : undefined;
   if (!validId(id)) notFound();
@@ -194,8 +198,39 @@ export default async function Page({
   const map = normalizeWebsite(c.google_maps_uri)?.website;
   const website = normalizeWebsite(c.website ?? undefined);
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
+  // A click on a contact opens its dialog: the inbox when one exists, otherwise the contact tab.
+  const dialogKinds = [
+    'email',
+    'phone',
+    'telegram',
+    'whatsapp',
+    'form',
+    'social',
+  ];
+  const dialogHref = (contact: {
+    id?: string;
+    kind: string;
+    normalized: string;
+  }) => {
+    if (!dialogKinds.includes(contact.kind)) return undefined;
+    const contactId =
+      contact.id ??
+      contacts.find(
+        (row) =>
+          row.kind === contact.kind && row.normalized === contact.normalized,
+      )?.id;
+    if (!contactId) return undefined;
+    const conversation = messaging.conversations.find(
+      (row) => row.contactId === contactId,
+    );
+    if (conversation) return `/inbox?conversation=${conversation.id}`;
+    const query = new URLSearchParams({ tab: 'contact', contact: contactId });
+    if (selectedCampaign) query.set('campaignId', selectedCampaign);
+    return `/companies/${id}?${query}`;
+  };
   const contactRow = (contact: (typeof contacts)[number]) => {
-    const href = contactHref(contact);
+    const dialog = dialogHref(contact);
+    const href = dialog ?? contactHref(contact);
     const unavailable = [
       {
         value: contact.meta?.telegram_unavailable,
@@ -221,7 +256,7 @@ export default async function Page({
                 className="truncate text-accent"
                 href={href}
                 target={
-                  contact.kind === 'phone' || contact.kind === 'email'
+                  dialog || contact.kind === 'phone' || contact.kind === 'email'
                     ? undefined
                     : '_blank'
                 }
@@ -355,6 +390,7 @@ export default async function Page({
         <CompanyChat
           initial={messaging}
           selectedCampaign={selectedCampaign}
+          selectedContact={validId(contactParam) ? contactParam : undefined}
           redirectToInbox
         />
       ) : (
@@ -400,7 +436,9 @@ export default async function Page({
                     ) as (keyof typeof uk.scoring.categories)[]
                   ).map((category) => {
                     const contact = mainScore.breakdown.top[category];
-                    const href = contact ? contactHref(contact) : undefined;
+                    const dialog = contact ? dialogHref(contact) : undefined;
+                    const href =
+                      dialog ?? (contact ? contactHref(contact) : undefined);
                     return (
                       <li key={category} className="flex min-w-0 gap-2">
                         <span className="w-20 shrink-0 text-xs leading-5 text-muted-foreground">
@@ -412,7 +450,7 @@ export default async function Page({
                           <a
                             className="truncate text-accent"
                             href={href}
-                            target="_blank"
+                            target={dialog ? undefined : '_blank'}
                             rel="noreferrer"
                             title={contact.normalized}
                           >
