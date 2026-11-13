@@ -50,12 +50,14 @@ function useTaskPolling() {
     failures: Task[];
     counts: Count[];
     sentToday: number;
+    unreadCount: number;
   }>({
     tasks: [],
     batches: [],
     failures: [],
     counts: [],
     sentToday: 0,
+    unreadCount: 0,
   });
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -93,13 +95,13 @@ export function useTasks() {
   if (!context) throw Error('TasksProvider missing');
   return context;
 }
-export function FailureBadge() {
-  const { failures } = useTasks();
-  const count = failures.length;
+export function FailureBadge({ inbox = false }: { inbox?: boolean }) {
+  const { failures, unreadCount } = useTasks();
+  const count = inbox ? unreadCount : failures.length;
   return count ? (
     <span
       className="ml-auto rounded-full bg-err-bg px-2 text-err"
-      aria-label={`${uk.tasks.failures}: ${count}`}
+      aria-label={`${inbox ? uk.inbound.unread : uk.tasks.failures}: ${count}`}
     >
       {count}
     </span>
@@ -120,6 +122,10 @@ export function TaskOverview() {
       'ai.models': uk.tasks.aiModels,
       'ai.assist': uk.tasks.aiAssist,
       'ai.drafts': uk.outreach.generate,
+      'ai.inbound': uk.inbound.classify,
+      'ai.reply': uk.inbound.suggest,
+      'email.receive': uk.inbound.received,
+      'whatsapp.receive': uk.inbound.received,
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
       'site.scan': uk.scanner.title,

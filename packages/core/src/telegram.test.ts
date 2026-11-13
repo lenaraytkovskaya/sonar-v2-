@@ -397,3 +397,54 @@ describe('Telegram transport', () => {
     await retry.adapter.closeAll();
   });
 });
+
+it('attaches one incoming listener per account and reuses its client for send', async () => {
+  const stub = mockClient(
+    () =>
+      new Api.UpdateShortSentMessage({ id: 91, pts: 1, ptsCount: 1, date: 1 }),
+  );
+  const onIncoming = vi.fn();
+  Object.assign(stub.client, { onIncoming });
+  const handler = vi.fn(async () => {});
+  await Promise.all([
+    stub.adapter.listen('account', 'private-session', handler),
+    stub.adapter.listen('account', 'private-session', handler),
+  ]);
+  expect(onIncoming).toHaveBeenCalledTimes(1);
+  expect(stub.adapter.listeningAccounts()).toEqual(['account']);
+  await stub.adapter.send({ ...delivery, to: '@company' });
+  expect(stub.factory).toHaveBeenCalledTimes(1);
+  await stub.adapter.closeAll();
+  expect(stub.adapter.listeningAccounts()).toEqual([]);
+  expect(stub.client.destroy).toHaveBeenCalledTimes(1);
+});
+
+it('replaces a cached listener when the account session changes', async () => {
+  const stub = mockClient(() => undefined);
+  const onIncoming = vi.fn();
+  Object.assign(stub.client, { onIncoming });
+  const handler = vi.fn(async () => {});
+  await stub.adapter.listen('account', 'session-one', handler);
+  await stub.adapter.listen('account', 'session-two', handler);
+  expect(stub.factory).toHaveBeenCalledTimes(2);
+  expect(stub.client.destroy).toHaveBeenCalledTimes(1);
+  expect(onIncoming).toHaveBeenCalledTimes(2);
+  await stub.adapter.closeAll();
+});
+
+it('replies to private users without public username or phone using persisted peer access hash', async () => {
+  const stub = mockClient(
+    () =>
+      new Api.UpdateShortSentMessage({ id: 91, pts: 1, ptsCount: 1, date: 1 }),
+  );
+  expect(normalizeTelegramRecipient('telegram:user:7:-8')).toBe(
+    'telegram:user:7:-8',
+  );
+  await stub.adapter.send({ ...delivery, to: 'telegram:user:7:-8' });
+  const sent = stub.client.invoke.mock.calls[0]![0] as Api.messages.SendMessage;
+  expect(sent.peer).toBeInstanceOf(Api.InputPeerUser);
+  expect((sent.peer as Api.InputPeerUser).userId.toString()).toBe('7');
+  expect((sent.peer as Api.InputPeerUser).accessHash.toString()).toBe('-8');
+  expect(stub.client.getInputEntity).not.toHaveBeenCalled();
+  await stub.adapter.closeAll();
+});

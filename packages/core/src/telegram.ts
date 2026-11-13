@@ -4,6 +4,7 @@ import { StringSession } from 'telegram/sessions/index.js';
 import { Logger, LogLevel } from 'telegram/extensions/Logger.js';
 import { returnBigInt } from 'telegram/Helpers.js';
 import { computeCheck } from 'telegram/Password.js';
+import { NewMessage, type NewMessageEvent } from 'telegram/events/index.js';
 export {
   encryptTelegramSession,
   decryptTelegramSession,
@@ -125,6 +126,7 @@ export function normalizeTelegramRecipient(raw: string): string | null {
     .trim()
     .replace(/^https?:\/\/(?:t\.me|telegram\.me)\/([a-zA-Z0-9_]+)\/?$/i, '@$1');
   if (/^\+[1-9]\d{6,14}$/.test(value)) return value;
+  if (/^telegram:user:[1-9]\d*(?::-?\d+)?$/.test(value)) return value;
   const name = value.replace(/^@/, '');
   return /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(name)
     ? `@${name.toLowerCase()}`
@@ -146,6 +148,7 @@ export type TelegramConnection = Pick<
 > & {
   session: { save(): string };
   switchDC?: (dc: number) => Promise<unknown>;
+  onIncoming?: (handler: (message: TelegramIncoming) => Promise<void>) => void;
 };
 type Credentials = { apiId: number; apiHash: string };
 export type TelegramClientFactory = (
@@ -168,20 +171,11 @@ function gramClient(
       connectionRetries: 2,
     },
   );
-  // GramJS has no receiveUpdates option; suppress server updates on every RPC,
-  // including internal entity resolution and its periodic GetState request.
-  const invoke = client.invoke.bind(client);
-  client.invoke = <R extends Api.AnyRequest>(
-    request: R,
-    dcId?: number,
-  ): Promise<R['__response']> =>
-    invoke(
-      request instanceof Api.InvokeWithoutUpdates
-        ? request
-        : new Api.InvokeWithoutUpdates({ query: request }),
-      dcId,
-    ) as Promise<R['__response']>;
-  client.onError = async () => {};
+  client.onError = async () => {
+    console.error(
+      'Telegram update processing failed; check incoming task queue.',
+    );
+  };
   return {
     connect: () => client.connect(),
     invoke: client.invoke.bind(client),
@@ -189,8 +183,37 @@ function gramClient(
     destroy: () => client.destroy(),
     switchDC: (dc: number) => client._switchDC(dc),
     session: saved,
+    onIncoming(handler) {
+      client.addEventHandler(
+        async (event: NewMessageEvent) => {
+          if (!event.isPrivate || event.message.out) return;
+          const sender = await event.message.getSender();
+          if (!(sender instanceof Api.User) || sender.bot || sender.self)
+            return;
+          await handler({
+            providerId: `${sender.id}:${event.message.id}`,
+            sender: sender.username
+              ? `@${sender.username}`
+              : sender.phone
+                ? `+${sender.phone}`
+                : `telegram:user:${sender.id}${sender.accessHash ? `:${sender.accessHash}` : ''}`,
+            senderPhone: sender.phone ? `+${sender.phone}` : undefined,
+            body: event.message.message || '',
+            receivedAt: new Date(event.message.date * 1000).toISOString(),
+          });
+        },
+        new NewMessage({ incoming: true }),
+      );
+    },
   };
 }
+export type TelegramIncoming = {
+  providerId: string;
+  sender: string;
+  senderPhone?: string;
+  body: string;
+  receivedAt: string;
+};
 export type TelegramSendRequest = {
   accountId: string;
   session: string;
@@ -203,6 +226,8 @@ export function createTelegramAdapter(
   factory: TelegramClientFactory = gramClient,
 ) {
   const clients = new Map<string, Promise<TelegramConnection>>();
+  const listening = new Set<string>();
+  const sessions = new Map<string, string>();
   function credentials(): Credentials {
     const apiId = Number(config.apiId ?? process.env.TELEGRAM_API_ID);
     const apiHash = config.apiHash ?? process.env.TELEGRAM_API_HASH;
@@ -232,10 +257,43 @@ export function createTelegramAdapter(
   async function close(accountId: string) {
     const pending = clients.get(accountId);
     clients.delete(accountId);
+    listening.delete(accountId);
+    sessions.delete(accountId);
     if (pending)
       await pending.then((client) => client.destroy()).catch(() => {});
   }
+  async function connection(accountId: string, session: string) {
+    if (clients.has(accountId) && sessions.get(accountId) !== session)
+      await close(accountId);
+    let pending = clients.get(accountId);
+    if (!pending) {
+      const created = factory(session, credentials());
+      pending = created
+        .connect()
+        .then(() => created)
+        .catch(async (error: unknown) => {
+          await created.destroy().catch(() => {});
+          clients.delete(accountId);
+          throw error;
+        });
+      clients.set(accountId, pending);
+      sessions.set(accountId, session);
+    }
+    return pending;
+  }
   return {
+    async listen(
+      accountId: string,
+      session: string,
+      handler: (message: TelegramIncoming) => Promise<void>,
+    ) {
+      const client = await connection(accountId, session);
+      if (listening.has(accountId)) return;
+      if (!client.onIncoming) throw new Error('Telegram updates unavailable');
+      client.onIncoming(handler);
+      listening.add(accountId);
+    },
+    listeningAccounts: () => [...listening],
     startLogin(phone: string) {
       if (!/^\+[1-9]\d{6,14}$/.test(phone))
         throw new TelegramSendError(
@@ -388,20 +446,7 @@ export function createTelegramAdapter(
       const randomId = telegramRandomId(message.idempotencyKey);
       let client: TelegramConnection;
       try {
-        let pending = clients.get(message.accountId);
-        if (!pending) {
-          const created = factory(message.session, credentials());
-          pending = created
-            .connect()
-            .then(() => created)
-            .catch(async (error: unknown) => {
-              await created.destroy().catch(() => {});
-              clients.delete(message.accountId);
-              throw error;
-            });
-          clients.set(message.accountId, pending);
-        }
-        client = await pending;
+        client = await connection(message.accountId, message.session);
         let peer: Api.TypeInputPeer;
         let cleanup:
           Api.contacts.DeleteContacts | Api.contacts.DeleteByPhones | undefined;
@@ -481,6 +526,16 @@ export function createTelegramAdapter(
               userId: user.id,
               accessHash: user.accessHash,
             });
+          } else if (to.startsWith('telegram:user:')) {
+            const [, , userId, accessHash] = to.split(':');
+            peer = accessHash
+              ? new Api.InputPeerUser({
+                  userId: returnBigInt(userId!),
+                  accessHash: returnBigInt(accessHash),
+                })
+              : await client.getInputEntity(
+                  new Api.PeerUser({ userId: returnBigInt(userId!) }),
+                );
           } else peer = await client.getInputEntity(to);
           const result = await client.invoke(
             new Api.messages.SendMessage({

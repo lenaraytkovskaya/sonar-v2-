@@ -1,4 +1,13 @@
 import { uk } from '@/i18n/uk';
+export const contactLabel = (value: string) => {
+  const telegramId = /^telegram:user:(\d+)(?::-?\d+)?$/.exec(value)?.[1];
+  const whatsappId = /^whatsapp:lid:(\d+)$/.exec(value)?.[1];
+  return telegramId
+    ? `${uk.inbound.telegramUser} ${telegramId}`
+    : whatsappId
+      ? `${uk.inbound.whatsappUser} ${whatsappId}`
+      : value;
+};
 export const channelLabel = (channel: string) =>
   ({
     email: uk.email.title,
@@ -11,4 +20,8 @@ export const channelLabel = (channel: string) =>
   })[channel] ?? channel;
 export const messageStatus = (status: string) =>
   uk.email.statuses[status as keyof typeof uk.email.statuses] ??
-  (status === 'skipped' ? uk.outreach.skipped : status);
+  (status === 'skipped'
+    ? uk.outreach.skipped
+    : status === 'received'
+      ? uk.inbound.received
+      : status);

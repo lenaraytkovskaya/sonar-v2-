@@ -27,6 +27,7 @@ export function normalizeWhatsAppRecipient(
   defaultCountry?: CountryCode,
 ): string | null {
   let value = raw.trim();
+  if (/^whatsapp:lid:[1-9]\d*$/.test(value)) return value;
   if (/^(?:https?:\/\/)?wa\.me\//i.test(value)) {
     try {
       const url = new URL(/^https?:/i.test(value) ? value : `https://${value}`);
@@ -194,20 +195,52 @@ export function createWhatsAppAdapter(
       ...(typeof me?.pushName === 'string' ? { name: me.pushName } : {}),
     };
   }
+  function webhookConfig() {
+    return {
+      webhooks: [
+        {
+          url: 'http://web:3000/api/webhooks/waha',
+          events: ['message'],
+          customHeaders: [
+            {
+              name: 'X-Api-Key',
+              value: config.apiKey ?? process.env.WAHA_API_KEY,
+            },
+          ],
+        },
+      ],
+    };
+  }
+  async function configureWebhook() {
+    await request('/api/sessions/default', 'PUT', {
+      name: 'default',
+      config: webhookConfig(),
+    });
+  }
   async function createSession() {
     await request('/api/sessions', 'POST', {
       name: 'default',
       start: true,
-      config: { webhooks: [] },
+      config: webhookConfig(),
     });
     return getSession();
   }
   return {
     getSession,
+    async phoneByLid(lid: string): Promise<string | null> {
+      if (!/^[1-9]\d*@lid$/.test(lid)) return null;
+      const data = await request(
+        `/api/default/lids/${encodeURIComponent(lid)}`,
+      );
+      return typeof data.pn === 'string' && /^[1-9]\d*@c\.us$/.test(data.pn)
+        ? normalizeWhatsAppRecipient(`+${data.pn.split('@')[0]}`)
+        : null;
+    },
     async start() {
       const session = await getSession();
       if (!session) return createSession();
-      else if (session.status === 'STOPPED')
+      await configureWebhook();
+      if (session.status === 'STOPPED')
         await request('/api/sessions/default/start', 'POST');
       else if (session.status === 'FAILED')
         await request('/api/sessions/default/restart', 'POST');
@@ -215,6 +248,7 @@ export function createWhatsAppAdapter(
     },
     async restart() {
       if (!(await getSession())) return createSession();
+      await configureWebhook();
       await request('/api/sessions/default/restart', 'POST');
       return getSession();
     },
@@ -237,6 +271,7 @@ export function createWhatsAppAdapter(
       return `data:image/png;base64,${data.data}`;
     },
     async send(input: WhatsAppSendRequest) {
+      const lid = /^whatsapp:lid:([1-9]\d*)$/.exec(input.to)?.[1];
       const phone = normalizeWhatsAppRecipient(input.to, input.defaultCountry);
       if (!phone || !input.body.trim() || !input.idempotencyKey)
         throw new WhatsAppSendError(
@@ -252,9 +287,11 @@ export function createWhatsAppAdapter(
           false,
           true,
         );
-      const contact = await request(
-        `/api/contacts/check-exists?${new URLSearchParams({ phone: phone.slice(1), session: 'default' })}`,
-      );
+      const contact = lid
+        ? { numberExists: true, chatId: `${lid}@lid` }
+        : await request(
+            `/api/contacts/check-exists?${new URLSearchParams({ phone: phone.slice(1), session: 'default' })}`,
+          );
       if (contact.numberExists === false)
         throw new WhatsAppSendError(
           'unavailable',

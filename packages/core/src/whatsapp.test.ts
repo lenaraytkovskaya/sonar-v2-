@@ -125,7 +125,15 @@ describe('WhatsApp WAHA Core adapter', () => {
     expect(JSON.parse(String(network.mock.calls[1][1]?.body))).toMatchObject({
       name: 'default',
       start: true,
-      config: { webhooks: [] },
+      config: {
+        webhooks: [
+          {
+            url: 'http://web:3000/api/webhooks/waha',
+            events: ['message'],
+            customHeaders: [{ name: 'X-Api-Key', value: 'private-test-key' }],
+          },
+        ],
+      },
     });
     await expect(adapter(fake(working)).getSession()).resolves.toEqual({
       status: 'WORKING',
@@ -164,5 +172,31 @@ describe('WhatsApp WAHA Core adapter', () => {
     expect(String(network.mock.calls[1][0])).toBe(
       'http://waha:3000/api/sessions',
     );
+  });
+});
+
+it('resolves LIDs to phone when available without inventing phone from LID digits', async () => {
+  const network = fake(
+    { lid: '12345678@lid', pn: '380671234567@c.us' },
+    { lid: '12345678@lid', pn: null },
+  );
+  const client = adapter(network);
+  expect(await client.phoneByLid('12345678@lid')).toBe('+380671234567');
+  expect(await client.phoneByLid('12345678@lid')).toBeNull();
+  expect(network.mock.calls[0]?.[0]).toBe(
+    'http://waha:3000/api/default/lids/12345678%40lid',
+  );
+  expect(normalizeWhatsAppRecipient('whatsapp:lid:12345678')).toBe(
+    'whatsapp:lid:12345678',
+  );
+});
+it('replies directly to an inbound LID without treating it as a phone', async () => {
+  const network = fake(working, { id: 'provider' });
+  await adapter(network).send({ ...input, to: 'whatsapp:lid:12345678' });
+  expect(network).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(String(network.mock.calls[1]?.[1]?.body))).toEqual({
+    session: 'default',
+    chatId: '12345678@lid',
+    text: 'Hello',
   });
 });

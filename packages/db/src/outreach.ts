@@ -27,17 +27,23 @@ export interface OutreachMessage {
   status: string;
   toValue: string;
   reasonUk: string | null;
+  classification: string | null;
+  needsHuman: boolean;
+  readAt: Date | null;
   createdAt: Date;
   sentAt: Date | null;
 }
 export interface OutreachConversation {
   id: string;
-  companyId: string;
-  companyName: string;
-  campaignId: string;
-  campaignName: string;
-  contactId: string;
+  companyId: string | null;
+  companyName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  contactId: string | null;
   contactValue: string;
+  unreadCount: number;
+  needsHuman: boolean;
+  campaignSendMode: string;
   channel: string;
   status: string;
   lastMessage: string | null;
@@ -56,37 +62,55 @@ const invalid = (reason: string): never => {
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
 const automatic = ['email', 'telegram', 'whatsapp'];
-const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",ct.value as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.created_at as "lastAt"
-  from conversations v join companies co on co.id=v.company_id join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,created_at from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.created_at as "createdAt",m.sent_at as "sentAt" from messages m join conversations v on v.id=m.conversation_id`;
+const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
+  (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
+  exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
+  from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
+  left join lateral(select body,status,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
   filters: {
     campaignId?: string;
+    conversationId?: string;
     channel?: string;
     status?: string;
     search?: string;
+    needsHuman?: boolean;
+    unread?: boolean;
   } = {},
 ) {
   const [conversations, campaigns] = await Promise.all([
     sonarPool.query<OutreachConversation>(
       `${conversationSelect}
       where ($1::uuid is null or v.campaign_id=$1) and ($2::text is null or v.channel=$2)
-      and ($3::text is null or m.status=$3) and ($4::text is null or co.name ilike '%'||$4||'%' or ct.value ilike '%'||$4||'%')
+      and ($3::text is null or m.status=$3) and ($4::text is null or co.name ilike '%'||$4||'%' or coalesce(ct.value,v.peer_value,m.to_value) ilike '%'||$4||'%')
+      and ($5::boolean is null or exists(select 1 from messages where conversation_id=v.id and needs_human)=$5)
+      and ($6::boolean is null or exists(select 1 from messages where conversation_id=v.id and direction='in' and read_at is null)=$6)
+      and ($7::uuid is null or v.id=$7)
       order by m.created_at desc nulls last,v.id`,
       [
         filters.campaignId || null,
         filters.channel || null,
         filters.status || null,
         filters.search?.trim() || null,
+        filters.needsHuman ?? null,
+        filters.unread ?? null,
+        filters.conversationId ?? null,
       ],
     ),
     sonarPool.query<{ id: string; name: string }>(
       'select id,name from campaigns order by name,id',
     ),
   ]);
-  return { conversations: conversations.rows, campaigns: campaigns.rows };
+  return {
+    conversations: conversations.rows,
+    campaigns: campaigns.rows,
+    unreadCount: conversations.rows.reduce(
+      (total, c) => total + c.unreadCount,
+      0,
+    ),
+  };
 }
 
 export async function getCompanyChat(companyId: string) {
@@ -141,7 +165,7 @@ export async function getCompanyChat(companyId: string) {
 
 async function contactBlocked(
   c: Pick<PoolClient, 'query'>,
-  companyId: string,
+  companyId: string | null,
   to: string,
 ) {
   if (await isContactBlocked(c, companyId, to)) return true;
@@ -153,7 +177,11 @@ async function contactBlocked(
   ).rows[0].blocked as boolean;
 }
 
-async function assertAllowed(c: PoolClient, companyId: string, to: string) {
+async function assertAllowed(
+  c: PoolClient,
+  companyId: string | null,
+  to: string,
+) {
   await c.query(
     "select pg_advisory_xact_lock(hashtextextended('company-contact:'||$1::text,0))",
     [companyId],
@@ -367,7 +395,7 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
   return snapshot;
 }
 
-async function queue(c: PoolClient, id: string, companyId: string) {
+async function queue(c: PoolClient, id: string, companyId: string | null) {
   const taskId = await enqueueTask(
     'message.send',
     `message.send:${id}`,
@@ -500,7 +528,7 @@ async function lockedMessage(c: PoolClient, id: string) {
   const {
     rows: [message],
   } = await c.query(
-    `select m.*,v.company_id,v.campaign_id,v.contact_id,a.channels,a.status as campaign_status,a.send_mode,ct.kind as contact_kind,ct.meta as contact_meta from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id where m.id=$1 for update of m for share of a`,
+    `select m.*,v.company_id,v.campaign_id,v.contact_id,coalesce(a.channels,jsonb_build_object(m.channel,true)) as channels,coalesce(a.status,'active') as campaign_status,case when m.source='reply' then 'manual' else a.send_mode end as send_mode,ct.kind as contact_kind,ct.meta as contact_meta from messages m join conversations v on v.id=m.conversation_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id where m.id=$1 for update of m`,
     [id],
   );
   await assertAllowed(c, message.company_id, message.to_value);
@@ -563,7 +591,7 @@ async function submitOutreachDraft(
     if (
       message.channels?.[message.channel] !== true ||
       message.campaign_status !== 'active' ||
-      !message.contact_id ||
+      (!message.contact_id && message.source !== 'reply') ||
       message.contact_meta?.[`${message.channel}_unavailable`]
     )
       invalid(
@@ -587,8 +615,8 @@ async function submitOutreachDraft(
     const {
       rows: [account],
     } = await c.query(
-      "select id from channel_accounts where channel=$1 and status='active' order by (id=$2) desc,created_at,id limit 1 for share",
-      [message.channel, message.account_id],
+      "select id from channel_accounts where channel=$1 and status='active' and ($3::boolean=false or id=$2) order by (id=$2) desc,created_at,id limit 1 for share",
+      [message.channel, message.account_id, message.source === 'reply'],
     );
     if (!account) invalid('Налаштуйте активний акаунт каналу.');
     await c.query(

@@ -1,3 +1,4 @@
+import { registerInboundTasks } from './inbound.js';
 import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
 import { registerAnalysisTasks } from './analysis.js';
@@ -23,6 +24,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerEmailTasks();
+  await registerInboundTasks();
   await registerDraftTasks();
   await registerAnalysisTasks();
   await registerScoringTasks();
@@ -59,8 +61,8 @@ async function stop() {
   if (stopping) return;
   stopping = true;
   await started.catch(() => {});
-  await closeTaskQueue();
   await closeTelegramClients();
+  await closeTaskQueue();
   await Promise.all([sonarPool.end(), registryPool.end()]);
 }
 for (const signal of ['SIGTERM', 'SIGINT'])

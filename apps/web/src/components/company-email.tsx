@@ -19,7 +19,7 @@ type Action = (
 const selectClass =
   'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
 
-function Draft({
+export function Draft({
   message,
   blocked,
   pending,
@@ -65,6 +65,16 @@ function Draft({
         </span>
         <LocalTime value={message.sentAt ?? message.createdAt} />
       </p>
+      {message.classification && (
+        <p className="text-xs text-muted-foreground">
+          {
+            uk.inbound.categories[
+              message.classification as keyof typeof uk.inbound.categories
+            ]
+          }
+          {message.needsHuman && ` · ${uk.inbound.needsHuman}`}
+        </p>
+      )}
       {editable && !blocked ? (
         <>
           {message.channel === 'email' && (

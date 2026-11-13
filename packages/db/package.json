@@ -63,6 +63,10 @@
     "./whatsapp": {
       "types": "./dist/whatsapp.d.ts",
       "default": "./dist/whatsapp.js"
+    },
+    "./inbound": {
+      "types": "./dist/inbound.d.ts",
+      "default": "./dist/inbound.js"
     }
   },
   "files": [

@@ -1,4 +1,24 @@
 export const uk = {
+  inbound: {
+    unknownCompany: 'Без компанії',
+    needsHuman: 'Потрібна людина',
+    unread: 'Непрочитані',
+    suggest: 'Запропонувати відповідь',
+    reply: 'Відповідь',
+    classify: 'Розбір вхідного повідомлення',
+    received: 'Отримано',
+    telegramUser: 'Користувач Telegram',
+    whatsappUser: 'Користувач WhatsApp',
+    categories: {
+      interest: 'Інтерес',
+      question: 'Питання',
+      price: 'Ціна / оплата',
+      contract: 'Договір',
+      complaint: 'Скарга',
+      refusal: 'Відмова',
+      autoreply: 'Автовідповідь',
+    },
+  },
   outreach: {
     title: 'Переписка',
     contacts: 'Контакти компанії',
@@ -30,6 +50,7 @@ export const uk = {
       manual: 'Вручну',
       api: 'API',
       inbound: 'Вхідне',
+      reply: 'Відповідь',
     },
   },
   manual: {

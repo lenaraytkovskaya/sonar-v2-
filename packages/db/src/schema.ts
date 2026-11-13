@@ -434,13 +434,11 @@ export const conversations = pgTable(
   'conversations',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id),
-    campaignId: uuid('campaign_id')
-      .notNull()
-      .references(() => campaigns.id),
+    companyId: uuid('company_id').references(() => companies.id),
+    campaignId: uuid('campaign_id').references(() => campaigns.id),
     contactId: uuid('contact_id').references(() => contacts.id),
+    accountId: uuid('account_id').references(() => channelAccounts.id),
+    peerValue: text('peer_value'),
     status: text('status').notNull().default('open'),
     channel: text('channel').notNull().default('email'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -448,6 +446,9 @@ export const conversations = pgTable(
       .defaultNow(),
   },
   (t) => [
+    uniqueIndex('conversation_inbound_peer')
+      .on(t.accountId, t.channel, t.peerValue)
+      .where(sql`${t.peerValue} is not null`),
     unique('conversation_company_campaign_contact_channel').on(
       t.companyId,
       t.campaignId,
@@ -479,6 +480,10 @@ export const messages = pgTable(
     firstAttemptAt: timestamp('first_attempt_at', { withTimezone: true }),
     quotaDay: text('quota_day'),
     providerId: text('provider_id'),
+    rfcMessageId: text('rfc_message_id'),
+    classification: text('classification'),
+    needsHuman: boolean('needs_human').notNull().default(false),
+    readAt: timestamp('read_at', { withTimezone: true }),
     approvedBy: uuid('approved_by').references(() => users.id),
     approvedAt: timestamp('approved_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id),
@@ -489,6 +494,13 @@ export const messages = pgTable(
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
   (t) => [
+    uniqueIndex('message_inbound_provider')
+      .on(t.channel, t.accountId, t.providerId)
+      .where(sql`${t.direction} = 'in'`),
+    check(
+      'message_classification',
+      sql`${t.classification} in ('interest','question','price','contract','complaint','refusal','autoreply')`,
+    ),
     check('message_direction', sql`${t.direction} in ('out','in')`),
     check(
       'message_channel',

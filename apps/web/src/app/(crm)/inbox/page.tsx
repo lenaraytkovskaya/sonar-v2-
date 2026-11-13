@@ -1,10 +1,14 @@
 import Link from 'next/link';
 import { uk } from '@/i18n/uk';
 import { validId } from '@/lib/api-access';
-import { channelLabel, messageStatus } from '@/lib/outreach-labels';
+import {
+  channelLabel,
+  contactLabel,
+  messageStatus,
+} from '@/lib/outreach-labels';
 import { cn } from '@/lib/utils';
 import { Card, PageHeader } from '@/components/shared';
-import { CompanyChat } from '@/components/company-email';
+import { ConversationChat } from '@/components/conversation-chat';
 import { LocalTime } from '@/components/local-time';
 import { Button } from '@/components/ui/button';
 const channels = ['email', 'telegram', 'whatsapp', 'form', 'social', 'call'];
@@ -17,6 +21,8 @@ export default async function Page({
     channel?: string;
     status?: string;
     conversation?: string;
+    needsHuman?: string;
+    unread?: string;
   }>;
 }) {
   const query = await searchParams;
@@ -24,17 +30,20 @@ export default async function Page({
     campaignId: validId(query.campaignId) ? query.campaignId : undefined,
     channel: channels.includes(query.channel ?? '') ? query.channel : undefined,
     status: statuses.includes(query.status ?? '') ? query.status : undefined,
+    needsHuman: query.needsHuman === '1' ? true : undefined,
+    unread: query.unread === '1' ? true : undefined,
   };
-  const { getInbox, getCompanyChat } = await import('@sonar/db/outreach');
+  const { getInbox } = await import('@sonar/db/outreach');
+  const { getConversationChat } = await import('@sonar/db/inbound');
   const inbox = await getInbox(filters);
   const selected =
     inbox.conversations.find((row) => row.id === query.conversation) ??
     inbox.conversations[0];
-  const chat = selected ? await getCompanyChat(selected.companyId) : null;
+  const chat = selected ? await getConversationChat(selected.id) : null;
   const conversationLink = (id: string) => {
     const params = new URLSearchParams({ conversation: id });
     for (const [key, value] of Object.entries(filters))
-      if (value) params.set(key, value);
+      if (value) params.set(key, typeof value === 'boolean' ? '1' : value);
     return `/inbox?${params}`;
   };
   const selectClass =
@@ -91,6 +100,24 @@ export default async function Page({
             </option>
           ))}
         </select>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="needsHuman"
+            value="1"
+            defaultChecked={filters.needsHuman}
+          />
+          {uk.inbound.needsHuman}
+        </label>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="unread"
+            value="1"
+            defaultChecked={filters.unread}
+          />
+          {uk.inbound.unread}
+        </label>
         <Button type="submit">{uk.company.apply}</Button>
       </form>
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,1fr)_minmax(0,2fr)]">
@@ -110,9 +137,19 @@ export default async function Page({
                 selected?.id === row.id && 'bg-chip',
               )}
             >
-              <p className="font-semibold">{row.companyName}</p>
+              <p className="flex items-center gap-2 font-semibold">
+                {row.companyName || uk.inbound.unknownCompany}
+                {row.unreadCount > 0 && (
+                  <span className="rounded-full bg-err-bg px-2 text-err">
+                    {row.unreadCount}
+                  </span>
+                )}
+              </p>
+              {row.needsHuman && (
+                <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
+              )}
               <p className="break-words">
-                {channelLabel(row.channel)} · {row.contactValue}
+                {channelLabel(row.channel)} · {contactLabel(row.contactValue)}
               </p>
               <p className="line-clamp-2 text-muted-foreground">
                 {row.lastMessage || uk.email.noMessages}
@@ -125,12 +162,7 @@ export default async function Page({
           ))}
         </Card>
         {chat && selected ? (
-          <CompanyChat
-            key={selected.id}
-            initial={chat}
-            selectedContact={selected.contactId ?? undefined}
-            selectedCampaign={selected.campaignId}
-          />
+          <ConversationChat key={selected.id} initial={chat} />
         ) : (
           <Card className="p-8 text-center text-sm text-muted-foreground">
             {uk.outreach.selectConversation}
