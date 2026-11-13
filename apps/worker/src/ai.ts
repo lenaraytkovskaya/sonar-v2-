@@ -29,7 +29,7 @@ export async function runAiAssist(
     return {
       status: 'paused',
       reasonCode: 'api_key_missing',
-      reasonUk: 'Додайте ключ OpenRouter, щоб скористатися ІІ-помічником.',
+      reasonUk: 'Додайте ключ OpenRouter, щоб скористатися ШІ-помічником.',
     };
   client ??= createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? '');
   const { rows } = await sonarPool.query(
@@ -43,11 +43,11 @@ export async function runAiAssist(
     return {
       status: 'paused',
       reasonCode: 'model_missing',
-      reasonUk: 'Виберіть дешеву модель у налаштуваннях ІІ.',
+      reasonUk: 'Виберіть дешеву модель у налаштуваннях ШІ.',
     };
   const instruction = config['ai.actions']?.[input.action];
   if (typeof instruction !== 'string')
-    throw new TaskFailure('action_invalid', 'Невідома дія ІІ-помічника.');
+    throw new TaskFailure('action_invalid', 'Невідома дія ШІ-помічника.');
   const about =
     typeof config['company.about'] === 'string'
       ? config['company.about'].trim()
@@ -79,7 +79,7 @@ export async function runAiAssist(
     : 'rewrite';
   const maxTokens = Number(config['ai.max_tokens']?.[limitAction]);
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 10000)
-    throw new TaskFailure('ai_config_invalid', 'Перевірте налаштування ІІ.');
+    throw new TaskFailure('ai_config_invalid', 'Перевірте налаштування ШІ.');
   const estimate =
     (Buffer.byteLength(JSON.stringify(messages)) + 100) * model.promptUsd +
     maxTokens * model.completionUsd +
@@ -100,7 +100,7 @@ export async function runAiAssist(
       } catch {
         throw new TaskFailure(
           'ai_schema_invalid',
-          'ІІ повернув некоректні фільтри. Спробуйте уточнити запит.',
+          'ШІ повернув некоректні фільтри. Спробуйте уточнити запит.',
         );
       }
     }
@@ -120,7 +120,7 @@ export async function runAiAssist(
       } catch {
         throw new TaskFailure(
           'ai_schema_invalid',
-          'ІІ повернув некоректні налаштування кампанії. Спробуйте уточнити опис.',
+          'ШІ повернув некоректні налаштування кампанії. Спробуйте уточнити опис.',
         );
       }
     }
@@ -152,9 +152,9 @@ export async function runAiAssist(
       throw new TaskFailure(
         error.code,
         error.finishReason === 'length'
-          ? 'Відповідь ІІ обрізана, збільште ліміт токенів'
+          ? 'Відповідь ШІ обрізана, збільште ліміт токенів'
           : error.code === 'empty_content'
-            ? 'ІІ не повернув текст відповіді: ліміт міг бути витрачений на міркування. Збільште ліміт токенів.'
+            ? 'ШІ не повернув текст відповіді: ліміт міг бути витрачений на міркування. Збільште ліміт токенів.'
             : error.code === 'usage_missing'
               ? 'OpenRouter не повернув коректну вартість. Витрати записано за резервом; звірте їх у провайдера.'
               : 'OpenRouter повернув некоректну відповідь. Витрати записано; уточніть запит або перевірте модель.',
@@ -176,7 +176,7 @@ export async function runAiAssist(
       };
     throw new TaskFailure(
       'ai_request_failed',
-      'Не вдалося завершити запит ІІ. Перевірте ключ і витрати OpenRouter перед повтором.',
+      'Не вдалося завершити запит ШІ. Перевірте ключ і витрати OpenRouter перед повтором.',
     );
   }
 }

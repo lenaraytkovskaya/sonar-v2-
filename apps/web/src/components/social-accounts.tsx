@@ -2,6 +2,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { listSocialAccounts } from '@sonar/db/social-accounts';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from './channel-icon';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { RevealToggle } from './ui/reveal-value';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -110,7 +114,8 @@ export function SocialAccounts({
           className="space-y-2 border-t border-border pt-3 text-sm"
         >
           <h3 className="font-semibold">
-            {account.name} · {uk.social.networks[account.network]}
+            <ChannelIcon channel={account.network} /> {account.name} ·{' '}
+            {uk.social.networks[account.network]}
           </h3>
           <p>
             {uk.email.owner}: {account.ownerName}
@@ -119,12 +124,23 @@ export function SocialAccounts({
             {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
             {uk.socialAccounts.proxy} {account.proxyIndex + 1}
           </p>
-          <p role="status">
+          <StatusBadge status={account.status}>
             {account.status === 'paused' && account.sessionStatus !== 'valid'
               ? uk.socialAccounts.needsLogin
               : (uk.socialAccounts.statuses[
                   account.status as keyof typeof uk.socialAccounts.statuses
                 ] ?? uk.tasks.status.paused)}
+          </StatusBadge>
+          <p>
+            <span className="mr-2">{uk.actions.session}</span>
+            <StatusBadge status={account.sessionStatus}>
+              {uk.actions.sessions[
+                account.sessionStatus as keyof typeof uk.actions.sessions
+              ] ?? uk.actions.sessions.pending}
+            </StatusBadge>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {uk.actions.savedSecret}
           </p>
           {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
           {account.checkedAt && (
@@ -148,38 +164,35 @@ export function SocialAccounts({
             >
               {uk.socialAccounts.check}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
+            <RowActions
               disabled={pending}
-              onClick={() => {
-                setEditing(account.id);
-                setName(account.name);
-                setNetwork(account.network);
-                setDailyLimit(String(account.dailyLimit));
-                setProxyIndex(String(account.proxyIndex));
-                setCookiesJson('');
-                setVisible(false);
-              }}
-            >
-              {uk.socialAccounts.edit}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={
-                pending ||
-                (!account.enabled && account.sessionStatus !== 'valid')
-              }
-              onClick={() =>
-                void mutate('PATCH', {
-                  id: account.id,
-                  enabled: !account.enabled,
-                })
-              }
-            >
-              {account.enabled ? uk.email.disable : uk.email.enable}
-            </Button>
+              actions={[
+                {
+                  kind: 'edit',
+                  label: uk.socialAccounts.edit,
+                  onSelect: () => {
+                    setEditing(account.id);
+                    setName(account.name);
+                    setNetwork(account.network);
+                    setDailyLimit(String(account.dailyLimit));
+                    setProxyIndex(String(account.proxyIndex));
+                    setCookiesJson('');
+                    setVisible(false);
+                  },
+                },
+                {
+                  kind: account.enabled ? 'disable' : 'enable',
+                  label: account.enabled ? uk.email.disable : uk.email.enable,
+                  disabled:
+                    !account.enabled && account.sessionStatus !== 'valid',
+                  onSelect: () =>
+                    void mutate('PATCH', {
+                      id: account.id,
+                      enabled: !account.enabled,
+                    }),
+                },
+              ]}
+            />
           </div>
         </section>
       ))}
@@ -303,13 +316,12 @@ export function SocialAccounts({
               ? uk.socialAccounts.replaceCookies
               : uk.socialAccounts.cookiePrivacy}
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setVisible(!visible)}
-          >
-            {visible ? uk.socialAccounts.hide : uk.socialAccounts.show}
-          </Button>
+          {cookiesJson && (
+            <RevealToggle
+              visible={visible}
+              onToggle={() => setVisible(!visible)}
+            />
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={pending || accountProxyIndex === null}>

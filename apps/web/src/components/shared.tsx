@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { uk } from '@/i18n/uk';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { statusTone } from '@/lib/status-tone';
 export { Card } from '@/components/ui/card';
 /** Score bands: 70+ strong lead, 40–70 worth a look, below 40 weak. */
 export function scoreTone(value: number | null) {
@@ -41,50 +42,45 @@ export function Score({
     </div>
   );
 }
-const companyTones: Record<keyof typeof uk.company.statuses, string> = {
-  new: 'bg-idle-bg text-idle',
-  enriching: 'bg-run-bg text-run',
-  ready: 'bg-run-bg text-run',
-  contacted: 'bg-wait-bg text-wait',
-  replied: 'bg-ok-bg text-ok',
-  interested: 'bg-ok-bg text-ok',
-  deal: 'bg-ok-bg text-ok',
-  refused: 'bg-err-bg text-err',
-  do_not_contact: 'bg-err-bg text-err',
-};
+export function StatusBadge({
+  status,
+  children,
+}: {
+  status: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 self-start items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+        {
+          ok: 'bg-ok-bg text-ok',
+          err: 'bg-err-bg text-err',
+          wait: 'bg-wait-bg text-wait',
+          run: 'bg-run-bg text-run',
+          idle: 'bg-idle-bg text-idle',
+        }[statusTone(status)],
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className="size-1.5 shrink-0 rounded-full bg-current"
+      />
+      {children}
+    </span>
+  );
+}
 export function CompanyStatus({
   status,
 }: {
   status: keyof typeof uk.company.statuses;
 }) {
   return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-        companyTones[status],
-      )}
-    >
-      {uk.company.statuses[status]}
-    </span>
+    <StatusBadge status={status}>{uk.company.statuses[status]}</StatusBadge>
   );
 }
 export function StatusPill({ status }: { status: keyof typeof uk.status }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-        {
-          ok: 'bg-ok-bg text-ok',
-          run: 'bg-run-bg text-run',
-          wait: 'bg-wait-bg text-wait',
-          err: 'bg-err-bg text-err',
-          idle: 'bg-idle-bg text-idle',
-        }[status],
-      )}
-    >
-      {uk.status[status]}
-    </span>
-  );
+  return <StatusBadge status={status}>{uk.status[status]}</StatusBadge>;
 }
 export function PageHeader({
   title,

@@ -1,7 +1,12 @@
+'use client';
+import { useState } from 'react';
+import { socialTarget } from '@sonar/core';
+import { RowActions } from './ui/row-actions';
 import Link from 'next/link';
 import { Network, Store } from 'lucide-react';
 import { uk } from '@/i18n/uk';
-import { Card, CompanyStatus, Score } from './shared';
+import { ChannelIcon } from './channel-icon';
+import { Card, CompanyStatus, Score, scoreTone } from './shared';
 export type CompanyCardRow = {
   id: string;
   name: string;
@@ -16,6 +21,7 @@ export type CompanyCardRow = {
   phones: string[];
   emails: string[];
   channels: string[];
+  socials?: string[];
   registry: boolean;
   platform: boolean;
   domain: string | null;
@@ -39,9 +45,35 @@ export function CompanyCard({
   company: CompanyCardRow;
   link: (id: string) => string;
 }) {
+  const [blocked, setBlocked] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const block = async () => {
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/companies/${c.id}/outreach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'block' }),
+      });
+      if (!response.ok)
+        throw Error((await response.json()).error ?? uk.email.error);
+      setBlocked(true);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : uk.email.error);
+    } finally {
+      setPending(false);
+    }
+  };
+  const networks = [
+    ...new Set(
+      (c.socials ?? []).flatMap((value) => socialTarget(value)?.network ?? []),
+    ),
+  ];
   return (
     <Card className="flex min-w-0 flex-col gap-2.5 p-3.5">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex min-h-11 items-start justify-between gap-2">
         <Link
           className="line-clamp-2 min-w-0 font-semibold leading-snug text-foreground hover:text-accent"
           href={link(c.id)}
@@ -49,7 +81,20 @@ export function CompanyCard({
         >
           {c.name}
         </Link>
-        <CompanyStatus status={c.status} />
+        <CompanyStatus status={blocked ? 'do_not_contact' : c.status} />
+        {!blocked && c.status !== 'do_not_contact' && (
+          <RowActions
+            disabled={pending}
+            actions={[
+              {
+                kind: 'block',
+                label: uk.email.block,
+                danger: true,
+                onSelect: () => void block(),
+              },
+            ]}
+          />
+        )}
       </div>
       <div className="flex items-end justify-between gap-3">
         <div className="min-w-0 text-xs text-muted-foreground">
@@ -57,7 +102,14 @@ export function CompanyCard({
             {[c.city, c.primary_type].filter(Boolean).join(' · ') || '—'}
           </p>
           <p>
-            <span className="text-wait">★</span> {c.rating ?? '—'}
+            <span
+              className={
+                scoreTone(c.rating === null ? null : Number(c.rating) * 20).text
+              }
+            >
+              ★
+            </span>{' '}
+            {c.rating ?? '—'}
             {c.ratings_count ? (
               <>
                 {' '}
@@ -74,8 +126,15 @@ export function CompanyCard({
           .map((kind) => (
             <span
               key={kind}
-              className="rounded bg-ok-bg px-1.5 py-0.5 text-[11px] font-medium text-ok"
+              className="inline-flex items-center gap-1 rounded bg-chip px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
             >
+              {kind === 'social' && networks.length ? (
+                networks.map((network) => (
+                  <ChannelIcon key={network} channel={network} />
+                ))
+              ) : (
+                <ChannelIcon channel={kind} />
+              )}{' '}
               {uk.company.kinds[kind]}
             </span>
           ))}
@@ -107,17 +166,17 @@ export function CompanyCard({
             rel="noreferrer"
             href={c.website}
           >
-            {c.domain ?? c.website}
+            <ChannelIcon channel="site" /> {c.domain ?? c.website}
           </a>
         )}
         {c.emails[0] && (
           <a className="block truncate" href={'mailto:' + c.emails[0]}>
-            {c.emails[0]}
+            <ChannelIcon channel="email" /> {c.emails[0]}
           </a>
         )}
         {c.phones[0] && (
           <a className="block tabular-nums" href={'tel:' + c.phones[0]}>
-            {c.phones[0]}
+            <ChannelIcon channel="phone" /> {c.phones[0]}
             {c.phones.length > 1 && (
               <span className="text-xs text-muted-foreground">
                 {' '}
@@ -151,6 +210,11 @@ export function CompanyCard({
             ))}
           </ul>
         </details>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-err">
+          {error}
+        </p>
       )}
       <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">

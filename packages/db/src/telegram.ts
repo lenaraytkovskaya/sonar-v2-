@@ -18,6 +18,7 @@ export interface TelegramAccount {
   id: string;
   name: string;
   address: string;
+  fullAddress: string;
   dailyLimit: number;
   sentToday: number;
   enabled: boolean;
@@ -53,7 +54,11 @@ export async function listTelegramAccounts(): Promise<TelegramAccount[]> {
   const { rows } = await sonarPool.query(
     `select a.id,a.name,a.address,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='telegram' and a.status<>'pending' order by a.name,a.id`,
   );
-  return rows.map((a) => ({ ...a, address: maskPhone(a.address) }));
+  return rows.map((a) => ({
+    ...a,
+    fullAddress: a.address,
+    address: maskPhone(a.address),
+  }));
 }
 async function lockAccount(c: PoolClient, id: string, userId: string) {
   await c.query(

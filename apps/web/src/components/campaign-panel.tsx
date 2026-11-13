@@ -7,6 +7,8 @@ import {
   type CampaignInput,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader } from './shared';
@@ -273,7 +275,9 @@ export function CampaignPanel({
             >
               {row.name}
               <span className="block text-sm text-muted-foreground">
-                {uk.campaign.statuses[row.status]}
+                <StatusBadge status={row.status}>
+                  {uk.campaign.statuses[row.status]}
+                </StatusBadge>
               </span>
             </button>
           ))}
@@ -560,22 +564,23 @@ export function CampaignPanel({
             >
               {exhausted ? uk.google.exhausted : uk.campaign.start}
             </Button>
-            <Button
-              variant="outline"
-              disabled={
-                pending || !id || !campaignSchema.safeParse(form).success
-              }
-              onClick={() => void act('score')}
-            >
-              {uk.campaign.recalculate}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={pending || !id}
-              onClick={() => void act('pause')}
-            >
-              {uk.campaign.pause}
-            </Button>
+            <RowActions
+              actions={[
+                {
+                  kind: 'score',
+                  label: uk.campaign.recalculate,
+                  disabled:
+                    pending || !id || !campaignSchema.safeParse(form).success,
+                  onSelect: () => void act('score'),
+                },
+                {
+                  kind: 'pause',
+                  label: uk.campaign.pause,
+                  disabled: pending || !id,
+                  onSelect: () => void act('pause'),
+                },
+              ]}
+            />
           </div>
           {message && <p role="status">{message}</p>}
           {id && <BatchList key={id} campaignId={id} />}

@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from 'react';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
 import { Card } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, type ScanResult } from './shared';
@@ -182,9 +184,8 @@ export function TaskOverview() {
                 {batch.size}
               </h2>
               <p>
-                {batch.campaign_name} ·{' '}
-                {uk.tasks.status[batch.status as keyof typeof uk.tasks.status]}{' '}
-                · ${Number(batch.cost_usd).toFixed(3)}
+                {batch.campaign_name} · <StatusText status={batch.status} /> · $
+                {Number(batch.cost_usd).toFixed(3)}
               </p>
               <progress
                 className="w-full"
@@ -231,13 +232,12 @@ export function TaskOverview() {
           return (
             <div key={type} className="mb-4">
               <p>{name(type)}</p>
-              <p className="text-sm text-muted-foreground">
-                {rows
-                  .map(
-                    (x) =>
-                      `${uk.tasks.status[x.status as keyof typeof uk.tasks.status]}: ${x.count}`,
-                  )
-                  .join(' · ')}
+              <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                {rows.map((row) => (
+                  <span key={row.status}>
+                    <StatusText status={row.status} />: {row.count}
+                  </span>
+                ))}
               </p>
               <progress
                 className="w-full"
@@ -316,13 +316,27 @@ export function TaskOverview() {
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
-              <Button
-                variant="outline"
+              <RowActions
                 disabled={pending === task.id}
-                onClick={() => void retry(task.id, 'dismiss')}
-              >
-                {uk.tasks.dismiss}
-              </Button>
+                actions={[
+                  ...(!task.result?.billingPending &&
+                  task.type !== 'social.request' &&
+                  !task.type.startsWith('whatsapp.account.')
+                    ? [
+                        {
+                          kind: 'retry' as const,
+                          label: uk.tasks.retry,
+                          onSelect: () => void retry(task.id),
+                        },
+                      ]
+                    : []),
+                  {
+                    kind: 'hide',
+                    label: uk.tasks.dismiss,
+                    onSelect: () => void retry(task.id, 'dismiss'),
+                  },
+                ]}
+              />
               {task.result?.billingPending ? (
                 reconciling === task.id ? (
                   <>
@@ -350,14 +364,7 @@ export function TaskOverview() {
                 <Button asChild>
                   <Link href="/channels">{uk.pages.channels.title}</Link>
                 </Button>
-              ) : (
-                <Button
-                  disabled={pending === task.id}
-                  onClick={() => void retry(task.id)}
-                >
-                  {uk.tasks.retry}
-                </Button>
-              )}
+              ) : null}
             </div>
           </div>
         ))}
@@ -369,20 +376,10 @@ export function TaskOverview() {
   );
 }
 
-const statusTones: Record<string, string> = {
-  done: 'bg-ok-bg text-ok',
-  running: 'bg-run-bg text-run',
-  queued: 'bg-idle-bg text-idle',
-  skipped: 'bg-wait-bg text-wait',
-  paused: 'bg-wait-bg text-wait',
-  failed: 'bg-err-bg text-err',
-};
 function StatusText({ status }: { status: string }) {
   return (
-    <span
-      className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${statusTones[status] ?? statusTones.queued}`}
-    >
+    <StatusBadge status={status}>
       {uk.tasks.status[status as keyof typeof uk.tasks.status] ?? status}
-    </span>
+    </StatusBadge>
   );
 }

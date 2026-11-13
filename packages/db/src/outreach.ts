@@ -302,7 +302,7 @@ export async function enqueueDraft(
       [input.companyId, input.campaignId],
     );
     if (!campaign?.analysis_id)
-      invalid('Спочатку виконайте ІІ-аналіз компанії в цій кампанії.');
+      invalid('Спочатку виконайте ШІ-аналіз компанії в цій кампанії.');
     if (campaign.score === null || campaign.score < campaign.min_score)
       invalid('Оцінка компанії нижча за поріг кампанії.');
     const [contact] = await eligibleContacts(

@@ -6,6 +6,7 @@ import { socialNetwork } from '@/lib/outreach-labels';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { RowActions } from './ui/row-actions';
 
 export function ManualEntry({
   companyId,
@@ -207,30 +208,39 @@ export function DeleteManualContact({
   const [pending, setPending] = useState(false),
     [error, setError] = useState('');
   return (
-    <div className="mt-2">
-      <Button
-        variant="outline"
+    <div>
+      <RowActions
         disabled={pending}
-        onClick={async () => {
-          setPending(true);
-          setError('');
-          try {
-            const response = await fetch(
-              `/api/companies/${companyId}/contacts?contactId=${contactId}`,
-              { method: 'DELETE' },
-            );
-            if (!response.ok)
-              throw Error((await response.json()).error ?? uk.ai.error);
-            router.refresh();
-          } catch (error) {
-            setError(error instanceof Error ? error.message : uk.ai.error);
-          } finally {
-            setPending(false);
-          }
-        }}
-      >
-        {uk.manual.deleteContact}
-      </Button>
+        actions={[
+          {
+            kind: 'delete',
+            label: uk.manual.deleteContact,
+            danger: true,
+            confirm: uk.actions.deleteContactConfirm,
+            onSelect: () => {
+              void (async () => {
+                setPending(true);
+                setError('');
+                try {
+                  const response = await fetch(
+                    `/api/companies/${companyId}/contacts?contactId=${contactId}`,
+                    { method: 'DELETE' },
+                  );
+                  if (!response.ok)
+                    throw Error((await response.json()).error ?? uk.ai.error);
+                  router.refresh();
+                } catch (error) {
+                  setError(
+                    error instanceof Error ? error.message : uk.ai.error,
+                  );
+                } finally {
+                  setPending(false);
+                }
+              })();
+            },
+          },
+        ]}
+      />
       {error && (
         <p role="alert" className="text-err">
           {error}

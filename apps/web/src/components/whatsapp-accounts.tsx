@@ -3,6 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import type { listWhatsAppAccounts } from '@sonar/db/whatsapp';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from './channel-icon';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
+import { RevealValue } from './ui/reveal-value';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -97,7 +101,7 @@ export function WhatsAppAccounts({
   return (
     <Card className="space-y-4 p-5">
       <h2 className="font-heading text-base font-bold">
-        {uk.whatsapp.accounts}
+        <ChannelIcon channel="whatsapp" /> {uk.whatsapp.accounts}
       </h2>
       {!configured && <p role="status">{uk.whatsapp.configuration}</p>}
       <p className="text-sm text-muted-foreground">
@@ -109,15 +113,33 @@ export function WhatsAppAccounts({
             <p className="font-medium">
               {account.name}
               {account.providerName && ` · ${account.providerName}`}
-              {account.address && ` · ${account.address}`}
+              {account.fullAddress && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <RevealValue
+                    value={account.fullAddress}
+                    masked={account.address}
+                    copy
+                  />
+                </>
+              )}
             </p>
             <p className="text-sm text-muted-foreground">
               {uk.email.owner}: {account.ownerName}
             </p>
             <p role="status">
-              {uk.whatsapp.statuses[account.status]}
-              {account.status === 'active' &&
-                ` · ${account.desiredEnabled ? uk.email.enabled : uk.email.disabled}`}
+              <StatusBadge
+                status={
+                  account.status === 'active' && !account.desiredEnabled
+                    ? 'disabled'
+                    : account.status
+                }
+              >
+                {uk.whatsapp.statuses[account.status]}
+                {account.status === 'active' &&
+                  ` · ${account.desiredEnabled ? uk.email.enabled : uk.email.disabled}`}
+              </StatusBadge>
             </p>
             <p className="text-sm text-muted-foreground">
               {uk.email.today}: {account.sentToday} / {account.dailyLimit}
@@ -174,40 +196,54 @@ export function WhatsAppAccounts({
               {uk.forms.save}
             </Button>
           </form>
-          <div className="flex flex-wrap gap-3">
-            {account.status === 'active' && (
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() =>
-                  void mutate('PATCH', {
-                    id: account.id,
-                    enabled: !account.desiredEnabled,
-                  })
-                }
-              >
-                {account.desiredEnabled ? uk.email.disable : uk.email.enable}
-              </Button>
-            )}
-            {['failed', 'stopped'].includes(account.status) && (
-              <Button
-                disabled={pending || !configured}
-                onClick={() =>
-                  void mutate('POST', { action: 'restart', id: account.id })
-                }
-              >
-                {uk.whatsapp.restart}
-              </Button>
-            )}
-            {account.status !== 'stopped' && (
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() => void mutate('DELETE', { id: account.id })}
-              >
-                {uk.whatsapp.disconnect}
-              </Button>
-            )}
+          <div className="flex justify-end">
+            <RowActions
+              disabled={pending}
+              actions={[
+                ...(account.status === 'active'
+                  ? [
+                      {
+                        kind: account.desiredEnabled
+                          ? ('disable' as const)
+                          : ('enable' as const),
+                        label: account.desiredEnabled
+                          ? uk.email.disable
+                          : uk.email.enable,
+                        onSelect: () =>
+                          void mutate('PATCH', {
+                            id: account.id,
+                            enabled: !account.desiredEnabled,
+                          }),
+                      },
+                    ]
+                  : []),
+                ...(['failed', 'stopped'].includes(account.status)
+                  ? [
+                      {
+                        kind: 'restart' as const,
+                        label: uk.whatsapp.restart,
+                        disabled: !configured,
+                        onSelect: () =>
+                          void mutate('POST', {
+                            action: 'restart',
+                            id: account.id,
+                          }),
+                      },
+                    ]
+                  : []),
+                ...(account.status !== 'stopped'
+                  ? [
+                      {
+                        kind: 'disconnect' as const,
+                        label: uk.whatsapp.disconnect,
+                        danger: true,
+                        onSelect: () =>
+                          void mutate('DELETE', { id: account.id }),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           </div>
         </section>
       ) : (

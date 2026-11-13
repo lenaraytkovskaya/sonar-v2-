@@ -105,6 +105,7 @@ it.skipIf(!enabled)(
         (a) => a.id === pending.id,
       )!;
       expect(account.enabled).toBe(true);
+      expect(account.fullAddress).toBe('+380501234567');
       expect(account.address).not.toContain('501234');
       expect(account).not.toHaveProperty('settings');
       expect(

@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
+import { RowActions } from './ui/row-actions';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import type { RegistryEntity } from '@sonar/core';
@@ -82,13 +84,16 @@ export function RegistryMatch({
                 >
                   {uk.registry.confirm}
                 </Button>
-                <Button
-                  variant="outline"
+                <RowActions
                   disabled={pending || !!active}
-                  onClick={() => void run('reject', candidate)}
-                >
-                  {uk.registry.reject}
-                </Button>
+                  actions={[
+                    {
+                      kind: 'hide',
+                      label: uk.registry.reject,
+                      onSelect: () => void run('reject', candidate),
+                    },
+                  ]}
+                />
               </div>
             </div>
           ))}
@@ -96,7 +101,9 @@ export function RegistryMatch({
       )}
       {task && !active && (
         <p className="text-sm text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
           {task.reason_uk && ` · ${task.reason_uk}`}
         </p>
       )}

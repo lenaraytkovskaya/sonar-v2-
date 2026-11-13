@@ -18,6 +18,7 @@ export interface WhatsAppAccount {
   id: string;
   name: string;
   address: string;
+  fullAddress?: string;
   dailyLimit: number;
   sentToday: number;
   enabled: boolean;
@@ -64,6 +65,7 @@ export async function listWhatsAppAccounts(): Promise<WhatsAppAccount[]> {
       accountStatus === 'paused' ? 'failed' : statusOf(settings.providerStatus);
     return {
       ...account,
+      fullAddress: account.address.startsWith('+') ? account.address : '',
       address: account.address.startsWith('+')
         ? `+${'•'.repeat(Math.max(4, account.address.length - 5))}${account.address.slice(-4)}`
         : '—',

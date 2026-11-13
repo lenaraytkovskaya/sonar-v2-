@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { uk } from '@/i18n/uk';
+import { ChannelIcon } from '@/components/channel-icon';
+import { StatusBadge } from '@/components/shared';
 import { validId } from '@/lib/api-access';
 import {
   channelLabel,
@@ -160,6 +162,10 @@ export default async function Page({
                 <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
               )}
               <p className="break-words">
+                <ChannelIcon
+                  channel={row.channel}
+                  value={row.contactValue ?? ''}
+                />{' '}
                 {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
                 {contactLabel(row.contactValue)}
               </p>
@@ -167,7 +173,11 @@ export default async function Page({
                 {row.lastMessage || uk.email.noMessages}
               </p>
               <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                {row.lastStatus && <span>{messageStatus(row.lastStatus)}</span>}
+                {row.lastStatus && (
+                  <StatusBadge status={row.lastStatus}>
+                    {messageStatus(row.lastStatus)}
+                  </StatusBadge>
+                )}
                 {row.lastAt && <LocalTime value={row.lastAt} />}
               </div>
             </Link>
