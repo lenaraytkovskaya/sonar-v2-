@@ -341,6 +341,25 @@ describe('Telegram transport', () => {
     });
     expect(switchDC).toHaveBeenCalledWith(4);
   });
+  it('never hangs: a stuck call times out and a stuck destroy is not awaited', async () => {
+    const stuck = mockClient(() => new Promise(() => {}));
+    const slow = createTelegramAdapter(
+      { ...credentials, timeoutMs: 50 },
+      stuck.factory,
+    );
+    await expect(slow.qrLogin('saved-session')).rejects.toMatchObject({
+      code: 'telegram_timeout',
+    });
+    const done = mockClient(
+      () => new Api.auth.LoginToken({ expires: 30, token: Buffer.from('t') }),
+    );
+    done.client.destroy.mockImplementation(() => new Promise(() => {}));
+    const started = Date.now();
+    await expect(done.adapter.qrLogin('')).resolves.toMatchObject({
+      status: 'qr',
+    });
+    expect(Date.now() - started).toBeLessThan(4500);
+  });
   it('asks for the 2FA password after a QR scan', async () => {
     const { adapter } = mockClient(() => {
       throw { errorMessage: 'SESSION_PASSWORD_NEEDED' };
