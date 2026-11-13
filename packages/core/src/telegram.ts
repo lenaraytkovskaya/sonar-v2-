@@ -497,6 +497,8 @@ export function createTelegramAdapter(
               const found = await client.invoke(
                 new Api.contacts.ResolvePhone({ phone: to.slice(1) }),
               );
+              if (!found?.users?.length)
+                console.info('[telegram] resolvePhone: no users');
               resolved = found?.users?.find(
                 (user): user is Api.User =>
                   user instanceof Api.User && !!user.accessHash,
@@ -504,6 +506,7 @@ export function createTelegramAdapter(
             } catch (error) {
               const code = (error as { errorMessage?: string }).errorMessage;
               if (code?.startsWith('FLOOD')) throw error;
+              console.info('[telegram] resolvePhone:', code ?? 'unknown error');
               // PHONE_NOT_OCCUPIED or a hidden number: fall back to importing the contact.
             }
           }
