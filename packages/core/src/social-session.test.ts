@@ -25,11 +25,11 @@ const raw = JSON.stringify([
 ]);
 const proxyUrls =
   'http://user:secret@proxy.example:8000,http://other.example:8000';
-function account() {
+function account(cookies = raw) {
   return {
     channel: 'instagram' as const,
     settings: {
-      cookiesEncrypted: encryptSocialCookies(raw, 'instagram', secret),
+      cookiesEncrypted: encryptSocialCookies(cookies, 'instagram', secret),
       proxyIndex: 0,
       proxyFingerprint: socialProxyFingerprint(
         socialSessionProxies(proxyUrls)[0]!,
@@ -38,6 +38,36 @@ function account() {
   };
 }
 describe('social session secrets and fixed proxy binding', () => {
+  it.each([
+    [null, 'Lax'],
+    [undefined, 'Lax'],
+    ['unspecified', 'Lax'],
+    ['strict', 'Strict'],
+    ['Strict', 'Strict'],
+    ['lax', 'Lax'],
+    ['Lax', 'Lax'],
+    ['none', 'None'],
+    ['None', 'None'],
+    ['no_restriction', 'None'],
+  ])('normalizes sameSite %s to %s', (sameSite, expected) => {
+    const cookies = JSON.stringify([{ ...JSON.parse(raw)[0], sameSite }]);
+    expect(normalizeSocialCookies(cookies, 'instagram')[0]?.sameSite).toBe(
+      expected,
+    );
+  });
+  it('roundtrips Cookie-Editor sameSite null through encryption and session resolution', () => {
+    const cookies = JSON.stringify([{ ...JSON.parse(raw)[0], sameSite: null }]);
+    const value = account(cookies);
+    expect(value.settings.cookiesEncrypted).not.toContain(
+      'private-session-cookie',
+    );
+    expect(resolveSocialSession(value, secret, proxyUrls).cookies).toEqual(
+      normalizeSocialCookies(raw, 'instagram').map((cookie) => ({
+        ...cookie,
+        sameSite: 'Lax',
+      })),
+    );
+  });
   it('normalizes Cookie-Editor JSON and authenticates encrypted session cookies', () => {
     const value = account();
     expect(value.settings.cookiesEncrypted).not.toContain(
@@ -77,6 +107,12 @@ describe('social session secrets and fixed proxy binding', () => {
       { secure: 'true' },
       { expirationDate: '123', session: false },
       { sameSite: 'unknown' },
+      { sameSite: '' },
+      { sameSite: 'toString' },
+      { sameSite: 0 },
+      { sameSite: false },
+      { sameSite: {} },
+      { sameSite: ['lax'] },
     ])
       expect(() =>
         normalizeSocialCookies(

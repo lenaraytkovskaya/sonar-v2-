@@ -94,9 +94,9 @@ export function normalizeSocialCookies(
       expires,
       httpOnly = false,
       secure = false,
-      sameSite = 'unspecified',
       session,
     } = cookie;
+    const sameSite = cookie.sameSite ?? 'unspecified';
     if (
       typeof name !== 'string' ||
       !name ||
