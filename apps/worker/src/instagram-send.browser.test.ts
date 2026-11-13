@@ -43,8 +43,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
         requests.push(`${url.hostname}${url.pathname}`);
-        if (url.pathname === '/fixture-rate-limit')
-          return route.fulfill({ status: 429, body: '{}' });
+        if (
+          url.pathname === '/api/v1/direct/fixture/' ||
+          url.pathname === '/blocked-resource'
+        )
+          return route.fulfill({
+            status: Number(options.backgroundStatus ?? 429),
+            body: '{}',
+          });
         if (options.navigationFailure) return route.abort('failed');
         if (
           url.hostname === 'www.instagram.com' &&
@@ -70,13 +76,52 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           throw Error(
             'https://user:synthetic-password@example.test/ cookie=synthetic-cookie Synthetic message',
           );
+        if (options.switchComposer)
+          await page.evaluate(() => {
+            const original = document.querySelector('[contenteditable]')!;
+            const other = original.cloneNode(true) as HTMLElement;
+            other.onkeydown = () => {
+              void (
+                window as unknown as {
+                  fixtureEvent: (event: string) => Promise<void>;
+                }
+              ).fixtureEvent('send:other_person');
+            };
+            original.replaceWith(other);
+          });
+        if (options.switchContainer)
+          await page.evaluate(
+            'document.querySelector("main").replaceWith(document.querySelector("main").cloneNode(true))',
+          );
+        if (options.hideRecipient)
+          await page.evaluate(
+            'document.querySelector("main header a").hidden = true',
+          );
         if (options.switchRecipient)
           await page.evaluate(
             'document.querySelector("main header a").href = "/other/"',
           );
         if (options.markerRateLimit)
           await page.evaluate(
-            'fetch("/fixture-rate-limit").then(response => response.status)',
+            'fetch("/api/v1/direct/fixture/").then(response => response.status)',
+          );
+        if (options.backgroundStatus)
+          await page.evaluate(
+            async ({ image, relevant }) => {
+              const url = relevant
+                ? '/api/v1/direct/fixture/'
+                : '/blocked-resource';
+              if (!image) return fetch(url).then((response) => response.status);
+              await new Promise((resolve) => {
+                const resource = new Image();
+                resource.onload = resource.onerror = resolve;
+                resource.src = 'https://unrelated.fixture.test' + url;
+              });
+            },
+            {
+              image: Boolean(options.backgroundImage),
+              relevant: Boolean(options.relevantResponse),
+            },
           );
         events.push('mark');
       });
@@ -105,6 +150,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { delayedDialog: true },
       { textarea: true },
       { body: 'Try again later' },
+      { outerDialog: true },
+      { innerDialog: true },
+      { outerMain: true },
     ])(
       'opens the profile action, confirms its recipient, ignores an unrelated last textbox and sends once (%j)',
       async (options) => {
@@ -138,7 +186,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(await formerComposer.getAttribute('id')).toBe('decoy');
         await formerComposer.fill('Synthetic message');
         expect(f.events).toEqual(['open']);
-        expect(f.inputs).toEqual(['decoy']);
+        await expect.poll(() => f.inputs).toEqual(['decoy']);
       } finally {
         await f.close();
       }
@@ -149,14 +197,18 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ['captcha', 'session', 'unconfirmed', 'session_invalid'],
       ['checkpoint', 'session', 'unconfirmed', 'session_invalid'],
       ['noSession', 'session', 'timeout', 'session_invalid'],
-      ['domRateLimit', 'session', 'restricted', 'session_invalid'],
-      ['rateLimit', 'navigation', 'http_429', 'session_invalid'],
+      ['domRateLimit', 'session', 'restricted', 'rate_limit'],
+      ['rateLimit', 'navigation', 'http_429', 'rate_limit'],
       ['wrongProfile', 'profile', 'timeout', 'unavailable'],
       ['noMessage', 'messagebutton', 'timeout', 'unavailable'],
       ['noDialog', 'dialog', 'timeout', 'unavailable'],
       ['wrongRecipient', 'dialog', 'timeout', 'unavailable'],
       ['sidebarOnlyRecipient', 'dialog', 'timeout', 'unavailable'],
       ['groupRecipient', 'dialog', 'mismatch', 'unavailable'],
+      ['splitPane', 'dialog', 'timeout', 'unavailable'],
+      ['hiddenRecipient', 'dialog', 'timeout', 'unavailable'],
+      ['staleHeader', 'dialog', 'unconfirmed', 'unavailable'],
+      ['ambiguousDialog', 'dialog', 'unconfirmed', 'unavailable'],
       ['noComposer', 'composer', 'timeout', 'unavailable'],
       ['duplicateComposer', 'composer', 'unexpected', 'unavailable'],
     ])(
@@ -193,7 +245,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
-    it.each(['markerFailure', 'switchRecipient'])(
+    it.each([
+      'markerFailure',
+      'switchRecipient',
+      'switchContainer',
+      'switchComposer',
+      'hideRecipient',
+    ])(
       'does not send when %s occurs during the durable marker',
       async (option) => {
         const f = await fixture({ [option]: true });
@@ -215,13 +273,52 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it.each(
+      [401, 403, 429].flatMap((backgroundStatus) =>
+        [false, true].map((backgroundImage) => ({
+          backgroundStatus,
+          backgroundImage,
+        })),
+      ),
+    )(
+      'ignores unrelated background response %j',
+      async ({ backgroundStatus, backgroundImage }) => {
+        const f = await fixture({ backgroundStatus, backgroundImage });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([401, 403, 429])(
+      'stops for relevant direct API HTTP %s',
+      async (backgroundStatus) => {
+        const f = await fixture({ backgroundStatus, relevantResponse: true });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: backgroundStatus === 429 ? 'rate_limit' : 'session_invalid',
+            stage: 'session',
+            errorKind: backgroundStatus === 429 ? 'http_429' : 'restricted',
+          });
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual(['open', 'mark']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it('stops at a locally simulated HTTP 429 during the durable marker without sending', async () => {
       const f = await fixture({ markerRateLimit: true });
       try {
         await expect(f.send()).rejects.toMatchObject({
-          code: 'session_invalid',
+          code: 'rate_limit',
           stage: 'session',
-          errorKind: 'restricted',
+          errorKind: 'http_429',
         });
         expect(f.mark).toHaveBeenCalledOnce();
         expect(f.events).toEqual(['open', 'mark']);

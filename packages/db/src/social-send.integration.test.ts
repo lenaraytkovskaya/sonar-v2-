@@ -186,6 +186,59 @@ it.skipIf(!enabled)(
       });
       expect(ambiguous).toHaveBeenCalledTimes(1);
       await reset();
+      // Rate limits pause the account without invalidating cookies or retrying attempts.
+      for (const attempted of [false, true]) {
+        await reset();
+        const limitedMessage = await create();
+        const rateLimited = vi.fn(async (_request, a) => {
+          if (attempted) await a!.beforeSend!();
+          throw new SocialSendError(
+            'rate_limit',
+            '[session/http_429] Instagram обмежив частоту запитів.',
+          );
+        });
+        expect(await send(limitedMessage.id, rateLimited)).toMatchObject({
+          status: 'paused',
+          reasonCode: 'social_rate_limit',
+        });
+        expect(
+          (
+            await sonarPool.query(
+              'select status,settings from channel_accounts where id=$1',
+              [account],
+            )
+          ).rows[0],
+        ).toMatchObject({
+          status: 'paused',
+          settings: { sessionStatus: 'valid' },
+        });
+        expect(
+          (
+            await sonarPool.query(
+              'select status,first_attempt_at from messages where id=$1',
+              [limitedMessage.id],
+            )
+          ).rows[0],
+        ).toEqual({
+          status: 'queued',
+          first_attempt_at: attempted ? now : null,
+        });
+        expect(await send(limitedMessage.id, rateLimited)).toMatchObject({
+          status: 'paused',
+          reasonCode: attempted
+            ? 'social_delivery_uncertain'
+            : 'account_disabled',
+        });
+        if (attempted) {
+          await reset();
+          expect(await send(limitedMessage.id, rateLimited)).toMatchObject({
+            status: 'paused',
+            reasonCode: 'social_delivery_uncertain',
+          });
+        }
+        expect(rateLimited).toHaveBeenCalledOnce();
+      }
+      await reset();
       const offline = await create();
       expect(
         await send(offline.id, async () => {

@@ -10,6 +10,12 @@
 <script>
   const f = window.fixtureOptions || {};
   const main = document.querySelector('main');
+  if (f.outerDialog || f.outerMain) {
+    const outer = document.createElement('div');
+    outer.setAttribute('role', f.outerDialog ? 'dialog' : 'main');
+    main.replaceWith(outer);
+    outer.append(main);
+  }
   if (f.checkpoint) history.replaceState({}, '', '/challenge/');
   if (f.noSession) document.querySelector('nav').remove();
   if (f.wrongProfile) main.querySelector('h2').textContent = 'other';
@@ -32,6 +38,31 @@
         main.innerHTML = `<header><a href="/${f.wrongRecipient ? 'other' : 'fixture_company'}/">Recipient</a></header>
       <section id="messages"></section>
       ${f.noComposer ? '<textarea placeholder="Search" id="internal-decoy"></textarea>' : f.textarea ? '<textarea placeholder="Повідомлення..."></textarea>' : '<div contenteditable="true" role="textbox" aria-label="Message"></div>'}`;
+        if (f.innerDialog || f.splitPane) {
+          const active = document.createElement('div');
+          active.setAttribute('role', 'dialog');
+          if (f.splitPane) {
+            active.innerHTML = '<header><strong>other_person</strong></header>';
+            active.append(...Array.from(main.children).slice(1));
+          } else active.append(...main.childNodes);
+          main.append(active);
+        }
+        if (f.hiddenRecipient) {
+          main.querySelector('header a').hidden = true;
+          main
+            .querySelector('header')
+            .insertAdjacentHTML('beforeend', '<strong>other_person</strong>');
+        }
+        if (f.staleHeader)
+          main.insertAdjacentHTML(
+            'afterbegin',
+            '<header><strong>other_person</strong></header>',
+          );
+        if (f.ambiguousDialog)
+          main.insertAdjacentHTML(
+            'afterend',
+            '<div role="dialog"><header><a href="/fixture_company/">Recipient</a></header><textarea placeholder="Message"></textarea></div>',
+          );
         if (f.sidebarOnlyRecipient) {
           main.querySelector('header').innerHTML =
             '<span>Unconfirmed recipient</span>';

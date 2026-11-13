@@ -1180,9 +1180,18 @@ export async function sendEmailMessage(
               "update channel_accounts set status='paused',settings=settings || jsonb_build_object('sessionStatus','invalid','reasonUk',$2::text) where id=$1",
               [account.id, 'Увійдіть знову (оновіть cookies)'],
             );
+          if (code === 'rate_limit')
+            await tx.query(
+              "update channel_accounts set status='paused',settings=settings || jsonb_build_object('reasonUk',$2::text) where id=$1",
+              [account.id, reason],
+            );
           await tx.query(
             "update messages set status=case when $3 then 'queued' else 'failed' end,reason_uk=$2 where id=$1",
-            [messageId, reason, code === 'session_invalid'],
+            [
+              messageId,
+              reason,
+              code === 'session_invalid' || code === 'rate_limit',
+            ],
           );
         });
         return terminal(

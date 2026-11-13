@@ -64,19 +64,23 @@ function stagedFailure(
   errorKind: SendErrorKind,
   code: SocialSendError['code'] = 'unavailable',
 ) {
-  const reason = {
-    navigation: 'Не вдалося відкрити сторінку Instagram.',
-    session:
-      'Сесію Instagram не підтверджено. Перевірте вхід та обмеження акаунта.',
-    profile: 'Профіль одержувача Instagram не підтверджено.',
-    messagebutton: 'Кнопку «Повідомлення» у профілі Instagram не підтверджено.',
-    dialog: 'Діалог Instagram з потрібним одержувачем не підтверджено.',
-    composer:
-      'Поле повідомлення в підтвердженому діалозі Instagram недоступне або неоднозначне.',
-    attempt: 'Не вдалося підтвердити безпечну спробу надсилання.',
-    confirmation:
-      'Доставку Instagram не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично.',
-  }[stage];
+  const reason =
+    code === 'rate_limit'
+      ? 'Instagram обмежив частоту запитів. Акаунт призупинено; перевірте обмеження перед ручним відновленням.'
+      : {
+          navigation: 'Не вдалося відкрити сторінку Instagram.',
+          session:
+            'Сесію Instagram не підтверджено. Перевірте вхід та обмеження акаунта.',
+          profile: 'Профіль одержувача Instagram не підтверджено.',
+          messagebutton:
+            'Кнопку «Повідомлення» у профілі Instagram не підтверджено.',
+          dialog: 'Діалог Instagram з потрібним одержувачем не підтверджено.',
+          composer:
+            'Поле повідомлення в підтвердженому діалозі Instagram недоступне або неоднозначне.',
+          attempt: 'Не вдалося підтвердити безпечну спробу надсилання.',
+          confirmation:
+            'Доставку Instagram не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично.',
+        }[stage];
   // Only allowlisted stage/kind values are retained, never Playwright messages or URLs.
   return Object.assign(
     new SocialSendError(code, `[${stage}/${errorKind}] ${reason}`),
@@ -91,17 +95,30 @@ async function instagramDialog(page: Page, handle: string) {
   await page.waitForURL(
     /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
   );
-  // A sidebar profile link is not evidence of the active recipient.
+  // Only the innermost visible conversation boundary may own its header/composer.
+  // Ancestor headers, sidebar links and hidden recipients cannot identify a chat.
+  const boundaries =
+    ':is([role="dialog"], main, [role="main"]):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"]) *)';
+  const containers = page
+    .locator(boundaries)
+    .filter({ hasNot: page.locator(boundaries) });
   const recipient = page
     .locator(conversationHeaders)
-    .locator(`a[href="/${handle}/" i]`);
-  const dialog = page
-    .locator('[role="dialog"]:visible, main:visible, [role="main"]:visible')
-    .filter({ has: recipient });
-  await dialog.waitFor({ state: 'visible' });
-  const links = await dialog
-    .locator(conversationHeaders)
-    .locator('a[href]')
+    .locator(
+      `a:visible:is([href="/${handle}/" i], [href="https://www.instagram.com/${handle}/" i], [href="https://instagram.com/${handle}/" i])`,
+    );
+  const matching = containers.filter({ has: recipient });
+  if ((await matching.count()) > 1)
+    throw stagedFailure('dialog', 'unconfirmed');
+  await matching.waitFor({ state: 'visible' });
+  if ((await containers.count()) !== 1)
+    throw stagedFailure('dialog', 'unconfirmed');
+  const dialog = containers;
+  const headers = dialog.locator(conversationHeaders);
+  if ((await headers.count()) !== 1)
+    throw stagedFailure('dialog', 'unconfirmed');
+  const links = await headers
+    .locator('a[href]:visible')
     .evaluateAll((elements) =>
       elements.map((element) => element.getAttribute('href')),
     );
@@ -126,14 +143,30 @@ async function sendInstagram(
 ) {
   let stage: SendStage = 'navigation';
   let attempted = false;
-  let restricted = false;
+  let restriction: 'session_invalid' | 'rate_limit' | undefined;
   page.on('response', (response) => {
-    if ([401, 403, 429].includes(response.status())) restricted = true;
+    if (![401, 403, 429].includes(response.status())) return;
+    const request = response.request();
+    const url = new URL(response.url());
+    const document =
+      request.isNavigationRequest() && request.frame() === page.mainFrame();
+    const directApi =
+      ['xhr', 'fetch'].includes(request.resourceType()) &&
+      /^\/api\/v1\/(?:direct\/|accounts\/current_user\/)/.test(url.pathname);
+    if (url.origin !== 'https://www.instagram.com' || (!document && !directApi))
+      return;
+    if (response.status() !== 429) restriction = 'session_invalid';
+    else restriction ??= 'rate_limit';
   });
   const assertSession = async () => {
     const previous = stage;
     stage = 'session';
-    if (restricted) throw stagedFailure(stage, 'restricted', 'session_invalid');
+    if (restriction)
+      throw stagedFailure(
+        stage,
+        restriction === 'rate_limit' ? 'http_429' : 'restricted',
+        restriction,
+      );
     await assertSocialSession(page, 'instagram');
     if (
       await page
@@ -144,7 +177,7 @@ async function sendInstagram(
         })
         .count()
     )
-      throw stagedFailure('session', 'restricted', 'session_invalid');
+      throw stagedFailure('session', 'restricted', 'rate_limit');
     stage = previous;
   };
   try {
@@ -156,9 +189,11 @@ async function sendInstagram(
       throw stagedFailure(
         stage,
         response.status() === 429 ? 'http_429' : 'http_error',
-        [401, 403, 429].includes(response.status())
-          ? 'session_invalid'
-          : 'unavailable',
+        response.status() === 429
+          ? 'rate_limit'
+          : [401, 403].includes(response.status())
+            ? 'session_invalid'
+            : 'unavailable',
       );
     await assertSession();
     stage = 'profile';
@@ -184,18 +219,40 @@ async function sendInstagram(
     stage = 'dialog';
     const dialog = await instagramDialog(page, target.handle);
     const dialogUrl = page.url();
-    const verifyDialog = async () => {
-      await assertSession();
-      stage = 'dialog';
-      await instagramDialog(page, target.handle);
-      if (page.url() !== dialogUrl) throw stagedFailure(stage, 'mismatch');
-    };
+    const dialogNode = await dialog.elementHandle();
     stage = 'composer';
     const composer = dialog
       .getByRole('textbox', { name: composerLabel })
       .or(dialog.getByPlaceholder(composerLabel))
-      .filter({ visible: true });
-    await composer.fill(body);
+      .filter({ visible: true })
+      .and(
+        page.locator(
+          ':not(:is(aside, nav, header, [role="banner"], [role="complementary"], [role="navigation"]) *)',
+        ),
+      );
+    const composerNode = await composer.elementHandle();
+    if (!composerNode) throw stagedFailure(stage, 'unconfirmed');
+    await composerNode.fill(body);
+    const verifyDialog = async () => {
+      await assertSession();
+      stage = 'dialog';
+      const current = await instagramDialog(page, target.handle);
+      if (
+        !(await current.evaluate(
+          (node, original) => node === original,
+          dialogNode,
+        )) ||
+        page.url() !== dialogUrl
+      )
+        throw stagedFailure(stage, 'mismatch');
+      if (
+        !(await composer.evaluate(
+          (node, original) => node === original,
+          composerNode,
+        ))
+      )
+        throw stagedFailure('composer', 'mismatch');
+    };
     const ownMessages = dialog
       .locator(outgoing.instagram)
       .filter({ has: page.getByText(body, { exact: true }) });
@@ -206,7 +263,7 @@ async function sendInstagram(
     attempted = true;
     await verifyDialog();
     stage = 'confirmation';
-    await composer.press('Enter');
+    await composerNode.press('Enter');
     await ownMessages
       .nth(count)
       .waitFor({ state: 'visible', timeout: timeoutMs });
@@ -229,7 +286,10 @@ async function sendInstagram(
         error.errorKind === 'timeout')
         ? 'timeout'
         : 'unexpected';
-    if (error instanceof SocialSendError && error.code === 'session_invalid')
+    if (
+      error instanceof SocialSendError &&
+      ['session_invalid', 'rate_limit'].includes(error.code)
+    )
       throw 'stage' in error
         ? error
         : stagedFailure(
