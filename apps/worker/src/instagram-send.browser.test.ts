@@ -135,7 +135,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         adapter.send(
           { id: 'fixture', channel: 'instagram', settings: {} },
           { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
-          250,
+          Number(options.timeoutMs ?? 250),
           'https://instagram.com/fixture_company/',
           typeof options.body === 'string' ? options.body : 'Synthetic message',
           mark,
@@ -188,7 +188,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { existingMenu: true, harmlessMenu: true, sanitizedMenu: true },
       { existingMenu: true, sanitizedMenu: true },
       { existingMenu: true, controls: true, menuDialog: true },
+      { existingMenu: true, menuDialog: true, bodyScrollLock: true },
+      { existingMenu: true, menuDialog: true, menuAncestorAriaHidden: true },
+      {
+        existingMenu: true,
+        sanitizedMenu: true,
+        bodyScrollLock: true,
+        menuAncestorAriaHidden: true,
+      },
       { reuseHidden: true, controls: true },
+      { existingMenu: true, delayedActionChange: 'enable', timeoutMs: 1000 },
     ])('uses the profile overflow portal safely (%j)', async (options) => {
       const f = await fixture({ overflow: true, ...options });
       try {
@@ -355,6 +364,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           expect(error.reasonUk).not.toMatch(
             /fixture_company|Synthetic message|https:|cookie/i,
           );
+          expect(f.events).toEqual(['options']);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['block', 'label', 'move', 'role', 'popup'])(
+      'cancels the pinned action if %s changes while click waits for enabled',
+      async (change) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          delayedActionChange: change,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            stage: 'messagebutton',
+            errorKind: 'unconfirmed',
+            reasonUk: expect.stringContaining('[branch=popup_changed;'),
+          });
           expect(f.events).toEqual(['options']);
           expect(f.inputs).toEqual([]);
           expect(f.mark).not.toHaveBeenCalled();

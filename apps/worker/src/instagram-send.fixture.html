@@ -167,6 +167,9 @@
           (button) => (button.onclick = () => window.fixtureEvent('decoy')),
         );
       const existing = document.querySelector('[role="menu"]');
+      const menuAncestor = document.createElement('div');
+      existing.replaceWith(menuAncestor);
+      menuAncestor.append(existing);
       if (f.harmlessMenu) existing.innerHTML = '<span>Navigation</span>';
       if (f.dangerousOverlay) {
         existing.setAttribute('role', 'dialog');
@@ -219,6 +222,28 @@
             '<button>Send message</button>',
           );
         document.body.append(popup);
+        if (f.bodyScrollLock) document.body.style.overflow = 'hidden';
+        if (f.menuAncestorAriaHidden)
+          menuAncestor.setAttribute('aria-hidden', 'true');
+        if (f.delayedActionChange) {
+          action.disabled = true;
+          if (f.delayedActionChange !== 'enable')
+            action.onclick = (event) => {
+              event.preventDefault();
+              window.fixtureEvent(`unsafe:${f.delayedActionChange}`);
+            };
+          setTimeout(() => {
+            if (f.delayedActionChange === 'block')
+              action.textContent = 'Заблокувати';
+            if (f.delayedActionChange === 'label')
+              action.setAttribute('aria-label', 'Заблокувати');
+            if (f.delayedActionChange === 'move') existing.append(action);
+            if (f.delayedActionChange === 'role')
+              action.setAttribute('role', 'checkbox');
+            if (f.delayedActionChange === 'popup') popup.id = 'foreign-popup';
+            action.disabled = false;
+          }, 150);
+        }
         if (f.duplicateMenu)
           popup.insertAdjacentHTML('afterend', popup.outerHTML);
         if (f.menuProfileMismatch) history.replaceState({}, '', '/other/');

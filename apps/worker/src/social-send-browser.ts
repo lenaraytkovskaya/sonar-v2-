@@ -281,20 +281,19 @@ async function sendInstagram(
         const controls = node.getAttribute('aria-controls');
         let changed = false;
         let openedPopup: Element | undefined;
-        const observer = new MutationObserver((records) => {
+        const recordChanges = (records: MutationRecord[]) => {
           changed ||= records.some((record) =>
             baseline.some(
               (old) =>
                 old === record.target ||
                 old.contains(record.target) ||
-                (record.type === 'attributes' &&
-                  (record.target as Element).contains(old)) ||
                 Array.from(record.removedNodes).some((removed) =>
                   removed.contains(old),
                 ),
             ),
           );
-        });
+        };
+        const observer = new MutationObserver(recordChanges);
         observer.observe(document, {
           subtree: true,
           childList: true,
@@ -318,6 +317,8 @@ async function sendInstagram(
             (element) => visible(element) && !baseline.includes(element),
           );
         const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
+          // Event dispatch can precede the observer callback in the same turn.
+          recordChanges(observer.takeRecords());
           if (initial) return initial;
           if (
             changed ||
@@ -352,7 +353,76 @@ async function sendInstagram(
           openedPopup = popup;
           return 'ready';
         };
-        return { initial, inspect, candidates, observer };
+        let blocked = false;
+        let removeGuard = () => {};
+        const guardAction = (popup: Element, action: Element) => {
+          const id = popup.id;
+          // Freeze the approved action's markup, allowing only enabled-state
+          // transitions. This also covers descendant and ARIA label/role changes.
+          const markup = () => {
+            const copy = action.cloneNode(true) as Element;
+            copy.removeAttribute('disabled');
+            copy.removeAttribute('aria-disabled');
+            const labelled = [
+              action,
+              ...Array.from(action.querySelectorAll('[aria-labelledby]')),
+            ];
+            return JSON.stringify([
+              copy.outerHTML,
+              labelled.map((element) =>
+                element
+                  .getAttribute('aria-labelledby')
+                  ?.split(/\s+/)
+                  .map((id) => document.getElementById(id)?.outerHTML),
+              ),
+            ]);
+          };
+          const approved = markup();
+          const guard = (event: Event) => {
+            if (!event.composedPath().includes(action)) return;
+            blocked ||=
+              inspect() !== 'ready' ||
+              candidates()[0] !== popup ||
+              popup.id !== id ||
+              !popup.contains(action) ||
+              action.matches(':disabled') ||
+              action.closest(
+                '[aria-disabled="true"], [aria-hidden="true"], [inert]',
+              ) !== null ||
+              markup() !== approved;
+            if (blocked) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          };
+          const events = [
+            'pointerdown',
+            'mousedown',
+            'pointerup',
+            'mouseup',
+            'click',
+          ];
+          for (const event of events)
+            window.addEventListener(event, guard, {
+              capture: true,
+              passive: false,
+            });
+          removeGuard = () => {
+            for (const event of events)
+              window.removeEventListener(event, guard, true);
+          };
+        };
+        return {
+          initial,
+          inspect,
+          candidates,
+          guardAction,
+          wasBlocked: () => blocked,
+          cleanup: () => {
+            observer.disconnect();
+            removeGuard();
+          },
+        };
       });
       try {
         const initial = await snapshot.evaluate((state) => state.initial);
@@ -394,8 +464,8 @@ async function sendInstagram(
         const popup = await snapshot.evaluateHandle(
           (state) => state.candidates()[0]!,
         );
-        // The identity is now fixed; neither the popup nor action can retarget
-        // to a stale/foreign menu while Playwright waits for actionability.
+        // Pin identities here; the dispatch guard below also checks provenance
+        // after Playwright's actionability wait, before page handlers can run.
         const actions = page
           .getByRole('menuitem', { name: menuMessageLabel })
           .or(page.getByRole('button', { name: menuMessageLabel }))
@@ -417,21 +487,34 @@ async function sendInstagram(
         await assertPopup();
         if (
           !(await actions.evaluateAll(
-            (nodes, { state, popup, action }) =>
-              state.inspect() === 'ready' &&
-              state.candidates()[0] === popup &&
-              nodes.filter((node) => popup.contains(node)).length === 1 &&
-              popup.contains(action) &&
-              nodes.some((node) => node === action),
+            (nodes, { state, popup, action }) => {
+              const pinned = nodes.find((node) => node === action);
+              if (
+                state.inspect() !== 'ready' ||
+                state.candidates()[0] !== popup ||
+                nodes.filter((node) => popup.contains(node)).length !== 1 ||
+                !popup.contains(action) ||
+                !pinned
+              )
+                return false;
+              state.guardAction(popup, pinned);
+              return true;
+            },
             { state: snapshot, popup, action: matching[0]! },
           ))
         )
           throw await messageButtonFailure('popup_changed', page, options);
-        await matching[0]!.click();
+        let clickError: unknown;
+        try {
+          await matching[0]!.click();
+        } catch (error) {
+          clickError = error;
+        }
+        if (await snapshot.evaluate((state) => state.wasBlocked()))
+          throw await messageButtonFailure('popup_changed', page, options);
+        if (clickError) throw clickError;
       } finally {
-        await snapshot
-          .evaluate((state) => state.observer.disconnect())
-          .catch(() => {});
+        await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
         await snapshot.dispose();
       }
     }
