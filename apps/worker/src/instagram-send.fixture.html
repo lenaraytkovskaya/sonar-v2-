@@ -127,9 +127,27 @@
           'beforeend',
           '<button id="follow">Стежити</button><button id="options"><svg role="img" aria-label="Options"><title>Options</title></svg></button>',
         );
-      const options = document.querySelector('#options');
-      document.querySelector('#follow').onclick = () =>
-        window.fixtureEvent('unsafe:follow');
+      let options = document.querySelector('#options');
+      let capturedPopup;
+      if (f.sanitizedMenu) {
+        const template = document.createElement('template');
+        template.innerHTML = f.sanitizedMarkup;
+        const capturedHeader = template.content.querySelector('header');
+        main.querySelector('header').replaceWith(capturedHeader);
+        options = capturedHeader.querySelector('[role="button"]');
+        capturedPopup = template.content.querySelector('[role="dialog"]');
+      }
+      options.setAttribute(
+        'aria-haspopup',
+        f.menuDialog || f.sanitizedMenu ? 'dialog' : 'menu',
+      );
+      options.setAttribute(
+        'aria-expanded',
+        f.alreadyExpanded ? 'true' : 'false',
+      );
+      if (f.controls) options.setAttribute('aria-controls', 'profile-popup');
+      const follow = document.querySelector('#follow');
+      if (follow) follow.onclick = () => window.fixtureEvent('unsafe:follow');
       if (f.unknownOptions) options.innerHTML = '…';
       if (f.wrongOptionsScope) document.body.append(options);
       if (f.duplicateOptions)
@@ -141,41 +159,71 @@
       document.body.insertAdjacentHTML(
         'beforeend',
         `<aside><button>Options</button><button>Надіслати повідомлення</button></aside>
-        <div role="menu" ${f.existingMenu ? '' : 'hidden'}><button>Надіслати повідомлення</button></div>`,
+        <div role="menu" ${f.existingMenu || f.dangerousOverlay ? '' : 'hidden'}><button>Надіслати повідомлення</button></div>`,
       );
       document
         .querySelectorAll('aside button, [role="menu"] button')
         .forEach(
           (button) => (button.onclick = () => window.fixtureEvent('decoy')),
         );
+      const existing = document.querySelector('[role="menu"]');
+      if (f.harmlessMenu) existing.innerHTML = '<span>Navigation</span>';
+      if (f.dangerousOverlay) {
+        existing.setAttribute('role', 'dialog');
+        existing.insertAdjacentHTML('beforeend', '<button>Cancel</button>');
+        existing.querySelector('button:last-child').onclick = () =>
+          window.fixtureEvent('unsafe:dismiss');
+      }
       options.onclick = async () => {
         window.fixtureEvent('options');
-        const popup = document.createElement('div');
-        popup.setAttribute('role', f.menuDialog ? 'dialog' : 'menu');
-        popup.innerHTML = `<button>Заблокувати</button><button>Обмежити</button><button>Поскаржитися</button><button>Поширити в...</button><button>Про цей обліковий запис</button>`;
+        if (!f.noExpandedTransition)
+          options.setAttribute('aria-expanded', 'true');
+        const popup =
+          capturedPopup ||
+          (f.reuseHidden || f.reuseVisible
+            ? existing
+            : document.createElement('div'));
+        popup.hidden = false;
+        popup.id = f.wrongControls ? 'foreign-popup' : 'profile-popup';
+        popup.setAttribute(
+          'role',
+          f.menuDialog || f.sanitizedMenu ? 'dialog' : 'menu',
+        );
+        if (f.wrongPopupRole) popup.setAttribute('role', 'dialog');
+        if (!capturedPopup)
+          popup.innerHTML = `<button>Заблокувати</button><button>Обмежити</button><button>Поскаржитися</button><button>Поширити в...</button><button>Про цей обліковий запис</button>`;
         popup
           .querySelectorAll('button')
           .forEach(
             (button) =>
               (button.onclick = () => window.fixtureEvent('unsafe:menu')),
           );
-        const action = document.createElement(f.menuLink ? 'a' : 'button');
+        const action = capturedPopup
+          ? capturedPopup.querySelector('[role="button"]')
+          : document.createElement(f.menuLink ? 'a' : 'button');
         if (f.menuLink) action.href = '#';
         if (f.menuItem) action.setAttribute('role', 'menuitem');
-        action.textContent = 'Надіслати повідомлення';
+        if (!capturedPopup) action.textContent = 'Надіслати повідомлення';
         action.onclick = (event) => {
           popup.remove();
           openConversation(event);
         };
         if (f.noMenuMessage || f.wrongMenu) action.hidden = true;
-        popup.append(action);
+        if (!capturedPopup) popup.append(action);
         if (f.duplicateMenuAction)
           popup.insertAdjacentHTML('beforeend', action.outerHTML);
         if (f.menuRateLimit) await fetch('/api/v1/direct/fixture/');
+        if (f.mutateExisting)
+          existing.insertAdjacentHTML(
+            'beforeend',
+            '<button>Send message</button>',
+          );
         document.body.append(popup);
         if (f.duplicateMenu)
           popup.insertAdjacentHTML('afterend', popup.outerHTML);
         if (f.menuProfileMismatch) history.replaceState({}, '', '/other/');
+        if (f.menuRecipientMismatch)
+          main.querySelector('h1, h2').textContent = 'other';
       };
     }
   }

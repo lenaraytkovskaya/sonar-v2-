@@ -41,7 +41,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         inputs.push(value);
       });
       await context.addInitScript({
-        content: `window.fixtureOptions = ${JSON.stringify(options)}; document.addEventListener('input', event => window.fixtureInput(event.target.id || event.target.getAttribute('role') || event.target.tagName.toLowerCase()));`,
+        content: `window.fixtureOptions = ${JSON.stringify({ ...options, sanitizedMarkup: options.sanitizedMenu ? capturedMenu : undefined })}; document.addEventListener('input', event => window.fixtureInput(event.target.id || event.target.getAttribute('role') || event.target.tagName.toLowerCase()));`,
       });
       // Every request is fulfilled or aborted locally; DNS is also disabled at launch.
       await context.route('**/*', async (route) => {
@@ -184,6 +184,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { menuItem: true },
       { menuLink: true },
       { directAvailable: true },
+      { existingMenu: true },
+      { existingMenu: true, harmlessMenu: true, sanitizedMenu: true },
+      { existingMenu: true, sanitizedMenu: true },
+      { existingMenu: true, controls: true, menuDialog: true },
+      { reuseHidden: true, controls: true },
     ])('uses the profile overflow portal safely (%j)', async (options) => {
       const f = await fixture({ overflow: true, ...options });
       try {
@@ -207,7 +212,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ['wrongOptionsScope', 'messagebutton'],
       ['unknownOptions', 'messagebutton'],
       ['duplicateOptions', 'messagebutton'],
-      ['existingMenu', 'messagebutton'],
+      ['dangerousOverlay', 'messagebutton'],
+      ['alreadyExpanded', 'messagebutton'],
+      ['noExpandedTransition', 'messagebutton'],
+      ['wrongPopupRole', 'messagebutton'],
+      ['reuseHidden', 'messagebutton'],
+      ['menuRecipientMismatch', 'messagebutton'],
       ['wrongMenu', 'messagebutton'],
       ['duplicateMenu', 'messagebutton'],
       ['duplicateMenuAction', 'messagebutton'],
@@ -229,7 +239,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'wrongOptionsScope',
             'unknownOptions',
             'duplicateOptions',
-            'existingMenu',
+            'dangerousOverlay',
+            'alreadyExpanded',
           ].includes(option!)
             ? []
             : ['wrongRecipient', 'groupRecipient'].includes(option!)
@@ -284,8 +295,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     });
     it.each([
       [
-        'existingMenu',
-        '[branch=preexisting_popup; menus=1; dialogs=0; options=1]',
+        'dangerousOverlay',
+        '[branch=preexisting_popup; menus=0; dialogs=1; options=1]',
       ],
       [
         'outerDialog',
@@ -312,6 +323,39 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             /fixture_company|Synthetic message|https:|cookie/i,
           );
           expect(f.events).toEqual([]);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      ['reuseVisible', 'popup_changed'],
+      ['mutateExisting', 'popup_changed'],
+      ['duplicateMenu', 'popup_ambiguous'],
+      ['wrongControls', 'popup_association'],
+    ])(
+      'rejects stale/foreign popup provenance %s without selecting a decoy',
+      async (option, branch) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          controls: true,
+          [option!]: true,
+        });
+        try {
+          const error = await f.send().catch((error) => error);
+          expect(error).toMatchObject({
+            code: 'unavailable',
+            stage: 'messagebutton',
+            errorKind: 'unconfirmed',
+            reasonUk: expect.stringContaining(`[branch=${branch};`),
+          });
+          expect(error.reasonUk).not.toMatch(
+            /fixture_company|Synthetic message|https:|cookie/i,
+          );
+          expect(f.events).toEqual(['options']);
           expect(f.inputs).toEqual([]);
           expect(f.mark).not.toHaveBeenCalled();
         } finally {
