@@ -280,13 +280,13 @@ export function CompanyChat({
         const conversationId =
           source.messages.find((row) => row.id === fields.messageId)
             ?.conversationId ??
-          source.conversations
-            .filter(
-              (row) =>
-                row.contactId === fields.contactId &&
-                row.campaignId === fields.campaignId,
-            )
-            .at(-1)?.id;
+          // Conversations come newest first; a phone can have both a call and a messenger dialog.
+          source.conversations.find(
+            (row) =>
+              row.contactId === fields.contactId &&
+              row.campaignId === fields.campaignId &&
+              (action !== 'call' || row.channel === 'call'),
+          )?.id;
         router.push(
           conversationId ? `/inbox?conversation=${conversationId}` : '/inbox',
         );
