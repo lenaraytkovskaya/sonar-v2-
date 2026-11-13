@@ -887,7 +887,11 @@ export async function sendEmailMessage(
           'Повідомлення не готове до надсилання.',
         ),
       );
-    if (m.channels?.[channel] !== true || m.campaign_status !== 'active')
+    // Social sends are human replies only; campaign channels configure outreach.
+    if (
+      (channel !== 'social' && m.channels?.[channel] !== true) ||
+      m.campaign_status !== 'active'
+    )
       return finish(
         terminal(
           'paused',
