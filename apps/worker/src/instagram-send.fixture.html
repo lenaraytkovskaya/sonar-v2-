@@ -211,6 +211,40 @@
           popup.remove();
           openConversation(event);
         };
+        if (f.interactionStyle)
+          action.addEventListener(f.interactionStyle, () => {
+            action.classList.add('interaction-style');
+            action.style.color = 'red';
+            // React may wrap the same label while applying interaction styling.
+            action.innerHTML = '<span>Надіслати повідомлення</span>';
+            existing.classList.add('background-style');
+          });
+        if (f.documentCaptureChange) {
+          document.addEventListener(
+            'click',
+            (event) => {
+              if (!event.composedPath().includes(action)) return;
+              changeAction(f.documentCaptureChange);
+              window.fixtureEvent('document-capture');
+            },
+            true,
+          );
+          action.onclick = (event) => {
+            event.preventDefault();
+            window.fixtureEvent('unsafe:click');
+          };
+        }
+        function changeAction(change) {
+          if (change === 'block') action.textContent = 'Заблокувати';
+          if (change === 'label')
+            action.setAttribute('aria-label', 'Заблокувати');
+          if (change === 'move') existing.append(action);
+          if (change === 'role') action.setAttribute('role', 'checkbox');
+          if (change === 'popup') popup.id = 'foreign-popup';
+          if (change === 'replace') action.replaceWith(action.cloneNode(true));
+          if (change === 'disable') action.disabled = true;
+          if (change === 'hide') action.style.visibility = 'hidden';
+        }
         if (f.noMenuMessage || f.wrongMenu) action.hidden = true;
         if (!capturedPopup) popup.append(action);
         if (f.duplicateMenuAction)
@@ -233,14 +267,7 @@
               window.fixtureEvent(`unsafe:${f.delayedActionChange}`);
             };
           setTimeout(() => {
-            if (f.delayedActionChange === 'block')
-              action.textContent = 'Заблокувати';
-            if (f.delayedActionChange === 'label')
-              action.setAttribute('aria-label', 'Заблокувати');
-            if (f.delayedActionChange === 'move') existing.append(action);
-            if (f.delayedActionChange === 'role')
-              action.setAttribute('role', 'checkbox');
-            if (f.delayedActionChange === 'popup') popup.id = 'foreign-popup';
+            changeAction(f.delayedActionChange);
             action.disabled = false;
           }, 150);
         }

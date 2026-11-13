@@ -279,27 +279,45 @@ async function sendInstagram(
         const role = node.getAttribute('aria-haspopup');
         const expected = role === 'true' ? 'menu' : role;
         const controls = node.getAttribute('aria-controls');
-        let changed = false;
-        let openedPopup: Element | undefined;
-        const recordChanges = (records: MutationRecord[]) => {
-          changed ||= records.some((record) =>
-            baseline.some(
-              (old) =>
-                old === record.target ||
-                old.contains(record.target) ||
-                Array.from(record.removedNodes).some((removed) =>
-                  removed.contains(old),
+        // Keep only semantics in page memory, never serialized DOM. CSS classes,
+        // inline styling and decorative wrappers may change during interaction.
+        const semantic = (element: Element) => {
+          const text = (value: string | null) =>
+            value?.replace(/\s+/g, ' ').trim();
+          return JSON.stringify([
+            element.tagName,
+            element.id,
+            element.getAttribute('role'),
+            element.getAttribute('href'),
+            text(element.textContent),
+            [
+              element,
+              ...Array.from(
+                element.querySelectorAll(
+                  '[role], [aria-label], [aria-labelledby], [aria-hidden], a[href]',
                 ),
-            ),
-          );
+              ),
+            ].map((label) => [
+              label.getAttribute('role'),
+              label.getAttribute('href'),
+              label.getAttribute('aria-hidden'),
+              label.getAttribute('aria-label'),
+              label
+                .getAttribute('aria-labelledby')
+                ?.split(/\s+/)
+                .map((id) => {
+                  const referenced = document.getElementById(id);
+                  return [
+                    id,
+                    text(referenced?.textContent ?? null),
+                    referenced?.getAttribute('aria-label'),
+                  ];
+                }),
+            ]),
+          ]);
         };
-        const observer = new MutationObserver(recordChanges);
-        observer.observe(document, {
-          subtree: true,
-          childList: true,
-          attributes: true,
-          characterData: true,
-        });
+        const baselineSemantics = baseline.map(semantic);
+        let openedPopup: Element | undefined;
         const initial: PopupFailureBranch | null = baseline.some(
           (old) =>
             old.getAttribute('role') !== 'menu' ||
@@ -317,12 +335,14 @@ async function sendInstagram(
             (element) => visible(element) && !baseline.includes(element),
           );
         const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
-          // Event dispatch can precede the observer callback in the same turn.
-          recordChanges(observer.takeRecords());
           if (initial) return initial;
           if (
-            changed ||
-            baseline.some((old) => !old.isConnected || !visible(old))
+            baseline.some(
+              (old, index) =>
+                !old.isConnected ||
+                !visible(old) ||
+                semantic(old) !== baselineSemantics[index],
+            )
           )
             return 'popup_changed';
           if (
@@ -354,42 +374,34 @@ async function sendInstagram(
           return 'ready';
         };
         let blocked = false;
+        let actionValid = () => true;
         let removeGuard = () => {};
         const guardAction = (popup: Element, action: Element) => {
           const id = popup.id;
-          // Freeze the approved action's markup, allowing only enabled-state
-          // transitions. This also covers descendant and ARIA label/role changes.
-          const markup = () => {
-            const copy = action.cloneNode(true) as Element;
-            copy.removeAttribute('disabled');
-            copy.removeAttribute('aria-disabled');
-            const labelled = [
-              action,
-              ...Array.from(action.querySelectorAll('[aria-labelledby]')),
-            ];
-            return JSON.stringify([
-              copy.outerHTML,
-              labelled.map((element) =>
-                element
-                  .getAttribute('aria-labelledby')
-                  ?.split(/\s+/)
-                  .map((id) => document.getElementById(id)?.outerHTML),
-              ),
-            ]);
-          };
-          const approved = markup();
+          const parent = action.parentElement;
+          const approved = semantic(action);
+          actionValid = () =>
+            inspect() === 'ready' &&
+            candidates()[0] === popup &&
+            popup.id === id &&
+            popup.contains(action) &&
+            action.parentElement === parent &&
+            visible(action) &&
+            !action.matches(':disabled') &&
+            action.closest(
+              '[aria-disabled="true"], [aria-hidden="true"], [inert]',
+            ) === null &&
+            semantic(action) === approved;
           const guard = (event: Event) => {
-            if (!event.composedPath().includes(action)) return;
+            const onAction = event.composedPath().includes(action);
+            if (event.currentTarget === window && !onAction) return;
             blocked ||=
-              inspect() !== 'ready' ||
-              candidates()[0] !== popup ||
-              popup.id !== id ||
-              !popup.contains(action) ||
-              action.matches(':disabled') ||
-              action.closest(
-                '[aria-disabled="true"], [aria-hidden="true"], [inert]',
-              ) !== null ||
-              markup() !== approved;
+              !onAction ||
+              !actionValid() ||
+              (event instanceof MouseEvent &&
+                !action.contains(
+                  document.elementFromPoint(event.clientX, event.clientY),
+                ));
             if (blocked) {
               event.preventDefault();
               event.stopImmediatePropagation();
@@ -402,14 +414,21 @@ async function sendInstagram(
             'mouseup',
             'click',
           ];
-          for (const event of events)
-            window.addEventListener(event, guard, {
-              capture: true,
-              passive: false,
-            });
-          removeGuard = () => {
+          // The popup capture boundary runs AFTER document capture (including
+          // React handlers), before target/bubble handlers. Window alone is too
+          // early. Keep it as well to catch an action moved outside the popup.
+          // This is a UI consistency guard, not a sandbox: third-party JS can
+          // still change behavior inside its own later/final event handlers.
+          for (const boundary of [window, popup])
             for (const event of events)
-              window.removeEventListener(event, guard, true);
+              boundary.addEventListener(event, guard, {
+                capture: true,
+                passive: false,
+              });
+          removeGuard = () => {
+            for (const boundary of [window, popup])
+              for (const event of events)
+                boundary.removeEventListener(event, guard, true);
           };
         };
         return {
@@ -418,10 +437,8 @@ async function sendInstagram(
           candidates,
           guardAction,
           wasBlocked: () => blocked,
-          cleanup: () => {
-            observer.disconnect();
-            removeGuard();
-          },
+          actionValid: () => actionValid(),
+          cleanup: () => removeGuard(),
         };
       });
       try {
@@ -465,7 +482,7 @@ async function sendInstagram(
           (state) => state.candidates()[0]!,
         );
         // Pin identities here; the dispatch guard below also checks provenance
-        // after Playwright's actionability wait, before page handlers can run.
+        // after Playwright's actionability wait and document capture handlers.
         const actions = page
           .getByRole('menuitem', { name: menuMessageLabel })
           .or(page.getByRole('button', { name: menuMessageLabel }))
@@ -510,7 +527,13 @@ async function sendInstagram(
         } catch (error) {
           clickError = error;
         }
-        if (await snapshot.evaluate((state) => state.wasBlocked()))
+        if (
+          await snapshot.evaluate(
+            (state, failed) =>
+              state.wasBlocked() || (failed && !state.actionValid()),
+            Boolean(clickError),
+          )
+        )
           throw await messageButtonFailure('popup_changed', page, options);
         if (clickError) throw clickError;
       } finally {

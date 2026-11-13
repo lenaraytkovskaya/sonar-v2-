@@ -372,7 +372,59 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
-    it.each(['block', 'label', 'move', 'role', 'popup'])(
+    it.each(['pointerenter', 'focus', 'pointerdown'])(
+      'allows cosmetic React interaction changes on %s',
+      async (interactionStyle) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          interactionStyle,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.events).toEqual(['options', 'open', 'mark', 'send']);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.inputs).toEqual(['textbox']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      'block',
+      'label',
+      'move',
+      'role',
+      'popup',
+      'replace',
+      'disable',
+      'hide',
+    ])(
+      'blocks %s changed by document capture before the target handler',
+      async (documentCaptureChange) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          documentCaptureChange,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            stage: 'messagebutton',
+            reasonUk: expect.stringContaining('[branch=popup_changed;'),
+          });
+          expect(f.events).toEqual(['options', 'document-capture']);
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['block', 'label', 'move', 'role', 'popup', 'replace'])(
       'cancels the pinned action if %s changes while click waits for enabled',
       async (change) => {
         const f = await fixture({
