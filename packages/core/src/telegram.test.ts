@@ -111,8 +111,9 @@ describe('Telegram transport', () => {
     expect(await adapter.send(delivery)).toBe('42');
     expect(factory).toHaveBeenCalledTimes(1);
     expect(
-      client.invoke.mock.calls.slice(0, 4).map(([r]) => r.className),
+      client.invoke.mock.calls.slice(0, 5).map(([r]) => r.className),
     ).toEqual([
+      'contacts.ResolvePhone',
       'contacts.GetContacts',
       'contacts.ImportContacts',
       'messages.SendMessage',
@@ -126,6 +127,28 @@ describe('Telegram transport', () => {
     );
     await adapter.closeAll();
     expect(client.destroy).toHaveBeenCalledTimes(1);
+  });
+  it('resolves a phone directly and sends without importing a contact', async () => {
+    const { adapter, client } = mockClient((r) =>
+      r instanceof Api.contacts.ResolvePhone
+        ? new Api.contacts.ResolvedPeer({
+            peer: new Api.PeerUser({ userId: user.id }),
+            chats: [],
+            users: [user],
+          })
+        : new Api.UpdateShortSentMessage({
+            id: 43,
+            pts: 1,
+            ptsCount: 1,
+            date: 1,
+          }),
+    );
+    expect(await adapter.send(delivery)).toBe('43');
+    expect(client.invoke.mock.calls.map(([r]) => r.className)).toEqual([
+      'contacts.ResolvePhone',
+      'messages.SendMessage',
+    ]);
+    await adapter.closeAll();
   });
   it('preserves an existing contact and sends usernames without importing', async () => {
     const { adapter, client } = mockClient((r) =>
@@ -142,11 +165,12 @@ describe('Telegram transport', () => {
     );
     await adapter.send(delivery);
     expect(client.invoke.mock.calls.map(([r]) => r.className)).toEqual([
+      'contacts.ResolvePhone',
       'contacts.GetContacts',
       'contacts.ImportContacts',
       'messages.SendMessage',
     ]);
-    const request = client.invoke.mock.calls[1]?.[0];
+    const request = client.invoke.mock.calls[2]?.[0];
     expect(
       request instanceof Api.contacts.ImportContacts && request.contacts[0],
     ).toMatchObject({ firstName: 'Original', lastName: '' });
@@ -312,7 +336,7 @@ describe('Telegram transport', () => {
   });
   it('logs in by QR: shows a token, follows a DC migration, then returns the phone', async () => {
     let scanned = false;
-    const { adapter, client } = mockClient((r) => {
+    const { adapter, client, factory } = mockClient((r) => {
       if (r instanceof Api.auth.ExportLoginToken)
         return scanned
           ? new Api.auth.LoginTokenMigrateTo({
@@ -320,14 +344,25 @@ describe('Telegram transport', () => {
               token: Buffer.from('t2'),
             })
           : new Api.auth.LoginToken({ expires: 30, token: Buffer.from('t1') });
+      if (r instanceof Api.help.GetConfig)
+        return {
+          dcOptions: [
+            new Api.DcOption({
+              id: 4,
+              ipAddress: '10.0.0.4',
+              port: 443,
+              ipv6: true,
+            }),
+            new Api.DcOption({ id: 4, ipAddress: '10.0.0.4', port: 443 }),
+          ],
+        };
       if (r instanceof Api.auth.ImportLoginToken)
         return new Api.auth.LoginTokenSuccess({
           authorization: new Api.auth.Authorization({ user }),
         });
       return {};
     });
-    const switchDC = vi.fn(async () => true);
-    Object.assign(client, { switchDC });
+    Object.assign(client, { invoke: client.invoke });
     expect(await adapter.qrLogin('')).toEqual({
       session: 'saved-session',
       status: 'qr',
@@ -339,7 +374,30 @@ describe('Telegram transport', () => {
       status: 'done',
       phone: '+380501234567',
     });
-    expect(switchDC).toHaveBeenCalledWith(4);
+    expect(factory).toHaveBeenLastCalledWith('', expect.anything(), {
+      id: 4,
+      ip: '10.0.0.4',
+      port: 443,
+    });
+  });
+  it('never hangs: a stuck call times out and a stuck destroy is not awaited', async () => {
+    const stuck = mockClient(() => new Promise(() => {}));
+    const slow = createTelegramAdapter(
+      { ...credentials, timeoutMs: 50 },
+      stuck.factory,
+    );
+    await expect(slow.qrLogin('saved-session')).rejects.toMatchObject({
+      code: 'telegram_timeout',
+    });
+    const done = mockClient(
+      () => new Api.auth.LoginToken({ expires: 30, token: Buffer.from('t') }),
+    );
+    done.client.destroy.mockImplementation(() => new Promise(() => {}));
+    const started = Date.now();
+    await expect(done.adapter.qrLogin('')).resolves.toMatchObject({
+      status: 'qr',
+    });
+    expect(Date.now() - started).toBeLessThan(4500);
   });
   it('asks for the 2FA password after a QR scan', async () => {
     const { adapter } = mockClient(() => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createWhatsAppAdapter,
   normalizeWhatsAppRecipient,
+  whatsappMessageId,
 } from './whatsapp.js';
 
 const working = {
@@ -164,5 +165,21 @@ describe('WhatsApp WAHA Core adapter', () => {
     expect(String(network.mock.calls[1][0])).toBe(
       'http://waha:3000/api/sessions',
     );
+  });
+});
+
+describe('WAHA sendText response', () => {
+  it('reads the message id from every engine format', () => {
+    expect(whatsappMessageId({ id: 'true_1@c.us_A' })).toBe('true_1@c.us_A');
+    expect(whatsappMessageId({ id: { _serialized: 'true_1@c.us_B' } })).toBe(
+      'true_1@c.us_B',
+    );
+    expect(whatsappMessageId({ key: { id: '3EB0C' }, message: {} })).toBe(
+      '3EB0C',
+    );
+    expect(whatsappMessageId({ _data: { key: { id: '3EB0D' } } })).toBe(
+      '3EB0D',
+    );
+    expect(whatsappMessageId({})).toBeNull();
   });
 });
