@@ -490,7 +490,29 @@ export function createTelegramAdapter(
         let providerMessageId: string | undefined;
         let sendError: TelegramSendError | undefined;
         try {
+          // Like the old Sonar: resolve the phone directly (no contact import, no import limit).
+          let resolved: Api.User | undefined;
           if (to.startsWith('+')) {
+            try {
+              const found = await client.invoke(
+                new Api.contacts.ResolvePhone({ phone: to.slice(1) }),
+              );
+              resolved = found?.users?.find(
+                (user): user is Api.User =>
+                  user instanceof Api.User && !!user.accessHash,
+              );
+            } catch (error) {
+              const code = (error as { errorMessage?: string }).errorMessage;
+              if (code?.startsWith('FLOOD')) throw error;
+              // PHONE_NOT_OCCUPIED or a hidden number: fall back to importing the contact.
+            }
+          }
+          if (resolved)
+            peer = new Api.InputPeerUser({
+              userId: resolved.id,
+              accessHash: resolved.accessHash!,
+            });
+          else if (to.startsWith('+')) {
             const existing = await client.invoke(
               new Api.contacts.GetContacts({ hash: returnBigInt(0) }),
             );
