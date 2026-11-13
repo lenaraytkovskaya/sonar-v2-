@@ -148,15 +148,19 @@ export type TelegramConnection = Pick<
   switchDC?: (dc: number) => Promise<unknown>;
 };
 type Credentials = { apiId: number; apiHash: string };
+type DataCenter = { id: number; ip: string; port: number };
 export type TelegramClientFactory = (
   session: string,
   credentials: Credentials,
+  dc?: DataCenter,
 ) => TelegramConnection;
 function gramClient(
   session: string,
   credentials: Credentials,
+  dc?: DataCenter,
 ): TelegramConnection {
   const saved = new StringSession(session);
+  if (dc) saved.setDC(dc.id, dc.ip, dc.port);
   const client = new TelegramClient(
     saved,
     credentials.apiId,
@@ -305,19 +309,66 @@ export function createTelegramAdapter(
           return user?.phone ? `+${user.phone}` : null;
         };
         try {
-          let result = await client.invoke(
+          const result = await client.invoke(
             new Api.auth.ExportLoginToken({ ...auth, exceptIds: [] }),
           );
+          console.info('[telegram-qr] export:', result.className);
           if (result instanceof Api.auth.LoginTokenMigrateTo) {
-            if (!client.switchDC)
+            // The account lives on another data center. GramJS _switchDC hangs in this
+            // short-lived client, so import the token through a fresh client on that DC.
+            const target = result;
+            const config = await client.invoke(new Api.help.GetConfig());
+            const option = config.dcOptions.find(
+              (o) =>
+                o.id === target.dcId &&
+                !o.ipv6 &&
+                !o.mediaOnly &&
+                !o.cdn &&
+                !o.tcpoOnly,
+            );
+            if (!option)
               throw new TelegramSendError(
                 'login_restart',
                 'Повторіть підключення Telegram.',
               );
-            await client.switchDC(result.dcId);
-            result = await client.invoke(
-              new Api.auth.ImportLoginToken({ token: result.token }),
-            );
+            console.info('[telegram-qr] migrate to DC', target.dcId);
+            const other = factory('', auth, {
+              id: target.dcId,
+              ip: option.ipAddress,
+              port: option.port,
+            });
+            try {
+              await other.connect();
+              const imported = await other.invoke(
+                new Api.auth.ImportLoginToken({ token: target.token }),
+              );
+              console.info('[telegram-qr] import:', imported.className);
+              if (imported instanceof Api.auth.LoginTokenSuccess)
+                return {
+                  session: other.session.save(),
+                  status: 'done' as const,
+                  phone: phoneOf(imported.authorization),
+                };
+              throw new TelegramSendError(
+                'login_restart',
+                'Повторіть підключення Telegram.',
+              );
+            } catch (error) {
+              if (
+                (error as { errorMessage?: string }).errorMessage ===
+                'SESSION_PASSWORD_NEEDED'
+              )
+                return {
+                  session: other.session.save(),
+                  status: 'password' as const,
+                };
+              throw error;
+            } finally {
+              await Promise.race([
+                other.destroy().catch(() => {}),
+                new Promise((resolve) => setTimeout(resolve, 3000)),
+              ]);
+            }
           }
           if (result instanceof Api.auth.LoginTokenSuccess)
             return {
