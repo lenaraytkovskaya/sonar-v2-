@@ -15,3 +15,6 @@ backups/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# Proxy lists with credentials (e.g. iproyal-proxies.txt) never go to git or images
+*proxies.txt
