@@ -1,6 +1,7 @@
 import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
 import { registerAnalysisTasks } from './analysis.js';
+import { registerDraftTasks } from './drafts.js';
 import { registerScoringTasks } from './scoring.js';
 import { registerSiteTasks } from './site.js';
 import { registerRegistryTasks } from './registry.js';
@@ -22,6 +23,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerEmailTasks();
+  await registerDraftTasks();
   await registerAnalysisTasks();
   await registerScoringTasks();
   await registerAiTasks();

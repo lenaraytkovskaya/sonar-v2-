@@ -26,10 +26,12 @@ const initial: CampaignInput = {
   cities: [],
   queries: [],
   offer: '',
+  outreach_goal: '',
+  min_score: 40,
   batch_size: 20,
   budget_usd: 0,
   channels: { email: true, telegram: false, whatsapp: false, forms: false },
-  send_mode: 'approval',
+  send_mode: 'manual',
   scoring_weights: {},
   status: 'draft',
   field_profile: 'contacts',
@@ -94,6 +96,8 @@ export function CampaignPanel({
   const initialForm = { ...initial, scoring_weights: defaultWeights };
   const withWeights = (row: CampaignInput): CampaignInput => ({
     ...row,
+    outreach_goal: row.outreach_goal ?? '',
+    min_score: Number(row.min_score ?? 40),
     scoring_weights: { ...defaultWeights, ...row.scoring_weights },
   });
   const { batches: batchProgress } = useTasks();
@@ -340,6 +344,19 @@ export function CampaignPanel({
             onChange={(v) => update('queries', v)}
           />
           <label className="block">
+            {uk.campaign.outreach_goal}
+            <textarea
+              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
+              value={form.outreach_goal}
+              maxLength={20000}
+              onChange={(e) => update('outreach_goal', e.target.value)}
+            />
+          </label>
+          <AiAssist
+            text={form.outreach_goal}
+            onApply={(v) => update('outreach_goal', v)}
+          />
+          <label className="block">
             {uk.campaign.offer}
             <span className="block text-sm text-muted-foreground">
               {uk.campaign.offerHint}
@@ -436,6 +453,25 @@ export function CampaignPanel({
               ))}
             </div>
           </fieldset>
+          <label className="block">
+            {uk.campaign.min_score}
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={form.min_score}
+              onChange={(e) => update('min_score', Number(e.target.value))}
+            />
+          </label>
+          <AiAssist
+            text={String(form.min_score)}
+            onApply={(v) => {
+              const n = Number(v);
+              if (Number.isFinite(n) && n >= 0 && n <= 100)
+                update('min_score', n);
+              else setMessage(uk.ai.invalid);
+            }}
+          />
           <fieldset className="space-y-3">
             <legend>{uk.campaign.scoring_weights}</legend>
             {Object.entries(form.scoring_weights).map(([key, v]) => (

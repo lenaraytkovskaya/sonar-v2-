@@ -7,7 +7,7 @@ import {
   type TextModel,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
-import { draftFromAnalysis } from '@sonar/db/email';
+import { enqueueOutreachDrafts } from '@sonar/db/outreach';
 import { analysisSnapshot } from '@sonar/db/analysis';
 import {
   BillingUncertain,
@@ -28,7 +28,8 @@ export async function runCompanyAnalysis(
     'select id,result,cost_usd from analyses where company_id=$1 and campaign_id=$2 and version=$3',
     [input.companyId, input.campaignId, input.version],
   );
-  if (existing)
+  if (existing) {
+    await enqueueOutreachDrafts(input.companyId, input.campaignId, existing.id);
     return {
       status: 'done',
       result: {
@@ -37,6 +38,7 @@ export async function runCompanyAnalysis(
         costUsd: Number(existing.cost_usd),
       },
     };
+  }
   const data = await analysisSnapshot(
     input.companyId,
     input.campaignId,
@@ -49,7 +51,7 @@ export async function runCompanyAnalysis(
       reasonUk: 'Компанію або її участь у кампанії не знайдено.',
     };
   const config = data.config;
-  const minScore = Number(config['analysis.min_score']),
+  const minScore = Number(data.min_score ?? config['analysis.min_score']),
     maxUsd = Number(config['analysis.max_usd']),
     maxTokens = Number(config['analysis.max_tokens']);
   if (
@@ -137,7 +139,12 @@ export async function runCompanyAnalysis(
           result,
         ],
       );
-      await draftFromAnalysis(input.companyId, input.campaignId, saved.id, tx);
+      await enqueueOutreachDrafts(
+        input.companyId,
+        input.campaignId,
+        saved.id,
+        tx,
+      );
       await tx.query('commit');
       savedId = saved.id;
     } catch (error) {

@@ -96,7 +96,7 @@ export async function analysisSnapshot(
     rows: [input],
   } = await sonarPool.query(
     `select c.name,c.website,c.country_code,c.primary_type,c.address,c.rating,c.ratings_count,
-    a.offer,a.language_code, s.score::float8,
+    a.offer,a.outreach_goal,a.min_score::float8,a.language_code, s.score::float8,
     coalesce((select jsonb_agg(jsonb_build_object('kind',p.kind,'value',p.value,'source',p.source,'source_url',p.source_url,'found_at',p.found_at) order by p.rank desc,p.id) from contacts p where p.company_id=c.id),'[]') as contacts,
     coalesce((select jsonb_agg(jsonb_build_object('kind',f.kind,'value',f.value,'source',f.source,'source_url',f.source_url,'found_at',f.found_at) order by f.kind,f.source_url,f.id) from company_facts f where f.company_id=c.id and (f.expires_at is null or f.expires_at>now()) and f.kind in ('language','schema_org','registry_entity','registry_status','google_display_name')),'[]') as facts,
     coalesce((select jsonb_agg(p) from (select source_url,value from company_facts where company_id=c.id and kind='page_text' and expires_at>now() order by source_url limit 3) p),'[]') as pages

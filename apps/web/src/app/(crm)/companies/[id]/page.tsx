@@ -6,7 +6,7 @@ import { notFound } from 'next/navigation';
 import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
-import { CompanyEmail } from '@/components/company-email';
+import { CompanyChat } from '@/components/company-email';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { SiteScan } from '@/components/site-scan';
@@ -118,11 +118,11 @@ export default async function Page({
   const selectedCampaign = validId(campaignId) ? campaignId : undefined;
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
-  const { getCompanyMessaging } = await import('@sonar/db/email');
+  const { getCompanyChat } = await import('@sonar/db/outreach');
   const { getProzorroCompanySummary } = await import('@sonar/db/prozorro');
   const [data, messaging, prozorro] = await Promise.all([
     getCompany(id),
-    getCompanyMessaging(id),
+    getCompanyChat(id),
     getProzorroCompanySummary(id),
   ]);
   if (!data) notFound();
@@ -498,16 +498,9 @@ export default async function Page({
                 </section>
               ))}
           </Section>
-          <CompanyEmail
-            companyId={id}
+          <CompanyChat
             initial={messaging}
             selectedCampaign={selectedCampaign}
-            drafts={Object.fromEntries(
-              analyses.map((analysis) => [
-                analysis.campaign_id,
-                analysis.result.first_message,
-              ]),
-            )}
           />
           {orderedScores.length > 0 && (
             <Collapsible title={uk.scoring.details}>

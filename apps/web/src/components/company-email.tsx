@@ -1,472 +1,445 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Image from 'next/image';
-import type { getCompanyMessaging } from '@sonar/db/email';
+import Link from 'next/link';
+import type { getCompanyChat } from '@sonar/db/outreach';
 import { uk } from '@/i18n/uk';
+import { cn } from '@/lib/utils';
+import { channelLabel, messageStatus } from '@/lib/outreach-labels';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
-type Messaging = Awaited<ReturnType<typeof getCompanyMessaging>>;
-export function CompanyEmail({
-  companyId,
-  initial,
-  drafts,
-  selectedCampaign,
+import { LocalTime } from './local-time';
+type Chat = Awaited<ReturnType<typeof getCompanyChat>>;
+type Message = Chat['messages'][number];
+type Action = (
+  action: string,
+  fields?: Record<string, unknown>,
+) => Promise<boolean>;
+const selectClass =
+  'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
+
+function Draft({
+  message,
+  blocked,
+  pending,
+  approval,
+  act,
 }: {
-  companyId: string;
-  initial: Messaging;
-  drafts: Record<string, string>;
-  selectedCampaign?: string;
+  message: Message;
+  blocked: boolean;
+  pending: boolean;
+  approval: boolean;
+  act: Action;
 }) {
-  const router = useRouter(),
-    busy = useRef(false),
-    draftKey = useRef({ fingerprint: '', key: '' });
-  const [data, setData] = useState(initial),
-    [open, setOpen] = useState(false),
-    [pending, setPending] = useState(false),
-    [notice, setNotice] = useState('');
-  const firstCampaign =
-    initial.campaigns.find((campaign) => campaign.id === selectedCampaign)
-      ?.id ??
-    initial.campaignId ??
-    '';
-  const [channel, setChannel] = useState<
-    'email' | 'form' | 'telegram' | 'whatsapp'
-  >('email');
-  const [campaignId, setCampaignId] = useState(firstCampaign),
-    [accountId, setAccountId] = useState(
-      initial.accounts.find((account) => account.enabled)?.id ?? '',
-    );
-  const [toAddress, setToAddress] = useState(initial.defaultRecipient),
-    [subject, setSubject] = useState(''),
-    [body, setBody] = useState(drafts[firstCampaign] ?? initial.suggestedBody);
-  useEffect(() => {
-    setData(initial);
-  }, [initial]);
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = async () => {
-      try {
-        const response = await fetch(`/api/companies/${companyId}/messages`, {
-          signal: controller.signal,
-        });
-        if (response.ok) setData(await response.json());
-      } catch {
-        /* Keep the last successful snapshot during temporary network failures. */
-      }
-    };
-    const timer = setInterval(() => void load(), 5000);
-    return () => {
-      controller.abort();
-      clearInterval(timer);
-    };
-  }, [companyId]);
-  const act = async (action: string, fields: Record<string, unknown> = {}) => {
-    if (busy.current) return;
-    busy.current = true;
-    setPending(true);
-    setNotice('');
-    try {
-      const response = await fetch(`/api/companies/${companyId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...fields }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw Error(result.error ?? uk.email.error);
-      if (action === 'send') {
-        setOpen(false);
-        setSubject('');
-        setBody('');
-        draftKey.current = { fingerprint: '', key: '' };
-        setNotice(uk.email.saved);
-      }
-      try {
-        const snapshot = await fetch(`/api/companies/${companyId}/messages`);
-        if (snapshot.ok) setData(await snapshot.json());
-      } catch {
-        /* Polling will refresh history after a confirmed mutation. */
-      }
-      router.refresh();
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : uk.email.error);
-    } finally {
-      busy.current = false;
-      setPending(false);
-    }
+  const [subject, setSubject] = useState(message.subject),
+    [body, setBody] = useState(message.body);
+  const editable = ['draft', 'awaiting_approval', 'awaiting_manual'].includes(
+    message.status,
+  );
+  const manual = ['form', 'social'].includes(message.channel);
+  const changed = subject !== message.subject || body !== message.body;
+  const save = () => act('save', { messageId: message.id, subject, body });
+  const proceed = async (action: string) => {
+    if (changed && !(await save())) return;
+    await act(action, { messageId: message.id });
   };
-  const send = () => {
-    const fields = { campaignId, accountId, toAddress, subject, body, channel };
-    const fingerprint = JSON.stringify(fields);
-    if (draftKey.current.fingerprint !== fingerprint)
-      draftKey.current = { fingerprint, key: crypto.randomUUID() };
-    void act('send', { ...fields, idempotencyKey: draftKey.current.key });
-  };
-  const approval =
-    data.campaigns.find((campaign) => campaign.id === campaignId)?.sendMode ===
-    'approval';
-  const accounts =
-    channel === 'whatsapp'
-      ? data.whatsappAccounts.filter((account) => account.status === 'active')
-      : channel === 'telegram'
-        ? data.telegramAccounts
-        : channel === 'form'
-          ? data.formAccounts
-          : data.accounts;
-  const recipients =
-    channel === 'whatsapp'
-      ? data.whatsappRecipients
-      : channel === 'telegram'
-        ? data.telegramRecipients
-        : channel === 'form'
-          ? data.formUrls
-          : data.emails;
-  // Contacts and accounts can appear after the page loaded (manual add, polling);
-  // keep the selected values inside the options the selects actually show.
-  const recipientKey = recipients.join('\n');
-  const accountKey = accounts
-    .filter((account) => account.enabled)
-    .map((account) => account.id)
-    .join('\n');
-  useEffect(() => {
-    const options = recipientKey ? recipientKey.split('\n') : [];
-    if (options.length && !options.includes(toAddress))
-      setToAddress(options[0]!);
-  }, [recipientKey, toAddress]);
-  useEffect(() => {
-    const options = accountKey ? accountKey.split('\n') : [];
-    if (options.length && !options.includes(accountId))
-      setAccountId(options[0]!);
-  }, [accountKey, accountId]);
-  const ready =
-    recipients.length > 0 &&
-    accounts.some((account) => account.enabled) &&
-    data.campaigns.length > 0;
-  const canWrite =
-    data.campaigns.length > 0 &&
-    ((data.emails.length > 0 &&
-      data.accounts.some((account) => account.enabled)) ||
-      (data.formUrls.length > 0 &&
-        data.formAccounts.some((account) => account.enabled)) ||
-      (data.telegramRecipients.length > 0 &&
-        data.telegramAccounts.some((account) => account.enabled)) ||
-      (data.whatsappRecipients.length > 0 &&
-        data.whatsappAccounts.some(
-          (account) => account.enabled && account.status === 'active',
-        )));
-  const sender = data.formAccounts.find((account) => account.id === accountId);
-  const selectClass =
-    'min-h-9 w-full rounded-lg border border-border bg-surface px-3';
   return (
-    <Card className="min-w-0 space-y-3 p-4 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
-          {uk.forms.messaging}
-        </h2>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            disabled={data.blocked || pending || !canWrite}
-            onClick={() => setOpen(!open)}
-          >
-            {uk.email.write}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={data.blocked || pending}
-            onClick={() => void act('block')}
-          >
-            {uk.email.block}
-          </Button>
-        </div>
-      </div>
-      {data.blocked ? (
-        <p role="status">{uk.email.blocked}</p>
-      ) : (
-        !canWrite && (
-          <p>
-            {uk.email.noSetup} {uk.forms.noSetup} {uk.telegram.noSetup}{' '}
-            {uk.whatsapp.noSetup}
-          </p>
-        )
+    <section
+      className={cn(
+        'min-w-0 space-y-2 rounded-lg border border-border p-3',
+        message.direction === 'in' ? 'mr-6 bg-surface' : 'ml-6 bg-raised',
       )}
-      {open && !data.blocked && (
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            send();
-          }}
-        >
-          <label className="block space-y-2">
-            {uk.forms.channel}
-            <select
-              className={selectClass}
-              value={channel}
-              onChange={(event) => {
-                const next = event.target.value as
-                  'email' | 'form' | 'telegram' | 'whatsapp';
-                setChannel(next);
-                setAccountId(
-                  (next === 'whatsapp'
-                    ? data.whatsappAccounts.filter(
-                        (account) => account.status === 'active',
-                      )
-                    : next === 'telegram'
-                      ? data.telegramAccounts
-                      : next === 'form'
-                        ? data.formAccounts
-                        : data.accounts
-                  ).find((account) => account.enabled)?.id ?? '',
-                );
-                setToAddress(
-                  (next === 'whatsapp'
-                    ? data.whatsappRecipients
-                    : next === 'telegram'
-                      ? data.telegramRecipients
-                      : next === 'form'
-                        ? data.formUrls
-                        : data.emails)[0] ?? '',
-                );
-              }}
-            >
-              <option value="email">{uk.email.title}</option>
-              <option value="form">{uk.forms.title}</option>
-              {data.whatsappRecipients.length > 0 &&
-                data.whatsappAccounts.some(
-                  (account) => account.enabled && account.status === 'active',
-                ) && <option value="whatsapp">{uk.whatsapp.title}</option>}
-              {data.telegramRecipients.length > 0 &&
-                data.telegramAccounts.some((account) => account.enabled) && (
-                  <option value="telegram">{uk.telegram.title}</option>
-                )}
-            </select>
-          </label>
-          {!ready && (
-            <p>
-              {channel === 'whatsapp'
-                ? uk.whatsapp.noSetup
-                : channel === 'telegram'
-                  ? uk.telegram.noSetup
-                  : channel === 'form'
-                    ? uk.forms.noSetup
-                    : uk.email.noSetup}
-            </p>
-          )}
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="space-y-2">
-              {uk.company.campaign}
-              <select
-                className={selectClass}
-                required
-                value={campaignId}
-                onChange={(event) => {
-                  setCampaignId(event.target.value);
-                  setBody(drafts[event.target.value] ?? '');
-                }}
-              >
-                {data.campaigns.map((campaign) => (
-                  <option key={campaign.id} value={campaign.id}>
-                    {campaign.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-2">
-              {uk.email.account}
-              <select
-                className={selectClass}
-                required
-                value={accountId}
-                onChange={(event) => setAccountId(event.target.value)}
-              >
-                {accounts
-                  .filter((account) => account.enabled)
-                  .map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name} ·{' '}
-                      {'address' in account
-                        ? account.address
-                        : account.fromAddress}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label className="space-y-2">
-              {uk.email.recipient}
-              <select
-                className={selectClass}
-                required
-                value={toAddress}
-                onChange={(event) => setToAddress(event.target.value)}
-              >
-                {recipients.map((email) => (
-                  <option key={email} value={email}>
-                    {email}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {channel === 'email' && (
+    >
+      <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+        <span>
+          {message.direction === 'in'
+            ? uk.outreach.incoming
+            : uk.outreach.outgoing}
+        </span>
+        <span>{messageStatus(message.status)}</span>
+        <span>
+          {uk.outreach.sources[
+            message.source as keyof typeof uk.outreach.sources
+          ] ?? message.source}
+        </span>
+        <LocalTime value={message.sentAt ?? message.createdAt} />
+      </p>
+      {editable && !blocked ? (
+        <>
+          {message.channel === 'email' && (
             <div>
-              <label htmlFor="email-subject">{uk.email.subject}</label>
+              <label htmlFor={`subject-${message.id}`}>
+                {uk.email.subject}
+              </label>
               <Input
-                id="email-subject"
-                required
-                maxLength={998}
+                id={`subject-${message.id}`}
                 value={subject}
+                maxLength={998}
                 onChange={(event) => setSubject(event.target.value)}
               />
               <AiAssist text={subject} onApply={setSubject} />
             </div>
           )}
           <div>
-            <label htmlFor="email-body">{uk.email.body}</label>
+            <label htmlFor={`body-${message.id}`}>{uk.email.body}</label>
             <textarea
-              id="email-body"
-              required
-              maxLength={channel === 'telegram' ? 4096 : 20000}
-              rows={8}
-              className="w-full rounded-lg border border-border bg-surface p-3"
+              id={`body-${message.id}`}
+              rows={5}
+              maxLength={20000}
               value={body}
               onChange={(event) => setBody(event.target.value)}
+              className="w-full rounded-lg border border-border bg-surface p-3"
             />
             <AiAssist text={body} onApply={setBody} />
           </div>
-          {channel === 'form' && sender && (
-            <section className="space-y-2 rounded-lg border border-border bg-raised p-4">
-              <h3 className="font-semibold">{uk.forms.preview}</h3>
-              <p>
-                {uk.forms.senderName}: {sender.senderName}
-              </p>
-              <p>
-                {uk.email.address}: {sender.fromAddress}
-              </p>
-              <p>
-                {uk.forms.senderPhone}: {sender.senderPhone}
-              </p>
-              <p className="whitespace-pre-wrap break-words">{body}</p>
-            </section>
-          )}
-          <p className="text-sm text-muted-foreground">
-            {approval
-              ? uk.email.approvalHint
-              : channel === 'whatsapp'
-                ? uk.whatsapp.sendHint
-                : channel === 'telegram'
-                  ? uk.telegram.sendHint
-                  : channel === 'form'
-                    ? uk.forms.sendHint
-                    : uk.email.sendHint}
-          </p>
-          <Button type="submit" disabled={pending || !ready}>
-            {pending
-              ? uk.ai.pending
-              : approval
-                ? uk.email.requestApproval
-                : uk.email.send}
-          </Button>
-        </form>
-      )}
-      {data.telegramUnavailable.map((contact) => (
-        <p
-          key={contact.value}
-          className="rounded-lg bg-err-bg px-3 py-2 text-xs text-err"
-        >
-          {contact.value} · {uk.telegram.unavailable}: {contact.reasonUk}
-        </p>
-      ))}
-      {data.whatsappUnavailable.map((contact) => (
-        <p
-          key={contact.value}
-          className="rounded-lg bg-err-bg px-3 py-2 text-xs text-err"
-        >
-          {contact.value} ·{' '}
-          {contact.reasonUk.startsWith(uk.whatsapp.unavailable)
-            ? contact.reasonUk
-            : `${uk.whatsapp.unavailable}: ${contact.reasonUk}`}
-        </p>
-      ))}
-      {notice && <p role="status">{notice}</p>}
-      <h3 className="font-semibold">{uk.email.history}</h3>
-      {!data.messages.length && <p>{uk.email.noMessages}</p>}
-      {data.messages.map((message) => (
-        <section
-          key={message.id}
-          className="space-y-2 border-t border-border pt-4"
-        >
-          <p className="break-words font-medium">
-            {message.channel === 'whatsapp'
-              ? uk.whatsapp.title
-              : message.channel === 'telegram'
-                ? uk.telegram.title
-                : message.channel === 'form'
-                  ? uk.forms.title
-                  : message.subject}{' '}
-            · {message.toAddress}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {uk.email.statuses[message.status]} ·{' '}
-            {new Date(message.sentAt ?? message.createdAt).toLocaleString(
-              'uk-UA',
-            )}
-          </p>
-          {message.status === 'queued' && message.scheduledAt && (
-            <p className="text-sm text-muted-foreground">
-              {uk.email.scheduled}:{' '}
-              {new Date(message.scheduledAt).toLocaleString('uk-UA')}
+          {manual && (
+            <p className="text-xs text-muted-foreground">
+              {uk.outreach.manualHint}
             </p>
           )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={pending || !changed || !body.trim()}
+              onClick={() => void save()}
+            >
+              {uk.outreach.save}
+            </Button>
+            {manual ? (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={pending || !body.trim()}
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(body)
+                      .then(() => act('copied'))
+                      .catch(() => act('copyError'))
+                  }
+                >
+                  {uk.outreach.copy}
+                </Button>
+                <Button
+                  disabled={pending || !body.trim()}
+                  onClick={() => void proceed('manual')}
+                >
+                  {uk.outreach.manualSent}
+                </Button>
+              </>
+            ) : (
+              <Button
+                disabled={
+                  pending ||
+                  !body.trim() ||
+                  (message.channel === 'email' && !subject.trim())
+                }
+                onClick={() =>
+                  void proceed(
+                    message.status === 'awaiting_approval' ? 'approve' : 'send',
+                  )
+                }
+              >
+                {message.status === 'awaiting_approval'
+                  ? uk.email.approve
+                  : approval
+                    ? uk.email.requestApproval
+                    : uk.email.send}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() => void act('skip', { messageId: message.id })}
+            >
+              {uk.outreach.skip}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          {message.subject && (
+            <h3 className="font-semibold">{message.subject}</h3>
+          )}
           <p className="whitespace-pre-wrap break-words">{message.body}</p>
-          {message.channel === 'form' && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {(['before', 'after'] as const).map(
-                (phase) =>
-                  message[
-                    phase === 'before' ? 'screenshotBefore' : 'screenshotAfter'
-                  ] && (
-                    <a
-                      key={phase}
-                      className="min-w-0 space-y-2 rounded-lg border border-border p-3 text-accent"
-                      href={`/api/form-messages/${message.id}/screenshots/${phase}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <span className="block">{uk.forms[phase]}</span>
-                      <Image
-                        src={`/api/form-messages/${message.id}/screenshots/${phase}`}
-                        alt={uk.forms[phase]}
-                        width={1280}
-                        height={960}
-                        unoptimized
-                        className="max-h-64 w-full rounded object-contain object-left"
-                      />
-                    </a>
-                  ),
-              )}
-            </div>
-          )}
-          {message.reasonUk && <p className="text-err">{message.reasonUk}</p>}
-          {message.status === 'draft' && (
+        </>
+      )}
+      {message.reasonUk && <p className="text-err">{message.reasonUk}</p>}
+    </section>
+  );
+}
+
+export function CompanyChat({
+  initial,
+  selectedCampaign,
+  selectedContact,
+}: {
+  initial: Chat;
+  selectedCampaign?: string;
+  selectedContact?: string;
+}) {
+  const [data, setData] = useState(initial);
+  const contacts = data.contacts.filter((contact) =>
+    ['email', 'form', 'social', 'phone', 'telegram', 'whatsapp'].includes(
+      contact.kind,
+    ),
+  );
+  const [contactId, setContactId] = useState(
+    selectedContact ?? contacts[0]?.id ?? '',
+  );
+  const [campaignId, setCampaignId] = useState(
+    selectedCampaign ?? data.campaigns[0]?.id ?? '',
+  );
+  const [pending, setPending] = useState(false),
+    [notice, setNotice] = useState(''),
+    [callNote, setCallNote] = useState('');
+  const [task, setTask] = useState<{
+    id: string;
+    status: string;
+    reason_uk?: string;
+  } | null>(null);
+  const busy = useRef(false),
+    requestKey = useRef({ fingerprint: '', key: '' });
+  const companyId = data.company?.id;
+  const path = `/api/companies/${companyId}/outreach`;
+  useEffect(() => setData(initial), [initial]);
+  useEffect(() => {
+    if (!contacts.some((contact) => contact.id === contactId))
+      setContactId(contacts[0]?.id ?? '');
+  }, [data.contacts, contactId]);
+  useEffect(() => {
+    if (!companyId) return;
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        const response = await fetch(path, { signal: controller.signal });
+        if (response.ok) setData(await response.json());
+        if (task && ['queued', 'running'].includes(task.status)) {
+          const status = await fetch(`${path}?taskId=${task.id}`, {
+            signal: controller.signal,
+          });
+          if (status.ok) setTask({ id: task.id, ...(await status.json()) });
+        }
+      } catch {
+        /* Retain the latest successful snapshot during a network interruption. */
+      }
+    };
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [companyId, path, task]);
+  const act: Action = async (action, fields = {}) => {
+    if (action === 'copied' || action === 'copyError') {
+      setNotice(action === 'copied' ? uk.outreach.copied : uk.email.error);
+      return true;
+    }
+    if (busy.current) return false;
+    busy.current = true;
+    setPending(true);
+    setNotice('');
+    try {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...fields }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw Error(result.error ?? uk.email.error);
+      if (action === 'generate')
+        setTask({ id: result.id, status: result.status ?? 'queued' });
+      else setNotice(uk.outreach.saved);
+      if (action === 'call') {
+        setCallNote('');
+        requestKey.current = { fingerprint: '', key: '' };
+      }
+      const snapshot = await fetch(path).catch(() => null);
+      if (snapshot?.ok) setData(await snapshot.json());
+      return true;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : uk.email.error);
+      return false;
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  };
+  const contact = contacts.find((row) => row.id === contactId);
+  const blocked = data.blocked || data.blockedContactIds.includes(contactId);
+  const approval =
+    data.campaigns.find((row) => row.id === campaignId)?.sendMode ===
+    'approval';
+  const conversationIds = data.conversations
+    .filter(
+      (row) => row.contactId === contactId && row.campaignId === campaignId,
+    )
+    .map((row) => row.id);
+  const messages = data.messages
+    .filter((row) => conversationIds.includes(row.conversationId))
+    .sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+  const generating = !!task && ['queued', 'running'].includes(task.status);
+  const request = (action: 'generate' | 'call') => {
+    const fields = {
+      contactId,
+      campaignId,
+      ...(action === 'call' ? { body: callNote } : {}),
+    };
+    const fingerprint = JSON.stringify({ action, ...fields });
+    if (requestKey.current.fingerprint !== fingerprint)
+      requestKey.current = { fingerprint, key: crypto.randomUUID() };
+    void act(action, { ...fields, requestId: requestKey.current.key }).then(
+      (ok) => {
+        if (ok && action === 'generate')
+          requestKey.current = { fingerprint: '', key: '' };
+      },
+    );
+  };
+  const href =
+    contact &&
+    ['form', 'social'].includes(contact.kind) &&
+    /^https?:\/\//i.test(contact.value)
+      ? contact.value
+      : null;
+  if (!data.company)
+    return <Card className="p-4">{uk.manual.errors.companyNotFound}</Card>;
+  return (
+    <Card className="min-w-0 space-y-4 p-4 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-heading font-bold">
+          {uk.outreach.title} ·{' '}
+          <Link href={`/companies/${data.company.id}`} className="text-accent">
+            {data.company.name}
+          </Link>
+        </h2>
+        {!data.blocked && (
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void act('block')}
+          >
+            {uk.email.block}
+          </Button>
+        )}
+        <select
+          aria-label={uk.company.campaign}
+          className={cn(selectClass, 'w-auto max-w-full')}
+          value={campaignId}
+          onChange={(event) => setCampaignId(event.target.value)}
+        >
+          {data.campaigns.map((campaign) => (
+            <option key={campaign.id} value={campaign.id}>
+              {campaign.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {!data.campaigns.length && <p>{uk.outreach.noCampaign}</p>}
+      <div
+        role="tablist"
+        aria-label={uk.outreach.contacts}
+        className="flex gap-2 overflow-x-auto pb-1"
+      >
+        {contacts.map((row) => (
+          <button
+            key={row.id}
+            role="tab"
+            aria-selected={row.id === contactId}
+            className={cn(
+              'min-h-11 shrink-0 rounded-lg border px-3 py-2 text-left',
+              row.id === contactId ? 'border-accent bg-chip' : 'border-border',
+            )}
+            onClick={() => {
+              setContactId(row.id);
+              setCallNote('');
+            }}
+          >
+            <span className="block text-xs text-muted-foreground">
+              {channelLabel(row.kind)}
+            </span>
+            {row.normalized || row.value}
+          </button>
+        ))}
+      </div>
+      {!contacts.length && <p>{uk.outreach.emptyContacts}</p>}
+      {blocked && (
+        <p role="status" className="rounded-lg bg-err-bg p-3 text-err">
+          {uk.email.blocked}
+        </p>
+      )}
+      {href && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-11 items-center text-accent"
+        >
+          {uk.outreach.openContact}
+        </a>
+      )}
+      <div
+        role="log"
+        aria-label={uk.email.history}
+        className="max-h-[36rem] space-y-3 overflow-y-auto"
+      >
+        {!messages.length && contact && (
+          <p className="py-6 text-center text-muted-foreground">
+            {uk.email.noMessages}
+          </p>
+        )}
+        {messages.map((message) => (
+          <Draft
+            key={`${message.id}:${message.body}:${message.subject}:${message.status}`}
+            message={message}
+            blocked={blocked}
+            pending={pending}
+            approval={approval}
+            act={act}
+          />
+        ))}
+      </div>
+      {contact &&
+        !blocked &&
+        (contact.kind === 'phone' ? (
+          <div className="border-t border-border pt-3">
+            <label htmlFor={`call-${data.company.id}`}>
+              {uk.outreach.callNote}
+            </label>
+            <textarea
+              id={`call-${data.company.id}`}
+              className="w-full rounded-lg border border-border bg-surface p-3"
+              value={callNote}
+              maxLength={20000}
+              rows={3}
+              onChange={(event) => setCallNote(event.target.value)}
+            />
+            <AiAssist text={callNote} onApply={setCallNote} />
             <Button
-              disabled={pending || data.blocked}
-              onClick={() => void act('submit', { messageId: message.id })}
+              className="mt-3"
+              disabled={pending || !campaignId || !callNote.trim()}
+              onClick={() => request('call')}
             >
-              {uk.email.send}
+              {uk.outreach.logCall}
             </Button>
-          )}
-          {message.status === 'awaiting_approval' && (
-            <Button
-              disabled={pending || data.blocked}
-              onClick={() => void act('approve', { messageId: message.id })}
-            >
-              {uk.email.approve}
-            </Button>
-          )}
-        </section>
-      ))}
+          </div>
+        ) : !messages.length ? (
+          <Button
+            disabled={pending || generating || !campaignId}
+            onClick={() => request('generate')}
+          >
+            {generating ? uk.outreach.generating : uk.outreach.generate}
+          </Button>
+        ) : null)}
+      {task && (
+        <p role="status" className="text-muted-foreground">
+          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          {task.reason_uk && ` · ${task.reason_uk}`}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
     </Card>
   );
 }

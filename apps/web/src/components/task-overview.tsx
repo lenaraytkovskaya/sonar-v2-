@@ -119,6 +119,7 @@ export function TaskOverview() {
       'prozorro.lookup': uk.prozorro.title,
       'ai.models': uk.tasks.aiModels,
       'ai.assist': uk.tasks.aiAssist,
+      'ai.drafts': uk.outreach.generate,
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
       'site.scan': uk.scanner.title,

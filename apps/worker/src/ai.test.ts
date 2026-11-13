@@ -16,6 +16,7 @@ vi.mock('@sonar/db/tasks', () => ({
 }));
 import { runAiAssist } from './ai.js';
 const suggestion = {
+  outreach_goal: 'Познайомитися та дізнатися про потреби СТО.',
   name: 'Авто',
   country_code: 'UA',
   language_code: 'uk',
@@ -78,6 +79,7 @@ it.each(['Обладнання для СТО.', '', '   ', undefined])(
       result: {
         suggestion: {
           offer: '',
+          outreach_goal: suggestion.outreach_goal,
           needs_about: false,
         },
       },

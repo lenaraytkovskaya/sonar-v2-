@@ -147,10 +147,12 @@ export const campaigns = pgTable(
     cities: text('cities').array().notNull(),
     queries: text('queries').array().notNull(),
     offer: text('offer').notNull(),
+    outreachGoal: text('outreach_goal').notNull().default(''),
+    minScore: numeric('min_score').notNull().default('40'),
     batchSize: integer('batch_size').notNull().default(20),
     budgetUsd: numeric('budget_usd', { precision: 20, scale: 10 }).notNull(),
     channels: jsonb('channels').notNull(),
-    sendMode: sendMode('send_mode').notNull().default('approval'),
+    sendMode: sendMode('send_mode').notNull().default('manual'),
     scoringWeights: jsonb('scoring_weights').notNull(),
     scoringRevision: integer('scoring_revision').notNull().default(0),
     status: campaignStatus('status').notNull().default('draft'),
@@ -164,6 +166,7 @@ export const campaigns = pgTable(
   },
   (t) => [
     check('campaign_budget_nonnegative', sql`${t.budgetUsd} >= 0`),
+    check('campaign_min_score', sql`${t.minScore} between 0 and 100`),
     check('campaign_batch_size', sql`${t.batchSize} in (20,50,100,200)`),
   ],
 );
@@ -445,9 +448,10 @@ export const conversations = pgTable(
       .defaultNow(),
   },
   (t) => [
-    unique('conversation_company_campaign_channel').on(
+    unique('conversation_company_campaign_contact_channel').on(
       t.companyId,
       t.campaignId,
+      t.contactId,
       t.channel,
     ),
   ],
@@ -459,10 +463,9 @@ export const messages = pgTable(
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => conversations.id),
-    accountId: uuid('account_id')
-      .notNull()
-      .references(() => channelAccounts.id),
+    accountId: uuid('account_id').references(() => channelAccounts.id),
     direction: text('direction').notNull().default('out'),
+    source: text('source').notNull().default('generated'),
     channel: text('channel').notNull().default('email'),
     scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
     toValue: text('to_value').notNull(),
@@ -489,11 +492,11 @@ export const messages = pgTable(
     check('message_direction', sql`${t.direction} in ('out','in')`),
     check(
       'message_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','form','social','call')`,
     ),
     check(
       'message_status',
-      sql`${t.status} in ('draft','awaiting_approval','awaiting_manual','queued','sent','delivered','read','failed')`,
+      sql`${t.status} in ('draft','awaiting_approval','awaiting_manual','queued','sent','delivered','read','failed','skipped')`,
     ),
   ],
 );

@@ -99,7 +99,8 @@ export async function runBudgetedRequest(
     if (
       service === 'google_places' ||
       service === 'twocaptcha' ||
-      (service === 'openrouter' && task.type === 'company.analyze')
+      (service === 'openrouter' &&
+        ['company.analyze', 'ai.drafts'].includes(task.type))
     ) {
       const {
         rows: [campaign],

@@ -14,7 +14,7 @@ async function snapshot(
   const {
     rows: [row],
   } = await client.query(
-    `select c.website,(select value from settings where key='platforms.kinds') as platform_kinds,c.rating,c.ratings_count,a.scoring_weights,a.scoring_revision,
+    `select c.website,(select value from settings where key='platforms.kinds') as platform_kinds,c.rating,c.ratings_count,a.scoring_weights,a.scoring_revision,a.min_score,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.id) from contacts p where p.company_id=c.id),'[]') as contacts,
       coalesce((select jsonb_agg(to_jsonb(f) order by f.found_at desc,f.id) from company_facts f where f.company_id=c.id and (f.expires_at is null or f.expires_at>now()) and f.kind in ('site_status','registry_entity','registry_status','termination_date')),'[]') as facts
      from companies c join campaign_companies cc on cc.company_id=c.id join campaigns a on a.id=cc.campaign_id
@@ -183,7 +183,8 @@ export async function computeCompanyScore(
     const {
       rows: [threshold],
     } = await client.query(
-      "select value from settings where key='analysis.min_score'",
+      'select min_score as value from campaigns where id=$1',
+      [campaignId],
     );
     if (result.score >= Number(threshold?.value))
       await enqueueCompanyAnalysis(companyId, campaignId, null, client);

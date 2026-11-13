@@ -29,3 +29,4 @@ export * from './email.js';
 export * from './manual.js';
 export * from './prozorro.js';
 export * from './platforms.js';
+export * from './outreach.js';

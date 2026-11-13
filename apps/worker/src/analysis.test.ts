@@ -9,7 +9,7 @@ const { query, snapshot, budgeted, draft } = vi.hoisted(() => ({
 vi.mock('@sonar/db', () => ({
   sonarPool: { query, connect: async () => ({ query, release: vi.fn() }) },
 }));
-vi.mock('@sonar/db/email', () => ({ draftFromAnalysis: draft }));
+vi.mock('@sonar/db/outreach', () => ({ enqueueOutreachDrafts: draft }));
 vi.mock('@sonar/db/analysis', () => ({ analysisSnapshot: snapshot }));
 vi.mock('@sonar/db/budget', async (original) => ({
   ...(await original<object>()),
@@ -39,6 +39,7 @@ const answer = {
 };
 const data = () => ({
   score: 40,
+  min_score: 40,
   about: 'Обладнання для СТО',
   offer: 'Пропозиція',
   contacts: [{ kind: 'email' }],
@@ -142,6 +143,7 @@ it('reuses a persisted analysis without calling OpenRouter', async () => {
   });
   expect(budgeted).not.toHaveBeenCalled();
   expect(snapshot).not.toHaveBeenCalled();
+  expect(draft).toHaveBeenCalledWith('company', 'campaign', 'prior');
 });
 it('rejects fabricated channels after billing and never saves them', async () => {
   const api = client();
@@ -169,4 +171,14 @@ it('enforces the per-company price cap before any paid request', async () => {
   });
   expect(budgeted).not.toHaveBeenCalled();
   expect(api.complete).not.toHaveBeenCalled();
+});
+
+it('uses the campaign score threshold ahead of the global analysis setting', async () => {
+  snapshot.mockResolvedValue({ ...data(), score: 60, min_score: 70 });
+  expect(await runCompanyAnalysis(input, 'task', client())).toMatchObject({
+    status: 'skipped',
+    reasonCode: 'score_below_threshold',
+  });
+  expect(budgeted).not.toHaveBeenCalled();
+  expect(draft).not.toHaveBeenCalled();
 });

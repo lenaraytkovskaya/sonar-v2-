@@ -498,7 +498,7 @@ export async function createCompanyMessage(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,channel) do update set contact_id=excluded.contact_id returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, contact.id, channel],
     );
     const status = messageStatusForMode(
@@ -856,6 +856,23 @@ export async function sendEmailMessage(
           `Активуйте кампанію та увімкніть ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'telegram' ? 'Telegram' : 'email'} перед надсиланням.`,
         ),
       );
+    if (m.send_mode === 'auto' && m.idempotency_key.startsWith('outreach:')) {
+      const {
+        rows: [score],
+      } = await c.query(
+        `select coalesce(s.score,-1)>=a.min_score as eligible from campaigns a left join company_scores s on s.campaign_id=a.id and s.company_id=$2 where a.id=$1`,
+        [m.campaign_id, m.company_id],
+      );
+      if (!score?.eligible) {
+        const reason =
+          'Оцінка компанії нижча за поріг кампанії. Автоматичне надсилання призупинено.';
+        await c.query('update messages set reason_uk=$2 where id=$1', [
+          messageId,
+          reason,
+        ]);
+        return finish(terminal('paused', 'score_below_threshold', reason));
+      }
+    }
     if (m.send_mode === 'manual' && !m.created_by && !m.approved_by) {
       await c.query(
         "update messages set status='draft',reason_uk='Надішліть повідомлення вручну.' where id=$1",
