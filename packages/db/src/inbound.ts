@@ -117,7 +117,7 @@ export async function recordInbound(input: InboundInput) {
         input.senderPhone && normalize(input.channel, input.senderPhone),
       ].filter(Boolean);
       const { rows: candidates } = await c.query(
-        `select id,company_id from contacts where kind=any($1::text[]) and lower(normalized)=any($2::text[]) order by rank desc,id`,
+        `select id,company_id from contacts where kind::text=any($1::text[]) and lower(normalized)=any($2::text[]) order by rank desc,id`,
         [
           input.channel === 'email' ? ['email'] : [input.channel, 'phone'],
           aliases,
@@ -254,7 +254,7 @@ export async function applyInboundClassification(
       );
       if (m.company_id) {
         await c.query(
-          `insert into do_not_contact(company_id,kind,value_normalized,reason) values($1,'company',$1::text,'Відмова у вхідному повідомленні.') on conflict(kind,value_normalized) do nothing`,
+          `insert into do_not_contact(company_id,kind,value_normalized,reason) values($1::uuid,'company',$1::text,'Відмова у вхідному повідомленні.') on conflict(kind,value_normalized) do nothing`,
           [m.company_id],
         );
         await c.query(
