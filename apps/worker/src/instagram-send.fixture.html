@@ -28,8 +28,8 @@
   else if (f.noMessage) main.querySelector('button').remove();
   else if (f.domRateLimit)
     main.innerHTML = '<div role="alert">Try again later</div>';
-  else
-    main.querySelector('button, a').onclick = (event) => {
+  else {
+    const openConversation = (event) => {
       event.preventDefault();
       window.fixtureEvent('open');
       if (f.noDialog) return;
@@ -115,4 +115,68 @@
       if (f.delayedDialog) setTimeout(open, 60);
       else open();
     };
+    main.querySelector('button, a').onclick = openConversation;
+    if (f.overflow) {
+      // Screenshot-supported structure; accessible labels/roles are assumptions.
+      // The profile has Follow only; the username's options open a body portal.
+      const direct = main.querySelector('button, a');
+      if (!f.directAvailable) direct.hidden = true;
+      main
+        .querySelector('header')
+        .insertAdjacentHTML(
+          'beforeend',
+          '<button id="follow">Стежити</button><button id="options"><svg role="img" aria-label="Options"><title>Options</title></svg></button>',
+        );
+      const options = document.querySelector('#options');
+      document.querySelector('#follow').onclick = () =>
+        window.fixtureEvent('unsafe:follow');
+      if (f.unknownOptions) options.innerHTML = '…';
+      if (f.wrongOptionsScope) document.body.append(options);
+      if (f.duplicateOptions)
+        options.insertAdjacentHTML('afterend', options.outerHTML);
+      options.insertAdjacentHTML(
+        'afterend',
+        '<button hidden aria-label="Options">…</button>',
+      );
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        `<aside><button>Options</button><button>Надіслати повідомлення</button></aside>
+        <div role="menu" ${f.existingMenu ? '' : 'hidden'}><button>Надіслати повідомлення</button></div>`,
+      );
+      document
+        .querySelectorAll('aside button, [role="menu"] button')
+        .forEach(
+          (button) => (button.onclick = () => window.fixtureEvent('decoy')),
+        );
+      options.onclick = async () => {
+        window.fixtureEvent('options');
+        const popup = document.createElement('div');
+        popup.setAttribute('role', f.menuDialog ? 'dialog' : 'menu');
+        popup.innerHTML = `<button>Заблокувати</button><button>Обмежити</button><button>Поскаржитися</button><button>Поширити в...</button><button>Про цей обліковий запис</button>`;
+        popup
+          .querySelectorAll('button')
+          .forEach(
+            (button) =>
+              (button.onclick = () => window.fixtureEvent('unsafe:menu')),
+          );
+        const action = document.createElement(f.menuLink ? 'a' : 'button');
+        if (f.menuLink) action.href = '#';
+        if (f.menuItem) action.setAttribute('role', 'menuitem');
+        action.textContent = 'Надіслати повідомлення';
+        action.onclick = (event) => {
+          popup.remove();
+          openConversation(event);
+        };
+        if (f.noMenuMessage || f.wrongMenu) action.hidden = true;
+        popup.append(action);
+        if (f.duplicateMenuAction)
+          popup.insertAdjacentHTML('beforeend', action.outerHTML);
+        if (f.menuRateLimit) await fetch('/api/v1/direct/fixture/');
+        document.body.append(popup);
+        if (f.duplicateMenu)
+          popup.insertAdjacentHTML('afterend', popup.outerHTML);
+        if (f.menuProfileMismatch) history.replaceState({}, '', '/other/');
+      };
+    }
+  }
 </script>

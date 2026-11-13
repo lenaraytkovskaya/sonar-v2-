@@ -20,6 +20,12 @@ export type SocialBrowserSession = {
 const home = (network: SocialNetwork) => `https://www.${network}.com/`;
 const messageLabel =
   /^(?:message|send message|повідомлення|надіслати повідомлення|сообщение|отправить сообщение)$/i;
+// The screenshots establish the route, not these accessible names/roles.
+// Unsupported or ambiguous markup must fail closed rather than guess an ellipsis.
+const profileOptionsLabel =
+  /^(?:options|more options|параметри|додаткові параметри|опції|настройки)$/i;
+const menuMessageLabel =
+  /^(?:send message|надіслати повідомлення|отправить сообщение)$/i;
 const sendLabel = /^(?:send|надіслати|отправить)$/i;
 const outgoing = {
   instagram:
@@ -211,10 +217,43 @@ async function sendInstagram(
       .filter({ has: page.getByRole('heading', { name }) });
     await profile.waitFor({ state: 'visible' });
     stage = 'messagebutton';
-    await profile
+    const directAction = page
       .getByRole('button', { name: messageLabel })
-      .or(profile.getByRole('link', { name: messageLabel }))
-      .click();
+      .or(page.getByRole('link', { name: messageLabel }))
+      .filter({ visible: true });
+    const optionsAction = page
+      .getByRole('button', { name: profileOptionsLabel })
+      .filter({ visible: true });
+    await profile
+      .filter({ has: directAction.or(optionsAction) })
+      .waitFor({ state: 'visible' });
+    const direct = profile.locator(directAction);
+    if (await direct.count()) await direct.click();
+    else {
+      // A portal is outside the verified header. Require a newly visible, unique
+      // popup after clicking that header's own options, never a pre-existing menu.
+      const popup = page.locator(
+        '[role="menu"]:visible, [role="dialog"]:visible',
+      );
+      if (await popup.count()) throw stagedFailure(stage, 'unconfirmed');
+      const options = profile.locator(optionsAction);
+      if ((await options.count()) !== 1)
+        throw stagedFailure(stage, 'unconfirmed');
+      await options.click();
+      await popup.waitFor({ state: 'visible' });
+      await assertSession();
+      if (
+        socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+        target.canonicalUrl.toLowerCase()
+      )
+        throw stagedFailure(stage, 'mismatch');
+      await popup
+        .getByRole('menuitem', { name: menuMessageLabel })
+        .or(popup.getByRole('button', { name: menuMessageLabel }))
+        .or(popup.getByRole('link', { name: menuMessageLabel }))
+        .filter({ visible: true })
+        .click();
+    }
     await assertSession();
     stage = 'dialog';
     const dialog = await instagramDialog(page, target.handle);
