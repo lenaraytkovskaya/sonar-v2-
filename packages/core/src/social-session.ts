@@ -40,7 +40,8 @@ import type { SocialNetwork } from './social.js';
 
 export class SocialSendError extends Error {
   constructor(
-    public code: 'session_invalid' | 'unavailable' | 'delivery_uncertain',
+    public code:
+      'session_invalid' | 'rate_limit' | 'unavailable' | 'delivery_uncertain',
     public reasonUk: string,
   ) {
     super(reasonUk);

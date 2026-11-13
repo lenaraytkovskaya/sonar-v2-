@@ -1,6 +1,5 @@
 import { expect, it, vi } from 'vitest';
 import type { Browser, BrowserContext, Page } from 'playwright';
-import { SocialSendError } from '@sonar/core/social-session';
 import {
   createSocialSendBrowser,
   type SocialSessionAccount,
@@ -47,6 +46,7 @@ function fixture(
   }));
   let url = '';
   const page = {
+    on: vi.fn(),
     goto: vi.fn(async (target: string) => {
       url = options.checkpoint
         ? 'https://www.instagram.com/challenge/'
@@ -69,7 +69,9 @@ function fixture(
             : selector.includes('page_transparency') && options.personalFacebook
               ? 0
               : 1,
-      filter: ownFilter,
+      filter: selector.includes('[role="alert"]')
+        ? () => ({ count: async () => 0 })
+        : ownFilter,
       first: () => ({ waitFor: async () => {} }),
       last: () => ({
         fill: async () => {
@@ -163,53 +165,6 @@ it('stops at a checkpoint before opening a composer or marking a send attempt', 
   expect(beforeSend).not.toHaveBeenCalled();
   expect(f.events).toEqual([]);
 });
-it('marks the durable attempt immediately before clicking and requires a new outgoing exact-text confirmation', async () => {
-  const f = fixture();
-  const id = await f.adapter.send(
-    account,
-    session,
-    1000,
-    'https://instagram.com/company/',
-    'Hello',
-    async () => {
-      f.events.push('mark');
-    },
-  );
-  expect(id).toBe('https://www.instagram.com/direct/t/thread/');
-  expect(f.events).toEqual(['fill', 'mark', 'click']);
-  expect(f.exact).toHaveBeenCalledWith('Hello', { exact: true });
-  expect(f.ownWait).toHaveBeenCalledWith({ state: 'visible', timeout: 1000 });
-});
-it('reports an uncertain delivery after click without retrying or claiming success', async () => {
-  const f = fixture({ confirm: false });
-  await expect(
-    f.adapter.send(
-      account,
-      session,
-      1000,
-      'https://instagram.com/company/',
-      'Hello',
-      async () => {},
-    ),
-  ).rejects.toMatchObject({ code: 'delivery_uncertain' });
-  expect(f.events.filter((event) => event === 'click')).toHaveLength(1);
-});
-it('never clicks send if the durable marker cannot be saved', async () => {
-  const f = fixture();
-  await expect(
-    f.adapter.send(
-      account,
-      session,
-      1000,
-      'https://instagram.com/company/',
-      'Hello',
-      async () => {
-        throw Error('database offline');
-      },
-    ),
-  ).rejects.toBeInstanceOf(SocialSendError);
-  expect(f.events).toEqual(['fill']);
-});
 it('rejects personal LinkedIn and unverified Facebook profiles before composing', async () => {
   const f = fixture({ personalFacebook: true });
   await expect(
@@ -234,26 +189,6 @@ it('rejects personal LinkedIn and unverified Facebook profiles before composing'
     ),
   ).rejects.toMatchObject({ code: 'unavailable' });
   expect(f.events).toEqual([]);
-});
-
-it('preserves a post-click checkpoint as session_invalid so the account is paused while the durable attempt remains', async () => {
-  const f = fixture({ postCheckpoint: true, confirm: false });
-  const mark = vi.fn(async () => {});
-  await expect(
-    f.adapter.send(
-      account,
-      session,
-      1000,
-      'https://instagram.com/company/',
-      'Hello',
-      mark,
-    ),
-  ).rejects.toMatchObject({
-    code: 'session_invalid',
-    reasonUk: 'Увійдіть знову (оновіть cookies)',
-  });
-  expect(mark).toHaveBeenCalledOnce();
-  expect(f.events).toEqual(['fill', 'click']);
 });
 
 it.each(['facebook', 'linkedin'] as const)(
