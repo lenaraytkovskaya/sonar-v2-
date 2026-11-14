@@ -550,6 +550,15 @@ async function sendInstagram(
     const composer = dialog
       .getByRole('textbox', { name: composerLabel })
       .or(dialog.getByPlaceholder(composerLabel))
+      .or(
+        dialog
+          .getByRole('textbox')
+          .and(
+            dialog.locator(
+              '[contenteditable="true"][aria-placeholder="Message..." i]:not([aria-readonly="true"])',
+            ),
+          ),
+      )
       .filter({ visible: true })
       .and(
         page.locator(

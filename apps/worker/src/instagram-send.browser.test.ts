@@ -178,6 +178,49 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it('fills the observed unnamed Lexical textbox while excluding header/sidebar editors', async () => {
+      const f = await fixture({ lexical: true, lexicalDecoys: true });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        expect(f.inputs).toEqual(['textbox']);
+        expect(f.events).toEqual(['open', 'mark', 'send']);
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
+      { lexicalPlaceholder: 'Search' },
+      { lexicalPlaceholder: 'Message... search' },
+      { noneditableComposer: true },
+      { readonlyComposer: true },
+      { nonTextboxComposer: true },
+      { noComposer: true },
+      { duplicateLexical: true },
+    ])(
+      'does not select or send with unsafe Lexical composer %j',
+      async (options) => {
+        const f = await fixture({
+          lexical: true,
+          lexicalDecoys: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            stage: 'composer',
+          });
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.events).toEqual(['open']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([
       {},
       { menuDialog: true },
