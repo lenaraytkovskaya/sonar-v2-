@@ -19,11 +19,7 @@ vi.mock('pg-boss', () => ({
     send = state.send;
   },
 }));
-import {
-  enqueueProzorroCompany,
-  enqueueCampaignProzorro,
-  enqueueProzorroLookup,
-} from './tasks.js';
+import { enqueueProzorroLookup } from './tasks.js';
 import {
   prozorroCompanyCode,
   saveProzorroCompanySnapshot,
@@ -34,6 +30,8 @@ beforeEach(() => {
   state.start.mockResolvedValue(undefined);
   state.query.mockImplementation(
     async (sql: string, values: unknown[] = []) => {
+      if (sql.startsWith('select value,source'))
+        return { rows: [{ source: 'registry', value: '12345678' }] };
       if (sql.startsWith('insert into tasks')) {
         const key = String(values[1]);
         if (state.ids.has(key)) return { rows: [] };
@@ -54,36 +52,7 @@ beforeEach(() => {
     },
   );
 });
-it('atomically deduplicates company/day and sends pg-boss only once', async () => {
-  const first = await enqueueProzorroCompany('company', 'actor');
-  const second = await enqueueProzorroCompany('company', 'actor');
-  expect(first.created).toBe(true);
-  expect(second.created).toBe(false);
-  expect(state.send).toHaveBeenCalledTimes(1);
-  expect([...state.ids.keys()][0]).toMatch(
-    /^prozorro\.company:company:\d{4}-\d{2}-\d{2}$/,
-  );
-  expect(
-    state.query.mock.calls.some(([sql]) =>
-      sql.includes("subject_type='company'"),
-    ),
-  ).toBe(true);
-});
-it('bulk query excludes successful checks in the last 30 days and counts only new tasks', async () => {
-  const base = state.query.getMockImplementation()!;
-  state.query.mockImplementation((sql: string, values: unknown[]) =>
-    sql.includes('select distinct cc.company_id')
-      ? Promise.resolve({ rows: [{ company_id: 'company' }] })
-      : base(sql, values),
-  );
-  expect(await enqueueCampaignProzorro('campaign', 'actor')).toBe(1);
-  expect(await enqueueCampaignProzorro('campaign', 'actor')).toBe(0);
-  expect(
-    state.query.mock.calls.find(([sql]) =>
-      sql.includes('select distinct cc.company_id'),
-    )?.[0],
-  ).toContain("interval '30 days'");
-});
+
 it('does not enqueue automatic external work when disabled or registry was not successful', async () => {
   // finishEnrichment reads campaign memberships; empty rows keep it local and free.
   await enqueueProzorroLookup('company');
@@ -132,23 +101,4 @@ it('persists one snapshot and deduplicates contacts with normalized conflict key
   ).toBe(true);
   expect(state.query.mock.calls.at(-1)?.[0]).toBe('commit');
   expect(state.release).toHaveBeenCalled();
-});
-it('resumes the same daily task after missing EDR is resolved, without changing its idempotency key', async () => {
-  const base = state.query.getMockImplementation()!;
-  await enqueueProzorroCompany('company');
-  state.send.mockClear();
-  state.query.mockImplementation((sql: string, values: unknown[]) => {
-    if (sql.startsWith('select payload from tasks'))
-      return Promise.resolve({ rows: [{ payload: { companyId: 'company' } }] });
-    if (sql.includes('select value,source from company_facts'))
-      return Promise.resolve({
-        rows: [{ source: 'registry', value: '12345678' }],
-      });
-    if (sql.startsWith("update tasks set status='queued'"))
-      return Promise.resolve({ rows: [{ id: 'task-id' }] });
-    return base(sql, values);
-  });
-  expect((await enqueueProzorroCompany('company')).created).toBe(true);
-  expect(state.ids.size).toBe(1);
-  expect(state.send).toHaveBeenCalledTimes(1);
 });

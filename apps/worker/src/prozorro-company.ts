@@ -12,6 +12,8 @@ import {
   boss,
   runTask,
   finishEnrichment,
+  enqueueProzorroCompany,
+  reconcileProzorroCompanyTasks,
   type TaskOutcome,
 } from '@sonar/db/tasks';
 import {
@@ -220,10 +222,21 @@ export async function lookupProzorroCompany(
   };
 }
 class CompanyPaused extends Error {}
+function identityChanged(): TaskOutcome {
+  return {
+    status: 'skipped',
+    reasonCode: 'prozorro_identity_changed',
+    reasonUk:
+      'Код ЄДРПОУ змінився під час пошуку. Результат не збережено; пошук буде повторено для поточного коду.',
+  };
+}
 export async function runProzorroCompany({
   companyId,
+  code: queuedCode,
 }: {
   companyId: string;
+  code?: string | null;
+  version?: string;
 }): Promise<TaskOutcome> {
   const { rows } = await sonarPool.query(
     "select key,value from settings where key like 'prozorro.%' or key='scanner.user_agent'",
@@ -245,6 +258,8 @@ export async function runProzorroCompany({
         reasonCode: 'prozorro_missing_edrpou',
         reasonUk: 'Немає коду ЄДРПОУ',
       };
+    if (queuedCode !== undefined && queuedCode !== code)
+      return identityChanged();
     const number = (key: string, min: number, max: number) => {
       const value = Number(config[`prozorro.${key}`]);
       if (!Number.isFinite(value) || value < min || value > max)
@@ -277,7 +292,8 @@ export async function runProzorroCompany({
       maxPages,
     );
     await check();
-    await saveProzorroCompanySnapshot(companyId, snapshot);
+    if ((await saveProzorroCompanySnapshot(companyId, snapshot)) === false)
+      return identityChanged();
     return { status: 'done', result: snapshot };
   } catch (error) {
     if (error instanceof CompanyPaused)
@@ -311,6 +327,25 @@ export async function registerProzorroCompanyTasks() {
   await runTask(
     'prozorro.company',
     (payload) => runProzorroCompany(payload as { companyId: string }),
-    (payload) => finishEnrichment((payload as { companyId: string }).companyId),
+    async (payload) => {
+      const { companyId, code } = payload as {
+        companyId: string;
+        code?: string | null;
+      };
+      if (
+        code !== undefined &&
+        code !== (await prozorroCompanyCode(companyId))
+      ) {
+        await enqueueProzorroCompany(companyId);
+        return;
+      }
+      await finishEnrichment(companyId);
+    },
   );
+  await boss.createQueue('prozorro.company.reconcile');
+  await boss.work('prozorro.company.reconcile', async () => {
+    await reconcileProzorroCompanyTasks();
+  });
+  await boss.schedule('prozorro.company.reconcile', '* * * * *');
+  await reconcileProzorroCompanyTasks();
 }

@@ -196,20 +196,63 @@ export async function getProzorroCompanySummary(companyId: string) {
 
 // Current bounded company lookup snapshot is separate from the retained full-feed index.
 export async function getProzorroCompanySnapshot(companyId: string) {
-  const { rows } = await sonarPool.query<{
-    value: import('@sonar/core').ProzorroCompanySnapshot;
-  }>(
-    "select value from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' order by found_at desc limit 1",
-    [companyId],
-  );
-  return rows[0]?.value ?? null;
+  const client = await sonarPool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select id from companies where id=$1 for update', [
+      companyId,
+    ]);
+    const code = await prozorroCompanyCode(companyId, client, true);
+    const { rows } = await client.query<{
+      value: import('@sonar/core').ProzorroCompanySnapshot;
+    }>(
+      "select value from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and value->>'code'=$2 order by found_at desc limit 1",
+      [companyId, code],
+    );
+    await client.query('commit');
+    return rows[0]?.value ?? null;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Session ownership spans HTTP and terminal task bookkeeping, without an open transaction.
+// Reconciliation uses the same key, so even an expired job with a live worker is not replaced.
+export async function acquireProzorroCompanyLease(companyId: string) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query(
+      "select pg_advisory_lock(hashtextextended('prozorro.company:'||$1,0))",
+      [companyId],
+    );
+  } catch (error) {
+    client.release(true);
+    throw error;
+  }
+  return async () => {
+    let destroy = false;
+    try {
+      await client.query(
+        "select pg_advisory_unlock(hashtextextended('prozorro.company:'||$1,0))",
+        [companyId],
+      );
+    } catch {
+      destroy = true;
+    } finally {
+      client.release(destroy);
+    }
+  };
 }
 export async function prozorroCompanyCode(
   companyId: string,
   client: Pick<PoolClient, 'query'> = sonarPool,
+  lock = false,
 ) {
   const { rows } = await client.query(
-    "select value,source from company_facts where company_id=$1 and kind='edrpou' and source in ('registry','manual','website','ai') order by (source='registry') desc,found_at desc",
+    "select value,source from company_facts where company_id=$1 and kind='edrpou' and source in ('registry','manual','website','ai') order by (source='registry') desc,found_at desc" +
+      (lock ? ' for share' : ''),
     [companyId],
   );
   const trusted = rows.some((r) => r.source === 'registry')
@@ -242,13 +285,19 @@ export async function saveProzorroCompanySnapshot(
     await client.query('select id from companies where id=$1 for update', [
       companyId,
     ]);
+    if (
+      (await prozorroCompanyCode(companyId, client, true)) !== snapshot.code
+    ) {
+      await client.query('commit');
+      return false;
+    }
     const { rows: newer } = await client.query(
-      "select 1 from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and found_at>$2",
-      [companyId, snapshot.checkedAt],
+      "select 1 from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and found_at>$2 and value->>'code'=$3",
+      [companyId, snapshot.checkedAt, snapshot.code],
     );
     if (newer.length) {
       await client.query('commit');
-      return;
+      return true;
     }
     await client.query(
       "delete from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro'",
@@ -298,6 +347,7 @@ export async function saveProzorroCompanySnapshot(
       }
     }
     await client.query('commit');
+    return true;
   } catch (error) {
     await client.query('rollback');
     throw error;

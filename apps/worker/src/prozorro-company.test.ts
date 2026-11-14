@@ -5,6 +5,10 @@ const state = vi.hoisted(() => ({
   code: vi.fn(),
   save: vi.fn(),
   http: vi.fn(),
+  reconcile: vi.fn(),
+  createQueue: vi.fn(),
+  work: vi.fn(),
+  schedule: vi.fn(),
 }));
 vi.mock('@sonar/db', () => ({ sonarPool: { query: state.query } }));
 vi.mock('@sonar/db/prozorro', () => ({
@@ -12,7 +16,13 @@ vi.mock('@sonar/db/prozorro', () => ({
   saveProzorroCompanySnapshot: state.save,
 }));
 vi.mock('@sonar/db/tasks', () => ({
-  boss: {},
+  boss: {
+    createQueue: state.createQueue,
+    work: state.work,
+    schedule: state.schedule,
+  },
+  reconcileProzorroCompanyTasks: state.reconcile,
+  enqueueProzorroCompany: vi.fn(),
   runTask: vi.fn(),
   finishEnrichment: vi.fn(),
 }));
@@ -24,6 +34,7 @@ import {
   lookupProzorroCompany,
   readCompanySearch,
   runProzorroCompany,
+  registerProzorroCompanyTasks,
 } from './prozorro-company.js';
 import { ProzorroHttp, ProzorroHttpError } from './prozorro-http.js';
 import { extractCompanyTender, summarizeCompanyTenders } from '@sonar/core';
@@ -36,6 +47,7 @@ const fixture = JSON.parse(
 const now = new Date('2026-11-14T12:00:00Z');
 beforeEach(() => {
   vi.clearAllMocks();
+  state.save.mockResolvedValue(true);
   state.code.mockResolvedValue('41165490');
   state.query.mockImplementation(async (sql: string) => ({
     rows: sql.includes('select key,value')
@@ -355,4 +367,45 @@ it('respects configured page budget, portal cap and skips invalid resolvers with
   });
   expect(http.get).toHaveBeenCalledTimes(1);
   expect(result.resolverRejected).toBe(14);
+});
+
+it('rejects a queued identity that has already changed before any HTTP request', async () => {
+  expect(
+    await runProzorroCompany({ companyId: 'company', code: '12345678' }),
+  ).toMatchObject({
+    status: 'skipped',
+    reasonCode: 'prozorro_identity_changed',
+  });
+  expect(state.http).not.toHaveBeenCalled();
+  expect(state.save).not.toHaveBeenCalled();
+});
+it('does not report done when the atomic save rejects an identity changed during HTTP', async () => {
+  state.http.mockReturnValue({
+    search: vi
+      .fn()
+      .mockResolvedValue({ ...fixture.search, data: [fixture.search.data[1]] }),
+    summary: vi.fn().mockResolvedValue(fixture.summary),
+    get: vi.fn().mockResolvedValue(fixture.detail),
+  });
+  state.save.mockResolvedValue(false);
+  expect(
+    await runProzorroCompany({ companyId: 'company', code: '41165490' }),
+  ).toMatchObject({
+    status: 'skipped',
+    reasonCode: 'prozorro_identity_changed',
+  });
+  expect(state.save).toHaveBeenCalledWith(
+    'company',
+    expect.objectContaining({ code: '41165490' }),
+  );
+});
+it('reconciles company jobs on startup and each scheduler trigger', async () => {
+  await registerProzorroCompanyTasks();
+  expect(state.reconcile).toHaveBeenCalledTimes(1);
+  expect(state.schedule).toHaveBeenCalledWith(
+    'prozorro.company.reconcile',
+    '* * * * *',
+  );
+  await state.work.mock.calls[0]![1]();
+  expect(state.reconcile).toHaveBeenCalledTimes(2);
 });
