@@ -34,6 +34,7 @@ export interface SocialAccount {
   nextSendAt: Date | null;
   proxyIndex: number;
   ownerName: string | null;
+  canSyncInbox: boolean;
 }
 export interface SocialSessionAccount {
   id: string;
@@ -221,13 +222,17 @@ export function getSocialProxyCount(): number {
     return 0;
   }
 }
-export async function listSocialAccounts(): Promise<SocialAccount[]> {
+export async function listSocialAccounts(
+  userId?: string,
+): Promise<SocialAccount[]> {
   const { rows } = await sonarPool.query<SocialAccount>(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
     coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
     a.next_send_at as "nextSendAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
+    coalesce(a.owner_id=$1::uuid and a.channel='instagram' and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
+    [userId ?? null],
   );
   return rows;
 }
@@ -442,6 +447,70 @@ export async function checkSocialSession(id: string, userId: string) {
       );
     }
     return { id: taskId, created: !!taskId };
+  });
+}
+/** Owner action only. The persisted receipt, not a client flag, authorizes one run. */
+export async function syncSocialInbox(id: string, userId: string) {
+  return transaction(async (c) => {
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
+    );
+    const account = await lock(c, id, userId);
+    if (
+      account.channel !== 'instagram' ||
+      account.status !== 'active' ||
+      account.settings.enabled === false ||
+      account.settings.sessionStatus !== 'valid'
+    )
+      invalid(
+        'Ручна синхронізація доступна лише власнику активного Instagram із підтвердженою сесією.',
+      );
+    try {
+      resolveSocialSession(account);
+    } catch (error) {
+      invalid(
+        error instanceof SocialSendError
+          ? error.reasonUk
+          : 'Перевірте сесію та закріплений проксі акаунта.',
+      );
+    }
+    // The account lock proves no browser for this account is still running.
+    // Recover only this owner's abandoned manual task, without polling/reconcile.
+    await c.query(
+      `update tasks t set status='failed',finished_at=now(),reason_code='social_inbox_interrupted',
+      reason_uk='Разову синхронізацію перервано. Повторіть вручну.'
+      where t.type='social.inbox.sync' and t.payload->>'accountId'=$1 and t.payload->>'mode'='manual'
+      and t.status in ('queued','running') and not exists(select 1 from pgboss.job j
+        where j.name='social.inbox.sync' and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))`,
+      [id],
+    );
+    const {
+      rows: [pending],
+    } = await c.query(
+      "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
+      [id],
+    );
+    if (pending) return { id: String(pending.id), created: false };
+    const taskId = await enqueueTask(
+      'social.inbox.sync',
+      `social.inbox.sync:${id}:${randomUUID()}`,
+      { accountId: id, mode: 'manual', requestedBy: userId },
+      c,
+    );
+    if (!taskId) throw new Error('Manual inbox task was not created');
+    await c.query(
+      "update tasks set subject_type='channel_account',subject_id=$2 where id=$1",
+      [taskId, id],
+    );
+    await logActivity(
+      'social.inbox.manual.queued',
+      'channel_account',
+      id,
+      userId,
+      { taskId },
+      c,
+    );
+    return { id: taskId as string, created: true };
   });
 }
 export async function withSocialSessionCheck(

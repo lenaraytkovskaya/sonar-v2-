@@ -233,6 +233,24 @@ export async function retryTask(id: string, userId: string) {
       return false;
     if (original.type === 'social.inbox.sync') {
       if (original.status === 'done') return false;
+      if (original.payload.mode === 'manual') {
+        const {
+          rows: [owned],
+        } = await client.query(
+          "select id from channel_accounts where id=$1 and owner_id=$2 and channel='instagram' and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false'",
+          [original.payload.accountId, userId],
+        );
+        if (!owned || original.payload.requestedBy !== userId) return false;
+        if (!['queued', 'running'].includes(original.status)) {
+          const {
+            rows: [closing],
+          } = await client.query(
+            "select id from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1 and state in ('created','retry','active') limit 1",
+            [id],
+          );
+          if (closing) return false;
+        }
+      }
       const {
         rows: [active],
       } = await client.query(

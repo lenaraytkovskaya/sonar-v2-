@@ -125,6 +125,294 @@ beforeAll(async () => {
   );
 });
 it.skipIf(!enabled)(
+  'authorizes and deduplicates manual Instagram imports without enabling or continuing polling',
+  async () => {
+    const accounts = await import('./social-accounts.js');
+    const id = randomUUID();
+    const previousPoll = '2026-11-13T10:03:00.000Z';
+    const cookies = encryptSocialCookies(
+      JSON.stringify([
+        {
+          name: 'sessionid',
+          value: 'stub',
+          domain: '.instagram.com',
+          session: true,
+        },
+        {
+          name: 'ds_user_id',
+          value: '900000000000004',
+          domain: '.instagram.com',
+          session: true,
+        },
+      ]),
+      'instagram',
+      process.env.AUTH_SECRET!,
+    );
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,owner_id,status,daily_limit,settings) values($1,'instagram','Manual inbox test','',$2,'active',20,$3)",
+      [
+        id,
+        user,
+        {
+          sessionStatus: 'valid',
+          cookiesEncrypted: cookies,
+          proxyIndex: 0,
+          proxyFingerprint: socialProxyFingerprint({
+            server: 'http://proxy.invalid:8000',
+          }),
+          inboxSync: {
+            watermark: '2026-11-13T10:00:00.000Z',
+            nextPollAt: previousPoll,
+          },
+        },
+      ],
+    );
+    await db.sonarPool.query(
+      "update settings set value='false' where key='social.inbox.enabled'",
+    );
+    const { parseInstagramInbox } =
+      await import('../../../apps/worker/src/instagram-inbox-parser.js');
+    const parsed = parseInstagramInbox(
+      JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../apps/worker/src/instagram-inbox.fixture.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ),
+      now.toISOString(),
+    )!;
+    const adapter = {
+      sync: vi.fn<
+        import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter['sync']
+      >(async (_account, _cp, persist) => {
+        await persist({ messages: parsed.messages, resumeAnchor: null });
+        return {
+          complete: false,
+          reason: 'unsupported_dom',
+          skipped: ['general_folder_unsupported'],
+        };
+      }),
+    };
+    try {
+      await expect(
+        accounts.syncSocialInbox(id, randomUUID()),
+      ).rejects.toThrow();
+      expect(
+        (await accounts.listSocialAccounts(user)).find((row) => row.id === id)
+          ?.canSyncInbox,
+      ).toBe(true);
+      expect(
+        (await accounts.listSocialAccounts(randomUUID())).find(
+          (row) => row.id === id,
+        )?.canSyncInbox,
+      ).toBe(false);
+      for (const patch of [
+        { status: 'disabled' },
+        { status: 'paused' },
+        { sessionStatus: 'unconfirmed' },
+        { channel: 'facebook' },
+        { channel: 'linkedin' },
+      ]) {
+        await db.sonarPool.query(
+          "update channel_accounts set channel=$2,status=$3,settings=settings||jsonb_build_object('sessionStatus',$4::text) where id=$1",
+          [
+            id,
+            patch.channel ?? 'instagram',
+            patch.status ?? 'active',
+            patch.sessionStatus ?? 'valid',
+          ],
+        );
+        await expect(accounts.syncSocialInbox(id, user)).rejects.toThrow();
+      }
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as n from tasks where type='social.inbox.sync' and payload->>'accountId'=$1",
+            [id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      await db.sonarPool.query(
+        "update channel_accounts set channel='instagram',status='active',settings=settings||'{\"sessionStatus\":\"valid\"}'::jsonb where id=$1",
+        [id],
+      );
+      const receipts = await Promise.all(
+        Array.from({ length: 3 }, () => accounts.syncSocialInbox(id, user)),
+      );
+      expect(new Set(receipts.map((receipt) => receipt.id)).size).toBe(1);
+      expect(receipts.filter((receipt) => receipt.created)).toHaveLength(1);
+      const taskId = receipts[0]!.id!;
+      const task = (
+        await db.sonarPool.query('select payload from tasks where id=$1', [
+          taskId,
+        ])
+      ).rows[0];
+      expect(task.payload).toEqual({
+        accountId: id,
+        mode: 'manual',
+        requestedBy: user,
+      });
+      expect(
+        await worker.runSocialInboxSync(
+          { accountId: id, mode: 'manual' } as { accountId: string },
+          adapter,
+          now,
+        ),
+      ).toMatchObject({
+        status: 'skipped',
+        reasonCode: 'social_inbox_disabled',
+      });
+      expect(adapter.sync).not.toHaveBeenCalled();
+      expect(
+        await worker.runSocialInboxSync(task.payload, adapter, now, taskId),
+      ).toMatchObject({
+        status: 'done',
+        result: { created: 5, mode: 'manual', complete: false },
+      });
+      const state = (
+        await db.sonarPool.query(
+          'select settings from channel_accounts where id=$1',
+          [id],
+        )
+      ).rows[0].settings;
+      expect(state.inboxSync).toMatchObject({
+        watermark: '2026-11-13T10:00:00.000Z',
+        nextPollAt: previousPoll,
+        complete: false,
+      });
+      expect(state.socialAction.counts).toEqual({ sync: 1 });
+      expect(
+        await worker.runSocialInboxSync(task.payload, adapter, now, taskId),
+      ).toMatchObject({ status: 'deferred', reasonCode: 'social_action_gate' });
+      expect(adapter.sync).toHaveBeenCalledOnce();
+      await db.sonarPool.query("update tasks set status='failed' where id=$1", [
+        taskId,
+      ]);
+      expect(await tasks.retryTask(taskId, randomUUID())).toBe(false);
+      // The task record may fail before pg-boss acknowledges its current job.
+      expect(await tasks.retryTask(taskId, user)).toBe(false);
+      let jobs = (
+        await db.sonarPool.query(
+          "select id from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1 and state in ('created','retry','active')",
+          [taskId],
+        )
+      ).rows;
+      await admin.cancel(
+        'social.inbox.sync',
+        jobs.map((row) => row.id),
+      );
+      expect(await tasks.retryTask(taskId, user)).toBe(true);
+      jobs = (
+        await db.sonarPool.query(
+          "select id from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1 and state in ('created','retry','active')",
+          [taskId],
+        )
+      ).rows;
+      expect(jobs).toHaveLength(1);
+      expect(
+        (
+          await db.sonarPool.query('select payload from tasks where id=$1', [
+            taskId,
+          ])
+        ).rows[0].payload,
+      ).toEqual(task.payload);
+      await db.sonarPool.query(
+        'update channel_accounts set owner_id=null where id=$1',
+        [id],
+      );
+      expect(
+        await worker.runSocialInboxSync(task.payload, adapter, now, taskId),
+      ).toMatchObject({
+        status: 'paused',
+        reasonCode: 'social_inbox_manual_unauthorized',
+      });
+      await db.sonarPool.query(
+        'update channel_accounts set owner_id=$2 where id=$1',
+        [id, user],
+      );
+      // A killed worker must not strand this account when global polling is off.
+      await admin.cancel(
+        'social.inbox.sync',
+        jobs.map((row) => row.id),
+      );
+      await db.sonarPool.query(
+        "update tasks set status='running' where id=$1",
+        [taskId],
+      );
+      const recovered = await accounts.syncSocialInbox(id, user);
+      expect(recovered.created).toBe(true);
+      expect(recovered.id).not.toBe(taskId);
+      expect(
+        (
+          await db.sonarPool.query('select status from tasks where id=$1', [
+            taskId,
+          ])
+        ).rows[0].status,
+      ).toBe('failed');
+      expect(await tasks.retryTask(taskId, user)).toBe(true);
+      expect(
+        (
+          await db.sonarPool.query('select result from tasks where id=$1', [
+            taskId,
+          ])
+        ).rows[0].result.retryTaskId,
+      ).toBe(recovered.id);
+      await db.sonarPool.query(
+        "update channel_accounts set status='disabled' where id=$1",
+        [id],
+      );
+      expect(
+        await worker.runSocialInboxSync(
+          task.payload,
+          adapter,
+          new Date(now.getTime() + 180000),
+          taskId,
+        ),
+      ).toMatchObject({
+        status: 'paused',
+        reasonCode: 'social_account_inactive',
+      });
+      expect(await inbox.reconcileSocialInbox(now)).toBe(0);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select value from settings where key='social.inbox.enabled'",
+          )
+        ).rows[0].value,
+      ).toBe(false);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as n from tasks where type='ai.inbound' and payload->>'messageId' in(select id::text from messages where account_id=$1)",
+            [id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+    } finally {
+      await db.sonarPool.query(
+        "delete from tasks where (type='social.inbox.sync' and payload->>'accountId'=$1::text) or payload->>'messageId' in(select id::text from messages where account_id=$1::uuid)",
+        [id],
+      );
+      await db.sonarPool.query('delete from messages where account_id=$1', [
+        id,
+      ]);
+      await db.sonarPool.query(
+        'delete from conversations where account_id=$1',
+        [id],
+      );
+      await db.sonarPool.query('delete from channel_accounts where id=$1', [
+        id,
+      ]);
+      await db.sonarPool.query(
+        "update settings set value='true' where key='social.inbox.enabled'",
+      );
+    }
+  },
+);
+it.skipIf(!enabled)(
   'persists observed Instagram sender IDs without invented profiles, deduplicates and keeps partial watermark',
   async () => {
     const id = randomUUID();

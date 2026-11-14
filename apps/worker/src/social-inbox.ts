@@ -53,6 +53,7 @@ export async function runSocialInboxSync(
   input: { accountId: string },
   adapter?: SocialInboxAdapter,
   now = new Date(),
+  taskId?: string,
 ): Promise<TaskOutcome> {
   if (!adapter)
     return {
@@ -81,13 +82,16 @@ export async function runSocialInboxSync(
     locked = true;
     const {
       rows: [account],
-    } = await c.query<SocialSessionAccount & { status: string }>(
-      "select id,channel,settings,status from channel_accounts where id=$1 and channel in ('instagram','facebook','linkedin')",
+    } = await c.query<
+      SocialSessionAccount & { status: string; owner_id: string | null }
+    >(
+      "select id,channel,settings,status,owner_id from channel_accounts where id=$1 and channel in ('instagram','facebook','linkedin')",
       [input.accountId],
     );
     if (
       !account ||
       account.status !== 'active' ||
+      account.settings.enabled === false ||
       account.settings.sessionStatus !== 'valid'
     )
       return {
@@ -95,13 +99,34 @@ export async function runSocialInboxSync(
         reasonCode: 'social_account_inactive',
         reasonUk: 'Увімкніть акаунт із підтвердженою сесією.',
       };
+    let manual = false;
+    if (taskId) {
+      const {
+        rows: [receipt],
+      } = await c.query(
+        `select t.payload->>'mode' as mode, (t.subject_type='channel_account' and t.subject_id=$2
+        and t.payload->>'requestedBy'=$3 and $4::boolean
+        and exists(select 1 from activity_log l where l.action='social.inbox.manual.queued'
+          and l.entity_type='channel_account' and l.entity_id=$2 and l.user_id::text=$3 and l.details->>'taskId'=t.id::text)) as trusted
+        from tasks t where t.id=$1 and t.type='social.inbox.sync' and t.status in ('queued','running') and t.payload->>'accountId'=$2`,
+        [taskId, account.id, account.owner_id, account.channel === 'instagram'],
+      );
+      manual = receipt?.mode === 'manual' && receipt.trusted === true;
+      if (receipt?.mode === 'manual' && !manual)
+        return {
+          status: 'paused',
+          reasonCode: 'social_inbox_manual_unauthorized',
+          reasonUk:
+            'Дозвіл власника на разову синхронізацію недійсний. Власник має запустити її з акаунта повторно.',
+        };
+    }
     const { rows: settings } = await c.query(
       "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
     );
-    if (config['social.inbox.enabled'] !== true)
+    if (config['social.inbox.enabled'] !== true && !manual)
       return {
         status: 'skipped',
         reasonCode: 'social_inbox_disabled',
@@ -147,7 +172,7 @@ export async function runSocialInboxSync(
           ...(account.settings.inboxSync as Partial<SocialInboxCheckpoint>),
           ...checkpoint,
           complete: false,
-          nextPollAt,
+          ...(!manual ? { nextPollAt } : {}),
         }),
       ],
     );
@@ -183,7 +208,7 @@ export async function runSocialInboxSync(
       [
         account.id,
         JSON.stringify({
-          nextPollAt,
+          ...(!manual ? { nextPollAt } : {}),
           complete,
           reason: result.reason ?? null,
           ...(complete
@@ -200,6 +225,7 @@ export async function runSocialInboxSync(
       status: 'done',
       result: {
         created,
+        mode: manual ? 'manual' : 'automatic',
         conflicts,
         complete,
         reason: result.reason ?? null,
@@ -258,9 +284,16 @@ export async function registerSocialInboxTasks(adapter?: SocialInboxAdapter) {
   await boss.createQueue('social.inbox.sync');
   await runTask(
     'social.inbox.sync',
-    (payload) => runSocialInboxSync(payload as { accountId: string }, adapter),
-    async () => {
-      if (adapter) await reconcileSocialInbox();
+    (payload, taskId) =>
+      runSocialInboxSync(
+        payload as { accountId: string },
+        adapter,
+        new Date(),
+        taskId,
+      ),
+    async (payload) => {
+      if (adapter && (payload as { mode?: unknown }).mode !== 'manual')
+        await reconcileSocialInbox();
     },
   );
   // Register the explicit unsupported handler, but never activate polling without
