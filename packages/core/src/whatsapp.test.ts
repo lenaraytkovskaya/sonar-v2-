@@ -31,6 +31,7 @@ describe('read-only session webhook diagnostics', () => {
     customHeaders: [{ name: 'x-api-key', value: 'private-test-key' }],
   };
   it.each([
+    'WORKING',
     'STOPPED',
     'STARTING',
     'SCAN_QR_CODE',
@@ -50,6 +51,19 @@ describe('read-only session webhook diagnostics', () => {
         messageEventConfigured: false,
         apiKeyMatches: false,
         webhookReachability: 'not_checked',
+      });
+    },
+  );
+  it.each([{ status: ['WORKING'] }, { status: { value: 'WORKING' } }])(
+    'rejects a non-string session status: %j',
+    async (response) => {
+      expect(await adapter(fake(response)).diagnoseWebhook()).toMatchObject({
+        providerReachability: 'reachable',
+        providerError: 'invalid_response',
+        sessionState: 'unknown',
+        expectedUrlConfigured: 'unknown',
+        messageEventConfigured: 'unknown',
+        apiKeyMatches: 'unknown',
       });
     },
   );

@@ -297,7 +297,7 @@ export function createWhatsAppAdapter(
           'PASSKEY_REQUIRED',
           'PASSKEY_CONFIRMATION_REQUIRED',
         ];
-        if (!states.includes(String(data.status)))
+        if (typeof data.status !== 'string' || !states.includes(data.status))
           throw new WhatsAppSendError('waha_response', '');
         result.sessionState =
           data.status as WhatsAppWebhookDiagnostic['sessionState'];
