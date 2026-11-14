@@ -60,3 +60,29 @@ it.each([
     });
   },
 );
+
+it('passes only the safe worker diagnostic to the paused account outcome', async () => {
+  const diagnostic = {
+    version: 1,
+    stage: 'auth',
+    urlKind: 'feed',
+    navigationHttpStatus: 200,
+    errorKind: 'timeout',
+    visible: {
+      legacyAuth: 0,
+      semanticAuth: 0,
+      captcha: 0,
+      checkpoint: 0,
+      login: 0,
+    },
+  } as const;
+  const error = new SocialSessionCheckError('unknown_auth');
+  error.diagnostic = diagnostic;
+  error.errorKind = 'timeout';
+  check.mockRejectedValueOnce(error);
+  expect(await runSocialSessionCheck({ accountId: 'synthetic' })).toEqual({
+    valid: false,
+    reason: 'unknown_auth',
+    diagnostic,
+  });
+});

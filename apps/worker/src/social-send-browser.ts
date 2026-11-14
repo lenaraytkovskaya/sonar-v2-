@@ -9,6 +9,7 @@ import {
   SocialSendError,
   SocialSessionCheckError,
   socialSessionCheckReason,
+  type SocialSessionCheckDiagnostic,
 } from '@sonar/core/social-session';
 import { socialTarget, type SocialNetwork } from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
@@ -920,11 +921,66 @@ async function sendInstagram(
     throw stagedFailure(stage, kind);
   }
 }
-export async function assertSocialSession(
-  page: Page,
-  network: SocialNetwork,
-  timeoutMs?: number,
-) {
+const legacyLinkedInAuth =
+  'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger';
+const captchaSelector = 'iframe[src*="captcha"], [data-testid="captcha"]';
+const checkpointSelector =
+  'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]';
+const checkpointText =
+  /^(?:Confirm it.s you|Confirm your identity|Підтвердьте свою особу|Підтвердіть, що це ви|Подтвердите, что это вы)$/i;
+function linkedInHome(page: Page) {
+  const url = new URL(page.url());
+  return (
+    ['https://www.linkedin.com', 'https://linkedin.com'].includes(url.origin) &&
+    !url.username &&
+    !url.password &&
+    /^\/(?:feed\/?)?$/.test(url.pathname)
+  );
+}
+function linkedInNavigation(page: Page) {
+  const headers = page
+    .locator('header, [role="banner"]')
+    .filter({ visible: true });
+  let nav = headers
+    .locator('nav, [role="navigation"]')
+    .filter({ visible: true })
+    .filter({
+      has: page
+        .getByRole('button', { name: /^(?:Профиль|Профіль|Me)$/i })
+        .and(page.locator('[aria-expanded]:visible')),
+    })
+    .filter({
+      has: page
+        .getByRole('button', {
+          name: /^(?:Обмен сообщениями|Сообщения|Повідомлення|Обмін повідомленнями|Messaging)(?:,.*)?$/i,
+        })
+        .filter({ visible: true }),
+    });
+  for (const path of ['mynetwork', 'jobs', 'notifications']) {
+    const links = [
+      '',
+      'https://www.linkedin.com',
+      'https://linkedin.com',
+    ].flatMap((origin) => [
+      `a[href="${origin}/${path}"]:visible`,
+      `a[href="${origin}/${path}/"]:visible`,
+    ]);
+    nav = nav.filter({ has: page.locator(links.join(', ')) });
+  }
+  // A single owning header and a single matching nav; duplicates fail closed.
+  return nav;
+}
+async function uniqueLinkedInNavigation(page: Page) {
+  const nav = linkedInNavigation(page);
+  return (
+    (await nav.count()) === 1 &&
+    (await nav
+      .locator('xpath=ancestor::*[self::header or @role="banner"]')
+      .filter({ visible: true })
+      .count()) === 1
+  );
+}
+async function assertSessionNegatives(page: Page, network: SocialNetwork) {
   const url = new URL(page.url());
   if (
     url.protocol !== 'https:' ||
@@ -939,26 +995,16 @@ export async function assertSocialSession(
     throw new SocialSessionCheckError('unknown_auth');
   if (
     /captcha/i.test(url.pathname) ||
-    (await page
-      .locator('iframe[src*="captcha"], [data-testid="captcha"]')
-      .filter({ visible: true })
-      .count())
+    (await page.locator(captchaSelector).filter({ visible: true }).count())
   )
     throw new SocialSessionCheckError('captcha');
   if (
     /checkpoint|challenge|security\/verification/i.test(url.pathname) ||
     (await page
-      .locator(
-        'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]',
-      )
+      .locator(checkpointSelector)
       .filter({ visible: true })
       .count()) ||
-    (await page
-      .getByText(
-        /^(?:Confirm it.s you|Confirm your identity|Підтвердьте свою особу|Підтвердіть, що це ви|Подтвердите, что это вы)$/i,
-      )
-      .filter({ visible: true })
-      .count())
+    (await page.getByText(checkpointText).filter({ visible: true }).count())
   )
     throw new SocialSessionCheckError('checkpoint');
   if (
@@ -969,20 +1015,41 @@ export async function assertSocialSession(
       .count())
   )
     throw new SocialSessionCheckError('login_required');
+}
+export async function assertSocialSession(
+  page: Page,
+  network: SocialNetwork,
+  timeoutMs?: number,
+) {
+  await assertSessionNegatives(page, network);
   const authenticated = {
     instagram: 'a[href^="/direct/"], a[href="/accounts/edit/"]',
     facebook:
       '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]',
-    linkedin:
-      'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger',
+    linkedin: legacyLinkedInAuth,
   }[network];
+  const legacy = page.locator(authenticated).filter({ visible: true });
+  let positive = legacy;
+  if (network === 'linkedin' && linkedInHome(page)) {
+    const nav = linkedInNavigation(page);
+    // Verify semantic boundary uniqueness after waiting.
+    positive = positive.or(nav);
+  }
   try {
-    await page
-      .locator(authenticated)
-      .filter({ visible: true })
-      .first()
-      .waitFor({ state: 'visible', timeout: timeoutMs });
+    await positive.first().waitFor({ state: 'visible', timeout: timeoutMs });
   } catch (error) {
+    // One fresh pass catches redirects/challenges arriving during the positive wait.
+    try {
+      await assertSessionNegatives(page, network);
+    } catch (negative) {
+      if (
+        negative instanceof SocialSessionCheckError &&
+        error instanceof Error &&
+        error.name === 'TimeoutError'
+      )
+        negative.errorKind = 'timeout';
+      throw negative;
+    }
     throw Object.assign(
       new SocialSessionCheckError(
         error instanceof Error && error.name === 'TimeoutError'
@@ -997,6 +1064,61 @@ export async function assertSocialSession(
       },
     );
   }
+  await assertSessionNegatives(page, network);
+  if (
+    network === 'linkedin' &&
+    !(await legacy.count()) &&
+    (!linkedInHome(page) || !(await uniqueLinkedInNavigation(page)))
+  )
+    throw new SocialSessionCheckError('unknown_auth');
+}
+async function sessionDiagnostic(
+  page: Page,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+  errorKind: SocialSessionCheckDiagnostic['errorKind'],
+): Promise<SocialSessionCheckDiagnostic> {
+  const url = new URL(page.url());
+  const path = url.pathname;
+  const urlKind = ![
+    'https://www.linkedin.com',
+    'https://linkedin.com',
+  ].includes(url.origin)
+    ? 'other'
+    : /captcha/i.test(path)
+      ? 'captcha'
+      : /checkpoint|challenge|security\/verification/i.test(path)
+        ? 'checkpoint'
+        : /login|signin|authwall/i.test(path)
+          ? 'login'
+          : path === '/'
+            ? 'home'
+            : /^\/feed\/?$/.test(path)
+              ? 'feed'
+              : 'other';
+  const counts = await Promise.all([
+    page.locator(legacyLinkedInAuth).filter({ visible: true }).count(),
+    linkedInNavigation(page).count(),
+    page.locator(captchaSelector).filter({ visible: true }).count(),
+    page.locator(checkpointSelector).filter({ visible: true }).count(),
+    page.getByText(checkpointText).filter({ visible: true }).count(),
+    page.locator('input[type="password"]').filter({ visible: true }).count(),
+  ]);
+  const cap = (n: number) => Math.min(n, 2);
+  return {
+    version: 1,
+    stage,
+    urlKind,
+    navigationHttpStatus,
+    errorKind,
+    visible: {
+      legacyAuth: cap(counts[0]!),
+      semanticAuth: cap(counts[1]!),
+      captcha: cap(counts[2]!),
+      checkpoint: cap(counts[3]! + counts[4]!),
+      login: cap(counts[5]!),
+    },
+  };
 }
 async function confirmedDialogUrl(page: Page, network: SocialNetwork) {
   const valid = (raw: string | null) => {
@@ -1114,29 +1236,50 @@ export function createSocialSendBrowser(
     ) {
       try {
         return await withPage(account, session, timeoutMs, async (page) => {
-          let response;
+          let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
+          let status: number | null = null;
           try {
-            response = await page.goto(home(account.channel), {
+            const response = await page.goto(home(account.channel), {
               waitUntil: 'domcontentloaded',
               timeout: timeoutMs,
             });
-          } catch (error) {
-            throw new SocialSessionCheckError(
-              socialSessionCheckReason(error, 'network'),
-            );
+            status = response?.status() ?? null;
+            stage = 'http';
+            // Only the final main-document response, never background HTTP failures.
+            if (status === 429) throw new SocialSessionCheckError('rate_limit');
+            if (status === 407) throw new SocialSessionCheckError('proxy');
+            if (status && status >= 500)
+              throw new SocialSessionCheckError('network');
+            stage = 'auth';
+            await assertSocialSession(page, account.channel);
+            if (!status || status < 200 || status >= 300)
+              throw new SocialSessionCheckError('unknown_auth');
+          } catch (caught) {
+            const error =
+              caught instanceof SocialSessionCheckError
+                ? caught
+                : new SocialSessionCheckError(
+                    socialSessionCheckReason(
+                      caught,
+                      stage === 'navigation' ? 'network' : 'browser',
+                    ),
+                  );
+            if (caught instanceof Error && caught.name === 'TimeoutError')
+              error.errorKind = 'timeout';
+            if (account.channel === 'linkedin') {
+              // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
+              error.diagnostic = await sessionDiagnostic(
+                page,
+                stage,
+                status,
+                error.errorKind ?? 'unconfirmed',
+              ).catch(() => undefined);
+            }
+            throw error;
           }
-          // goto returns the final main-document response, never a background resource.
-          const status = response?.status();
-          if (status === 429) throw new SocialSessionCheckError('rate_limit');
-          if (status === 407) throw new SocialSessionCheckError('proxy');
-          if (status && status >= 500)
-            throw new SocialSessionCheckError('network');
-          // Explicit login/challenge evidence takes precedence over ambiguous 4xx responses.
-          await assertSocialSession(page, account.channel);
-          if (!status || status < 200 || status >= 300)
-            throw new SocialSessionCheckError('unknown_auth');
         });
       } catch (error) {
+        if (error instanceof SocialSessionCheckError) throw error;
         throw new SocialSessionCheckError(
           socialSessionCheckReason(error, 'browser'),
         );

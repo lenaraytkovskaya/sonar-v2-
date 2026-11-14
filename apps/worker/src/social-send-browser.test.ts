@@ -79,7 +79,10 @@ function fixture(
             selector.includes('aria-label^="You sent')
           ? ownFilter
           : () => ({
-              count: async () => 0,
+              count: async () =>
+                selector.includes('global-nav__primary-link-me-menu-trigger')
+                  ? 1
+                  : 0,
               first: () => ({ waitFor: async () => {} }),
             }),
       first: () => ({ waitFor: async () => {} }),

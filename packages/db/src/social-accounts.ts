@@ -8,6 +8,8 @@ import {
   socialReservedProxyIndex,
   SocialSendError,
   socialSessionCheckReason,
+  safeSocialSessionDiagnostic,
+  type SocialSessionCheckDiagnostic,
   socialSessionCheckReasons,
   type SocialSessionCheckReason,
 } from '@sonar/core/social-session';
@@ -435,18 +437,22 @@ export async function checkSocialSession(id: string, userId: string) {
 }
 export async function withSocialSessionCheck(
   id: string,
-  check: (
-    account: SocialSessionAccount,
-  ) => Promise<{ valid: boolean; reason?: SocialSessionCheckReason }>,
+  check: (account: SocialSessionAccount) => Promise<{
+    valid: boolean;
+    reason?: SocialSessionCheckReason;
+    diagnostic?: SocialSessionCheckDiagnostic;
+  }>,
 ): Promise<TaskOutcome> {
   return transaction(async (c) => {
     const account = await lock(c, id);
     let valid = false;
+    let diagnostic: SocialSessionCheckDiagnostic | undefined;
     let reason: SocialSessionCheckReason | undefined;
     try {
       resolveSocialSession(account);
       const result = await check(account);
       valid = result.valid;
+      diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
       if (!valid)
         reason =
           result.reason &&
@@ -486,6 +492,7 @@ export async function withSocialSessionCheck(
       ? { status: 'done', result: { valid: true } }
       : {
           status: 'paused',
+          result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
           reasonCode: `social_session_${reason}`,
           reasonUk: reasonUk!,
         };
