@@ -33,7 +33,7 @@ type ParentStructureReason =
   | 'content_controls'
   | 'parent_missing'
   | 'parent_body'
-  | 'parent_children'
+  | 'parent_competing'
   | 'parent_regions'
   | 'parent_editors'
   | 'parent_forbidden';
@@ -97,6 +97,18 @@ async function conversation(
           (labels.includes('Minimise chat') && labels.includes('Close chat'))
         );
       };
+      const chatControls = (scope: Element) =>
+        all(scope, 'button, [role="button"]').filter((node) =>
+          [
+            'Chat settings',
+            'Minimise chat',
+            'Close chat',
+            'Start a voice call',
+            'Start a video call',
+          ].includes(
+            normalize(node.getAttribute('aria-label') || node.textContent),
+          ),
+        );
       const forbidden =
         'nav, [role="navigation"], aside, [role="complementary"]';
       const identity = (anchor: Element) => {
@@ -130,6 +142,71 @@ async function conversation(
             child !== branch(scope, composer) &&
             headerControls(child),
         );
+      const sendSelector =
+        '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]';
+      const composerActionSelector = `${sendSelector}, [role="button"][aria-label="Send a Like"], button[aria-label="Send a Like"]`;
+      // The live third branch is unobserved. Accept incidental branches only
+      // when all chat semantics stay exclusively in the immediate header/body.
+      // Reuse this predicate through dispatch; never search a higher ancestor.
+      const parentFailure = (
+        content: Element,
+        region: Element,
+        composer: Element,
+        counts: ParentStructureCounts = {},
+      ): ParentStructureReason | undefined => {
+        if (chatControls(content).length) return 'content_controls';
+        const parent = content.parentElement;
+        if (!parent) return 'parent_missing';
+        if (parent === document.body) return 'parent_body';
+        const measured = (
+          key: keyof ParentStructureCounts,
+          selector: string,
+        ) => {
+          const value = all(parent, selector).length;
+          counts[key] = count(value);
+          return value;
+        };
+        measured('childrenVisible', ':scope > *');
+        if (measured('regionsVisible', regionSelector) !== 1)
+          return 'parent_regions';
+        if (measured('editorsVisible', composerSelector) !== 1)
+          return 'parent_editors';
+        if (measured('forbiddenVisible', forbidden)) return 'parent_forbidden';
+        const headers = headersIn(parent, region, composer);
+        // Header count and recipient identity are checked by the caller.
+        if (headers.length !== 1) return;
+        const header = headers[0]!;
+        const controls = chatControls(header).map((node) =>
+          normalize(node.getAttribute('aria-label') || node.textContent),
+        );
+        const logs = all(parent, '[role="log"]');
+        const editor = all(content, composerSelector)[0];
+        if (
+          new Set(controls).size !== controls.length ||
+          chatControls(parent).some((node) => !header.contains(node)) ||
+          logs.length > 1 ||
+          logs.some(
+            (node) =>
+              node !== region &&
+              !region.contains(node) &&
+              !(node.contains(region) && !node.contains(composer)),
+          ) ||
+          all(parent, 'a[href]').some(
+            (node) =>
+              !header.contains(node) &&
+              !region.contains(node) &&
+              identity(node),
+          ) ||
+          all(parent, '[contenteditable="true"], [role="textbox"]').some(
+            (node) => node !== editor,
+          ) ||
+          all(parent, composerContainer).some((node) => node !== composer) ||
+          all(parent, composerActionSelector).some(
+            (node) => !composer.contains(node),
+          )
+        )
+          return 'parent_competing';
+      };
       const count = (value: number) => Math.min(value, 9);
       const measure = (scope: ParentNode, selector: string): Counts => {
         const raw = Array.from(scope.querySelectorAll(selector));
@@ -224,36 +301,19 @@ async function conversation(
             if (!headers.length) {
               // Support the observed header/body split when the nearest shared
               // messages/composer container is the body rather than the chat root.
-              // Allow only that immediate two-branch parent, never an ancestor
-              // search that could borrow a profile-page link outside this chat.
+              // Bind only that immediate semantic parent, without borrowing a
+              // profile-page link outside this chat.
               const parent = scope.parentElement;
               const counts: ParentStructureCounts = {};
-              const parentFailure = (() => {
-                if (headerControls(contentScope)) return 'content_controls';
-                if (!parent) return 'parent_missing';
-                if (parent === document.body) return 'parent_body';
-                // Store only counts actually evaluated by this short circuit,
-                // using the same visibility filter as the acceptance predicate.
-                const measured = (
-                  key: keyof ParentStructureCounts,
-                  selector: string,
-                ) => {
-                  const value = all(parent, selector).length;
-                  counts[key] = count(value);
-                  return value;
-                };
-                if (measured('childrenVisible', ':scope > *') !== 2)
-                  return 'parent_children';
-                if (measured('regionsVisible', regionSelector) !== 1)
-                  return 'parent_regions';
-                if (measured('editorsVisible', composerSelector) !== 1)
-                  return 'parent_editors';
-                if (measured('forbiddenVisible', forbidden))
-                  return 'parent_forbidden';
-              })();
-              if (parentFailure) {
+              const failure = parentFailure(
+                contentScope,
+                region,
+                composer,
+                counts,
+              );
+              if (failure) {
                 observation.parentStructure = {
-                  subreason: parentFailure,
+                  subreason: failure,
                   ...counts,
                 };
                 reject('parent_structure');
@@ -284,6 +344,8 @@ async function conversation(
             );
             if (
               recipientLinks.length !== 1 ||
+              links.filter((link) => identity(link) === recipient).length !==
+                1 ||
               links.some(
                 (link) => identity(link) && identity(link) !== recipient,
               )
@@ -331,8 +393,6 @@ async function conversation(
           link,
           name,
         } = candidates[0]!;
-        const sendSelector =
-          '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]';
         const sendButtons = () => all(composer, sendSelector);
         const pinned = [
           scope,
@@ -352,8 +412,9 @@ async function conversation(
           contentScope.contains(composer) &&
           (contentScope === scope ||
             (contentScope.parentElement === scope &&
-              all(scope, ':scope > *').length === 2 &&
-              !headerControls(contentScope))) &&
+              !parentFailure(contentScope, region, composer))) &&
+          headersIn(scope, region, composer).length === 1 &&
+          headersIn(scope, region, composer)[0] === header &&
           header.parentElement === scope &&
           headerControls(header) &&
           header.contains(link) &&

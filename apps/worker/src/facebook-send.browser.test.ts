@@ -185,10 +185,40 @@ document.querySelector('#open').onclick = () => {
       }
     }
     if (o.directPage) history.replaceState(null, '', '/messages/t/SYNTHETIC_PRIVATE_THREAD/');
+    // Synthetic third branch: Sonar86 exposed only its count, not its contents.
+    if (o.incidentalBranch || Object.keys(o).some(key => key.startsWith('extraBranch'))) {
+      const extra = document.createElement('div');
+      extra.innerHTML = '<span role="status">Synthetic chat notice</span>';
+      if (o.extraBranchHeader) extra.append(scope.firstElementChild.cloneNode(true));
+      if (o.extraBranchProfile || o.extraBranchOtherRecipient || o.extraBranchBorrowedProfile) {
+        const link = scope.querySelector('a').cloneNode(true);
+        if (o.extraBranchOtherRecipient) link.href = '/100000000000002/';
+        extra.append(link);
+        if (o.extraBranchBorrowedProfile) scope.querySelector('a').remove();
+      }
+      if (o.extraBranchChat) extra.append(chat('embedded', '100000000000002', 'Other Recipient'));
+      if (o.extraBranchEditor) {
+        const other = editor.cloneNode(true); other.removeAttribute('data-lexical-editor'); extra.append(other);
+      }
+      if (o.extraBranchRegion) extra.append(region(scope).cloneNode(true));
+      if (o.extraBranchLog) extra.insertAdjacentHTML('beforeend', '<div role="log">Other conversation</div>');
+      if (o.extraBranchComposer) {
+        const other = scope.querySelector('[aria-label="Thread composer"]').cloneNode(true);
+        other.querySelector('[contenteditable]').remove(); extra.append(other);
+      }
+      if (o.extraBranchControl) extra.insertAdjacentHTML('beforeend', '<button>Close chat</button>');
+      if (o.extraBranchSend) extra.insertAdjacentHTML('beforeend', '<button aria-label="Press Enter to send">Send</button>');
+      if (o.extraBranchLike) extra.insertAdjacentHTML('beforeend', '<button aria-label="Send a Like">Like</button>');
+      if (o.extraBranchNav) extra.insertAdjacentHTML('beforeend', '<nav>Other navigation</nav>');
+      if (o.extraBranchContentProfile) scope.querySelector('[aria-label="Thread composer"]').after(scope.querySelector('a').cloneNode(true));
+      if (o.extraBranchDuplicateControl) scope.firstElementChild.append(scope.querySelector('[aria-label="Chat settings"]').cloneNode(true));
+      scope.append(extra);
+    }
     if (o.otherPage) history.replaceState(null, '', '/unrecognized/synthetic/');
     if (o.afterFillNoAuth) editor.addEventListener('input', () => document.querySelector('nav').remove(), { once: true });
     if (o.afterFillNoRegion) editor.addEventListener('input', () => region(scope).remove(), { once: true });
     if (o.afterFillHiddenButton) editor.addEventListener('input', () => scope.querySelector('[aria-label="Press Enter to send"]').hidden = true, { once: true });
+    if (o.afterFillExtraHeader) editor.addEventListener('input', () => scope.append(scope.firstElementChild.cloneNode(true)), { once: true });
   };
   if (o.delayedChat) setTimeout(show, 40); else show();
 };
@@ -347,6 +377,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 scope.append(
                   scope.querySelector('[aria-label="Thread composer"]')!,
                 );
+              if (options.clickExtraHeader)
+                scope.append(scope.firstElementChild!.cloneNode(true));
+              if (options.clickExtraProfile)
+                scope.append(scope.querySelector('a')!.cloneNode(true));
+              if (options.clickExtraControl)
+                scope.insertAdjacentHTML(
+                  'beforeend',
+                  '<button>Close chat</button>',
+                );
+              if (options.clickExtraEditor)
+                scope.insertAdjacentHTML(
+                  'beforeend',
+                  '<div role="textbox">Other editor</div>',
+                );
+              if (options.clickExtraLog)
+                scope.insertAdjacentHTML(
+                  'beforeend',
+                  '<div role="log">Other conversation</div>',
+                );
+              if (options.clickIncidental)
+                scope.insertAdjacentHTML(
+                  'beforeend',
+                  '<div role="status">Synthetic notice</div>',
+                );
             };
             // Synchronize with the real dispatch after the guard is armed.
             // An animation plus a timer does not guarantee mutation before click.
@@ -387,6 +441,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await page.evaluate(() => {
             document.querySelector<HTMLAnchorElement>('#target a')!.href =
               '/100000000000002/';
+          });
+        if (options.markerExtraHeader)
+          await page.evaluate(() => {
+            const scope = document.querySelector('#target')!;
+            scope.append(scope.firstElementChild!.cloneNode(true));
           });
         if (options.markerRerender)
           await page.evaluate(() => {
@@ -506,13 +565,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         'timeout',
         { headers: 2 },
       ],
-      [
-        { zeroHeaders: true },
-        'first_lookup',
-        'parent_structure',
-        'timeout',
-        {},
-      ],
+      [{ zeroHeaders: true }, 'first_lookup', 'header_count', 'timeout', {}],
       ...(
         [
           [
@@ -523,7 +576,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           [{ parentBody: true }, { subreason: 'parent_body' }],
           [
             { parentChildren: true, parentRegions: true },
-            { subreason: 'parent_children', childrenVisible: 9 },
+            {
+              subreason: 'parent_regions',
+              childrenVisible: 9,
+              regionsVisible: 2,
+            },
           ],
           [
             { parentRegions: true, parentEditors: true },
@@ -614,6 +671,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ],
       [{ draft: true }, 'first_lookup', 'draft', 'not_found', {}],
       [{ afterFillNoRegion: true }, 'after_fill', 'no_region', 'timeout', {}],
+      [
+        { observed: true, afterFillExtraHeader: true },
+        'after_fill',
+        'header_count',
+        'timeout',
+        { headers: 2 },
+      ],
       [
         { afterFillHiddenButton: true },
         'after_fill',
@@ -731,6 +795,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, incidentalBranch: true },
+      { observed: true, incidentalBranch: true, neighbour: true },
+      { observed: true, incidentalBranch: true, pendingSettles: true },
+      { wrappedChatBody: true, incidentalBranch: true },
+      { wrappedChatBody: true, parentChildren: true },
+      { observed: true, clickIncidental: true },
       { observed: true },
       { observed: true, company: true },
       { observed: true, neighbour: true },
@@ -773,7 +843,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.requests).toEqual([f.target]);
           expect(f.dispatchPhases).toEqual(
-            options.clickStable ? ['pointerdown'] : [],
+            options.clickStable || options.clickIncidental
+              ? ['pointerdown']
+              : [],
           );
         } finally {
           await f.close();
@@ -781,6 +853,23 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      ...[
+        'extraBranchHeader',
+        'extraBranchProfile',
+        'extraBranchOtherRecipient',
+        'extraBranchBorrowedProfile',
+        'extraBranchChat',
+        'extraBranchEditor',
+        'extraBranchRegion',
+        'extraBranchLog',
+        'extraBranchComposer',
+        'extraBranchControl',
+        'extraBranchSend',
+        'extraBranchLike',
+        'extraBranchNav',
+        'extraBranchContentProfile',
+        'extraBranchDuplicateControl',
+      ].map((key) => ({ observed: true, [key]: true })),
       { observed: true, wrongRecipient: true },
       { observed: true, wrongRecipient: true, neighbour: true },
       { observed: true, outsideProfileHeader: true, wrongRecipient: true },
@@ -826,6 +915,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, incidentalBranch: true, nestedPending: true },
+      { observed: true, incidentalBranch: true, nestedFailed: true },
       { observed: true, oldOnly: true },
       { observed: true, oldOnly: true, markerOutgoing: true },
       { observed: true, rerenderAfterSend: true },
@@ -868,6 +959,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, markerExtraHeader: true },
+      { observed: true, clickExtraHeader: true },
+      { observed: true, clickExtraProfile: true },
+      { observed: true, clickExtraControl: true },
+      { observed: true, clickExtraEditor: true },
+      { observed: true, clickExtraLog: true },
       { observed: true, documentCaptureRecipient: true },
       { observed: true, clickButton: true, documentCaptureButton: true },
       { observed: true, clickAvatarLabel: true },
