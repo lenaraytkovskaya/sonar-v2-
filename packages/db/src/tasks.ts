@@ -414,7 +414,9 @@ export async function runTask(
       },
       async (status, result, code, reason) => {
         await sonarPool.query(
-          `update tasks set status=$2::text::task_status, result=coalesce($3::jsonb,result), reason_code=$4, reason_uk=$5,
+          `update tasks set status=$2::text::task_status,
+    result=case when type='social.inbox.sync' and $2::text='running' then '{}'::jsonb else coalesce($3::jsonb,result) end,
+    reason_code=$4, reason_uk=$5,
     attempts=attempts+case when $2::text='running' then 1 else 0 end,
     started_at=case when $2::text='running' then now() else started_at end,
     finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
