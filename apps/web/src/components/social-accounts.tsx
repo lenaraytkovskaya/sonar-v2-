@@ -13,17 +13,20 @@ const selectClass =
   'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
 export function SocialAccounts({
   accounts,
+  network,
+  active,
   proxyCount,
   accountProxyIndex,
 }: {
   accounts: Account[];
+  network: Account['network'];
+  active: boolean;
   proxyCount: number;
   accountProxyIndex: number | null;
 }) {
   const [current, setCurrent] = useState(accounts);
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
-  const [network, setNetwork] = useState<Account['network']>('instagram');
   const [dailyLimit, setDailyLimit] = useState('20');
   const [proxyIndex, setProxyIndex] = useState(String(accountProxyIndex ?? ''));
   const [cookiesJson, setCookiesJson] = useState('');
@@ -33,6 +36,7 @@ export function SocialAccounts({
   const busy = useRef(false);
   useEffect(() => setCurrent(accounts), [accounts]);
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     const timer = setInterval(() => {
       if (busy.current) return;
@@ -49,7 +53,7 @@ export function SocialAccounts({
       controller.abort();
       clearInterval(timer);
     };
-  }, []);
+  }, [active]);
   const mutate = async (method: string, fields: object) => {
     if (busy.current) return false;
     busy.current = true;
@@ -86,10 +90,13 @@ export function SocialAccounts({
     setDailyLimit('20');
     setProxyIndex(String(accountProxyIndex ?? ''));
   };
+  const networkAccounts = current.filter(
+    (account) => account.network === network,
+  );
   return (
     <Card className="space-y-4 p-5">
       <h2 className="font-heading text-base font-bold">
-        {uk.socialAccounts.title}
+        {uk.socialAccounts.title} · {uk.social.networks[network]}
       </h2>
       <details className="text-sm">
         <summary className="min-h-11 cursor-pointer text-accent">
@@ -104,7 +111,7 @@ export function SocialAccounts({
           {uk.socialAccounts.cookiePrivacy}
         </p>
       </details>
-      {current.map((account) => (
+      {networkAccounts.map((account) => (
         <section
           key={account.id}
           className="space-y-2 border-t border-border pt-3 text-sm"
@@ -155,7 +162,6 @@ export function SocialAccounts({
               onClick={() => {
                 setEditing(account.id);
                 setName(account.name);
-                setNetwork(account.network);
                 setDailyLimit(String(account.dailyLimit));
                 setProxyIndex(String(account.proxyIndex));
                 setCookiesJson('');
@@ -205,11 +211,11 @@ export function SocialAccounts({
         </h3>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label htmlFor="social-name">
+            <label htmlFor={`social-${network}-name`}>
               {uk.email.name} · {uk.social.networks[network]}
             </label>
             <Input
-              id="social-name"
+              id={`social-${network}-name`}
               placeholder={uk.socialAccounts.namePlaceholders[network]}
               value={name}
               required
@@ -219,27 +225,9 @@ export function SocialAccounts({
             <AiAssist text={name} onApply={setName} />
           </div>
           <div>
-            <label htmlFor="social-network">{uk.socialAccounts.network}</label>
-            <select
-              id="social-network"
-              className={selectClass}
-              value={network}
-              disabled={!!editing}
-              onChange={(event) =>
-                setNetwork(event.target.value as Account['network'])
-              }
-            >
-              {Object.entries(uk.social.networks).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="social-limit">{uk.email.limit}</label>
+            <label htmlFor={`social-${network}-limit`}>{uk.email.limit}</label>
             <Input
-              id="social-limit"
+              id={`social-${network}-limit`}
               type="number"
               min={1}
               step={1}
@@ -249,9 +237,11 @@ export function SocialAccounts({
             />
           </div>
           <div>
-            <label htmlFor="social-proxy">{uk.socialAccounts.proxy}</label>
+            <label htmlFor={`social-${network}-proxy`}>
+              {uk.socialAccounts.proxy}
+            </label>
             <select
-              id="social-proxy"
+              id={`social-${network}-proxy`}
               className={selectClass}
               required
               value={proxyIndex}
@@ -277,13 +267,13 @@ export function SocialAccounts({
           </div>
         </div>
         <div>
-          <label htmlFor="social-cookies">
+          <label htmlFor={`social-${network}-cookies`}>
             {uk.socialAccounts.cookies} · {uk.social.networks[network]}
           </label>
           <textarea
-            id="social-cookies"
+            id={`social-${network}-cookies`}
             placeholder={uk.socialAccounts.cookiesPlaceholder}
-            aria-describedby="social-cookies-help"
+            aria-describedby={`social-${network}-cookies-help`}
             className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
             style={
               visible || !cookiesJson
@@ -297,7 +287,10 @@ export function SocialAccounts({
             value={cookiesJson}
             onChange={(event) => setCookiesJson(event.target.value)}
           />
-          <p id="social-cookies-help" className="text-xs text-muted-foreground">
+          <p
+            id={`social-${network}-cookies-help`}
+            className="text-xs text-muted-foreground"
+          >
             {uk.socialAccounts.cookiesHint[network]}{' '}
             {editing
               ? uk.socialAccounts.replaceCookies
