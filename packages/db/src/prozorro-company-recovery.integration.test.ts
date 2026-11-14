@@ -265,6 +265,158 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
+  'saves a missing known code with manual provenance, requeues the skipped daily task and deduplicates repeated actions',
+  async () => {
+    const id = await company();
+    await db.sonarPool.query(
+      "delete from company_facts where company_id=$1 and kind='edrpou'",
+      [id],
+    );
+    expect(await prozorro.prozorroCompanyCodes(id)).toEqual([]);
+    const skipped = await tasks.enqueueProzorroCompany(id);
+    await db.sonarPool.query(
+      "update pgboss.job set state='completed' where name='prozorro.company' and data->>'taskId'=$1",
+      [skipped.id],
+    );
+    await db.sonarPool.query(
+      "update tasks set status='skipped',reason_code='prozorro_missing_edrpou' where id=$1",
+      [skipped.id],
+    );
+    const queued = await tasks.enqueueProzorroCompany(id, null, undefined, {
+      manualCode: '41165490',
+    });
+    expect(queued).toMatchObject({
+      id: skipped.id,
+      status: 'queued',
+      created: true,
+    });
+    expect((await task(queued.id)).payload.code).toBe('41165490');
+    const facts = async () =>
+      (
+        await db.sonarPool.query(
+          "select value,source,source_url,found_at from company_facts where company_id=$1 and kind='edrpou'",
+          [id],
+        )
+      ).rows;
+    const original = await facts();
+    expect(original).toEqual([
+      {
+        value: '41165490',
+        source: 'manual',
+        source_url: `/companies/${id}`,
+        found_at: expect.any(Date),
+      },
+    ]);
+    expect(await prozorro.prozorroCompanyCodes(id)).toEqual([
+      { code: '41165490', source: 'manual' },
+    ]);
+    const duplicate = await tasks.enqueueProzorroCompany(id, null, undefined, {
+      manualCode: '41165490',
+    });
+    expect(duplicate).toMatchObject({ id: queued.id, created: false });
+    expect(await facts()).toEqual(original);
+    await expect(
+      tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: B }),
+    ).rejects.toMatchObject({ reason: 'conflictingCode' });
+    expect(await facts()).toEqual(original);
+    expect(await live(id)).toHaveLength(1);
+    expect(
+      (
+        await db.sonarPool.query(
+          "select count(*)::int as n from company_facts where company_id=$1 and source='registry'",
+          [id],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+  },
+);
+it.skipIf(!enabled)(
+  'rejects invalid and conflicting manual codes without altering existing registry or manual facts',
+  async () => {
+    const id = await company();
+    const before = (
+      await db.sonarPool.query(
+        'select * from company_facts where company_id=$1',
+        [id],
+      )
+    ).rows;
+    await expect(
+      tasks.enqueueProzorroCompany(id, null, undefined, {
+        manualCode: '1234****',
+      }),
+    ).rejects.toMatchObject({ reason: 'invalidCode' });
+    await expect(
+      tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: B }),
+    ).rejects.toMatchObject({ reason: 'conflictingCode' });
+    expect(
+      (
+        await db.sonarPool.query(
+          'select * from company_facts where company_id=$1',
+          [id],
+        )
+      ).rows,
+    ).toEqual(before);
+    expect(await live(id)).toHaveLength(0);
+    await tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: A });
+    expect(
+      (
+        await db.sonarPool.query(
+          'select * from company_facts where company_id=$1',
+          [id],
+        )
+      ).rows,
+    ).toEqual(before);
+    // The field remains unavailable for an ambiguous identity, even if no effective code can be selected.
+    await db.sonarPool.query(
+      "insert into company_facts(company_id,kind,value,source) values($1,'edrpou',$2,'registry')",
+      [id, JSON.stringify(B)],
+    );
+    expect(await prozorro.prozorroCompanyCode(id)).toBeNull();
+    expect(
+      (await prozorro.prozorroCompanyCodes(id)).some((fact) => fact.code),
+    ).toBe(true);
+    await expect(
+      tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: A }),
+    ).rejects.toMatchObject({ reason: 'conflictingCode' });
+  },
+);
+it.skipIf(!enabled)(
+  'rolls back manual identity and queue together, and fences concurrent competing identities',
+  async () => {
+    const id = await company();
+    await db.sonarPool.query(
+      "delete from company_facts where company_id=$1 and kind='edrpou'",
+      [id],
+    );
+    // Use an outer transaction to prove that the fact and pg-boss job share its atomic boundary.
+    const client = await db.sonarPool.connect();
+    try {
+      await client.query('begin');
+      await tasks.enqueueProzorroCompany(id, null, client, { manualCode: A });
+      await client.query('rollback');
+    } finally {
+      client.release();
+    }
+    expect(await prozorro.prozorroCompanyCodes(id)).toEqual([]);
+    expect(await live(id)).toHaveLength(0);
+    const results = await Promise.allSettled([
+      tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: A }),
+      tasks.enqueueProzorroCompany(id, null, undefined, { manualCode: B }),
+    ]);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    const codes = await prozorro.prozorroCompanyCodes(id);
+    expect(codes).toHaveLength(1);
+    expect([A, B]).toContain(codes[0]!.code);
+    const jobs = await live(id);
+    expect(jobs).toHaveLength(1);
+    expect((await task(jobs[0]!.data.taskId)).payload.code).toBe(
+      codes[0]!.code,
+    );
+  },
+);
+it.skipIf(!enabled)(
   'runs the real tracked worker through A fetch, B correction, rejected save and one B successor',
   async () => {
     const id = await company();

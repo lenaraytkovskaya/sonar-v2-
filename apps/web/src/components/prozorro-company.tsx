@@ -11,13 +11,15 @@ const amounts = (values: Record<string, number>) =>
 export function ProzorroCompany({
   companyId,
   snapshot,
+  allowManualCode,
 }: {
   companyId: string;
   snapshot: ProzorroCompanySnapshot | null;
+  allowManualCode: boolean;
 }) {
   return (
     <div className="space-y-3">
-      <ProzorroSearch companyId={companyId} />
+      <ProzorroSearch companyId={companyId} allowManualCode={allowManualCode} />
       {snapshot ? (
         <>
           <p>

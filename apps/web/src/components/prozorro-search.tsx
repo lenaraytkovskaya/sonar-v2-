@@ -1,20 +1,26 @@
 'use client';
+import { prozorroCode } from '@sonar/core';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
+import { AiAssist } from './ai-assist';
+import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 export function ProzorroSearch({
   companyId,
   campaignId,
+  allowManualCode = false,
 }: {
   companyId?: string;
   campaignId?: string;
+  allowManualCode?: boolean;
 }) {
   const router = useRouter(),
     { tasks } = useTasks();
   const [pending, setPending] = useState(false),
-    [message, setMessage] = useState('');
+    [message, setMessage] = useState(''),
+    [code, setCode] = useState('');
   const task = tasks.find(
     (t) => t.type === 'prozorro.company' && t.subject_id === companyId,
   );
@@ -25,42 +31,79 @@ export function ProzorroSearch({
       router.refresh();
     }
   }, [task?.id, task?.status, router]);
+  const search = async (manualCode?: string) => {
+    setPending(true);
+    setMessage('');
+    try {
+      const response = await fetch(
+        companyId
+          ? `/api/companies/${companyId}/prozorro`
+          : `/api/campaigns/${campaignId}/prozorro`,
+        {
+          method: 'POST',
+          ...(manualCode
+            ? {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: manualCode }),
+              }
+            : {}),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error ?? uk.tasks.error);
+      setMessage(
+        campaignId
+          ? `${uk.prozorro.queued}: ${data.count}`
+          : data.created
+            ? uk.prozorro.queued
+            : `${uk.prozorro.todayTask}: ${uk.tasks.status[data.status as keyof typeof uk.tasks.status] ?? data.status}`,
+      );
+      if (manualCode) router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : uk.tasks.error);
+    } finally {
+      setPending(false);
+    }
+  };
   return (
     <div className="space-y-2">
       <Button
         variant="outline"
         disabled={pending || !!active}
-        onClick={async () => {
-          setPending(true);
-          setMessage('');
-          try {
-            const response = await fetch(
-              companyId
-                ? `/api/companies/${companyId}/prozorro`
-                : `/api/campaigns/${campaignId}/prozorro`,
-              { method: 'POST' },
-            );
-            const data = await response.json();
-            if (!response.ok) throw Error(data.error ?? uk.tasks.error);
-            setMessage(
-              campaignId
-                ? `${uk.prozorro.queued}: ${data.count}`
-                : data.created
-                  ? uk.prozorro.queued
-                  : `${uk.prozorro.todayTask}: ${uk.tasks.status[data.status as keyof typeof uk.tasks.status] ?? data.status}`,
-            );
-          } catch (error) {
-            setMessage(error instanceof Error ? error.message : uk.tasks.error);
-          } finally {
-            setPending(false);
-          }
-        }}
+        onClick={() => void search()}
       >
         {campaignId ? uk.prozorro.bulk : uk.prozorro.search}
       </Button>
+      {companyId && allowManualCode && (
+        <div className="space-y-2">
+          <label className="block space-y-1">
+            <span>{uk.prozorro.companyCode}</span>
+            <Input
+              className="min-h-11"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={10}
+              value={code}
+              disabled={pending || !!active}
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">
+            {uk.prozorro.manualCodeHint}
+          </p>
+          <AiAssist text={code} onApply={setCode} />
+          <Button
+            variant="outline"
+            disabled={pending || !!active || !prozorroCode(code)}
+            onClick={() => void search(code)}
+          >
+            {uk.prozorro.saveCodeSearch}
+          </Button>
+        </div>
+      )}
       {(message || task?.reason_uk) && (
         <p role="status" className="text-xs text-muted-foreground">
-          {task?.reason_uk || message}
+          {message || task?.reason_uk}
         </p>
       )}
     </div>

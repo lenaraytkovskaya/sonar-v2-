@@ -1,3 +1,4 @@
+import { prozorroCode } from '@sonar/core';
 import { enqueueCompanyScores } from './scoring.js';
 import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
@@ -538,7 +539,15 @@ export async function enqueueProzorroSync(userId?: string | null) {
     }
   });
 }
+export class ProzorroCodeError extends Error {
+  constructor(
+    public reason: 'invalidCode' | 'conflictingCode' | 'companyBusy',
+  ) {
+    super(reason);
+  }
+}
 type ProzorroEnqueueOptions = {
+  manualCode?: string;
   taskId?: string;
   retry?: boolean;
   onlyIfStale?: boolean;
@@ -571,9 +580,14 @@ export async function enqueueProzorroCompany(
   existingClient?: PoolClient,
   options: ProzorroEnqueueOptions = {},
 ) {
+  const manualCode =
+    options.manualCode === undefined ? null : prozorroCode(options.manualCode);
+  if (options.manualCode !== undefined && !manualCode)
+    throw new ProzorroCodeError('invalidCode');
   const save = async (client: PoolClient) => {
     const key = `prozorro.company:${companyId}:${new Date().toISOString().slice(0, 10)}`;
     if (!(await lockProzorroCompany(client, companyId))) {
+      if (manualCode) throw new ProzorroCodeError('companyBusy');
       // A code correction requested during HTTP is revisited after the owner finishes.
       const { rows } = await client.query(
         "update tasks set payload=payload||'{\"pendingRefresh\":true}'::jsonb where id=(select id from tasks where type='prozorro.company' and payload->>'companyId'=$1 order by created_at desc limit 1) returning id,status",
@@ -586,8 +600,32 @@ export async function enqueueProzorroCompany(
       };
     }
     await recoverProzorroCompany(client, companyId);
-    const { prozorroCompanyCode } = await import('./prozorro.js');
+    const { prozorroCompanyCode, prozorroCompanyCodes } =
+      await import('./prozorro.js');
+    if (manualCode) {
+      const existing = (
+        await prozorroCompanyCodes(companyId, client, true)
+      ).filter((fact) => fact.code);
+      if (existing.some((fact) => fact.code !== manualCode))
+        throw new ProzorroCodeError('conflictingCode');
+      if (!existing.length) {
+        await client.query(
+          "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'edrpou',$2,'manual',$3,now())",
+          [companyId, JSON.stringify(manualCode), `/companies/${companyId}`],
+        );
+        await logActivity(
+          'company.edrpou.manual',
+          'company',
+          companyId,
+          userId,
+          { code: manualCode },
+          client,
+        );
+      }
+    }
     const code = await prozorroCompanyCode(companyId, client, true);
+    if (manualCode && code !== manualCode)
+      throw new ProzorroCodeError('conflictingCode');
     const { rows: live } = await client.query(prozorroLiveJobs, [companyId]);
     if (live[0]) {
       if ((live[0].payload.code ?? null) !== code)
