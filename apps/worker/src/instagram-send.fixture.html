@@ -35,9 +35,19 @@
       if (f.noDialog) return;
       const open = () => {
         history.pushState({}, '', '/direct/t/fixture-thread/');
+        const lexical = `<div class="notranslate" contenteditable="${f.noneditableComposer ? 'false' : 'true'}" role="${f.nonTextboxComposer ? 'searchbox' : 'textbox'}" spellcheck="false" tabindex="0" aria-placeholder="${f.lexicalPlaceholder ?? 'Message...'}" ${f.readonlyComposer ? 'aria-readonly="true"' : ''} style="user-select: text; white-space: pre-wrap; word-break: break-word;" data-lexical-editor="true" data-interactable="|click||input||keydown|"><p dir="auto"><br></p></div>`;
         main.innerHTML = `<header><a href="/${f.wrongRecipient ? 'other' : 'fixture_company'}/">Recipient</a></header>
       <section id="messages"></section>
-      ${f.noComposer ? '<textarea placeholder="Search" id="internal-decoy"></textarea>' : f.textarea ? '<textarea placeholder="Повідомлення..."></textarea>' : '<div contenteditable="true" role="textbox" aria-label="Message"></div>'}`;
+      ${f.noComposer ? '<textarea placeholder="Search" id="internal-decoy"></textarea>' : f.lexical ? `<div data-pagelet="IGDComposerForCannes">${lexical}</div>` : f.textarea ? '<textarea placeholder="Повідомлення..."></textarea>' : '<div contenteditable="true" role="textbox" aria-label="Message"></div>'}`;
+        if (f.lexical) main.setAttribute('role', 'main');
+        if (f.lexicalDecoys) {
+          main.querySelector('header').insertAdjacentHTML('beforeend', lexical);
+          main.insertAdjacentHTML(
+            'beforeend',
+            `<div role="navigation">${lexical}</div><aside>${lexical}</aside>`,
+          );
+        }
+        if (f.duplicateLexical) main.insertAdjacentHTML('beforeend', lexical);
         if (f.innerDialog || f.splitPane) {
           const active = document.createElement('div');
           active.setAttribute('role', 'dialog');
@@ -95,9 +105,10 @@
           'beforeend',
           '<textarea id="decoy" placeholder="Search"></textarea>',
         );
-        const composer = main.querySelector(
-          '[contenteditable], textarea:not([id])',
-        );
+        const composer =
+          main.querySelector(
+            '[data-pagelet="IGDComposerForCannes"] [contenteditable]',
+          ) || main.querySelector('[contenteditable], textarea:not([id])');
         if (composer)
           composer.onkeydown = (event) => {
             if (event.key !== 'Enter') return;
