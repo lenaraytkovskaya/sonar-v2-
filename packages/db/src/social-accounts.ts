@@ -7,6 +7,9 @@ import {
   socialSessionProxies,
   socialReservedProxyIndex,
   SocialSendError,
+  socialSessionCheckReason,
+  socialSessionCheckReasons,
+  type SocialSessionCheckReason,
 } from '@sonar/core/social-session';
 import type { SocialNetwork } from '@sonar/core';
 import { sonarPool } from './index.js';
@@ -23,6 +26,7 @@ export interface SocialAccount {
   status: string;
   sessionStatus: string;
   reasonUk: string | null;
+  sessionCheckReason: SocialSessionCheckReason | null;
   checkedAt: string | null;
   nextSendAt: Date | null;
   proxyIndex: number;
@@ -209,7 +213,7 @@ export function getSocialProxyCount(): number {
 export async function listSocialAccounts(): Promise<SocialAccount[]> {
   const { rows } = await sonarPool.query<SocialAccount>(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
-    coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'checkedAt' as "checkedAt",
+    coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
     a.next_send_at as "nextSendAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
@@ -281,7 +285,12 @@ export async function saveSocialAccount(
           }
         : {}),
       ...(replaced
-        ? { sessionStatus: 'pending', checkedAt: null, reasonUk: null }
+        ? {
+            sessionStatus: 'pending',
+            checkedAt: null,
+            reasonUk: null,
+            sessionCheckReason: null,
+          }
         : {}),
     };
     const id = existing?.id ?? randomUUID();
@@ -346,7 +355,12 @@ export async function updateSocialAccount(
           }
         : {}),
       ...(replaced
-        ? { sessionStatus: 'pending', checkedAt: null, reasonUk: null }
+        ? {
+            sessionStatus: 'pending',
+            checkedAt: null,
+            reasonUk: null,
+            sessionCheckReason: null,
+          }
         : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     };
@@ -423,28 +437,38 @@ export async function withSocialSessionCheck(
   id: string,
   check: (
     account: SocialSessionAccount,
-  ) => Promise<{ valid: boolean; reason?: string }>,
+  ) => Promise<{ valid: boolean; reason?: SocialSessionCheckReason }>,
 ): Promise<TaskOutcome> {
   return transaction(async (c) => {
     const account = await lock(c, id);
-    let valid = false,
-      reason: string | undefined;
+    let valid = false;
+    let reason: SocialSessionCheckReason | undefined;
     try {
       resolveSocialSession(account);
       const result = await check(account);
       valid = result.valid;
-      if (!valid) reason = 'Увійдіть знову (оновіть cookies)';
+      if (!valid)
+        reason =
+          result.reason &&
+          Object.hasOwn(socialSessionCheckReasons, result.reason)
+            ? result.reason
+            : 'unknown_auth';
     } catch (error) {
-      reason =
-        error instanceof SocialSendError
-          ? error.reasonUk
-          : 'Не вдалося перевірити сесію соцмережі. Повторіть перевірку.';
+      reason = socialSessionCheckReason(error);
     }
+    const reasonUk = reason ? socialSessionCheckReasons[reason] : null;
+    const invalidCookies =
+      reason === 'login_required' || reason === 'cookies_invalid';
     const settings = {
       ...account.settings,
-      sessionStatus: valid ? 'valid' : 'invalid',
+      sessionStatus: valid
+        ? 'valid'
+        : invalidCookies
+          ? 'invalid'
+          : 'unconfirmed',
       checkedAt: new Date().toISOString(),
-      reasonUk: reason ?? null,
+      sessionCheckReason: reason ?? null,
+      reasonUk,
     };
     await c.query(
       'update channel_accounts set status=$2,settings=$3 where id=$1',
@@ -462,8 +486,8 @@ export async function withSocialSessionCheck(
       ? { status: 'done', result: { valid: true } }
       : {
           status: 'paused',
-          reasonCode: 'social_session_invalid',
-          reasonUk: reason!,
+          reasonCode: `social_session_${reason}`,
+          reasonUk: reasonUk!,
         };
   });
 }

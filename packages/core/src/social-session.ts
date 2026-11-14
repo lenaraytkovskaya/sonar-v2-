@@ -48,6 +48,63 @@ export class SocialSendError extends Error {
     this.name = 'SocialSendError';
   }
 }
+// Fixed reasons are safe to persist; raw browser errors must never reach the UI/DB.
+export const socialSessionCheckReasons = {
+  login_required:
+    'Потрібен вхід у соцмережу. Увійдіть знову та оновіть cookies.',
+  cookies_invalid:
+    'Некоректні або застарілі cookies. Експортуйте сесію повторно.',
+  captcha: 'Соцмережа вимагає CAPTCHA. Пройдіть перевірку вручну.',
+  checkpoint:
+    'Соцмережа вимагає підтвердження особи. Пройдіть перевірку вручну.',
+  rate_limit:
+    'Соцмережа обмежила частоту запитів. Повторіть перевірку пізніше.',
+  timeout: 'Час очікування соцмережі вичерпано. Повторіть перевірку пізніше.',
+  network: 'Не вдалося з’єднатися із соцмережею. Перевірте мережу та проксі.',
+  proxy:
+    'Закріплений проксі недоступний або змінений. Перевірте налаштування проксі.',
+  browser: 'Не вдалося запустити або використати браузер. Повторіть перевірку.',
+  unknown_auth: 'Сесію не підтверджено. Перевірте вхід у соцмережу вручну.',
+} as const;
+export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
+export class SocialSessionCheckError extends SocialSendError {
+  constructor(public reason: SocialSessionCheckReason) {
+    super(
+      reason === 'rate_limit'
+        ? 'rate_limit'
+        : [
+              'login_required',
+              'cookies_invalid',
+              'captcha',
+              'checkpoint',
+              'unknown_auth',
+              'proxy',
+            ].includes(reason)
+          ? 'session_invalid'
+          : 'unavailable',
+      socialSessionCheckReasons[reason],
+    );
+  }
+}
+export function socialSessionCheckReason(
+  error: unknown,
+  fallback: SocialSessionCheckReason = 'unknown_auth',
+): SocialSessionCheckReason {
+  if (error instanceof SocialSessionCheckError) return error.reason;
+  if (!(error instanceof Error)) return fallback;
+  if (error.name === 'TimeoutError') return 'timeout';
+  if (
+    /net::ERR_(?:PROXY|TUNNEL)|proxy authentication|\b407\b/i.test(
+      error.message,
+    )
+  )
+    return 'proxy';
+  if (
+    /net::ERR_|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(error.message)
+  )
+    return 'network';
+  return fallback;
+}
 export interface SocialSessionCookie {
   name: string;
   value: string;
@@ -64,10 +121,7 @@ export interface SocialSessionProxy {
   password?: string;
 }
 function invalid(): never {
-  throw new SocialSendError(
-    'session_invalid',
-    'Некоректні або застарілі cookies. Експортуйте сесію повторно.',
-  );
+  throw new SocialSessionCheckError('cookies_invalid');
 }
 export function normalizeSocialCookies(
   raw: string,
@@ -250,10 +304,7 @@ export function resolveSocialSession(
     ? proxies[Number(settings.proxyIndex)]
     : undefined;
   if (!proxy || socialProxyFingerprint(proxy) !== settings.proxyFingerprint)
-    throw new SocialSendError(
-      'session_invalid',
-      'Закріплений проксі недоступний або змінений. Виберіть проксі та перевірте сесію повторно.',
-    );
+    throw new SocialSessionCheckError('proxy');
   if (typeof settings.cookiesEncrypted !== 'string') invalid();
   try {
     return {
