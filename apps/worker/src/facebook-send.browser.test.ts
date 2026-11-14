@@ -3,8 +3,8 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createSocialSendBrowser } from './social-send-browser.js';
 
 // Synthetic generic wrappers. Only labels, relationships and Lexical attributes
-// come from root's English UI observations; exact HTML branch relationships are
-// a structural assumption pending live DOM, not a captured Facebook fixture.
+// come from root's English UI observations, including an avatar-only recipient
+// link and sibling header/body. Deeper nesting and outgoing rows are synthetic.
 const markup = `
 <style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
 <nav aria-label="Account"><a href="/100000000000009/">Synthetic self</a></nav>
@@ -33,6 +33,20 @@ function chat(id, target, name) {
     '<div aria-label="Thread composer"><div contenteditable="true" role="textbox" spellcheck="true" tabindex="0" ' +
     'aria-describedby="synthetic-description" aria-label="Write to ' + name + '" aria-placeholder="Aa" data-lexical-editor="true"><p dir="auto"></p></div>' +
     '<div role="button" tabindex="0" aria-label="Send a Like"><svg><title>Send a Like</title></svg></div></div>';
+  if (o.avatarLink) {
+    const link = scope.querySelector('a');
+    link.setAttribute('aria-label', name); link.innerHTML = '<span><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></span><div role="none"></div>';
+    const settings = scope.querySelector('[aria-label="Chat settings"]');
+    settings.setAttribute('aria-haspopup', 'dialog'); settings.innerHTML = '<h2 dir="auto"><span>' + name + '</span></h2>';
+    if (o.wrongAvatarLabel) link.setAttribute('aria-label', 'Other Recipient');
+  }
+  if (o.wrappedChatBody) {
+    const body = document.createElement('div');
+    while (scope.children[1]) body.append(scope.children[1]);
+    if (o.extraBodyWrapper) {
+      const wrapper = document.createElement('div'); wrapper.append(body); scope.append(wrapper);
+    } else scope.append(body);
+  }
   return scope;
 }
 const region = scope => scope.querySelector('[aria-label^="Messages in conversation"]');
@@ -82,6 +96,13 @@ document.querySelector('#open').onclick = () => {
       const chats = document.createElement('div'); chats.id = 'chats'; layout.append(chats); chats.append(scope);
       scope.querySelector('a').replaceWith(document.createTextNode(label));
     }
+    if (o.outsideProfileHeader) {
+      const layout = document.createElement('div'); scope.replaceWith(layout);
+      const profileHeader = chat('profile', recipient, label).firstElementChild;
+      layout.append(profileHeader, scope);
+    }
+    if (o.duplicateRegion) scope.append(region(scope).cloneNode(true));
+    if (o.duplicateComposer) scope.append(scope.querySelector('[aria-label="Thread composer"]').cloneNode(true));
     if (o.outsideHeaderLink) scope.append(scope.querySelector('a'));
     if (o.headerLinkInMessages) region(scope).append(scope.querySelector('a'));
     if (o.globalLinkOnly) { scope.querySelector('a').remove(); document.querySelector('nav').insertAdjacentHTML('beforeend', '<a href="/' + recipient + '/">' + label + '</a>'); }
@@ -115,6 +136,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         page = value;
       });
       const events: string[] = [];
+      const dispatchPhases: string[] = [];
       const requests: string[] = [];
       const target = options.company
         ? 'https://www.facebook.com/synthetic_company/'
@@ -122,6 +144,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await context.exposeBinding('fixtureEvent', (_source, event: string) => {
         events.push(event);
       });
+      await context.exposeBinding(
+        'fixtureDispatch',
+        (_source, phase: string) => {
+          dispatchPhases.push(phase);
+        },
+      );
       await context.addInitScript({
         content: `window.fixtureOptions = ${JSON.stringify(options)}`,
       });
@@ -173,7 +201,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             const button = scope.querySelector(
               '[aria-label="Press Enter to send"]',
             )!;
-            const mutate = () => {
+            const mutate = (event: Event) => {
+              void (
+                window as unknown as {
+                  fixtureDispatch: (phase: string) => Promise<void>;
+                }
+              ).fixtureDispatch(event.type);
               const editor = scope.querySelector('[contenteditable]')!;
               if (options.clickRecipient || options.documentCaptureRecipient) {
                 scope
@@ -198,22 +231,28 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               if (options.clickDisabled)
                 button.setAttribute('aria-disabled', 'true');
               if (options.clickReparent) scope.append(button);
+              if (options.clickAvatarLabel)
+                scope
+                  .querySelector('a')!
+                  .setAttribute('aria-label', 'Other Recipient');
+              if (options.clickChatBodyReparent)
+                scope.append(
+                  scope.querySelector('[aria-label="Thread composer"]')!,
+                );
             };
-            if (options.documentCaptureRecipient)
-              document.addEventListener('click', mutate, {
+            // Synchronize with the real dispatch after the guard is armed.
+            // An animation plus a timer does not guarantee mutation before click.
+            // Document capture runs between the window and scope/button guards.
+            document.addEventListener(
+              options.documentCaptureRecipient || options.documentCaptureButton
+                ? 'click'
+                : 'pointerdown',
+              mutate,
+              {
                 capture: true,
                 once: true,
-              });
-            else {
-              button.animate(
-                [
-                  { transform: 'translateX(0px)' },
-                  { transform: 'translateX(20px)' },
-                ],
-                { duration: 200, fill: 'forwards' },
-              );
-              setTimeout(mutate, 60);
-            }
+              },
+            );
           }, options);
         if (options.markerOutgoing)
           await page.evaluate(() => {
@@ -254,6 +293,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
       return {
         events,
+        dispatchPhases,
         requests,
         mark,
         target,
@@ -288,6 +328,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { bodySending: true, bodyWrapper: true },
       { hiddenStatus: true },
       { clickStable: true },
+      { avatarLink: true },
+      { avatarLink: true, company: true },
+      { avatarLink: true, headerProfilePhp: true },
+      { wrappedChatBody: true },
+      { avatarLink: true, wrappedChatBody: true, neighbour: true },
+      { avatarLink: true, wrappedChatBody: true, company: true },
     ])(
       'sends once to a bound direct profile/Page and confirms a distinct outgoing (%j)',
       async (options) => {
@@ -302,6 +348,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.requests).toEqual([f.target]);
+          expect(f.dispatchPhases).toEqual(
+            options.clickStable ? ['pointerdown'] : [],
+          );
         } finally {
           await f.close();
         }
@@ -317,6 +366,20 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { draft: true },
       { unavailable: true },
       { noAction: true },
+      { avatarLink: true, wrongAvatarLabel: true },
+      { avatarLink: true, wrappedChatBody: true, wrongRecipient: true },
+      { wrappedChatBody: true, outsideProfileLink: true, wrongRecipient: true },
+      {
+        avatarLink: true,
+        wrappedChatBody: true,
+        outsideProfileHeader: true,
+        wrongRecipient: true,
+      },
+      { wrappedChatBody: true, outsideHeaderLink: true },
+      { wrappedChatBody: true, headerLinkInMessages: true },
+      { wrappedChatBody: true, duplicateRegion: true },
+      { wrappedChatBody: true, duplicateComposer: true },
+      { wrappedChatBody: true, extraBodyWrapper: true },
     ])(
       'never composes or marks an unbound/unavailable chat (%j)',
       async (options) => {
@@ -374,12 +437,21 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { clickComposer: true },
       { clickBody: true },
       { clickButton: true },
+      // A detached button still receives the in-flight click unless guarded.
+      { clickButton: true, documentCaptureButton: true },
       { clickDuplicateButton: true },
       { clickDisabled: true },
       { clickReparent: true },
       { documentCaptureRecipient: true },
       { markerNetwork: true },
       { marker503: true },
+      { avatarLink: true, wrappedChatBody: true, clickAvatarLabel: true },
+      { avatarLink: true, wrappedChatBody: true, clickChatBodyReparent: true },
+      {
+        avatarLink: true,
+        wrappedChatBody: true,
+        documentCaptureRecipient: true,
+      },
     ])(
       'does not dispatch or rebind after a durable marker failure/change (%j)',
       async (options) => {
@@ -390,6 +462,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           });
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.events).toEqual(['open', 'input:target', 'mark']);
+          expect(f.dispatchPhases).toEqual(
+            options.documentCaptureRecipient || options.documentCaptureButton
+              ? ['click']
+              : Object.keys(options).some((key) => key.startsWith('click'))
+                ? ['pointerdown']
+                : [],
+          );
         } finally {
           await f.close();
         }
