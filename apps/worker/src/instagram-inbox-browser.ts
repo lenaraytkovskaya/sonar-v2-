@@ -3,9 +3,13 @@ import type {
   SocialInboxBatch,
   SocialInboxMessage,
 } from '@sonar/core/social-inbox';
-import { SocialSessionCheckError } from '@sonar/core/social-session';
+import {
+  SocialSessionCheckError,
+  type SocialSessionCheckDiagnostic,
+} from '@sonar/core/social-session';
 import {
   assertSocialSession,
+  instagramSessionMarkers,
   socialSendBrowser,
 } from './social-send-browser.js';
 import {
@@ -22,6 +26,64 @@ const origin = 'https://www.instagram.com';
 const inboxContainer =
   '[data-pagelet="IGDInboxThreadListScrollableAreaPagelet"]';
 const messagesContainer = '[data-pagelet="IGDMessagesList"]';
+type CaptureDiagnostic = NonNullable<SocialSessionCheckDiagnostic['capture']>;
+const emptyCapture = (): CaptureDiagnostic => ({
+  received: 0,
+  parsed: 0,
+  verified: 0,
+  persisted: 0,
+  httpStatus: null,
+});
+
+async function diagnose(
+  error: unknown,
+  page: Page | undefined,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+  capture: CaptureDiagnostic,
+) {
+  if (!(error instanceof SocialSessionCheckError) || error.diagnostic)
+    return error;
+  // Collect before page closure. A diagnostic failure must not replace the reason.
+  error.diagnostic = await (async (): Promise<SocialSessionCheckDiagnostic> => {
+    const url = new URL(page?.url() ?? 'about:blank');
+    const path = url.pathname;
+    const urlKind =
+      url.origin !== origin
+        ? 'other'
+        : /captcha/i.test(path)
+          ? 'captcha'
+          : /checkpoint|challenge|security\/verification/i.test(path)
+            ? 'checkpoint'
+            : /login|signin|authwall/i.test(path)
+              ? 'login'
+              : /^\/direct\/inbox\/?$/.test(path)
+                ? 'inbox'
+                : /^\/direct\/requests\/?$/.test(path)
+                  ? 'requests'
+                  : /^\/direct\/t\/\d+\/?$/.test(path)
+                    ? 'thread'
+                    : 'other';
+    return {
+      version: 1,
+      stage,
+      urlKind,
+      navigationHttpStatus,
+      errorKind: error.errorKind ?? 'unconfirmed',
+      visible: page
+        ? await instagramSessionMarkers(page)
+        : {
+            legacyAuth: 0,
+            semanticAuth: 0,
+            captcha: 0,
+            checkpoint: 0,
+            login: 0,
+          },
+      capture: { ...capture },
+    };
+  })().catch(() => undefined);
+  return error;
+}
 
 /** Passive response observation only. No request replay, credentials inspection or API queries. */
 export async function captureInstagramInbox(
@@ -31,8 +93,24 @@ export async function captureInstagramInbox(
   assertSession = () => assertSocialSession(page, 'instagram', timeoutMs),
   expectedViewerId?: string,
 ) {
+  const capture = emptyCapture();
+  let navigationHttpStatus: number | null = null;
+  const diagnosed = (
+    error: unknown,
+    stage: SocialSessionCheckDiagnostic['stage'],
+  ) => diagnose(error, page, stage, navigationHttpStatus, capture);
+  const checkSession = async (stage: 'auth' | 'capture_auth') => {
+    try {
+      await assertSession();
+    } catch (error) {
+      throw await diagnosed(error, stage);
+    }
+  };
   if (!expectedViewerId || !/^\d+$/.test(expectedViewerId))
-    throw new SocialSessionCheckError('unknown_auth');
+    throw await diagnosed(
+      new SocialSessionCheckError('unknown_auth'),
+      'identity',
+    );
   let pending = Promise.resolve();
   let failure: unknown;
   let revision = 0;
@@ -56,6 +134,7 @@ export async function captureInstagramInbox(
       response.request().method() !== 'POST'
     )
       return;
+    capture.received = Math.min(capture.received + 1, 2);
     const request = response.request();
     const frame = request.frame();
     if (
@@ -71,9 +150,11 @@ export async function captureInstagramInbox(
       return;
     }
     const responseScope = scope;
+    let stage: SocialSessionCheckDiagnostic['stage'] = 'http';
     pending = pending
       .then(async () => {
         if (failure) return;
+        capture.httpStatus = response.status();
         if (response.status() === 429)
           throw new SocialSessionCheckError('rate_limit');
         if (response.status() !== 200) {
@@ -96,15 +177,18 @@ export async function captureInstagramInbox(
             skipped.add('requests_shape_unsupported');
             return;
           }
-          await assertSession();
+          await checkSession('capture_auth');
           requestsCovered = true;
           revision++;
           await persistBatch({ messages: [], resumeAnchor: null });
+          capture.persisted = Math.min(capture.persisted + 1, 2);
           return;
         }
         const parsed = parseInstagramInbox(body, new Date().toISOString());
         if (!parsed) return;
-        await assertSession();
+        capture.parsed = Math.min(capture.parsed + 1, 2);
+        await checkSession('capture_auth');
+        stage = 'actor';
         if (
           !parsed.mailboxId ||
           (!mailboxId && parsed.actors.length === 0) ||
@@ -116,6 +200,7 @@ export async function captureInstagramInbox(
           )
         )
           throw new SocialSessionCheckError('unknown_auth');
+        capture.verified = Math.min(capture.verified + 1, 2);
         mailboxId ??= parsed.mailboxId;
         seenMailbox = true;
         revision++;
@@ -151,9 +236,10 @@ export async function captureInstagramInbox(
         }
         // Serialize and commit each captured chunk before any further UI action.
         await persistBatch({ messages, resumeAnchor: null });
+        capture.persisted = Math.min(capture.persisted + 1, 2);
       })
-      .catch((error) => {
-        failure ??= error;
+      .catch(async (error) => {
+        failure ??= await diagnosed(error, stage);
       });
   };
   const drain = async () => {
@@ -177,14 +263,22 @@ export async function captureInstagramInbox(
   };
   const navigate = async (url: string) => {
     scope = url === `${origin}/direct/inbox/` ? 'inbox' : url;
-    const response = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: Math.max(1, deadline - Date.now()),
-    });
-    if (response?.status() === 429)
-      throw new SocialSessionCheckError('rate_limit');
-    if (!response || response.status() >= 400) invalid = true;
-    await assertSession();
+    let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
+    try {
+      navigationHttpStatus = null;
+      const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: Math.max(1, deadline - Date.now()),
+      });
+      navigationHttpStatus = response?.status() ?? null;
+      stage = 'http';
+      if (navigationHttpStatus === 429)
+        throw new SocialSessionCheckError('rate_limit');
+      if (!response || response.status() >= 400) invalid = true;
+      await checkSession('auth');
+    } catch (error) {
+      throw await diagnosed(error, stage);
+    }
     await drain();
   };
   let listening = true;
@@ -214,7 +308,7 @@ export async function captureInstagramInbox(
       if (!history && page.url() !== `${origin}/direct/inbox/`) {
         await navigate(`${origin}/direct/inbox/`);
       }
-      await assertSession();
+      await checkSession('auth');
       await drain();
       const container = page.locator(
         history ? messagesContainer : inboxContainer,
@@ -244,7 +338,7 @@ export async function captureInstagramInbox(
       await navigate(`${origin}/direct/requests/`);
       await waitForCapture(before);
     }
-    await assertSession();
+    await checkSession('auth');
     detach();
     await drain();
     if (unprovenChain) skipped.add('pagination_chain_unverified');
@@ -297,7 +391,13 @@ export function createSocialInboxAdapter(
           cookie.path === '/',
       );
       if (actorCookies.length !== 1 || !/^\d+$/.test(actorCookies[0]!.value))
-        throw new SocialSessionCheckError('unknown_auth');
+        throw await diagnose(
+          new SocialSessionCheckError('unknown_auth'),
+          undefined,
+          'identity',
+          null,
+          emptyCapture(),
+        );
       const expectedViewerId = actorCookies[0]!.value;
       return browser.withPage(account, account.session, timeoutMs, (page) =>
         captureInstagramInbox(

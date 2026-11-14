@@ -4,6 +4,7 @@ import type {
 } from '@sonar/core/social-inbox';
 import {
   resolveSocialSession,
+  safeSocialSessionDiagnostic,
   SocialSendError,
   SocialSessionCheckError,
   socialSessionCheckReason,
@@ -250,6 +251,10 @@ export async function runSocialInboxSync(
             ? 'rate_limit'
             : socialSessionCheckReason(error);
       const invalid = ['login_required', 'cookies_invalid'].includes(reason);
+      const diagnostic =
+        error instanceof SocialSessionCheckError
+          ? safeSocialSessionDiagnostic(error.diagnostic)
+          : undefined;
       if (error.code === 'session_invalid' || error.code === 'rate_limit')
         await c.query(
           "update channel_accounts set status='paused',settings=settings||$2::jsonb where id=$1",
@@ -266,6 +271,7 @@ export async function runSocialInboxSync(
         status: 'paused',
         reasonCode: `social_inbox_${reason}`,
         reasonUk: socialSessionCheckReasons[reason],
+        ...(diagnostic ? { result: { diagnostic } } : {}),
       };
     }
     return {

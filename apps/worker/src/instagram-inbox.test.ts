@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import type { Page, Response } from 'playwright';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
 import { validateSocialInboxMessage } from '@sonar/core/social-inbox';
+import { SocialSessionCheckError } from '@sonar/core/social-session';
 import {
   parseInstagramInbox,
   parseInstagramRequests,
@@ -212,7 +213,11 @@ function browser(
     waitForTimeout: async () => {
       await new Promise((resolve) => setTimeout(resolve, 2));
     },
-    locator: vi.fn(() => ({
+    getByText: vi.fn(() => ({ filter: () => ({ count: async () => 0 }) })),
+    locator: vi.fn((selector: string) => ({
+      filter: () => ({
+        count: async () => (selector.startsWith('a[href^="/direct/"]') ? 1 : 0),
+      }),
       count: async () => 1,
       evaluate: vi.fn(async () => {
         events.push('scroll');
@@ -348,6 +353,73 @@ it('propagates persistence/session failures and always detaches the response lis
   expect(blocked.page.off).toHaveBeenCalledOnce();
 });
 
+it('reports a parsed mailbox blocked by the DOM auth wait without accepting its viewer or persisting', async () => {
+  const f = browser([fixture()]);
+  const marker = {
+    count: async () => 0,
+    first: () => ({
+      waitFor: async () => {
+        throw Object.assign(Error('synthetic timeout'), {
+          name: 'TimeoutError',
+        });
+      },
+    }),
+  };
+  f.page.locator.mockImplementation(() => ({ filter: () => marker }) as never);
+  await expect(
+    captureInstagramInbox(
+      f.page as unknown as Page,
+      100,
+      f.persist,
+      undefined,
+      '900000000000004',
+    ),
+  ).rejects.toMatchObject({
+    reason: 'unknown_auth',
+    diagnostic: {
+      stage: 'capture_auth',
+      urlKind: 'inbox',
+      errorKind: 'timeout',
+      visible: {
+        legacyAuth: 0,
+        semanticAuth: 0,
+        captcha: 0,
+        checkpoint: 0,
+        login: 0,
+      },
+      capture: {
+        received: 1,
+        parsed: 1,
+        verified: 0,
+        persisted: 0,
+        httpStatus: 200,
+      },
+    },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+  expect(f.page.off).toHaveBeenCalledOnce();
+});
+
+it('distinguishes a navigation auth failure with no captured response', async () => {
+  const f = browser([]);
+  f.assert.mockRejectedValue(new SocialSessionCheckError('unknown_auth'));
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: {
+      stage: 'auth',
+      urlKind: 'inbox',
+      navigationHttpStatus: 200,
+      capture: {
+        received: 0,
+        parsed: 0,
+        verified: 0,
+        persisted: 0,
+        httpStatus: null,
+      },
+    },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
 it('delegates account, pinned session and configured timeout to the shared browser factory', async () => {
   const account = {
     id: 'test',
@@ -454,7 +526,13 @@ it('rejects the first actor when it differs from the authorized session identity
   thread(value).viewer.id = '800000000000004';
   thread(value).viewer_id = thread(value).viewer.id;
   const f = browser([value]);
-  await expect(f.run()).rejects.toMatchObject({ reason: 'unknown_auth' });
+  await expect(f.run()).rejects.toMatchObject({
+    reason: 'unknown_auth',
+    diagnostic: {
+      stage: 'actor',
+      capture: { parsed: 1, verified: 0, persisted: 0 },
+    },
+  });
   expect(f.persist).not.toHaveBeenCalled();
 });
 it('rejects a foreign request frame before persisting its response', async () => {
@@ -514,6 +592,9 @@ it('refuses to open a context when authorized ds_user_id is missing', async () =
       { watermark: null, cycleStartedAt: null, resumeAnchor: null },
       async () => {},
     ),
-  ).rejects.toMatchObject({ reason: 'unknown_auth' });
+  ).rejects.toMatchObject({
+    reason: 'unknown_auth',
+    diagnostic: { stage: 'identity', capture: { received: 0 } },
+  });
   expect(withPage).not.toHaveBeenCalled();
 });

@@ -95,8 +95,17 @@ export const socialSessionCheckReasons = {
 export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
 export type SocialSessionCheckDiagnostic = {
   version: 1;
-  stage: 'navigation' | 'http' | 'auth';
-  urlKind: 'home' | 'feed' | 'login' | 'checkpoint' | 'captcha' | 'other';
+  stage: 'navigation' | 'http' | 'auth' | 'identity' | 'capture_auth' | 'actor';
+  urlKind:
+    | 'home'
+    | 'feed'
+    | 'login'
+    | 'checkpoint'
+    | 'captcha'
+    | 'other'
+    | 'inbox'
+    | 'requests'
+    | 'thread';
   navigationHttpStatus: number | null;
   errorKind: 'timeout' | 'unconfirmed';
   visible: {
@@ -105,6 +114,13 @@ export type SocialSessionCheckDiagnostic = {
     captcha: number;
     checkpoint: number;
     login: number;
+  };
+  capture?: {
+    received: number;
+    parsed: number;
+    verified: number;
+    persisted: number;
+    httpStatus: number | null;
   };
 };
 /** Rebuild from fixed keys; never persist arbitrary browser/callback properties. */
@@ -115,10 +131,25 @@ export function safeSocialSessionDiagnostic(
   const d = value as SocialSessionCheckDiagnostic;
   if (
     d.version !== 1 ||
-    !['navigation', 'http', 'auth'].includes(d.stage) ||
-    !['home', 'feed', 'login', 'checkpoint', 'captcha', 'other'].includes(
-      d.urlKind,
-    ) ||
+    ![
+      'navigation',
+      'http',
+      'auth',
+      'identity',
+      'capture_auth',
+      'actor',
+    ].includes(d.stage) ||
+    ![
+      'home',
+      'feed',
+      'login',
+      'checkpoint',
+      'captcha',
+      'other',
+      'inbox',
+      'requests',
+      'thread',
+    ].includes(d.urlKind) ||
     !['timeout', 'unconfirmed'].includes(d.errorKind) ||
     !d.visible ||
     (d.navigationHttpStatus !== null &&
@@ -139,6 +170,26 @@ export function safeSocialSessionDiagnostic(
     if (!Number.isSafeInteger(count) || count < 0) return;
     visible[key] = Math.min(count, 2);
   }
+  let capture: SocialSessionCheckDiagnostic['capture'];
+  if (d.capture) {
+    const { httpStatus } = d.capture;
+    if (
+      httpStatus !== null &&
+      (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599)
+    )
+      return;
+    capture = { received: 0, parsed: 0, verified: 0, persisted: 0, httpStatus };
+    for (const key of [
+      'received',
+      'parsed',
+      'verified',
+      'persisted',
+    ] as const) {
+      const count = d.capture[key];
+      if (!Number.isSafeInteger(count) || count < 0) return;
+      capture[key] = Math.min(count, 2);
+    }
+  }
   return {
     version: 1,
     stage: d.stage,
@@ -146,6 +197,7 @@ export function safeSocialSessionDiagnostic(
     navigationHttpStatus: d.navigationHttpStatus,
     errorKind: d.errorKind,
     visible,
+    ...(capture ? { capture } : {}),
   };
 }
 export class SocialSessionCheckError extends SocialSendError {

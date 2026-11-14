@@ -234,4 +234,42 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
       visible: { ...raw.visible, login: -1 },
     }),
   ).toBeUndefined();
+  const inbox = {
+    ...raw,
+    stage: 'capture_auth',
+    urlKind: 'inbox',
+    capture: {
+      received: 999,
+      parsed: 1,
+      verified: 0,
+      persisted: 0,
+      httpStatus: 200,
+      viewerId: 'private',
+      url: 'secret',
+    },
+  };
+  expect(safeSocialSessionDiagnostic(inbox)).toEqual({
+    ...safe,
+    stage: 'capture_auth',
+    urlKind: 'inbox',
+    capture: {
+      received: 2,
+      parsed: 1,
+      verified: 0,
+      persisted: 0,
+      httpStatus: 200,
+    },
+  });
+  expect(
+    safeSocialSessionDiagnostic({
+      ...inbox,
+      capture: { ...inbox.capture, parsed: -1 },
+    }),
+  ).toBeUndefined();
+  expect(
+    safeSocialSessionDiagnostic({
+      ...inbox,
+      capture: { ...inbox.capture, httpStatus: 999 },
+    }),
+  ).toBeUndefined();
 });
