@@ -91,7 +91,64 @@ export const socialSessionCheckReasons = {
   unknown_auth: 'Сесію не підтверджено. Перевірте вхід у соцмережу вручну.',
 } as const;
 export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
+export type SocialSessionCheckDiagnostic = {
+  version: 1;
+  stage: 'navigation' | 'http' | 'auth';
+  urlKind: 'home' | 'feed' | 'login' | 'checkpoint' | 'captcha' | 'other';
+  navigationHttpStatus: number | null;
+  errorKind: 'timeout' | 'unconfirmed';
+  visible: {
+    legacyAuth: number;
+    semanticAuth: number;
+    captcha: number;
+    checkpoint: number;
+    login: number;
+  };
+};
+/** Rebuild from fixed keys; never persist arbitrary browser/callback properties. */
+export function safeSocialSessionDiagnostic(
+  value: unknown,
+): SocialSessionCheckDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return;
+  const d = value as SocialSessionCheckDiagnostic;
+  if (
+    d.version !== 1 ||
+    !['navigation', 'http', 'auth'].includes(d.stage) ||
+    !['home', 'feed', 'login', 'checkpoint', 'captcha', 'other'].includes(
+      d.urlKind,
+    ) ||
+    !['timeout', 'unconfirmed'].includes(d.errorKind) ||
+    !d.visible ||
+    (d.navigationHttpStatus !== null &&
+      (!Number.isInteger(d.navigationHttpStatus) ||
+        d.navigationHttpStatus < 100 ||
+        d.navigationHttpStatus > 599))
+  )
+    return;
+  const visible = {} as SocialSessionCheckDiagnostic['visible'];
+  for (const key of [
+    'legacyAuth',
+    'semanticAuth',
+    'captcha',
+    'checkpoint',
+    'login',
+  ] as const) {
+    const count = d.visible[key];
+    if (!Number.isSafeInteger(count) || count < 0) return;
+    visible[key] = Math.min(count, 2);
+  }
+  return {
+    version: 1,
+    stage: d.stage,
+    urlKind: d.urlKind,
+    navigationHttpStatus: d.navigationHttpStatus,
+    errorKind: d.errorKind,
+    visible,
+  };
+}
 export class SocialSessionCheckError extends SocialSendError {
+  diagnostic?: SocialSessionCheckDiagnostic;
+  errorKind?: 'timeout' | 'unconfirmed';
   constructor(public reason: SocialSessionCheckReason) {
     super(
       reason === 'rate_limit'

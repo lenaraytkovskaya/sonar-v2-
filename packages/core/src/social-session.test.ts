@@ -189,3 +189,49 @@ it('reserves endpoint aliases without changing account indices, credentials or f
   );
   expect(proxies.map(socialProxyFingerprint)).toEqual(before);
 });
+
+it('rebuilds bounded diagnostics without retaining private extra fields', async () => {
+  const { safeSocialSessionDiagnostic } = await import('./social-session.js');
+  const raw = {
+    version: 1,
+    stage: 'auth',
+    urlKind: 'feed',
+    navigationHttpStatus: 403,
+    errorKind: 'timeout',
+    url: 'https://private.test?secret',
+    html: 'private',
+    visible: {
+      legacyAuth: 999,
+      semanticAuth: 2,
+      captcha: 0,
+      checkpoint: 1,
+      login: 0,
+      text: 'secret',
+    },
+  };
+  const safe = safeSocialSessionDiagnostic(raw);
+  expect(safe).toEqual({
+    version: 1,
+    stage: 'auth',
+    urlKind: 'feed',
+    navigationHttpStatus: 403,
+    errorKind: 'timeout',
+    visible: {
+      legacyAuth: 2,
+      semanticAuth: 2,
+      captcha: 0,
+      checkpoint: 1,
+      login: 0,
+    },
+  });
+  expect(JSON.stringify(safe)).not.toMatch(/secret|private|https/);
+  expect(
+    safeSocialSessionDiagnostic({ ...raw, stage: 'secret' }),
+  ).toBeUndefined();
+  expect(
+    safeSocialSessionDiagnostic({
+      ...raw,
+      visible: { ...raw.visible, login: -1 },
+    }),
+  ).toBeUndefined();
+});

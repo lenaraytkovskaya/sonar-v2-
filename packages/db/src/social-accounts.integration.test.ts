@@ -74,18 +74,43 @@ it.skipIf(!enabled)(
         ).toMatchObject({ status: 'done' });
         expect(check).toHaveBeenCalledOnce();
         if (network === 'linkedin') {
+          const diagnostic = {
+            version: 1,
+            stage: 'auth',
+            urlKind: 'feed',
+            navigationHttpStatus: 200,
+            errorKind: 'timeout',
+            visible: {
+              legacyAuth: 0,
+              semanticAuth: 0,
+              captcha: 0,
+              checkpoint: 0,
+              login: 0,
+            },
+          } as const;
           for (const reason of Object.keys(
             socialSessionCheckReasons,
           ) as (keyof typeof socialSessionCheckReasons)[]) {
             const outcome = await accounts.withSocialSessionCheck(
               saved.id,
-              async () => ({ valid: false, reason }),
+              async () => ({
+                valid: false,
+                reason,
+                diagnostic: {
+                  ...diagnostic,
+                  rawUrl: 'https://private.test/?token=secret',
+                },
+              }),
             );
             expect(outcome).toMatchObject({
               status: 'paused',
               reasonCode: `social_session_${reason}`,
               reasonUk: socialSessionCheckReasons[reason],
+              result: { valid: false, diagnostic },
             });
+            expect(JSON.stringify(outcome)).not.toMatch(
+              /secret|private|rawUrl/,
+            );
             expect(
               (await accounts.listSocialAccounts()).find(
                 (row) => row.id === saved.id,
@@ -120,6 +145,7 @@ it.skipIf(!enabled)(
           );
           expect(unsafe).toMatchObject({
             reasonUk: socialSessionCheckReasons.unknown_auth,
+            result: { valid: false },
           });
           expect(
             JSON.stringify(

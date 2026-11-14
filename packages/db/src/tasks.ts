@@ -290,6 +290,7 @@ export type TaskOutcome =
   | { status: 'done'; result: object }
   | {
       status: 'skipped' | 'paused' | 'failed';
+      result?: object;
       reasonCode: string;
       reasonUk: string;
     }
@@ -311,7 +312,7 @@ export async function executeTask(
     else
       await save(
         outcome.status === 'deferred' ? 'queued' : outcome.status,
-        undefined,
+        'result' in outcome ? outcome.result : undefined,
         outcome.reasonCode,
         outcome.reasonUk,
       );
