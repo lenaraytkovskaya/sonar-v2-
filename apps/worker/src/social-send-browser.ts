@@ -221,6 +221,174 @@ function instagramComposer(page: Page, dialog: Locator) {
       ),
     );
 }
+async function instagramArticleConfirmation(dialog: Locator, body: string) {
+  return dialog.evaluateHandle((container, body) => {
+    const articleSelector = '[role="article"][aria-roledescription="message"]';
+    const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility === 'visible';
+    const localUrl = (anchor: Element) => {
+      try {
+        const url = new URL(anchor.getAttribute('href')!, location.href);
+        return url.origin === location.origin && !url.username && !url.password
+          ? url
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const sender = () => {
+      const candidates = Array.from(
+        document.querySelectorAll('a[href]'),
+      ).filter((anchor) => {
+        if (
+          !visible(anchor) ||
+          anchor.closest(
+            'main, [role="main"], [role="dialog"], aside, nav, [role="navigation"], [role="complementary"]',
+          )
+        )
+          return false;
+        const url = localUrl(anchor);
+        const handle =
+          url && /^\/([a-z0-9._]{1,30})\/$/i.exec(url.pathname)?.[1];
+        if (
+          !url ||
+          url.search ||
+          url.hash ||
+          !handle ||
+          !Array.from(anchor.querySelectorAll('img')).some(
+            (img) =>
+              visible(img) &&
+              img.alt.toLowerCase() ===
+                `${handle}'s profile picture`.toLowerCase(),
+          )
+        )
+          return false;
+        // The observed rail has no semantic nav. Require its known routes
+        // together outside every conversation boundary, never a page-wide LCA.
+        for (let rail = anchor.parentElement; rail; rail = rail.parentElement) {
+          if (rail.querySelector('main, [role="main"], [role="dialog"]'))
+            return false;
+          const paths = new Set(
+            Array.from(rail.querySelectorAll('a[href]'))
+              .filter(visible)
+              .map(localUrl)
+              .filter((link) => link !== null)
+              .map((link) => link.pathname),
+          );
+          if (
+            ['/', '/reels/', '/direct/inbox/', '/explore/'].every((p) =>
+              paths.has(p),
+            )
+          )
+            return true;
+        }
+        return false;
+      });
+      return candidates.length === 1
+        ? new URL(candidates[0]!.getAttribute('href')!, location.href).pathname
+            .slice(1, -1)
+            .toLowerCase()
+        : null;
+    };
+    const expectedSender = sender();
+    const lists = container.querySelectorAll(
+      '[data-pagelet="IGDMessagesList"]',
+    );
+    const list = lists.length === 1 ? lists[0]! : null;
+    const matching = () =>
+      list
+        ? Array.from(list.querySelectorAll(articleSelector)).filter(
+            (article) => {
+              const ids = article
+                .getAttribute('aria-labelledby')
+                ?.trim()
+                .split(/\s+/);
+              const labels = ids?.map((id) => document.getElementById(id));
+              return (
+                visible(article) &&
+                labels?.length &&
+                labels.every((label) => label && article.contains(label)) &&
+                normalize(
+                  labels.map((label) => label!.textContent).join(' '),
+                ) === normalize(body)
+              );
+            },
+          )
+        : [];
+    const author = (article: Element) => {
+      for (
+        let common = article.parentElement;
+        common && common !== list;
+        common = common.parentElement
+      ) {
+        if (common.querySelectorAll(articleSelector).length !== 1) return null;
+        const groups = common.querySelectorAll(
+          '[role="group"][aria-label="Message actions"]',
+        );
+        if (!groups.length) continue;
+        if (groups.length !== 1 || article.contains(groups[0]!)) return null;
+        const replies = Array.from(
+          groups[0]!.querySelectorAll('[role="button"][aria-label]'),
+        )
+          .map((control) =>
+            /^Reply to message from ([a-z0-9._]{1,30})$/i.exec(
+              control.getAttribute('aria-label')!,
+            ),
+          )
+          .filter((match) => match !== null);
+        return replies.length === 1 ? replies[0]![1]!.toLowerCase() : null;
+      }
+      return null;
+    };
+    let previous = matching();
+    let previousArticles: Element[] = [];
+    // Unknown old authors also consume the baseline: later hydration must not
+    // turn an old exact body into evidence of this send.
+    let priorOwn = 0;
+    return {
+      arm: () => {
+        previous = matching();
+        previousArticles = list
+          ? Array.from(list.querySelectorAll(articleSelector))
+          : [];
+        priorOwn = previous.filter((article) => {
+          const value = author(article);
+          return value === null || value === expectedSender;
+        }).length;
+      },
+      confirmed: () => {
+        if (
+          !expectedSender ||
+          sender() !== expectedSender ||
+          !list?.isConnected ||
+          !container.contains(list)
+        )
+          return false;
+        const current = matching();
+        const own = current.filter(
+          (article) => author(article) === expectedSender,
+        );
+        const last = previousArticles.at(-1);
+        return (
+          current.length > previous.length &&
+          own.length > priorOwn &&
+          own.some(
+            (article) =>
+              !previousArticles.includes(article) &&
+              (!last ||
+                (list.contains(last) &&
+                  Boolean(
+                    last.compareDocumentPosition(article) &
+                    Node.DOCUMENT_POSITION_FOLLOWING,
+                  ))),
+          )
+        );
+      },
+    };
+  }, body);
+}
 async function sendInstagram(
   page: Page,
   target: { canonicalUrl: string; handle: string },
@@ -678,19 +846,32 @@ async function sendInstagram(
     const ownMessages = dialog
       .locator(outgoing.instagram)
       .filter({ has: page.getByText(body, { exact: true }) });
-    const count = await ownMessages.count();
-    stage = 'attempt';
-    await beforeSend();
-    attempted = true;
-    await verifyDialog('after_marker');
-    stage = 'confirmation';
-    await composerNode.press('Enter');
-    await ownMessages
-      .nth(count)
-      .waitFor({ state: 'visible', timeout: timeoutMs });
-    await verifyDialog('after_send');
-    stage = 'confirmation';
-    return await confirmedDialogUrl(page, 'instagram');
+    const articles = await instagramArticleConfirmation(dialog, body);
+    try {
+      stage = 'attempt';
+      await beforeSend();
+      attempted = true;
+      await verifyDialog('after_marker');
+      stage = 'confirmation';
+      const count = await ownMessages.count();
+      await articles.evaluate((state) => state.arm());
+      await composerNode.press('Enter');
+      await Promise.any([
+        ownMessages
+          .nth(count)
+          .waitFor({ state: 'visible', timeout: timeoutMs }),
+        page.waitForFunction((state) => state.confirmed(), articles, {
+          timeout: timeoutMs,
+        }),
+      ]).catch((error: AggregateError) => {
+        throw error.errors[0];
+      });
+      await verifyDialog('after_send');
+      stage = 'confirmation';
+      return await confirmedDialogUrl(page, 'instagram');
+    } finally {
+      await articles.dispose();
+    }
   } catch (caught) {
     let error = caught;
     if (stage !== 'navigation') {
