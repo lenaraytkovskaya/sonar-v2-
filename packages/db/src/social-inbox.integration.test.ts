@@ -413,7 +413,7 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
-  'persists observed Instagram sender IDs without invented profiles, deduplicates and keeps partial watermark',
+  'keeps empty Instagram observations unverified and preserves partial watermark through later attributable imports',
   async () => {
     const id = randomUUID();
     const watermark = '2026-11-13T10:00:00.000Z';
@@ -465,6 +465,92 @@ it.skipIf(!enabled)(
       ],
     );
     try {
+      const { captureInstagramInbox } =
+        await import('../../../apps/worker/src/instagram-inbox-browser.js');
+      const empty = JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../apps/worker/src/instagram-inbox.fixture.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      );
+      empty.data.get_slide_mailbox_for_iris_subscription.threads_by_folder.edges =
+        [];
+      let url = '';
+      let listener: ((response: unknown) => void) | undefined;
+      const frame = { url: () => url };
+      const page = {
+        on: (_event: string, fn: typeof listener) => {
+          listener = fn;
+        },
+        off: () => {
+          listener = undefined;
+        },
+        url: () => url,
+        mainFrame: () => frame,
+        goto: async (target: string) => {
+          url = target;
+          listener?.({
+            url: () => 'https://www.instagram.com/api/graphql',
+            status: () => 200,
+            request: () => ({
+              method: () => 'POST',
+              url: () => 'https://www.instagram.com/api/graphql',
+              frame: () => frame,
+            }),
+            json: async () => empty,
+          });
+          return { status: () => 200 };
+        },
+        waitForTimeout: async (ms: number) => {
+          await new Promise((resolve) => setTimeout(resolve, ms));
+        },
+      };
+      const emptyAdapter: import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter =
+        {
+          sync: async (_account, _checkpoint, persist) =>
+            captureInstagramInbox(
+              page as unknown as Parameters<typeof captureInstagramInbox>[0],
+              25,
+              persist,
+              async () => {},
+              '900000000000004',
+            ),
+        };
+      expect(
+        await worker.runSocialInboxSync({ accountId: id }, emptyAdapter, now),
+      ).toMatchObject({
+        status: 'done',
+        result: {
+          created: 0,
+          complete: false,
+          reason: 'unsupported_dom',
+          skipped: expect.arrayContaining(['no_verified_mailbox']),
+        },
+      });
+      const state = (
+        await db.sonarPool.query(
+          'select status,settings from channel_accounts where id=$1',
+          [id],
+        )
+      ).rows[0];
+      expect(state.status).toBe('active');
+      expect(state.settings.sessionStatus).toBe('valid');
+      expect(state.settings.sessionCheckReason).toBeUndefined();
+      expect(state.settings.inboxSync).toMatchObject({
+        watermark,
+        complete: false,
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select count(*)::int as n from messages where account_id=$1',
+            [id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
       const adapter: import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter =
         {
           async sync(_account, _checkpoint, persist) {
@@ -478,7 +564,11 @@ it.skipIf(!enabled)(
           },
         };
       expect(
-        await worker.runSocialInboxSync({ accountId: id }, adapter, now),
+        await worker.runSocialInboxSync(
+          { accountId: id },
+          adapter,
+          new Date(state.settings.socialAction.nextAt),
+        ),
       ).toMatchObject({
         status: 'done',
         result: {

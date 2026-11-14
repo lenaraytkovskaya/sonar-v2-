@@ -43,6 +43,11 @@ const mailbox = (value = fixture()) =>
   value.data.get_slide_mailbox_for_iris_subscription;
 const thread = (value: ReturnType<typeof fixture>) =>
   mailbox(value).threads_by_folder.edges[0].node.as_ig_direct_thread;
+const emptyFixture = () => {
+  const value = fixture();
+  mailbox(value).threads_by_folder.edges = [];
+  return value;
+};
 
 it('maps observed true identities, exact text, timestamps and provider IDs', () => {
   const parsed = parseInstagramInbox(fixture(), observedAt)!;
@@ -241,8 +246,96 @@ function browser(
       assert,
       '900000000000004',
     );
-  return { page, events, batches, persist, assert, requestFrame, run };
+  return { page, events, batches, persist, assert, requestFrame, emit, run };
 }
+
+it('waits past an unattributed empty observation and persists a later attributable mailbox', async () => {
+  const empty = emptyFixture();
+  mailbox(empty).id = '800000000000003'; // An empty observation cannot bind this identity.
+  const f = browser([empty]);
+  const wait = vi
+    .spyOn(f.page, 'waitForTimeout')
+    .mockImplementationOnce(async () => {
+      expect(f.persist).not.toHaveBeenCalled();
+      f.emit([fixture()]);
+    });
+  expect(await f.run()).toMatchObject({
+    complete: false,
+    skipped: ['general_folder_unsupported'],
+  });
+  expect(wait).toHaveBeenCalled();
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+  expect(f.batches[0]?.messages).toEqual(
+    parseInstagramInbox(fixture(), f.batches[0]!.messages[0]!.observedAt)!
+      .messages,
+  );
+});
+
+it('rejects a foreign actor after an empty observation before any persistence', async () => {
+  const foreign = fixture();
+  thread(foreign).viewer.id = '800000000000004';
+  thread(foreign).viewer_id = thread(foreign).viewer.id;
+  const f = browser([emptyFixture(), foreign]);
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: {
+      actor: { reason: 'viewer_mismatch', hasPreviousMailbox: false },
+      capture: { parsed: 2, verified: 0, persisted: 0 },
+    },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
+it('ends empty-only observations at the deadline without verifying, persisting or visiting Requests', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = browser([emptyFixture()]);
+    const result = f.run();
+    void result.catch(() => {});
+    await vi.advanceTimersByTimeAsync(99);
+    expect(f.page.off).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toMatchObject({
+      complete: false,
+      reason: 'unsupported_dom',
+      skipped: expect.arrayContaining([
+        'no_verified_mailbox',
+        'requests_and_spam_unverified',
+      ]),
+    });
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(f.page.goto).toHaveBeenCalledOnce();
+    expect(f.page.off).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(['pagination', 'partial-error', 'mailbox', 'edges'])(
+  'does not accept an empty observation with malformed %s',
+  async (kind) => {
+    const value = emptyFixture();
+    if (kind === 'pagination')
+      delete mailbox(value).threads_by_folder.page_info;
+    if (kind === 'partial-error') value.errors = [{ message: 'synthetic' }];
+    if (kind === 'mailbox') delete mailbox(value).id;
+    if (kind === 'edges') delete mailbox(value).threads_by_folder.edges;
+    const f = browser([value, fixture()]);
+    await expect(f.run()).rejects.toMatchObject({ reason: 'unknown_auth' });
+    expect(f.persist).not.toHaveBeenCalled();
+  },
+);
+
+it('does not let a trailing empty observation close or reset the verified pagination chain', async () => {
+  const first = fixture();
+  mailbox(first).threads_by_folder.page_info.has_next_page = true;
+  const f = browser([first, emptyFixture()], [[fixture()]]);
+  expect(await f.run()).toMatchObject({
+    complete: false,
+    skipped: expect.arrayContaining(['pagination_chain_unverified']),
+  });
+  expect(f.events).toContain('scroll');
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0, 0]);
+});
 
 it('attaches before navigation, serially persists every chunk and deduplicates repeat captures', async () => {
   const f = browser([fixture(), fixture()]);
@@ -604,7 +697,6 @@ it('rejects the first actor when it differs from the authorized session identity
 
 it.each([
   'missing-mailbox',
-  'empty-edges',
   'missing-edges',
   'viewer-mismatch',
   'actor-mailbox-mismatch',
@@ -614,7 +706,6 @@ it.each([
   async (kind) => {
     const value = fixture();
     if (kind === 'missing-mailbox') delete mailbox(value).id;
-    if (kind === 'empty-edges') mailbox(value).threads_by_folder.edges = [];
     if (kind === 'missing-edges') delete mailbox(value).threads_by_folder.edges;
     if (kind === 'viewer-mismatch') thread(value).viewer.id = '800000000000004';
     if (kind === 'actor-mailbox-mismatch')
@@ -630,16 +721,12 @@ it.each([
     const reason =
       kind === 'missing-mailbox'
         ? 'mailbox_missing'
-        : ['empty-edges', 'missing-edges'].includes(kind)
+        : kind === 'missing-edges'
           ? 'initial_actors_empty'
           : kind === 'actor-mailbox-mismatch'
             ? 'actor_mailbox_mismatch'
             : 'viewer_mismatch';
-    const hasActors = ![
-      'missing-mailbox',
-      'empty-edges',
-      'missing-edges',
-    ].includes(kind);
+    const hasActors = !['missing-mailbox', 'missing-edges'].includes(kind);
     const error = await f.run().catch((error) => error);
     expect(error).toMatchObject({
       reason: 'unknown_auth',
@@ -651,7 +738,7 @@ it.each([
           hasPreviousMailbox: false,
           hasMailbox: kind !== 'missing-mailbox',
           hasActors,
-          emptyEdges: kind === 'empty-edges',
+          emptyEdges: false,
           allViewersMatchExpected: kind === 'actor-mailbox-mismatch',
           anyViewerMatchesExpected: [
             'actor-mailbox-mismatch',
