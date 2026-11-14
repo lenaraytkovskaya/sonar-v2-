@@ -245,7 +245,7 @@ export async function acquireProzorroCompanyLease(companyId: string) {
     }
   };
 }
-export async function prozorroCompanyCode(
+export async function prozorroCompanyCodes(
   companyId: string,
   client: Pick<PoolClient, 'query'> = sonarPool,
   lock = false,
@@ -255,22 +255,29 @@ export async function prozorroCompanyCode(
       (lock ? ' for share' : ''),
     [companyId],
   );
+  return rows.map((r) => {
+    const code = prozorroCode(
+      typeof r.value === 'object' && r.value
+        ? r.value.valid === false
+          ? null
+          : r.value.code
+        : r.value,
+    );
+    return { code, source: r.source as string };
+  });
+}
+export async function prozorroCompanyCode(
+  companyId: string,
+  client: Pick<PoolClient, 'query'> = sonarPool,
+  lock = false,
+) {
+  const rows = await prozorroCompanyCodes(companyId, client, lock);
   const trusted = rows.some((r) => r.source === 'registry')
     ? rows.filter((r) => r.source === 'registry')
     : rows;
   const codes = [
     ...new Set(
-      trusted
-        .map((r) =>
-          prozorroCode(
-            typeof r.value === 'object' && r.value
-              ? r.value.valid === false
-                ? null
-                : r.value.code
-              : r.value,
-          ),
-        )
-        .filter((x): x is string => !!x),
+      trusted.map((r) => r.code).filter((code): code is string => !!code),
     ),
   ];
   return codes.length === 1 ? codes[0]! : null;

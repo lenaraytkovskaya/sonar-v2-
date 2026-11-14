@@ -1,14 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { access, enqueue, query, activity, company, campaign } = vi.hoisted(
-  () => ({
+const { access, enqueue, query, activity, company, campaign, CodeError } =
+  vi.hoisted(() => ({
+    CodeError: class extends Error {
+      constructor(
+        public reason: 'invalidCode' | 'conflictingCode' | 'companyBusy',
+      ) {
+        super(reason);
+      }
+    },
     access: vi.fn(),
     enqueue: vi.fn(),
     query: vi.fn(),
     activity: vi.fn(),
     company: vi.fn(),
     campaign: vi.fn(),
-  }),
-);
+  }));
 vi.mock('@/lib/api-access', () => ({
   apiUser: access,
   validId: (id: unknown) =>
@@ -20,6 +26,7 @@ vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 vi.mock('@sonar/db/tasks', () => ({
   enqueueProzorroSync: enqueue,
   enqueueProzorroCompany: company,
+  ProzorroCodeError: CodeError,
   enqueueCampaignProzorro: campaign,
   logActivity: activity,
 }));
@@ -113,4 +120,59 @@ describe('company and campaign Prozorro actions', () => {
     );
     expect(enqueue).not.toHaveBeenCalled();
   });
+});
+
+describe('explicit company code entry', () => {
+  const id = '12345678-1234-1234-1234-123456789012';
+  const context = { params: Promise.resolve({ id }) };
+  const input = (body?: string) =>
+    new Request('http://localhost/api/companies/' + id + '/prozorro', {
+      method: 'POST',
+      body,
+    });
+  it('passes a known code only for the explicit action; empty requests retain normal lookup', async () => {
+    query.mockResolvedValue({ rowCount: 1 });
+    company.mockResolvedValue({ id: 'task', created: true });
+    expect(
+      (await companyPost(input('{"code":"41165490"}'), context)).status,
+    ).toBe(202);
+    expect(company).toHaveBeenLastCalledWith(id, 'actor', undefined, {
+      manualCode: '41165490',
+    });
+    expect((await companyPost(input(), context)).status).toBe(202);
+    expect(company).toHaveBeenLastCalledWith(id, 'actor');
+  });
+  it.each([
+    '{"code":"1234****"}',
+    '{"code":41165490}',
+    '{"code":null}',
+    '{"code":""}',
+    '{',
+    'null',
+    '[]',
+  ])(
+    'rejects invalid code or malformed body %s before touching data',
+    async (body) => {
+      expect((await companyPost(input(body), context)).status).toBe(400);
+      expect(company).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+    },
+  );
+  it('preserves mutation authentication for the manual code action', async () => {
+    access.mockResolvedValue(null);
+    const request = input('{"code":"41165490"}');
+    expect((await companyPost(request, context)).status).toBe(401);
+    expect(access).toHaveBeenCalledWith(request, true);
+    expect(company).not.toHaveBeenCalled();
+  });
+  it.each(['conflictingCode', 'companyBusy'] as const)(
+    'returns a readable conflict for %s',
+    async (reason) => {
+      query.mockResolvedValue({ rowCount: 1 });
+      company.mockRejectedValue(new CodeError(reason));
+      const response = await companyPost(input('{"code":"41165490"}'), context);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: expect.any(String) });
+    },
+  );
 });

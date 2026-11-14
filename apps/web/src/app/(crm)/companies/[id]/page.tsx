@@ -125,13 +125,15 @@ export default async function Page({
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
   const { getCompanyChat } = await import('@sonar/db/outreach');
-  const { getProzorroCompanySnapshot } = await import('@sonar/db/prozorro');
+  const { getProzorroCompanySnapshot, prozorroCompanyCodes } =
+    await import('@sonar/db/prozorro');
   const { getCompanySocial } = await import('@sonar/db/social');
-  const [data, messaging, prozorro, social] = await Promise.all([
+  const [data, messaging, prozorro, social, codes] = await Promise.all([
     getCompany(id),
     getCompanyChat(id),
     getProzorroCompanySnapshot(id),
     getCompanySocial(id),
+    prozorroCompanyCodes(id),
   ]);
   if (!data) notFound();
   const {
@@ -679,7 +681,11 @@ export default async function Page({
             />
           </Section>
           <Section title={uk.prozorro.title}>
-            <ProzorroCompany companyId={id} snapshot={prozorro} />
+            <ProzorroCompany
+              companyId={id}
+              snapshot={prozorro}
+              allowManualCode={!codes.some((fact) => fact.code)}
+            />
           </Section>
           <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
             {!siteFacts.length && (
