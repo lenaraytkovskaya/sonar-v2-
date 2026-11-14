@@ -26,6 +26,7 @@ async function timeout() {
     );
   return value;
 }
+export { timeout as socialPageTimeout };
 export async function runSocialSend(
   input: { messageId: string },
   taskId: string,

@@ -54,3 +54,29 @@ it('requires provider IDs and actual timestamps without synthesizing identities'
     }),
   ).toThrow('Некоректне');
 });
+
+it('allows an observed Instagram outgoing sender ID when the provider omits its profile handle', () => {
+  const message = {
+    externalMessageId: '123',
+    threadId: '456',
+    direction: 'out' as const,
+    senderPlatformId: '789',
+    peerProfile: 'https://instagram.com/peer/',
+    body: 'Hello',
+    occurredAt: '2026-11-14T10:00:00Z',
+    observedAt: '2026-11-14T10:01:00Z',
+  };
+  expect(
+    validateSocialInboxMessage('instagram', message).senderProfile,
+  ).toBeUndefined();
+  expect(() =>
+    validateSocialInboxMessage('instagram', {
+      ...message,
+      senderPlatformId: '',
+    }),
+  ).toThrow();
+  expect(() =>
+    validateSocialInboxMessage('instagram', { ...message, direction: 'in' }),
+  ).toThrow();
+  expect(() => validateSocialInboxMessage('facebook', message)).toThrow();
+});

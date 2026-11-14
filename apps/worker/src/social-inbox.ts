@@ -46,6 +46,7 @@ export interface SocialInboxAdapter {
   ): Promise<{
     complete: boolean;
     reason?: 'history_locked' | 'unsupported_dom';
+    skipped?: string[];
   }>;
 }
 export async function runSocialInboxSync(
@@ -191,7 +192,13 @@ export async function runSocialInboxSync(
     );
     return {
       status: 'done',
-      result: { created, conflicts, complete, reason: result.reason ?? null },
+      result: {
+        created,
+        conflicts,
+        complete,
+        reason: result.reason ?? null,
+        skipped: result.skipped ?? [],
+      },
     };
   } catch (error) {
     accepting = false;

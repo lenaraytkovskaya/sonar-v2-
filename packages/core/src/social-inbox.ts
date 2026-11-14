@@ -9,7 +9,8 @@ export type SocialInboxMessage = {
   externalMessageId: string;
   threadId: string;
   direction: 'in' | 'out';
-  senderProfile: string;
+  senderProfile?: string;
+  senderPlatformId?: string;
   peerProfile: string;
   body: string;
   occurredAt: string;
@@ -57,6 +58,15 @@ export function validateSocialInboxMessage(
   network: SocialNetwork,
   message: SocialInboxMessage,
 ) {
+  if (
+    !message.senderProfile &&
+    !(
+      network === 'instagram' &&
+      message.direction === 'out' &&
+      /^\d{1,1000}$/.test(message.senderPlatformId ?? '')
+    )
+  )
+    throw new Error('Потрібна підтверджена особа відправника.');
   for (const id of [message.externalMessageId, message.threadId])
     if (
       typeof id !== 'string' ||
@@ -84,7 +94,9 @@ export function validateSocialInboxMessage(
     throw new Error('Некоректне повідомлення соцмережі.');
   return {
     ...message,
-    senderProfile: canonicalSocialPeer(network, message.senderProfile),
+    ...(message.senderProfile
+      ? { senderProfile: canonicalSocialPeer(network, message.senderProfile) }
+      : {}),
     peerProfile: canonicalSocialPeer(network, message.peerProfile),
   };
 }

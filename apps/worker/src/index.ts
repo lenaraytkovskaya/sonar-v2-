@@ -1,5 +1,7 @@
 import { registerInboundTasks } from './inbound.js';
 import { registerSocialInboxTasks } from './social-inbox.js';
+import { createSocialInboxAdapter } from './instagram-inbox-browser.js';
+import { socialPageTimeout } from './social-send.js';
 import { registerSocialTasks, closeSocialBrowser } from './social.js';
 import {
   registerSocialSessionTasks,
@@ -31,7 +33,7 @@ const started = (async () => {
   await boss.createQueue(queueName);
   await registerEmailTasks();
   await registerInboundTasks();
-  await registerSocialInboxTasks();
+  await registerSocialInboxTasks(createSocialInboxAdapter(socialPageTimeout));
   await registerDraftTasks();
   await registerAnalysisTasks();
   await registerScoringTasks();
