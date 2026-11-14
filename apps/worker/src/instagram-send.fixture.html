@@ -40,8 +40,33 @@
       <section id="messages"></section>
       ${f.noComposer ? '<textarea placeholder="Search" id="internal-decoy"></textarea>' : f.lexical ? `<div data-pagelet="IGDComposerForCannes">${lexical}</div>` : f.textarea ? '<textarea placeholder="Повідомлення..."></textarea>' : '<div contenteditable="true" role="textbox" aria-label="Message"></div>'}`;
         if (f.lexical) main.setAttribute('role', 'main');
+        let conversationHeader = main.querySelector('header');
+        if (f.pageletHeader) {
+          const pagelet = document.createElement('div');
+          pagelet.dataset.pagelet = f.unknownPagelet
+            ? 'UnknownHeader'
+            : 'IGDInboxHeaderOffMsys';
+          pagelet.innerHTML = `<div><div style="min-height: 44px"><div><a role="link" href="/${f.wrongRecipient ? 'other' : 'fixture_company'}/" aria-label="Open the profile page of fixture_company">Recipient</a></div></div></div>`;
+          conversationHeader.replaceWith(pagelet);
+          conversationHeader = pagelet;
+          main.insertAdjacentHTML(
+            'beforeend',
+            '<div role="navigation" aria-label="Thread list"><a href="/sidebar_person/">Sidebar person</a></div>',
+          );
+          if (f.nestedSemanticHeader) {
+            const header = document.createElement('header');
+            header.append(...pagelet.childNodes);
+            pagelet.append(header);
+          }
+          if (f.outerSemanticHeader) {
+            const header = document.createElement('div');
+            header.setAttribute('role', 'banner');
+            pagelet.replaceWith(header);
+            header.append(pagelet);
+          }
+        }
         if (f.lexicalDecoys) {
-          main.querySelector('header').insertAdjacentHTML('beforeend', lexical);
+          conversationHeader.insertAdjacentHTML('beforeend', lexical);
           main.insertAdjacentHTML(
             'beforeend',
             `<div role="navigation">${lexical}</div><aside>${lexical}</aside>`,
@@ -58,10 +83,11 @@
           main.append(active);
         }
         if (f.hiddenRecipient) {
-          main.querySelector('header a').hidden = true;
-          main
-            .querySelector('header')
-            .insertAdjacentHTML('beforeend', '<strong>other_person</strong>');
+          conversationHeader.querySelector('a').hidden = true;
+          conversationHeader.insertAdjacentHTML(
+            'beforeend',
+            '<strong>other_person</strong>',
+          );
         }
         if (f.staleHeader)
           main.insertAdjacentHTML(
@@ -74,20 +100,25 @@
             '<div role="dialog"><header><a href="/fixture_company/">Recipient</a></header><textarea placeholder="Message"></textarea></div>',
           );
         if (f.sidebarOnlyRecipient) {
-          main.querySelector('header').innerHTML =
-            '<span>Unconfirmed recipient</span>';
-          main.insertAdjacentHTML(
-            'beforeend',
-            '<aside><header><a href="/fixture_company/">Sidebar target</a></header></aside>',
-          );
+          const sidebar = document.createElement('div');
+          sidebar.setAttribute('role', 'navigation');
+          sidebar.setAttribute('aria-label', 'Thread list');
+          sidebar.append(conversationHeader.cloneNode(true));
+          conversationHeader.innerHTML = '<span>Unconfirmed recipient</span>';
+          main.append(sidebar);
         }
         if (f.groupRecipient)
-          main
-            .querySelector('header')
-            .insertAdjacentHTML(
-              'beforeend',
-              '<a href="/other/">Other recipient</a>',
-            );
+          conversationHeader.insertAdjacentHTML(
+            'beforeend',
+            '<a href="/other/">Other recipient</a>',
+          );
+        if (f.mainOnlyRecipient)
+          conversationHeader.replaceWith(...conversationHeader.childNodes);
+        if (f.foreignNestedDialog)
+          main.insertAdjacentHTML(
+            'beforeend',
+            '<div role="dialog"><header><a href="/other/">Other recipient</a></header><textarea placeholder="Message"></textarea></div>',
+          );
         if (f.existingMessage)
           main.querySelector('#messages').innerHTML =
             '<div aria-label="You sent"><span>Synthetic message</span></div>';

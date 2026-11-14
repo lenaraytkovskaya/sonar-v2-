@@ -101,11 +101,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           );
         if (options.hideRecipient)
           await page.evaluate(
-            'document.querySelector("main header a").hidden = true',
+            'document.querySelector("main :is(header, [data-pagelet=IGDInboxHeaderOffMsys]) a").hidden = true',
           );
         if (options.switchRecipient)
           await page.evaluate(
-            'document.querySelector("main header a").href = "/other/"',
+            'document.querySelector("main :is(header, [data-pagelet=IGDInboxHeaderOffMsys]) a").href = "/other/"',
           );
         if (options.markerRateLimit)
           await page.evaluate(
@@ -192,6 +192,90 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+    it.each([
+      {},
+      { innerDialog: true },
+      { nestedSemanticHeader: true },
+      { outerSemanticHeader: true },
+    ])(
+      'confirms the observed div pagelet with a Lexical composer (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          lexicalDecoys: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.inputs).toEqual(['textbox']);
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+          expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      { wrongRecipient: true },
+      { hiddenRecipient: true },
+      { sidebarOnlyRecipient: true },
+      { mainOnlyRecipient: true },
+      { unknownPagelet: true },
+      { foreignNestedDialog: true },
+      { splitPane: true },
+      { groupRecipient: true },
+      { nestedSemanticHeader: true, groupRecipient: true },
+      { staleHeader: true },
+      { ambiguousDialog: true },
+    ])(
+      'blocks an unconfirmed pagelet recipient before input (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            stage: 'dialog',
+          });
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.events).toEqual(['open']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      { switchRecipient: true, code: 'delivery_uncertain', stage: 'dialog' },
+      { hideRecipient: true, code: 'delivery_uncertain', stage: 'dialog' },
+      { switchComposer: true, code: 'delivery_uncertain', stage: 'dialog' },
+      { switchContainer: true, code: 'delivery_uncertain', stage: 'dialog' },
+      { markerFailure: true, code: 'delivery_uncertain', stage: 'attempt' },
+      { markerRateLimit: true, code: 'rate_limit', stage: 'session' },
+    ])(
+      'preserves the pagelet durable marker gates (%j)',
+      async ({ code, stage, ...options }) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({ code, stage });
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).not.toContain('send');
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([
       { lexicalPlaceholder: 'Search' },
       { lexicalPlaceholder: 'Message... search' },
