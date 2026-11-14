@@ -1,10 +1,16 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createSocialSendBrowser } from './social-send-browser.js';
 
-// Synthetic generic wrappers. Only labels, relationships and Lexical attributes
-// come from root's English UI observations, including an avatar-only recipient
-// link and sibling header/body. Deeper nesting and outgoing rows are synthetic.
+// The captured variant preserves every element and its nesting from the supplied
+// floating chat, including actual outgoing markup. Names, IDs, times and messages
+// are synthetic; resource/style attributes are removed. Other variants below use
+// generic synthetic wrappers. The stylesheet and UI event behavior are synthetic.
+const observedChat = readFileSync(
+  new URL('./facebook-chat.sanitized.fixture.html', import.meta.url),
+  'utf8',
+);
 const markup = `
 <style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
 <nav aria-label="Account"><a href="/100000000000009/">Synthetic self</a></nav>
@@ -12,10 +18,23 @@ const markup = `
 <div id="chats"></div>
 <script>
 const o = window.fixtureOptions;
+const observedChat = ${JSON.stringify(observedChat)};
 const body = o.bodySending ? 'Sending' : o.bodyPending ? 'Pending review' : 'Synthetic message';
 const recipient = o.company ? 'synthetic_company' : '100000000000001';
 const label = 'Synthetic Recipient';
 function row(own = true, text = body, time = '4 November 2026, 20:15') {
+  if (o.observed) {
+    const template = document.createElement('template'); template.innerHTML = observedChat;
+    const wrapper = template.content.querySelector('[aria-label^="At "]').closest('[role="article"]');
+    const content = wrapper.querySelector('[aria-label^="At "]');
+    const sent = wrapper.querySelector('[aria-label^="Enter, Message sent "]');
+    content.setAttribute('aria-label', 'At ' + time + ', ' + (own ? 'You' : 'Synthetic Recipient') + ': ' + text);
+    sent.setAttribute('aria-label', 'Enter, Message sent ' + time + ' by ' + (own ? 'You' : 'Synthetic Recipient') + ': ' + text);
+    for (const node of content.querySelectorAll('*')) {
+      if (!node.children.length && node.textContent === 'Synthetic message 1') node.textContent = text;
+    }
+    return wrapper;
+  }
   const wrapper = document.createElement('div');
   const sender = own ? 'You' : 'Synthetic Recipient';
   wrapper.innerHTML = '<div aria-label="At ' + time + ', ' + sender + ': ' + text + '"><h2>' +
@@ -25,6 +44,16 @@ function row(own = true, text = body, time = '4 November 2026, 20:15') {
 }
 function chat(id, target, name) {
   const scope = document.createElement('div'); scope.id = id;
+  if (o.observed) {
+    scope.innerHTML = observedChat;
+    const captured = scope.firstElementChild;
+    captured.id = id;
+    captured.querySelector('a').href = 'https://www.facebook.com/' + target + '/';
+    captured.querySelector('a').setAttribute('aria-label', name);
+    captured.querySelector('[contenteditable]').setAttribute('aria-label', 'Write to ' + name);
+    captured.querySelector('[aria-label^="Messages in conversation"]').setAttribute('aria-label', 'Messages in conversation with ' + name);
+    return captured;
+  }
   // Header-like generic container, deliberately not a header element.
   scope.innerHTML = '<div><a href="https://www.facebook.com/' + target + '/">' + name + '</a>' +
     '<div role="button" aria-label="Chat settings" aria-haspopup="menu"></div>' +
@@ -314,6 +343,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       };
     }
     it.each([
+      { observed: true },
+      { observed: true, company: true },
+      { observed: true, neighbour: true },
+      { observed: true, sameTimestamp: true },
+      { observed: true, bodySending: true },
+      { observed: true, pendingSettles: true },
       {},
       { company: true },
       { noSettingsLabel: true },
@@ -357,6 +392,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, wrongRecipient: true },
+      { observed: true, wrongRecipient: true, neighbour: true },
+      { observed: true, outsideProfileHeader: true, wrongRecipient: true },
+      { observed: true, globalLinkOnly: true },
+      { observed: true, outsideHeaderLink: true },
+      { observed: true, headerLinkInMessages: true },
+      { observed: true, duplicateRegion: true },
+      { observed: true, duplicateComposer: true },
       { wrongRecipient: true },
       { wrongRecipient: true, neighbour: true },
       { globalLinkOnly: true },
@@ -394,6 +437,15 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, oldOnly: true },
+      { observed: true, oldOnly: true, markerOutgoing: true },
+      { observed: true, rerenderAfterSend: true },
+      { observed: true, incoming: true },
+      { observed: true, missingSelf: true },
+      { observed: true, sendInNeighbour: true, neighbour: true },
+      { observed: true, nestedPending: true },
+      { observed: true, nestedFailed: true },
+      { observed: true, eraseOnly: true },
       { oldOnly: true },
       { oldOnly: true, markerOutgoing: true },
       { recipientAfterSend: true },
@@ -427,6 +479,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { observed: true, documentCaptureRecipient: true },
+      { observed: true, clickButton: true, documentCaptureButton: true },
+      { observed: true, clickAvatarLabel: true },
+      { observed: true, clickChatBodyReparent: true },
+      { observed: true, markerNetwork: true },
+      { observed: true, marker503: true },
       { markerRecipient: true },
       { markerRerender: true },
       { markerComposer: true },
