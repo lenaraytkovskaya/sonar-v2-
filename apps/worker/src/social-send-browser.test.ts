@@ -175,7 +175,7 @@ it('stops at a checkpoint before opening a composer or marking a send attempt', 
   expect(beforeSend).not.toHaveBeenCalled();
   expect(f.events).toEqual([]);
 });
-it('rejects personal LinkedIn and unverified Facebook profiles before composing', async () => {
+it('rejects personal LinkedIn and unconfirmed Facebook chats before composing', async () => {
   const f = fixture({ personalFacebook: true });
   await expect(
     f.adapter.send(
@@ -201,29 +201,45 @@ it('rejects personal LinkedIn and unverified Facebook profiles before composing'
   expect(f.events).toEqual([]);
 });
 
-it.each(['facebook', 'linkedin'] as const)(
-  'sends to a confirmed %s company dialog using the send button',
-  async (network) => {
+it('sends to a LinkedIn company dialog using the send button', async () => {
+  const f = fixture();
+  const to = 'https://linkedin.com/company/company/';
+  await f.adapter.send(
+    { ...account, channel: 'linkedin' },
+    session,
+    1000,
+    to,
+    'Hello',
+    async () => {
+      f.events.push('mark');
+    },
+  );
+  expect(f.events).toEqual(['open', 'fill', 'mark', 'click']);
+});
+
+it.each([
+  'https://facebook.com/company/',
+  'https://facebook.com/person/',
+  'https://facebook.com/profile.php?id=100000000000001',
+])(
+  'does not trust a Facebook target or page-wide transparency link (%s)',
+  async (to) => {
     const f = fixture();
-    const to =
-      network === 'linkedin'
-        ? 'https://linkedin.com/company/company/'
-        : 'https://facebook.com/company/';
-    await f.adapter.send(
-      { ...account, channel: network },
-      session,
-      1000,
-      to,
-      'Hello',
-      async () => {
-        f.events.push('mark');
-      },
-    );
-    expect(f.events).toEqual(
-      network === 'linkedin'
-        ? ['open', 'fill', 'mark', 'click']
-        : ['fill', 'mark', 'click'],
-    );
+    const mark = vi.fn();
+    await expect(
+      f.adapter.send(
+        { ...account, channel: 'facebook' },
+        session,
+        1000,
+        to,
+        'Hello',
+        mark,
+      ),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+    expect(f.events).toEqual([]);
+    expect(mark).not.toHaveBeenCalled();
+    expect(f.page.goto).toHaveBeenCalledTimes(1);
+    expect(f.page.goto.mock.calls[0]![0]).not.toContain('m.me');
   },
 );
 it('skips a LinkedIn company with no Message button and reports the exact reason', async () => {

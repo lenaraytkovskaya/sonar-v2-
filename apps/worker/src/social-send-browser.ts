@@ -1167,20 +1167,14 @@ export function createSocialSendBrowser(
             timeout: timeoutMs,
           });
           await assertSocialSession(page, account.channel);
-          if (
-            account.channel === 'facebook' &&
-            !(await page.locator('a[href*="page_transparency"]').count()) &&
-            !(await page
-              .getByText(
-                /^(?:Page transparency|Прозорість сторінки|Прозрачность страницы)$/i,
-              )
-              .count())
-          )
-            throw failure('unavailable');
+          // Personal profiles and company Pages both require an attributable
+          // active chat. A URL/transparency link cannot identify that chat or
+          // prove a new own message. Keep input/send unreachable until the
+          // Facebook conversation and confirmation DOM contract is verified.
           if (account.channel === 'facebook') {
-            await page.goto(
-              `https://m.me/${encodeURIComponent(target.handle)}`,
-              { waitUntil: 'domcontentloaded', timeout: timeoutMs },
+            throw new SocialSendError(
+              'unavailable',
+              'Надсилання Facebook недоступне: одержувача активного діалогу та нове власне повідомлення не підтверджено. Потрібна ручна перевірка.',
             );
           } else {
             const messageButton = page
