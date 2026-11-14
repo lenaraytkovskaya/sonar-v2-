@@ -38,6 +38,30 @@ import {
 } from './telegram-crypto.js';
 import type { SocialNetwork } from './social.js';
 
+// This records an observed browser dispatch, never a server delivery receipt.
+export const facebookDispatchReason = 'Відправлено, перевірте в чаті';
+export type FacebookDispatchResult = {
+  outcome: 'facebook_dispatched_unconfirmed';
+  dialogUrl: string;
+  observation: {
+    inputExactMatch: boolean;
+    dispatchPerformed: boolean;
+    outgoingBefore: number;
+    outgoingAfter: number;
+    newOutgoing: boolean;
+    observationMs: number;
+    lateError:
+      | 'none'
+      | 'outgoing_changed'
+      | 'session'
+      | 'rate_limit'
+      | 'browser'
+      | 'network'
+      | 'http_error';
+    senderFingerprint?: string;
+  };
+};
+
 export class SocialSendError extends Error {
   constructor(
     public code:

@@ -167,7 +167,15 @@ export default async function Page({
                 {row.lastMessage || uk.email.noMessages}
               </p>
               <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                {row.lastStatus && <span>{messageStatus(row.lastStatus)}</span>}
+                {row.lastStatus && (
+                  <span>
+                    {messageStatus(row.lastStatus, {
+                      channel: row.channel,
+                      toValue: row.contactValue,
+                      reasonUk: row.lastReasonUk,
+                    })}
+                  </span>
+                )}
                 {row.lastAt && <LocalTime value={row.lastAt} />}
               </div>
             </Link>

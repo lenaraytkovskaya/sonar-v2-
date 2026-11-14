@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
 import type { SocialTarget } from '@sonar/core';
 import { socialTarget } from '@sonar/core';
 import {
   SocialSendError,
+  type FacebookDispatchResult,
   SocialSessionCheckError,
   socialSessionCheckReason,
 } from '@sonar/core/social-session';
@@ -454,8 +456,7 @@ async function conversation(
           !all(scope, forbidden).length &&
           (!filled ||
             ((editor as HTMLElement).isContentEditable &&
-              normalize((editor as HTMLElement).innerText) ===
-                normalize(body) &&
+              (editor as HTMLElement).innerText === body &&
               editor.getAttribute('aria-disabled') !== 'true' &&
               editor.getAttribute('aria-readonly') !== 'true' &&
               sendButtons().length === 1 &&
@@ -634,6 +635,9 @@ async function conversation(
           scope,
           region,
           valid: verify,
+          inputExactMatch: () => (editor as HTMLElement).innerText === body,
+          outgoingCount: () =>
+            rows().filter((row) => sentRow(row) !== null).length,
           empty: () => {
             const empty = !normalize((editor as HTMLElement).innerText);
             if (!empty) observation.branch = 'draft';
@@ -693,9 +697,19 @@ export async function sendFacebook(
   timeoutMs: number,
   body: string,
   beforeSend: () => Promise<void>,
-  assertSession: () => Promise<void>,
-) {
+  assertSession: (timeoutMs?: number) => Promise<void>,
+): Promise<FacebookDispatchResult> {
   let attempted = false;
+  const facts: FacebookDispatchResult['observation'] = {
+    inputExactMatch: false,
+    dispatchPerformed: false,
+    outgoingBefore: 0,
+    outgoingAfter: 0,
+    newOutgoing: false,
+    observationMs: 0,
+    lateError: 'none',
+  };
+  let observationStarted = 0;
   let phase = 'navigation';
   let observation: Observation | undefined;
   let branch = 'not_observed';
@@ -706,6 +720,7 @@ export async function sendFacebook(
     JSON.stringify({
       version: 'fb-observed84-v1',
       phase,
+      transmission: facts,
       ...observation,
       branch:
         branch === 'not_observed' ? (observation?.branch ?? branch) : branch,
@@ -718,6 +733,8 @@ export async function sendFacebook(
             : 'unknown',
     });
   let restricted = false;
+  let dispatchStarted = false;
+  let transportFailure: 'network' | 'http_error' | undefined;
   page.on('response', (response) => {
     const url = new URL(response.url());
     if (
@@ -726,11 +743,34 @@ export async function sendFacebook(
       ['document', 'xhr', 'fetch'].includes(response.request().resourceType())
     )
       restricted = true;
+    if (
+      dispatchStarted &&
+      /^(www\.)?facebook\.com$/.test(url.hostname) &&
+      response.status() >= 400 &&
+      ['document', 'xhr', 'fetch'].includes(response.request().resourceType())
+    ) {
+      transportFailure = 'http_error';
+      facts.lateError = 'http_error';
+    }
   });
-  const check = async () => {
+  page.on('requestfailed', (request) => {
+    if (
+      dispatchStarted &&
+      /^(www\.)?facebook\.com$/.test(new URL(request.url()).hostname) &&
+      ['document', 'xhr', 'fetch'].includes(request.resourceType())
+    ) {
+      transportFailure = 'network';
+      facts.lateError = 'network';
+    }
+  });
+  const check = async (sessionTimeoutMs?: number) => {
     if (restricted) throw new SocialSessionCheckError('rate_limit');
+    if (transportFailure) {
+      facts.lateError = transportFailure;
+      throw unavailable();
+    }
     try {
-      await assertSession();
+      await assertSession(sessionTimeoutMs);
     } catch (error) {
       // Missing auth chrome is not evidence that cookies expired (e.g. an error
       // document or failed navigation). Only observed login/challenge UI pauses.
@@ -776,6 +816,20 @@ export async function sendFacebook(
       throw new SocialSessionCheckError('network');
     await check();
     if (response && response.status() >= 400) throw unavailable('http_error');
+    // Hash only the allowlisted identity cookie inside the existing context.
+    // Neither cookie values nor the raw account identifier leave this scope.
+    const identities = new Set(
+      (await page.context().cookies('https://www.facebook.com'))
+        .filter(
+          (cookie) => cookie.name === 'c_user' && /^\d+$/.test(cookie.value),
+        )
+        .map((cookie) => cookie.value),
+    );
+    if (identities.size === 1)
+      facts.senderFingerprint = createHash('sha256')
+        .update([...identities][0]!)
+        .digest('hex')
+        .slice(0, 12);
     phase = 'profile';
     if (socialTarget(page.url())?.handle !== target.handle)
       throw unavailable('profile_mismatch');
@@ -812,6 +866,10 @@ export async function sendFacebook(
       state = await conversation(page, target.handle, body, observe);
       if (!(await state.evaluate((state) => state?.valid(true))))
         throw unavailable();
+      facts.inputExactMatch = await state.evaluate((state) =>
+        state!.inputExactMatch(),
+      );
+      if (!facts.inputExactMatch) throw unavailable();
       const dialogUrl = page.url();
       const button = (
         await state.evaluateHandle((state) => state!.button())
@@ -843,10 +901,17 @@ export async function sendFacebook(
         }, button))
       )
         throw unavailable();
+      const outgoingBefore = await state.evaluate((state) =>
+        state!.outgoingCount(),
+      );
+      facts.outgoingBefore = Math.min(99, outgoingBefore);
       phase = 'dispatch';
+      dispatchStarted = true;
       await button.click(); // Exactly one dispatch, never retry after the marker.
       if (await state.evaluate((state) => state!.blocked()))
         throw unavailable();
+      facts.dispatchPerformed = true;
+      observationStarted = Date.now();
       phase = 'confirmation';
       await page.waitForFunction((state) => state?.confirmed(), state, {
         timeout: timeoutMs,
@@ -855,9 +920,43 @@ export async function sendFacebook(
       if (page.url() !== dialogUrl) throw unavailable('url_changed');
       if (!(await state.evaluate((state) => state?.confirmed())))
         throw unavailable();
-      // Floating chats have no thread URL. Return the verified recipient's stable
-      // profile URL; do not fabricate a /messages/t/ thread identifier.
-      return target.canonicalUrl;
+      const outgoingAfter = await state.evaluate((state) =>
+        state!.outgoingCount(),
+      );
+      facts.outgoingAfter = Math.min(99, outgoingAfter);
+      // Keep semantic detection separate from saturated telemetry counts.
+      facts.newOutgoing = await state.evaluate((state) => state!.confirmed());
+      // Keep the original page alive for transmission using the existing timeout,
+      // capped at ten seconds. Elapsed time is not proof of server delivery.
+      const until = Date.now() + Math.min(timeoutMs, 10000);
+      phase = 'transmission';
+      while (Date.now() < until) {
+        await page.waitForTimeout(Math.min(200, until - Date.now()));
+        facts.observationMs = Date.now() - observationStarted;
+        try {
+          // A tiny remaining timer budget can falsely fail a visible auth check.
+          // Bound each check independently; the hold can overrun by at most 200 ms.
+          await check(Math.min(timeoutMs, 200));
+        } catch (error) {
+          facts.lateError =
+            transportFailure ?? (restricted ? 'rate_limit' : 'session');
+          throw error;
+        }
+        if (
+          page.url() !== dialogUrl ||
+          !(await state.evaluate((state) => state?.confirmed()))
+        ) {
+          facts.lateError = 'outgoing_changed';
+          throw unavailable();
+        }
+      }
+      facts.observationMs = Date.now() - observationStarted;
+      // Floating chat has no thread URL: preserve its verified profile link.
+      return {
+        outcome: 'facebook_dispatched_unconfirmed',
+        dialogUrl: target.canonicalUrl,
+        observation: facts,
+      };
     } catch (error) {
       // Only retrieve memory captured by the failing check/dispatch/last poll.
       const last = await state
@@ -872,10 +971,16 @@ export async function sendFacebook(
   } catch (error) {
     // Explicit auth/checkpoint/rate-limit evidence pauses the account. A closed
     // page or failed recheck must still be uncertain after the durable marker.
+    if (observationStarted)
+      facts.observationMs = Date.now() - observationStarted;
+    if (phase === 'transmission' && facts.lateError === 'none')
+      facts.lateError = 'browser';
     const detail = diagnostic(error);
     let caught = error;
     try {
-      await check();
+      await check(
+        phase === 'transmission' ? Math.min(timeoutMs, 200) : undefined,
+      );
     } catch (sessionError) {
       if (
         sessionError instanceof SocialSendError &&

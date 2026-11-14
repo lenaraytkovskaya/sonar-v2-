@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, expect, it, vi } from 'vitest';
 import {
   SocialSendError,
+  facebookDispatchReason,
+  type FacebookDispatchResult,
   SocialSessionCheckError,
 } from '@sonar/core/social-session';
 import { campaignSchema } from '@sonar/core';
@@ -104,9 +106,24 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           'update channel_accounts set next_send_at=null,daily_limit=100,status=\'active\',settings=\'{"sessionStatus":"valid"}\' where id=$1',
           [account],
         );
-      const sender = vi.fn(async (_request, a) => {
+      const dispatch = (url: string): FacebookDispatchResult => ({
+        outcome: 'facebook_dispatched_unconfirmed',
+        dialogUrl: url,
+        observation: {
+          inputExactMatch: true,
+          dispatchPerformed: true,
+          outgoingBefore: 99,
+          outgoingAfter: 99,
+          newOutgoing: true,
+          observationMs: 400,
+          lateError: 'none',
+        },
+      });
+      const sender = vi.fn(async (request, a) => {
         await a!.beforeSend!();
-        return 'https://www.instagram.com/direct/t/123/';
+        return network === 'facebook'
+          ? dispatch(request.to)
+          : 'https://www.instagram.com/direct/t/123/';
       });
       const key = randomUUID(),
         first = await create(key);
@@ -145,6 +162,59 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           )
         ).rows[0].next_send_at,
       ).toEqual(new Date(now.getTime() + 120000));
+      const stored = (await getConversationChat(conversationId)).messages.find(
+        (m) => m.id === first.id,
+      )!;
+      expect(stored.reasonUk).toBe(
+        network === 'facebook' ? facebookDispatchReason : null,
+      );
+      if (network === 'facebook') {
+        expect(stored.providerId).toBe(`https://www.facebook.com/sonar_test/`);
+        expect(await send(first.id, sender)).toMatchObject({
+          status: 'done',
+          result: { delivery: 'unconfirmed' },
+        });
+        expect(sender).toHaveBeenCalledOnce();
+        for (const invalid of [
+          'no_marker',
+          'no_input',
+          'no_dispatch',
+          'no_outgoing',
+        ] as const) {
+          await reset();
+          const message = await create();
+          const invalidSender: import('./email.js').ChannelSender = async (
+            request,
+            a,
+          ) => {
+            if (invalid !== 'no_marker') await a!.beforeSend!();
+            const result = dispatch(request.to);
+            if (invalid === 'no_input')
+              result.observation.inputExactMatch = false;
+            if (invalid === 'no_dispatch')
+              result.observation.dispatchPerformed = false;
+            if (invalid === 'no_outgoing')
+              result.observation.newOutgoing = false;
+            return result;
+          };
+          expect(await send(message.id, invalidSender)).toMatchObject({
+            status: 'paused',
+            reasonCode: 'social_delivery_uncertain',
+          });
+          expect(
+            (
+              await sonarPool.query('select status from messages where id=$1', [
+                message.id,
+              ])
+            ).rows[0].status,
+          ).toBe('failed');
+        }
+        await reset();
+        await sonarPool.query(
+          'update channel_accounts set next_send_at=$2 where id=$1',
+          [account, new Date(now.getTime() + 120000)],
+        );
+      }
       const limited = await create();
       expect(await send(limited.id, sender)).toMatchObject({
         status: 'deferred',
