@@ -261,6 +261,9 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
     },
   });
   expect(
+    safeSocialSessionDiagnostic({ ...inbox, stage: 'persist' }),
+  ).toMatchObject({ stage: 'persist', capture: { received: 2 } });
+  expect(
     safeSocialSessionDiagnostic({
       ...inbox,
       capture: { ...inbox.capture, parsed: -1 },

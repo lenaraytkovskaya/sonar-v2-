@@ -177,9 +177,12 @@ export async function captureInstagramInbox(
             skipped.add('requests_shape_unsupported');
             return;
           }
+          capture.parsed = Math.min(capture.parsed + 1, 2);
           await checkSession('capture_auth');
+          capture.verified = Math.min(capture.verified + 1, 2);
           requestsCovered = true;
           revision++;
+          stage = 'persist';
           await persistBatch({ messages: [], resumeAnchor: null });
           capture.persisted = Math.min(capture.persisted + 1, 2);
           return;
@@ -235,6 +238,7 @@ export async function captureInstagramInbox(
           messages.push(message);
         }
         // Serialize and commit each captured chunk before any further UI action.
+        stage = 'persist';
         await persistBatch({ messages, resumeAnchor: null });
         capture.persisted = Math.min(capture.persisted + 1, 2);
       })

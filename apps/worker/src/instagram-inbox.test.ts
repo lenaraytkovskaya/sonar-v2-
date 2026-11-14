@@ -420,6 +420,66 @@ it('distinguishes a navigation auth failure with no captured response', async ()
   expect(f.persist).not.toHaveBeenCalled();
 });
 
+it('counts both Inbox and Requests before a final auth failure', async () => {
+  const f = browser([fixture()]);
+  f.assert.mockImplementation(async () => {
+    if (f.batches.length === 2)
+      throw new SocialSessionCheckError('unknown_auth');
+  });
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: {
+      stage: 'auth',
+      urlKind: 'requests',
+      capture: { received: 2, parsed: 2, verified: 2, persisted: 2 },
+    },
+  });
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+});
+
+it('counts parsed Requests without verification when its auth guard fails', async () => {
+  const f = browser([fixture()]);
+  let requestChecks = 0;
+  f.assert.mockImplementation(async () => {
+    // Navigation checks first; the second check belongs to the parsed response.
+    if (f.page.url().endsWith('/requests/') && ++requestChecks === 2)
+      throw new SocialSessionCheckError('unknown_auth');
+  });
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: {
+      stage: 'capture_auth',
+      capture: { received: 2, parsed: 2, verified: 1, persisted: 1 },
+    },
+  });
+  expect(f.batches).toHaveLength(1);
+});
+
+it.each(['inbox', 'requests'])(
+  'reports the %s persistence stage and retains earlier batches',
+  async (scope) => {
+    const f = browser([fixture()]);
+    const persist = f.persist.getMockImplementation()!;
+    f.persist.mockImplementation(async (batch) => {
+      if (scope === 'inbox' || f.batches.length === 1)
+        throw new SocialSessionCheckError('unknown_auth');
+      await persist(batch);
+    });
+    const count = scope === 'inbox' ? 1 : 2;
+    await expect(f.run()).rejects.toMatchObject({
+      diagnostic: {
+        stage: 'persist',
+        capture: {
+          received: count,
+          parsed: count,
+          verified: count,
+          persisted: count - 1,
+        },
+      },
+    });
+    expect(f.batches).toHaveLength(count - 1);
+    expect(f.page.off).toHaveBeenCalledOnce();
+  },
+);
+
 it('delegates account, pinned session and configured timeout to the shared browser factory', async () => {
   const account = {
     id: 'test',

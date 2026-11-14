@@ -95,7 +95,14 @@ export const socialSessionCheckReasons = {
 export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
 export type SocialSessionCheckDiagnostic = {
   version: 1;
-  stage: 'navigation' | 'http' | 'auth' | 'identity' | 'capture_auth' | 'actor';
+  stage:
+    | 'navigation'
+    | 'http'
+    | 'auth'
+    | 'identity'
+    | 'capture_auth'
+    | 'actor'
+    | 'persist';
   urlKind:
     | 'home'
     | 'feed'
@@ -138,6 +145,7 @@ export function safeSocialSessionDiagnostic(
       'identity',
       'capture_auth',
       'actor',
+      'persist',
     ].includes(d.stage) ||
     ![
       'home',
