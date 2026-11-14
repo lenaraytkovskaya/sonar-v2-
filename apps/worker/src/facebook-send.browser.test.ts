@@ -162,6 +162,28 @@ document.querySelector('#open').onclick = () => {
       scope.setAttribute('data-private', 'private@example.invalid +12345678901 PRIVATE_MESSAGE_SENTINEL');
       scope.style.setProperty('--private', 'PRIVATE_CSS_SENTINEL');
     }
+    if (o.wrappedChatBody) {
+      const content = scope.lastElementChild;
+      if (o.parentControls) region(scope).append(scope.querySelector('[aria-label="Chat settings"]').cloneNode(true));
+      // A missing parent is not reachable in a static connected DOM; simulate
+      // that observation without changing layout/visibility or the finder.
+      if (o.parentMissing) Object.defineProperty(content, 'parentElement', { value: null });
+      if (o.parentBody) document.body.append(content);
+      if (o.parentChildren) {
+        for (let i = 0; i < 15; i++) { const child = document.createElement('div'); child.textContent = 'PRIVATE_CHILD_SENTINEL'; scope.append(child); }
+      }
+      const header = scope.firstElementChild;
+      if (o.parentRegions) header.append(region(scope).cloneNode(true));
+      if (o.parentEditors) header.append(editor.cloneNode(true));
+      if (o.parentForbidden) {
+        for (let i = 0; i < 15; i++) { const aside = document.createElement('aside'); aside.textContent = 'PRIVATE_ASIDE_SENTINEL'; header.append(aside); }
+      }
+      if (o.parentHiddenExtras) {
+        for (const node of [region(scope).cloneNode(true), editor.cloneNode(true), document.createElement('aside')]) {
+          node.hidden = true; scope.append(node);
+        }
+      }
+    }
     if (o.directPage) history.replaceState(null, '', '/messages/t/SYNTHETIC_PRIVATE_THREAD/');
     if (o.otherPage) history.replaceState(null, '', '/unrecognized/synthetic/');
     if (o.afterFillNoAuth) editor.addEventListener('input', () => document.querySelector('nav').remove(), { once: true });
@@ -491,6 +513,56 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         'timeout',
         {},
       ],
+      ...(
+        [
+          [
+            { parentControls: true, parentMissing: true },
+            { subreason: 'content_controls' },
+          ],
+          [{ parentMissing: true }, { subreason: 'parent_missing' }],
+          [{ parentBody: true }, { subreason: 'parent_body' }],
+          [
+            { parentChildren: true, parentRegions: true },
+            { subreason: 'parent_children', childrenVisible: 9 },
+          ],
+          [
+            { parentRegions: true, parentEditors: true },
+            {
+              subreason: 'parent_regions',
+              childrenVisible: 2,
+              regionsVisible: 2,
+            },
+          ],
+          [
+            { parentEditors: true, parentForbidden: true },
+            {
+              subreason: 'parent_editors',
+              childrenVisible: 2,
+              regionsVisible: 1,
+              editorsVisible: 2,
+            },
+          ],
+          [
+            { parentForbidden: true },
+            {
+              subreason: 'parent_forbidden',
+              childrenVisible: 2,
+              regionsVisible: 1,
+              editorsVisible: 1,
+              forbiddenVisible: 9,
+            },
+          ],
+        ] as const
+      ).map(
+        ([options, parentStructure]) =>
+          [
+            { ...options, wrappedChatBody: true, privacy: true },
+            'first_lookup',
+            'parent_structure',
+            'timeout',
+            { parentStructure },
+          ] as const,
+      ),
       [
         { wrappedChatBody: true, wrappedNoHeader: true },
         'first_lookup',
@@ -627,6 +699,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             failure,
             ...detail,
           });
+          if ('parentStructure' in detail)
+            expect(diagnostic.parentStructure).toEqual(detail.parentStructure);
           if (
             !('evaluateError' in options) &&
             !('directPage' in options) &&
@@ -650,6 +724,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? 1
               : 0,
           );
+          if (branch === 'parent_structure') expect(f.events).toEqual(['open']);
         } finally {
           await f.close();
         }
@@ -680,6 +755,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { avatarLink: true, company: true },
       { avatarLink: true, headerProfilePhp: true },
       { wrappedChatBody: true },
+      { wrappedChatBody: true, parentHiddenExtras: true },
       { avatarLink: true, wrappedChatBody: true, neighbour: true },
       { avatarLink: true, wrappedChatBody: true, company: true },
     ])(

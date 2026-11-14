@@ -29,6 +29,20 @@ type Counts = {
   visible: number;
   visibility: 'absent' | 'visible' | 'inert' | 'hidden' | 'display';
 };
+type ParentStructureReason =
+  | 'content_controls'
+  | 'parent_missing'
+  | 'parent_body'
+  | 'parent_children'
+  | 'parent_regions'
+  | 'parent_editors'
+  | 'parent_forbidden';
+type ParentStructureCounts = {
+  childrenVisible?: number;
+  regionsVisible?: number;
+  editorsVisible?: number;
+  forbiddenVisible?: number;
+};
 type Observation = {
   branch: FinderBranch;
   pageKind: 'profile' | 'direct' | 'other' | 'login';
@@ -42,6 +56,9 @@ type Observation = {
   hasRecipientLink: boolean;
   canonicalMatch: boolean;
   nameMatch: boolean;
+  parentStructure?: ParentStructureCounts & {
+    subreason: ParentStructureReason;
+  };
 };
 
 // English labels and Lexical attributes observed by root in Facebook's floating
@@ -210,19 +227,39 @@ async function conversation(
               // Allow only that immediate two-branch parent, never an ancestor
               // search that could borrow a profile-page link outside this chat.
               const parent = scope.parentElement;
-              if (
-                headerControls(contentScope) ||
-                !parent ||
-                parent === document.body ||
-                all(parent, ':scope > *').length !== 2 ||
-                all(parent, regionSelector).length !== 1 ||
-                all(parent, composerSelector).length !== 1 ||
-                all(parent, forbidden).length
-              ) {
+              const counts: ParentStructureCounts = {};
+              const parentFailure = (() => {
+                if (headerControls(contentScope)) return 'content_controls';
+                if (!parent) return 'parent_missing';
+                if (parent === document.body) return 'parent_body';
+                // Store only counts actually evaluated by this short circuit,
+                // using the same visibility filter as the acceptance predicate.
+                const measured = (
+                  key: keyof ParentStructureCounts,
+                  selector: string,
+                ) => {
+                  const value = all(parent, selector).length;
+                  counts[key] = count(value);
+                  return value;
+                };
+                if (measured('childrenVisible', ':scope > *') !== 2)
+                  return 'parent_children';
+                if (measured('regionsVisible', regionSelector) !== 1)
+                  return 'parent_regions';
+                if (measured('editorsVisible', composerSelector) !== 1)
+                  return 'parent_editors';
+                if (measured('forbiddenVisible', forbidden))
+                  return 'parent_forbidden';
+              })();
+              if (parentFailure) {
+                observation.parentStructure = {
+                  subreason: parentFailure,
+                  ...counts,
+                };
                 reject('parent_structure');
                 break;
               }
-              scope = parent;
+              scope = parent!;
               headers = headersIn(scope, region, composer);
             }
             observation.headers = count(headers.length);
