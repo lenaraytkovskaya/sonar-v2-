@@ -120,7 +120,7 @@ export function SocialAccounts({
             {uk.socialAccounts.proxy} {account.proxyIndex + 1}
           </p>
           <p role="status">
-            {account.status === 'paused' && account.sessionStatus !== 'valid'
+            {account.status === 'paused' && account.sessionStatus === 'invalid'
               ? uk.socialAccounts.needsLogin
               : (uk.socialAccounts.statuses[
                   account.status as keyof typeof uk.socialAccounts.statuses

@@ -69,6 +69,15 @@ function browserFixture(authenticated = true) {
       selector.startsWith('main ')
         ? { evaluateAll: vi.fn(async () => links) }
         : {
+            filter: () => ({
+              count: async () => 0,
+              first: () => ({
+                waitFor: async () => {
+                  if (!authenticated)
+                    throw new Error('missing authenticated marker');
+                },
+              }),
+            }),
             count: vi.fn(async () => 0),
             first: () => ({
               waitFor: vi.fn(async () => {
@@ -78,7 +87,10 @@ function browserFixture(authenticated = true) {
             }),
           },
     ),
-    getByText: vi.fn(() => ({ count: vi.fn(async () => 0) })),
+    getByText: vi.fn(() => ({
+      filter: () => ({ count: async () => 0 }),
+      count: vi.fn(async () => 0),
+    })),
   };
   const context = {
     addCookies: vi.fn(),

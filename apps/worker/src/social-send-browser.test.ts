@@ -33,6 +33,7 @@ function fixture(
   });
   const exact = vi.fn((value: string | RegExp) => ({
     exact: true,
+    filter: () => ({ count: async () => 0 }),
     count: async () =>
       value instanceof RegExp &&
       value.test('Page transparency') &&
@@ -55,6 +56,7 @@ function fixture(
           : target.startsWith('https://m.me/')
             ? 'https://www.facebook.com/messages/t/thread/'
             : target;
+      return { status: () => 200 };
     }),
     url: () => url,
     locator: vi.fn((selector: string) => ({
@@ -64,14 +66,22 @@ function fixture(
           ? options.dialogLink
             ? 1
             : 0
-          : selector.startsWith('input[type="password"]')
+          : selector.startsWith('input[type="password"]') ||
+              selector.startsWith('iframe') ||
+              selector.startsWith('form[action')
             ? 0
             : selector.includes('page_transparency') && options.personalFacebook
               ? 0
               : 1,
       filter: selector.includes('[role="alert"]')
         ? () => ({ count: async () => 0 })
-        : ownFilter,
+        : selector.includes('msg-s-message') ||
+            selector.includes('aria-label^="You sent')
+          ? ownFilter
+          : () => ({
+              count: async () => 0,
+              first: () => ({ waitFor: async () => {} }),
+            }),
       first: () => ({ waitFor: async () => {} }),
       last: () => ({
         fill: async () => {
@@ -268,4 +278,40 @@ it('uses a unique thread link from the active conversation overlay as providerId
       async () => {},
     ),
   ).resolves.toBe('https://www.linkedin.com/messaging/thread/thread/');
+});
+
+it.each([
+  [
+    Object.assign(Error('private navigation details'), {
+      name: 'TimeoutError',
+    }),
+    'timeout',
+  ],
+  [
+    Error('net::ERR_PROXY_CONNECTION_FAILED https://user:secret@proxy.test/'),
+    'proxy',
+  ],
+  [
+    Error('net::ERR_CONNECTION_RESET https://private.test/?cookies=secret'),
+    'network',
+  ],
+])('classifies adapter navigation errors safely', async (error, reason) => {
+  const f = fixture();
+  f.page.goto.mockRejectedValueOnce(error);
+  await expect(f.adapter.check(account, session, 1000)).rejects.toMatchObject({
+    reason,
+  });
+  expect(f.page.close).toHaveBeenCalledOnce();
+  await f.adapter.close();
+});
+it('keeps context/browser failures separate from invalid cookies', async () => {
+  const f = fixture();
+  f.context.addCookies.mockRejectedValueOnce(
+    Error('Browser closed; private cookies'),
+  );
+  await expect(f.adapter.check(account, session, 1000)).rejects.toMatchObject({
+    reason: 'browser',
+    code: 'unavailable',
+  });
+  await f.adapter.close();
 });

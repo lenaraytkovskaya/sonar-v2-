@@ -5,7 +5,11 @@ import {
   type Locator,
   type Page,
 } from 'playwright';
-import { SocialSendError } from '@sonar/core/social-session';
+import {
+  SocialSendError,
+  SocialSessionCheckError,
+  socialSessionCheckReason,
+} from '@sonar/core/social-session';
 import { socialTarget, type SocialNetwork } from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
 
@@ -929,26 +933,39 @@ export async function assertSocialSession(page: Page, network: SocialNetwork) {
         network === 'facebook' && /^(www\.)?messenger\.com$/.test(url.hostname)
       ))
   )
-    throw failure('session_invalid');
+    throw new SocialSessionCheckError('unknown_auth');
   if (
-    /login|signin|checkpoint|challenge|captcha|authwall|security\/verification/i.test(
-      url.pathname,
-    ) ||
+    /captcha/i.test(url.pathname) ||
     (await page
-      .locator(
-        'input[type="password"], iframe[src*="captcha"], [data-testid="captcha"], form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]',
-      )
+      .locator('iframe[src*="captcha"], [data-testid="captcha"]')
+      .filter({ visible: true })
       .count())
   )
-    throw failure('session_invalid');
+    throw new SocialSessionCheckError('captcha');
   if (
-    await page
+    /checkpoint|challenge|security\/verification/i.test(url.pathname) ||
+    (await page
+      .locator(
+        'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]',
+      )
+      .filter({ visible: true })
+      .count()) ||
+    (await page
       .getByText(
         /^(?:Confirm it.s you|Confirm your identity|Підтвердьте свою особу|Підтвердіть, що це ви|Подтвердите, что это вы)$/i,
       )
-      .count()
+      .filter({ visible: true })
+      .count())
   )
-    throw failure('session_invalid');
+    throw new SocialSessionCheckError('checkpoint');
+  if (
+    /login|signin|authwall/i.test(url.pathname) ||
+    (await page
+      .locator('input[type="password"]')
+      .filter({ visible: true })
+      .count())
+  )
+    throw new SocialSessionCheckError('login_required');
   const authenticated = {
     instagram: 'a[href^="/direct/"], a[href="/accounts/edit/"]',
     facebook:
@@ -957,14 +974,25 @@ export async function assertSocialSession(page: Page, network: SocialNetwork) {
       'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger',
   }[network];
   try {
-    await page.locator(authenticated).first().waitFor({ state: 'visible' });
+    await page
+      .locator(authenticated)
+      .filter({ visible: true })
+      .first()
+      .waitFor({ state: 'visible' });
   } catch (error) {
-    throw Object.assign(failure('session_invalid'), {
-      errorKind:
+    throw Object.assign(
+      new SocialSessionCheckError(
         error instanceof Error && error.name === 'TimeoutError'
-          ? 'timeout'
-          : 'unconfirmed',
-    });
+          ? 'unknown_auth'
+          : socialSessionCheckReason(error, 'browser'),
+      ),
+      {
+        errorKind:
+          error instanceof Error && error.name === 'TimeoutError'
+            ? 'timeout'
+            : 'unconfirmed',
+      },
+    );
   }
 }
 async function confirmedDialogUrl(page: Page, network: SocialNetwork) {
@@ -1042,9 +1070,11 @@ export function createSocialSendBrowser(
       if (cached?.key !== key) {
         await cached?.context.close();
         contexts.delete(account.id);
-        browser ??= launch().catch(() => {
+        browser ??= launch().catch((error) => {
           browser = undefined;
-          throw failure('session_invalid');
+          throw new SocialSessionCheckError(
+            socialSessionCheckReason(error, 'browser'),
+          );
         });
         const context = await (
           await browser
@@ -1055,9 +1085,11 @@ export function createSocialSendBrowser(
         });
         try {
           await context.addCookies(session.cookies);
-        } catch {
+        } catch (error) {
           await context.close().catch(() => {});
-          throw failure('session_invalid');
+          throw new SocialSessionCheckError(
+            socialSessionCheckReason(error, 'browser'),
+          );
         }
         cached = { key, context };
         contexts.set(account.id, cached);
@@ -1077,13 +1109,35 @@ export function createSocialSendBrowser(
       session: SocialBrowserSession,
       timeoutMs: number,
     ) {
-      return withPage(account, session, timeoutMs, async (page) => {
-        await page.goto(home(account.channel), {
-          waitUntil: 'domcontentloaded',
-          timeout: timeoutMs,
+      try {
+        return await withPage(account, session, timeoutMs, async (page) => {
+          let response;
+          try {
+            response = await page.goto(home(account.channel), {
+              waitUntil: 'domcontentloaded',
+              timeout: timeoutMs,
+            });
+          } catch (error) {
+            throw new SocialSessionCheckError(
+              socialSessionCheckReason(error, 'network'),
+            );
+          }
+          // goto returns the final main-document response, never a background resource.
+          const status = response?.status();
+          if (status === 429) throw new SocialSessionCheckError('rate_limit');
+          if (status === 407) throw new SocialSessionCheckError('proxy');
+          if (status && status >= 500)
+            throw new SocialSessionCheckError('network');
+          // Explicit login/challenge evidence takes precedence over ambiguous 4xx responses.
+          await assertSocialSession(page, account.channel);
+          if (!status || status < 200 || status >= 300)
+            throw new SocialSessionCheckError('unknown_auth');
         });
-        await assertSocialSession(page, account.channel);
-      });
+      } catch (error) {
+        throw new SocialSessionCheckError(
+          socialSessionCheckReason(error, 'browser'),
+        );
+      }
     },
     async send(
       account: SocialSessionAccount,

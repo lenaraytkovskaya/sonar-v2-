@@ -1,6 +1,7 @@
 import {
   resolveSocialSession,
   SocialSendError,
+  socialSessionCheckReason,
 } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { sendEmailMessage, type ChannelSender } from '@sonar/db/email';
@@ -78,12 +79,8 @@ export async function runSocialSessionCheck(input: { accountId: string }) {
         await timeout(),
       );
       return { valid: true };
-    } catch {
-      return {
-        valid: false,
-        reason:
-          'Сесію не підтверджено. Перевірте cookies, проксі та ручну перевірку в соцмережі.',
-      };
+    } catch (error) {
+      return { valid: false, reason: socialSessionCheckReason(error) };
     }
   });
 }

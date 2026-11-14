@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
+import { socialSessionCheckReasons } from '@sonar/core/social-session';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
   'stores social cookies privately, enforces ownership and pauses a changed pinned proxy',
@@ -72,6 +73,63 @@ it.skipIf(!enabled)(
           await accounts.withSocialSessionCheck(saved.id, check),
         ).toMatchObject({ status: 'done' });
         expect(check).toHaveBeenCalledOnce();
+        if (network === 'linkedin') {
+          for (const reason of Object.keys(
+            socialSessionCheckReasons,
+          ) as (keyof typeof socialSessionCheckReasons)[]) {
+            const outcome = await accounts.withSocialSessionCheck(
+              saved.id,
+              async () => ({ valid: false, reason }),
+            );
+            expect(outcome).toMatchObject({
+              status: 'paused',
+              reasonCode: `social_session_${reason}`,
+              reasonUk: socialSessionCheckReasons[reason],
+            });
+            expect(
+              (await accounts.listSocialAccounts()).find(
+                (row) => row.id === saved.id,
+              ),
+            ).toMatchObject({
+              status: 'paused',
+              sessionStatus: ['login_required', 'cookies_invalid'].includes(
+                reason,
+              )
+                ? 'invalid'
+                : 'unconfirmed',
+              sessionCheckReason: reason,
+              reasonUk: socialSessionCheckReasons[reason],
+            });
+            expect(
+              (
+                await sonarPool.query(
+                  'select settings from channel_accounts where id=$1',
+                  [saved.id],
+                )
+              ).rows[0].settings.cookiesEncrypted,
+            ).toBe(stored.settings.cookiesEncrypted);
+            await expect(
+              accounts.updateSocialAccount(saved.id, { enabled: true }, actor),
+            ).rejects.toThrow('Спочатку перевірте сесію');
+          }
+          const unsafe = await accounts.withSocialSessionCheck(
+            saved.id,
+            async () => {
+              throw Error('https://user:secret@proxy.test/?cookies=secret');
+            },
+          );
+          expect(unsafe).toMatchObject({
+            reasonUk: socialSessionCheckReasons.unknown_auth,
+          });
+          expect(
+            JSON.stringify(
+              (await accounts.listSocialAccounts()).find(
+                (row) => row.id === saved.id,
+              ),
+            ),
+          ).not.toContain('secret');
+          await accounts.withSocialSessionCheck(saved.id, check);
+        }
         await accounts.updateSocialAccount(
           saved.id,
           { enabled: false, dailyLimit: 5 },
@@ -101,7 +159,11 @@ it.skipIf(!enabled)(
           (await accounts.listSocialAccounts()).find(
             (row) => row.id === saved.id,
           ),
-        ).toMatchObject({ status: 'paused', sessionStatus: 'invalid' });
+        ).toMatchObject({
+          status: 'paused',
+          sessionStatus: 'unconfirmed',
+          sessionCheckReason: 'proxy',
+        });
         process.env.SOCIAL_PROXY_URLS = process.env
           .SOCIAL_PROXY_URLS!.split(',')
           .reverse()
