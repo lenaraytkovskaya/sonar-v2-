@@ -12,6 +12,17 @@ it.skipIf(!enabled)(
     const oldSecret = process.env.AUTH_SECRET,
       oldProxies = process.env.SOCIAL_PROXY_URLS;
     const created: string[] = [];
+    // Advance past the shared action gap while testing session classifications.
+    let checkAt = Date.parse('2026-11-12T00:00:00Z');
+    const checkSession = (
+      id: string,
+      check: Parameters<typeof accounts.withSocialSessionCheck>[1],
+    ) => {
+      const at = new Date(checkAt);
+      checkAt += 120000;
+      return accounts.withSocialSessionCheck(id, check, at);
+    };
+
     process.env.AUTH_SECRET = 'social-account-integration-secret-at-least-32';
     process.env.SOCIAL_PROXY_URLS =
       'http://user:private-proxy-password@proxy.example:8000,http://second.example:8000';
@@ -69,18 +80,18 @@ it.skipIf(!enabled)(
           accounts.updateSocialAccount(saved.id, { enabled: true }, actor),
         ).rejects.toThrow('Спочатку перевірте сесію');
         const check = vi.fn(async () => ({ valid: true }));
-        expect(
-          await accounts.withSocialSessionCheck(saved.id, check),
-        ).toMatchObject({ status: 'done' });
+        expect(await checkSession(saved.id, check)).toMatchObject({
+          status: 'done',
+        });
         expect(check).toHaveBeenCalledOnce();
         if (network === 'linkedin') {
           for (const reason of Object.keys(
             socialSessionCheckReasons,
           ) as (keyof typeof socialSessionCheckReasons)[]) {
-            const outcome = await accounts.withSocialSessionCheck(
-              saved.id,
-              async () => ({ valid: false, reason }),
-            );
+            const outcome = await checkSession(saved.id, async () => ({
+              valid: false,
+              reason,
+            }));
             expect(outcome).toMatchObject({
               status: 'paused',
               reasonCode: `social_session_${reason}`,
@@ -112,12 +123,9 @@ it.skipIf(!enabled)(
               accounts.updateSocialAccount(saved.id, { enabled: true }, actor),
             ).rejects.toThrow('Спочатку перевірте сесію');
           }
-          const unsafe = await accounts.withSocialSessionCheck(
-            saved.id,
-            async () => {
-              throw Error('https://user:secret@proxy.test/?cookies=secret');
-            },
-          );
+          const unsafe = await checkSession(saved.id, async () => {
+            throw Error('https://user:secret@proxy.test/?cookies=secret');
+          });
           expect(unsafe).toMatchObject({
             reasonUk: socialSessionCheckReasons.unknown_auth,
           });
@@ -128,14 +136,14 @@ it.skipIf(!enabled)(
               ),
             ),
           ).not.toContain('secret');
-          await accounts.withSocialSessionCheck(saved.id, check);
+          await checkSession(saved.id, check);
         }
         await accounts.updateSocialAccount(
           saved.id,
           { enabled: false, dailyLimit: 5 },
           actor,
         );
-        await accounts.withSocialSessionCheck(saved.id, check);
+        await checkSession(saved.id, check);
         expect(
           (await accounts.listSocialAccounts()).find(
             (row) => row.id === saved.id,
@@ -151,9 +159,9 @@ it.skipIf(!enabled)(
           .reverse()
           .join(',');
         check.mockClear();
-        expect(
-          await accounts.withSocialSessionCheck(saved.id, check),
-        ).toMatchObject({ status: 'paused' });
+        expect(await checkSession(saved.id, check)).toMatchObject({
+          status: 'paused',
+        });
         expect(check).not.toHaveBeenCalled();
         expect(
           (await accounts.listSocialAccounts()).find(
@@ -234,9 +242,11 @@ it.skipIf(!enabled)(
         actor,
       );
       accountId = saved.id;
-      await accounts.withSocialSessionCheck(saved.id, async () => ({
-        valid: true,
-      }));
+      await accounts.withSocialSessionCheck(
+        saved.id,
+        async () => ({ valid: true }),
+        new Date(now.getTime() - 120000),
+      );
       await sonarPool.query(
         "insert into tasks(id,type,idempotency_key,payload,status) values($1::uuid,'social.request',$1::text,'{}','running'),($2::uuid,'social.request',$2::text,'{}','running')",
         [requestId, request2],

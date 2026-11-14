@@ -4,7 +4,7 @@ import type { PoolClient } from 'pg';
 export async function reserveSocialAction(
   c: PoolClient,
   accountId: string,
-  action: 'send' | 'sync' | 'fetch',
+  action: 'send' | 'sync' | 'fetch' | 'check',
   now: Date,
   dailyLimit?: number,
 ): Promise<Date | null> {

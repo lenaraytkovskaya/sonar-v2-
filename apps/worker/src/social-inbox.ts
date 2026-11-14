@@ -95,13 +95,19 @@ export async function runSocialInboxSync(
         reasonCode: 'social_account_inactive',
         reasonUk: 'Увімкніть акаунт із підтвердженою сесією.',
       };
-    const session = resolveSocialSession(account);
     const { rows: settings } = await c.query(
-      "select key,value from settings where key in ('social.inbox.poll_seconds','social.inbox.daily_limit')",
+      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
     );
+    if (config['social.inbox.enabled'] !== true)
+      return {
+        status: 'skipped',
+        reasonCode: 'social_inbox_disabled',
+        reasonUk: 'Синхронізацію вхідних соцмереж вимкнено.',
+      };
+    const session = resolveSocialSession(account);
     const poll = Number(config['social.inbox.poll_seconds']);
     const limit = Number(config['social.inbox.daily_limit']);
     if (

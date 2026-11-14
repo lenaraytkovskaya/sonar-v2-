@@ -214,6 +214,14 @@ export async function enqueueRegistryMatch(
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const {
+      rows: [identity],
+    } = await client.query('select type from tasks where id=$1', [id]);
+    // Match reconciler lock ordering: orchestration lock before task row locks.
+    if (identity?.type === 'social.inbox.sync')
+      await client.query(
+        "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
+      );
+    const {
       rows: [original],
     } = await client.query('select * from tasks where id=$1 for update', [id]);
     if (
@@ -223,6 +231,36 @@ export async function retryTask(id: string, userId: string) {
       original.type.startsWith('whatsapp.account.')
     )
       return false;
+    if (original.type === 'social.inbox.sync') {
+      if (original.status === 'done') return false;
+      const {
+        rows: [active],
+      } = await client.query(
+        "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
+        [original.payload.accountId],
+      );
+      if (active) {
+        if (active.id !== id) {
+          await client.query(
+            "update tasks set result=coalesce(result,'{}'::jsonb)||jsonb_build_object('retryTaskId',$2::text) where id=$1",
+            [id, active.id],
+          );
+          await logActivity(
+            'task.retry',
+            'task',
+            id,
+            userId,
+            { activeTaskId: active.id },
+            client,
+          );
+        }
+        return true;
+      }
+      await client.query(
+        "update tasks set result=result-'retryTaskId' where id=$1 and result ? 'retryTaskId'",
+        [id],
+      );
+    }
     if (original.type === 'google.request') {
       const {
         rows: [parent],

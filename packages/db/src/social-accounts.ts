@@ -447,40 +447,60 @@ export async function withSocialSessionCheck(
   check: (
     account: SocialSessionAccount,
   ) => Promise<{ valid: boolean; reason?: SocialSessionCheckReason }>,
+  now = new Date(),
 ): Promise<TaskOutcome> {
-  return transaction(async (c) => {
+  const c = await sonarPool.connect();
+  let locked = false;
+  let inTransaction = false;
+  try {
+    // Keep the common account lock across the callback, without a SQL transaction.
+    await c.query(
+      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+      [id],
+    );
+    locked = true;
+    await c.query('begin');
+    inTransaction = true;
     const account = await lock(c, id);
     let valid = false;
     let reason: SocialSessionCheckReason | undefined;
     try {
       resolveSocialSession(account);
-      const result = await check(account);
-      valid = result.valid;
-      if (!valid)
-        reason =
-          result.reason &&
-          Object.hasOwn(socialSessionCheckReasons, result.reason)
-            ? result.reason
-            : 'unknown_auth';
     } catch (error) {
       reason = socialSessionCheckReason(error);
+    }
+    const runAt = reason
+      ? null
+      : await reserveSocialAction(c, id, 'check', now);
+    await c.query('commit');
+    inTransaction = false;
+    if (runAt)
+      return {
+        status: 'deferred',
+        runAt,
+        reasonCode: 'social_action_gate',
+        reasonUk: 'Перевірка сесії після спільної паузи дій акаунта.',
+      };
+    if (!reason) {
+      try {
+        const result = await check(account);
+        valid = result.valid;
+        if (!valid)
+          reason =
+            result.reason &&
+            Object.hasOwn(socialSessionCheckReasons, result.reason)
+              ? result.reason
+              : 'unknown_auth';
+      } catch (error) {
+        reason = socialSessionCheckReason(error);
+      }
     }
     const reasonUk = reason ? socialSessionCheckReasons[reason] : null;
     const invalidCookies =
       reason === 'login_required' || reason === 'cookies_invalid';
-    const settings = {
-      ...account.settings,
-      sessionStatus: valid
-        ? 'valid'
-        : invalidCookies
-          ? 'invalid'
-          : 'unconfirmed',
-      checkedAt: new Date().toISOString(),
-      sessionCheckReason: reason ?? null,
-      reasonUk,
-    };
+    // Merge only session fields so the committed action reservation survives.
     await c.query(
-      'update channel_accounts set status=$2,settings=$3 where id=$1',
+      'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
       [
         id,
         account.settings.enabled === false
@@ -488,7 +508,16 @@ export async function withSocialSessionCheck(
           : valid
             ? 'active'
             : 'paused',
-        settings,
+        {
+          sessionStatus: valid
+            ? 'valid'
+            : invalidCookies
+              ? 'invalid'
+              : 'unconfirmed',
+          checkedAt: now.toISOString(),
+          sessionCheckReason: reason ?? null,
+          reasonUk,
+        },
       ],
     );
     return valid
@@ -498,5 +527,11 @@ export async function withSocialSessionCheck(
           reasonCode: `social_session_${reason}`,
           reasonUk: reasonUk!,
         };
-  });
+  } catch (error) {
+    if (inTransaction) await c.query('rollback');
+    throw error;
+  } finally {
+    if (locked) await releaseSocialFetchSession(c, id);
+    c.release();
+  }
 }

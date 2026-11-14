@@ -700,6 +700,233 @@ it.skipIf(!enabled)(
     });
   },
 );
+it.skipIf(!enabled)(
+  'defers session checks behind the shared action gap and counts checks separately',
+  async () => {
+    const { reserveSocialAction } = await import('@sonar/db/social-action');
+    const { withSocialSessionCheck } = await import('./social-accounts.js');
+    await resetGate();
+    const c = await db.sonarPool.connect();
+    try {
+      await c.query('begin');
+      await reserveSocialAction(c, account, 'send', now);
+      await c.query('commit');
+    } finally {
+      c.release();
+    }
+    const check = vi.fn(async () => ({ valid: true }));
+    expect(await withSocialSessionCheck(account, check, now)).toMatchObject({
+      status: 'deferred',
+      reasonCode: 'social_action_gate',
+      runAt: new Date(now.getTime() + 120000),
+    });
+    expect(check).not.toHaveBeenCalled();
+    expect(
+      await withSocialSessionCheck(
+        account,
+        check,
+        new Date(now.getTime() + 120000),
+      ),
+    ).toMatchObject({ status: 'done' });
+    expect(check).toHaveBeenCalledOnce();
+    const state = (
+      await db.sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [account],
+      )
+    ).rows[0].settings;
+    expect(state.socialAction.counts).toEqual({ send: 1, check: 1 });
+    expect(state.socialAction.nextAt).toBe(
+      new Date(now.getTime() + 240000).toISOString(),
+    );
+    const adapter = { sync: vi.fn() };
+    expect(
+      await worker.runSocialInboxSync(
+        { accountId: account },
+        adapter,
+        new Date(now.getTime() + 120000),
+      ),
+    ).toMatchObject({ status: 'deferred', reasonCode: 'social_action_gate' });
+    expect(adapter.sync).not.toHaveBeenCalled();
+  },
+);
+it.skipIf(!enabled)(
+  'keeps the account lock but no SQL transaction open during a session check callback',
+  async () => {
+    const { withSocialSessionCheck } = await import('./social-accounts.js');
+    await resetGate();
+    let idleTransactions: unknown[] = [];
+    let lockedDuringCallback = true;
+    let committedCount = 0;
+    const result = await withSocialSessionCheck(
+      account,
+      async () => {
+        idleTransactions = (
+          await db.sonarPool.query(
+            "select pid from pg_stat_activity where datname=current_database() and state='idle in transaction'",
+          )
+        ).rows;
+        const c = await db.sonarPool.connect();
+        try {
+          lockedDuringCallback = (
+            await c.query(
+              "select pg_try_advisory_lock(hashtextextended('channel-account:'||$1::text,0)) as locked",
+              [account],
+            )
+          ).rows[0].locked;
+          if (lockedDuringCallback)
+            await c.query(
+              "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
+              [account],
+            );
+          committedCount =
+            (
+              await c.query(
+                'select settings from channel_accounts where id=$1',
+                [account],
+              )
+            ).rows[0].settings.socialAction?.counts?.check ?? 0;
+        } finally {
+          c.release();
+        }
+        return { valid: true };
+      },
+      now,
+    );
+    expect(result).toMatchObject({ status: 'done' });
+    expect(idleTransactions).toEqual([]);
+    expect(lockedDuringCallback).toBe(false);
+    expect(committedCount).toBe(1);
+  },
+);
+it.skipIf(!enabled)(
+  'reuses the reconciled account job when an older failed sync is retried concurrently',
+  async () => {
+    await resetGate();
+    await inbox.reconcileSocialInbox(now);
+    const active = (
+      await db.sonarPool.query(
+        "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running')",
+        [account],
+      )
+    ).rows[0].id;
+    const old = randomUUID();
+    await db.sonarPool.query(
+      "insert into tasks(id,type,idempotency_key,status,payload) values($1::uuid,'social.inbox.sync',$1::uuid::text,'failed',$2)",
+      [old, { accountId: account }],
+    );
+    const attempts = await Promise.allSettled([
+      tasks.retryTask(old, user),
+      tasks.retryTask(old, user),
+      inbox.reconcileSocialInbox(now),
+    ]);
+    expect(attempts.slice(0, 2)).toEqual([
+      { status: 'fulfilled', value: true },
+      { status: 'fulfilled', value: true },
+    ]);
+    expect(
+      (
+        await db.sonarPool.query(
+          'select status,result from tasks where id=$1',
+          [old],
+        )
+      ).rows[0],
+    ).toMatchObject({ status: 'failed', result: { retryTaskId: active } });
+    expect(
+      (
+        await db.sonarPool.query(
+          "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running')",
+          [account],
+        )
+      ).rows,
+    ).toEqual([{ id: active }]);
+    expect(
+      (
+        await db.sonarPool.query(
+          "select count(*)::int as n from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1",
+          [active],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    // Also race a manual retry against creating a replacement after the active job ends.
+    await db.sonarPool.query("update tasks set status='done' where id=$1", [
+      active,
+    ]);
+    const replacement = await Promise.allSettled([
+      tasks.retryTask(old, user),
+      inbox.reconcileSocialInbox(now),
+      tasks.retryTask(old, user),
+    ]);
+    expect(replacement.every((result) => result.status === 'fulfilled')).toBe(
+      true,
+    );
+    const pending = (
+      await db.sonarPool.query(
+        "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running')",
+        [account],
+      )
+    ).rows;
+    expect(pending).toHaveLength(1);
+    const retried = (
+      await db.sonarPool.query('select result from tasks where id=$1', [old])
+    ).rows[0];
+    expect(retried.result?.retryTaskId).toBe(
+      pending[0].id === old ? undefined : pending[0].id,
+    );
+    expect(
+      (
+        await db.sonarPool.query(
+          "select count(*)::int as n from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1",
+          [pending[0].id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  },
+);
+it.skipIf(!enabled)(
+  'skips an already queued inbox job when polling is disabled without reserving an action',
+  async () => {
+    await resetGate();
+    await inbox.reconcileSocialInbox(now);
+    const queued = (
+      await db.sonarPool.query(
+        "select payload from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status='queued'",
+        [account],
+      )
+    ).rows[0];
+    const before = (
+      await db.sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [account],
+      )
+    ).rows[0].settings;
+    await db.sonarPool.query(
+      "update settings set value='false' where key='social.inbox.enabled'",
+    );
+    try {
+      const adapter = { sync: vi.fn(async () => ({ complete: true })) };
+      expect(
+        await worker.runSocialInboxSync(queued.payload, adapter, now),
+      ).toMatchObject({
+        status: 'skipped',
+        reasonCode: 'social_inbox_disabled',
+      });
+      expect(adapter.sync).not.toHaveBeenCalled();
+      expect(
+        (
+          await db.sonarPool.query(
+            'select settings from channel_accounts where id=$1',
+            [account],
+          )
+        ).rows[0].settings,
+      ).toEqual(before);
+    } finally {
+      await db.sonarPool.query(
+        "update settings set value='true' where key='social.inbox.enabled'",
+      );
+    }
+  },
+);
 afterAll(async () => {
   if (!enabled) return;
   for (const setting of originalSettings)
