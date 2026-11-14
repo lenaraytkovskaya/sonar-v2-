@@ -136,6 +136,37 @@ document.querySelector('#open').onclick = () => {
     if (o.headerLinkInMessages) region(scope).append(scope.querySelector('a'));
     if (o.globalLinkOnly) { scope.querySelector('a').remove(); document.querySelector('nav').insertAdjacentHTML('beforeend', '<a href="/' + recipient + '/">' + label + '</a>'); }
     if (o.draft) scope.querySelector('[contenteditable]').textContent = 'Existing draft';
+    const editor = scope.querySelector('[contenteditable]');
+    if (o.noEditor) editor.remove();
+    if (o.hiddenEditor) editor.hidden = true;
+    if (o.displayEditor) editor.style.display = 'none';
+    if (o.inertEditor) editor.inert = true;
+    if (o.noRegion) region(scope).remove();
+    if (o.hiddenRegion) region(scope).hidden = true;
+    if (o.nameMismatch) region(scope).setAttribute('aria-label', 'Messages in conversation with Different Name');
+    if (o.noComposerScope) editor.parentElement.removeAttribute('aria-label');
+    if (o.forbiddenScope) { const aside = document.createElement('aside'); scope.replaceWith(aside); aside.append(scope); }
+    if (o.duplicateHeader) scope.prepend(scope.firstElementChild.cloneNode(true));
+    if (o.zeroHeaders) { for (const button of scope.querySelectorAll('button, [role="button"]')) button.remove(); }
+    if (o.wrappedNoHeader) { for (const button of scope.firstElementChild.querySelectorAll('button, [role="button"]')) button.remove(); }
+    if (o.duplicateTarget) scope.after(scope.cloneNode(true));
+    if (o.manyEditors) { for (let i = 0; i < 15; i++) scope.append(editor.cloneNode(true)); }
+    if (o.hiddenLink) scope.querySelector('a').hidden = true;
+    if (o.privacy) {
+      const name = 'PRIVATE_NAME_SENTINEL';
+      scope.querySelector('a').href = 'https://www.facebook.com/PRIVATE_HANDLE_SENTINEL/?token=PRIVATE_TOKEN_SENTINEL';
+      scope.querySelector('a').textContent = name;
+      editor.setAttribute('aria-label', 'Write to ' + name);
+      region(scope).setAttribute('aria-label', 'Messages in conversation with ' + name);
+      document.cookie = 'session=PRIVATE_COOKIE_SENTINEL';
+      scope.setAttribute('data-private', 'private@example.invalid +12345678901 PRIVATE_MESSAGE_SENTINEL');
+      scope.style.setProperty('--private', 'PRIVATE_CSS_SENTINEL');
+    }
+    if (o.directPage) history.replaceState(null, '', '/messages/t/SYNTHETIC_PRIVATE_THREAD/');
+    if (o.otherPage) history.replaceState(null, '', '/unrecognized/synthetic/');
+    if (o.afterFillNoAuth) editor.addEventListener('input', () => document.querySelector('nav').remove(), { once: true });
+    if (o.afterFillNoRegion) editor.addEventListener('input', () => region(scope).remove(), { once: true });
+    if (o.afterFillHiddenButton) editor.addEventListener('input', () => scope.querySelector('[aria-label="Press Enter to send"]').hidden = true, { once: true });
   };
   if (o.delayedChat) setTimeout(show, 40); else show();
 };
@@ -163,6 +194,32 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       let page: Page;
       context.on('page', (value) => {
         page = value;
+        if (options.evaluateError)
+          vi.spyOn(page, 'evaluateHandle').mockRejectedValueOnce(
+            Error('PRIVATE_ERROR_SENTINEL private@example.invalid'),
+          );
+        if (options.lateDom || options.acquireRace) {
+          const wait = page.waitForFunction.bind(page);
+          vi.spyOn(page, 'waitForFunction').mockImplementation(
+            async (...args) => {
+              try {
+                const result = await wait(...args);
+                if (options.acquireRace)
+                  await page.evaluate(() =>
+                    document
+                      .querySelector('#target [contenteditable]')
+                      ?.remove(),
+                  );
+                return result;
+              } catch (error) {
+                await page.evaluate(() =>
+                  document.querySelector('#chats')?.replaceChildren(),
+                );
+                throw error;
+              }
+            },
+          );
+        }
       });
       const events: string[] = [];
       const dispatchPhases: string[] = [];
@@ -290,7 +347,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             )!;
             region.append(region.firstElementChild!.cloneNode(true));
           });
-        if (options.markerFailure) throw Error('private callback failure');
+        if (options.markerFailure)
+          throw Error('PRIVATE_ERROR_SENTINEL private@example.invalid');
         if (options.markerClose) await page.close();
         if (options.markerCheckpoint)
           await page.evaluate(() =>
@@ -298,6 +356,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               'beforeend',
               '<form action="/checkpoint/"><button>Continue</button></form>',
             ),
+          );
+        if (options.markerUrl)
+          await page.evaluate(() =>
+            history.replaceState(null, '', '/PRIVATE_URL_SENTINEL/'),
           );
         if (options.markerRecipient)
           await page.evaluate(() => {
@@ -342,6 +404,257 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it.each([
+      [
+        { noEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { editors: { raw: 0, visible: 0, visibility: 'absent' } },
+      ],
+      [
+        { hiddenEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { editors: { raw: 1, visible: 0, visibility: 'hidden' } },
+      ],
+      [
+        { displayEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { editors: { raw: 1, visible: 0, visibility: 'display' } },
+      ],
+      [
+        { inertEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { editors: { raw: 1, visible: 0, visibility: 'inert' } },
+      ],
+      [
+        { noRegion: true },
+        'first_lookup',
+        'no_region',
+        'timeout',
+        { regions: { raw: 0, visible: 0, visibility: 'absent' } },
+      ],
+      [
+        { hiddenRegion: true },
+        'first_lookup',
+        'no_region',
+        'timeout',
+        { regions: { raw: 1, visible: 0, visibility: 'hidden' } },
+      ],
+      [
+        { duplicateRegion: true },
+        'first_lookup',
+        'multiple',
+        'timeout',
+        { regions: { raw: 2, visible: 2 } },
+      ],
+      [
+        { manyEditors: true },
+        'first_lookup',
+        'multiple',
+        'timeout',
+        { editors: { raw: 9, visible: 9 } },
+      ],
+      [
+        { duplicateTarget: true },
+        'first_lookup',
+        'multiple',
+        'timeout',
+        { candidates: 2 },
+      ],
+      [{ forbiddenScope: true }, 'first_lookup', 'forbidden', 'timeout', {}],
+      [{ nameMismatch: true }, 'first_lookup', 'name_mismatch', 'timeout', {}],
+      [
+        { noComposerScope: true },
+        'first_lookup',
+        'composer_scope',
+        'timeout',
+        {},
+      ],
+      [
+        { duplicateHeader: true },
+        'first_lookup',
+        'header_count',
+        'timeout',
+        { headers: 2 },
+      ],
+      [
+        { zeroHeaders: true },
+        'first_lookup',
+        'parent_structure',
+        'timeout',
+        {},
+      ],
+      [
+        { wrappedChatBody: true, wrappedNoHeader: true },
+        'first_lookup',
+        'header_count',
+        'timeout',
+        { headers: 0 },
+      ],
+      [
+        { globalLinkOnly: true },
+        'first_lookup',
+        'recipient_link_count',
+        'timeout',
+        { hasRecipientLink: false, canonicalMatch: false, nameMatch: false },
+      ],
+      [
+        { hiddenLink: true },
+        'first_lookup',
+        'recipient_link_count',
+        'timeout',
+        { links: { raw: 1, visible: 0, visibility: 'hidden' } },
+      ],
+      [
+        { avatarLink: true, wrongAvatarLabel: true },
+        'first_lookup',
+        'recipient_link_count',
+        'timeout',
+        { hasRecipientLink: true, canonicalMatch: true, nameMatch: false },
+      ],
+      [
+        { wrongRecipient: true },
+        'first_lookup',
+        'wrong_recipient',
+        'timeout',
+        { hasRecipientLink: true, canonicalMatch: false, nameMatch: true },
+      ],
+      [
+        { wrongRecipient: true, lateDom: true },
+        'first_lookup',
+        'wrong_recipient',
+        'timeout',
+        { links: { raw: 1, visible: 1 } },
+      ],
+      [
+        { privacy: true },
+        'first_lookup',
+        'wrong_recipient',
+        'timeout',
+        { nameMatch: true },
+      ],
+      [{ draft: true }, 'first_lookup', 'draft', 'not_found', {}],
+      [{ afterFillNoRegion: true }, 'after_fill', 'no_region', 'timeout', {}],
+      [
+        { afterFillHiddenButton: true },
+        'after_fill',
+        'invalidated',
+        'not_found',
+        { buttons: { raw: 1, visible: 0, visibility: 'hidden' } },
+      ],
+      [
+        { markerRecipient: true },
+        'after_marker',
+        'invalidated',
+        'not_found',
+        { canonicalMatch: false },
+      ],
+      [{ markerFailure: true }, 'after_marker', 'bound', 'unknown', {}],
+      [{ clickDisabled: true }, 'dispatch', 'invalidated', 'not_found', {}],
+      [
+        { clickButton: true, documentCaptureButton: true },
+        'dispatch',
+        'dispatch_blocked',
+        'not_found',
+        {},
+      ],
+      [{ oldOnly: true }, 'confirmation', 'unconfirmed', 'timeout', {}],
+      [
+        { rerenderAfterSend: true },
+        'confirmation',
+        'baseline_invalidated',
+        'timeout',
+        {},
+      ],
+      [{ evaluateError: true }, 'first_lookup', 'not_observed', 'unknown', {}],
+      [
+        { afterFillNoAuth: true },
+        'before_marker',
+        'session_check',
+        'not_found',
+        {},
+      ],
+      [{ markerUrl: true }, 'after_marker', 'url_changed', 'not_found', {}],
+      [
+        { acquireRace: true },
+        'first_lookup',
+        'no_editor',
+        'not_found',
+        { editors: { raw: 0, visible: 0 } },
+      ],
+      [
+        { directPage: true, noEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { pageKind: 'direct' },
+      ],
+      [
+        { otherPage: true, noEditor: true },
+        'first_lookup',
+        'no_editor',
+        'timeout',
+        { pageKind: 'other' },
+      ],
+    ] as const)(
+      'reports the exact private observation (%j)',
+      async (options, phase, branch, failure, detail) => {
+        const f = await fixture(options);
+        try {
+          const error = (await f.send().catch((error: unknown) => error)) as {
+            code: string;
+            reasonUk: string;
+          };
+          expect(error.code).toBe(
+            ['after_marker', 'dispatch', 'confirmation'].includes(phase)
+              ? 'delivery_uncertain'
+              : 'unavailable',
+          );
+          const diagnostic = JSON.parse(
+            error.reasonUk.slice(error.reasonUk.indexOf('{')),
+          );
+          expect(diagnostic).toMatchObject({
+            version: 'fb-observed84-v1',
+            phase,
+            branch,
+            failure,
+            ...detail,
+          });
+          if (
+            !('evaluateError' in options) &&
+            !('directPage' in options) &&
+            !('otherPage' in options)
+          )
+            expect(diagnostic.pageKind).toBe('profile');
+          expect(error.reasonUk).not.toMatch(
+            /PRIVATE_|private@example|12345678901|10000000000000|Synthetic|SYNTHETIC_PRIVATE|https?:|href|aria-label/,
+          );
+          const scalars = (value: unknown): unknown[] =>
+            value && typeof value === 'object'
+              ? Object.values(value).flatMap(scalars)
+              : [value];
+          for (const value of scalars(diagnostic))
+            if (typeof value === 'number') {
+              expect(value).toBeGreaterThanOrEqual(0);
+              expect(value).toBeLessThanOrEqual(9);
+            }
+          expect(f.mark).toHaveBeenCalledTimes(
+            ['after_marker', 'dispatch', 'confirmation'].includes(phase)
+              ? 1
+              : 0,
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([
       { observed: true },
       { observed: true, company: true },

@@ -7,9 +7,51 @@ import {
   socialSessionCheckReason,
 } from '@sonar/core/social-session';
 
+type FinderBranch =
+  | 'no_editor'
+  | 'no_region'
+  | 'multiple'
+  | 'forbidden'
+  | 'name_mismatch'
+  | 'composer_scope'
+  | 'header_count'
+  | 'parent_structure'
+  | 'recipient_link_count'
+  | 'wrong_recipient'
+  | 'bound'
+  | 'invalidated'
+  | 'dispatch_blocked'
+  | 'unconfirmed'
+  | 'baseline_invalidated'
+  | 'draft';
+type Counts = {
+  raw: number;
+  visible: number;
+  visibility: 'absent' | 'visible' | 'inert' | 'hidden' | 'display';
+};
+type Observation = {
+  branch: FinderBranch;
+  pageKind: 'profile' | 'direct' | 'other' | 'login';
+  editors: Counts;
+  regions: Counts;
+  links?: Counts;
+  buttons?: Counts;
+  headers: number;
+  recipientLinks: number;
+  candidates: number;
+  hasRecipientLink: boolean;
+  canonicalMatch: boolean;
+  nameMatch: boolean;
+};
+
 // English labels and Lexical attributes observed by root in Facebook's floating
 // chat. No message-row roles or DOM IDs are assumed.
-async function conversation(page: Page, recipient: string, body: string) {
+async function conversation(
+  page: Page,
+  recipient: string,
+  body: string,
+  observe: (observation: Observation) => void,
+) {
   const finder = await page.evaluateHandle(
     ({ recipient, body }) => {
       const normalize = (text: string | null) =>
@@ -71,10 +113,59 @@ async function conversation(page: Page, recipient: string, body: string) {
             child !== branch(scope, composer) &&
             headerControls(child),
         );
-      return () => {
+      const count = (value: number) => Math.min(value, 9);
+      const measure = (scope: ParentNode, selector: string): Counts => {
+        const raw = Array.from(scope.querySelectorAll(selector));
+        const node = raw.find(visible) ?? raw[0];
+        return {
+          raw: count(raw.length),
+          visible: count(raw.filter(visible).length),
+          visibility: !node
+            ? 'absent'
+            : visible(node)
+              ? 'visible'
+              : node.closest('[inert]')
+                ? 'inert'
+                : node.closest('[hidden], [aria-hidden="true"]') ||
+                    getComputedStyle(node).visibility !== 'visible'
+                  ? 'hidden'
+                  : 'display',
+        };
+      };
+      const pageKind = (): Observation['pageKind'] =>
+        /^\/(?:login|checkpoint)(?:[/.]|$)/.test(location.pathname)
+          ? 'login'
+          : /^\/messages(?:\/|$)/.test(location.pathname)
+            ? 'direct'
+            : location.pathname === '/profile.php' ||
+                /^\/[\w.-]+\/?$/.test(location.pathname)
+              ? 'profile'
+              : 'other';
+      let observation: Observation;
+      const find = () => {
+        observation = {
+          branch: 'no_editor',
+          pageKind: pageKind(),
+          editors: measure(document, composerSelector),
+          regions: measure(document, regionSelector),
+          headers: 0,
+          recipientLinks: 0,
+          candidates: 0,
+          hasRecipientLink: false,
+          canonicalMatch: false,
+          nameMatch: false,
+        };
+        const reject = (branch: FinderBranch) => {
+          observation.branch = branch;
+        };
         const candidates = [];
+        const initial = observation;
         for (const editor of all(document, composerSelector)) {
-          if (editor.closest(forbidden)) continue;
+          observation = { ...initial, branch: 'no_region' };
+          if (editor.closest(forbidden)) {
+            reject('forbidden');
+            continue;
+          }
           for (
             let scope = editor.parentElement;
             scope && scope !== document.body;
@@ -82,13 +173,17 @@ async function conversation(page: Page, recipient: string, body: string) {
           ) {
             const regions = all(scope, regionSelector);
             if (!regions.length) continue;
+            observation.regions = measure(scope, regionSelector);
+            observation.editors = measure(scope, composerSelector);
             // Never absorb page navigation or a neighbouring conversation.
             if (
               regions.length !== 1 ||
               all(scope, composerSelector).length !== 1 ||
               all(scope, forbidden).length
-            )
+            ) {
+              reject(all(scope, forbidden).length ? 'forbidden' : 'multiple');
               break;
+            }
             const region = regions[0]!;
             const name = normalize(
               editor.getAttribute('aria-label')?.slice('Write to '.length) ??
@@ -98,10 +193,15 @@ async function conversation(page: Page, recipient: string, body: string) {
               !name ||
               normalize(region.getAttribute('aria-label')) !==
                 `Messages in conversation with ${name}`
-            )
+            ) {
+              reject('name_mismatch');
               break;
+            }
             const composer = editor.closest(composerContainer);
-            if (!composer || !scope.contains(composer)) break;
+            if (!composer || !scope.contains(composer)) {
+              reject('composer_scope');
+              break;
+            }
             const contentScope = scope;
             let headers = headersIn(scope, region, composer);
             if (!headers.length) {
@@ -118,26 +218,50 @@ async function conversation(page: Page, recipient: string, body: string) {
                 all(parent, regionSelector).length !== 1 ||
                 all(parent, composerSelector).length !== 1 ||
                 all(parent, forbidden).length
-              )
+              ) {
+                reject('parent_structure');
                 break;
+              }
               scope = parent;
               headers = headersIn(scope, region, composer);
             }
-            if (headers.length !== 1) break;
+            observation.headers = count(headers.length);
+            if (headers.length !== 1) {
+              reject('header_count');
+              break;
+            }
             const header = headers[0]!;
             const links = all(header, 'a[href]');
             const recipientLinks = links.filter(
               (link) =>
                 identity(link) === recipient && namesRecipient(link, name),
             );
+            observation.links = measure(header, 'a[href]');
+            observation.recipientLinks = count(recipientLinks.length);
+            observation.hasRecipientLink = links.length > 0;
+            observation.canonicalMatch = links.some(
+              (link) => identity(link) === recipient,
+            );
+            observation.nameMatch = links.some((link) =>
+              namesRecipient(link, name),
+            );
             if (
               recipientLinks.length !== 1 ||
               links.some(
                 (link) => identity(link) && identity(link) !== recipient,
               )
-            )
+            ) {
+              reject(
+                links.some(
+                  (link) => identity(link) && identity(link) !== recipient,
+                )
+                  ? 'wrong_recipient'
+                  : 'recipient_link_count',
+              );
               break;
+            }
             candidates.push({
+              observation: { ...observation },
               scope,
               contentScope,
               region,
@@ -150,7 +274,16 @@ async function conversation(page: Page, recipient: string, body: string) {
             break;
           }
         }
-        if (candidates.length !== 1) return null;
+        observation.candidates = count(candidates.length);
+        if (candidates.length !== 1) {
+          if (candidates.length > 1) observation.branch = 'multiple';
+          return null;
+        }
+        observation = {
+          ...candidates[0]!.observation,
+          candidates: 1,
+          branch: 'bound',
+        };
         const {
           scope,
           contentScope,
@@ -161,11 +294,9 @@ async function conversation(page: Page, recipient: string, body: string) {
           link,
           name,
         } = candidates[0]!;
-        const sendButtons = () =>
-          all(
-            composer,
-            '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]',
-          );
+        const sendSelector =
+          '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]';
+        const sendButtons = () => all(composer, sendSelector);
         const pinned = [
           scope,
           contentScope,
@@ -231,6 +362,35 @@ async function conversation(page: Page, recipient: string, body: string) {
               editor.getAttribute('aria-readonly') !== 'true' &&
               sendButtons().length === 1 &&
               sendButtons()[0]!.getAttribute('aria-disabled') !== 'true'));
+        const verify = (filled: boolean) => {
+          const ok = valid(filled);
+          if (!ok) {
+            observation.branch = 'invalidated';
+            observation.editors = measure(scope, composerSelector);
+            observation.regions = measure(scope, regionSelector);
+            observation.links = measure(header, 'a[href]');
+            observation.buttons = measure(composer, sendSelector);
+            const links = all(header, 'a[href]');
+            observation.pageKind = pageKind();
+            observation.headers = count(
+              headersIn(scope, region, composer).length,
+            );
+            observation.recipientLinks = count(
+              links.filter(
+                (link) =>
+                  identity(link) === recipient && namesRecipient(link, name),
+              ).length,
+            );
+            observation.hasRecipientLink = links.length > 0;
+            observation.canonicalMatch = links.some(
+              (link) => identity(link) === recipient,
+            );
+            observation.nameMatch = links.some((link) =>
+              namesRecipient(link, name),
+            );
+          }
+          return ok;
+        };
         const rows = () =>
           all(region, '[aria-label]').filter(
             (row) =>
@@ -329,7 +489,7 @@ async function conversation(page: Page, recipient: string, body: string) {
             if (event.currentTarget === window && !onButton) return;
             blocked ||=
               !onButton ||
-              !valid(true) ||
+              !verify(true) ||
               sendButtons()[0] !== button ||
               button.parentElement !== parent ||
               !visible(button) ||
@@ -340,6 +500,8 @@ async function conversation(page: Page, recipient: string, body: string) {
                   document.elementFromPoint(event.clientX, event.clientY),
                 ));
             if (blocked) {
+              if (observation.branch !== 'invalidated')
+                observation.branch = 'dispatch_blocked';
               event.preventDefault();
               event.stopImmediatePropagation();
             }
@@ -366,25 +528,33 @@ async function conversation(page: Page, recipient: string, body: string) {
           };
         };
         return {
+          diagnostic: () => observation,
           guardDispatch,
           blocked: () => blocked,
           cleanup: () => cleanup(),
           editor,
           scope,
           region,
-          valid,
-          empty: () => !normalize((editor as HTMLElement).innerText),
+          valid: verify,
+          empty: () => {
+            const empty = !normalize((editor as HTMLElement).innerText);
+            if (!empty) observation.branch = 'draft';
+            return empty;
+          },
           button: () => sendButtons()[0]!,
           arm: () => {
             baseline = rows();
             signatures = baseline.map(sentRow);
           },
           confirmed: () => {
+            if (!verify(false)) return false;
             if (
-              !valid(false) ||
               baseline.some((row) => !row.isConnected || !region.contains(row))
-            )
+            ) {
+              observation.branch = 'baseline_invalidated';
               return false;
+            }
+            observation.branch = 'unconfirmed';
             const current = rows();
             return current.some((row) => {
               const signature = sentRow(row);
@@ -398,12 +568,22 @@ async function conversation(page: Page, recipient: string, body: string) {
           },
         };
       };
+      return { find, diagnostic: () => observation };
     },
     { recipient, body },
   );
   try {
-    await page.waitForFunction((find) => find() !== null, finder);
-    return await finder.evaluateHandle((find) => find());
+    await page.waitForFunction((finder) => finder.find() !== null, finder);
+    const state = await finder.evaluateHandle((finder) => finder.find());
+    observe(await finder.evaluate((finder) => finder.diagnostic()));
+    return state;
+  } catch (error) {
+    // Read the stored last poll, never a fresh scan of a later DOM.
+    const observation = await finder
+      .evaluate((finder) => finder.diagnostic())
+      .catch(() => undefined);
+    if (observation) observe(observation);
+    throw error;
   } finally {
     await finder.dispose();
   }
@@ -419,6 +599,26 @@ export async function sendFacebook(
 ) {
   let attempted = false;
   let phase = 'navigation';
+  let observation: Observation | undefined;
+  let branch = 'not_observed';
+  const observe = (value: Observation) => {
+    observation = value;
+  };
+  const diagnostic = (error: unknown) =>
+    JSON.stringify({
+      version: 'fb-observed84-v1',
+      phase,
+      ...observation,
+      branch:
+        branch === 'not_observed' ? (observation?.branch ?? branch) : branch,
+      failure:
+        error instanceof SocialSendError &&
+        !(error instanceof SocialSessionCheckError)
+          ? 'not_found'
+          : socialSessionCheckReason(error, 'browser') === 'timeout'
+            ? 'timeout'
+            : 'unknown',
+    });
   let restricted = false;
   page.on('response', (response) => {
     const url = new URL(response.url());
@@ -440,15 +640,25 @@ export async function sendFacebook(
         error instanceof SocialSessionCheckError &&
         error.reason === 'unknown_auth'
       )
-        throw unavailable();
+        throw unavailable('session_check');
       throw error;
     }
   };
-  const unavailable = () =>
-    new SocialSendError(
+  const unavailable = (
+    reason?:
+      | 'http_error'
+      | 'profile_mismatch'
+      | 'action_count'
+      | 'session_check'
+      | 'url_changed'
+      | 'button_changed',
+  ) => {
+    if (reason) branch = reason;
+    return new SocialSendError(
       'unavailable',
       `[facebook/${phase}] Не підтверджено одержувача активного діалогу, поле або кнопку повідомлення Facebook.`,
     );
+  };
   try {
     const response = await page
       .goto(target.canonicalUrl, {
@@ -467,9 +677,10 @@ export async function sendFacebook(
     if (response && (response.status() === 407 || response.status() >= 500))
       throw new SocialSessionCheckError('network');
     await check();
-    if (response && response.status() >= 400) throw unavailable();
+    if (response && response.status() >= 400) throw unavailable('http_error');
     phase = 'profile';
-    if (socialTarget(page.url())?.handle !== target.handle) throw unavailable();
+    if (socialTarget(page.url())?.handle !== target.handle)
+      throw unavailable('profile_mismatch');
     const actions = page
       .locator('main, [role="main"]')
       .getByRole('button', {
@@ -482,11 +693,11 @@ export async function sendFacebook(
       )
       .filter({ visible: true });
     await actions.waitFor({ state: 'visible' });
-    if ((await actions.count()) !== 1) throw unavailable();
+    if ((await actions.count()) !== 1) throw unavailable('action_count');
     await actions.click();
     await check();
-    phase = 'dialog';
-    let state = await conversation(page, target.handle, body);
+    phase = 'first_lookup';
+    let state = await conversation(page, target.handle, body, observe);
     try {
       if (
         !(await state.evaluate((state) => state?.valid(false) && state.empty()))
@@ -496,11 +707,11 @@ export async function sendFacebook(
         await state.evaluateHandle((state) => state!.editor)
       ).asElement();
       if (!editor) throw unavailable();
-      phase = 'composer';
+      phase = 'after_fill';
       await editor.fill(body);
       // Lexical may rerender during fill. Rebind only before the durable marker.
       await state.dispose();
-      state = await conversation(page, target.handle, body);
+      state = await conversation(page, target.handle, body, observe);
       if (!(await state.evaluate((state) => state?.valid(true))))
         throw unavailable();
       const dialogUrl = page.url();
@@ -508,21 +719,23 @@ export async function sendFacebook(
         await state.evaluateHandle((state) => state!.button())
       ).asElement();
       if (!button) throw unavailable();
+      phase = 'before_marker';
       await check();
-      phase = 'attempt';
       attempted = true; // A callback error may follow a committed durable write.
+      phase = 'after_marker';
       await beforeSend();
       await check();
+      if (page.url() !== dialogUrl) throw unavailable('url_changed');
+      if (!(await state.evaluate((state) => state?.valid(true))))
+        throw unavailable();
       if (
-        page.url() !== dialogUrl ||
-        !(await state.evaluate((state) => state?.valid(true))) ||
         !(await button.evaluate(
           (button, state) =>
             button === state!.button() && !button.matches(':disabled'),
           state,
         ))
       )
-        throw unavailable();
+        throw unavailable('button_changed');
       if (
         !(await state.evaluate((state, button) => {
           if (!state?.valid(true) || state.button() !== button) return false;
@@ -532,22 +745,28 @@ export async function sendFacebook(
         }, button))
       )
         throw unavailable();
-      phase = 'confirmation';
+      phase = 'dispatch';
       await button.click(); // Exactly one dispatch, never retry after the marker.
       if (await state.evaluate((state) => state!.blocked()))
         throw unavailable();
+      phase = 'confirmation';
       await page.waitForFunction((state) => state?.confirmed(), state, {
         timeout: timeoutMs,
       });
       await check();
-      if (
-        page.url() !== dialogUrl ||
-        !(await state.evaluate((state) => state?.confirmed()))
-      )
+      if (page.url() !== dialogUrl) throw unavailable('url_changed');
+      if (!(await state.evaluate((state) => state?.confirmed())))
         throw unavailable();
       // Floating chats have no thread URL. Return the verified recipient's stable
       // profile URL; do not fabricate a /messages/t/ thread identifier.
       return target.canonicalUrl;
+    } catch (error) {
+      // Only retrieve memory captured by the failing check/dispatch/last poll.
+      const last = await state
+        .evaluate((state) => state?.diagnostic())
+        .catch(() => undefined);
+      if (last) observe(last);
+      throw error;
     } finally {
       await state.evaluate((state) => state?.cleanup()).catch(() => {});
       await state.dispose();
@@ -555,6 +774,7 @@ export async function sendFacebook(
   } catch (error) {
     // Explicit auth/checkpoint/rate-limit evidence pauses the account. A closed
     // page or failed recheck must still be uncertain after the durable marker.
+    const detail = diagnostic(error);
     let caught = error;
     try {
       await check();
@@ -568,15 +788,21 @@ export async function sendFacebook(
     if (
       caught instanceof SocialSendError &&
       ['session_invalid', 'rate_limit'].includes(caught.code)
-    )
+    ) {
+      caught.reasonUk += ` ${detail}`;
       throw caught;
+    }
     if (attempted)
       throw new SocialSendError(
         'delivery_uncertain',
-        `[facebook/${phase}] Доставку не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично.`,
+        `[facebook/${phase}] Доставку не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично. ${detail}`,
       );
-    if (caught instanceof SocialSendError && caught.code === 'unavailable')
+    if (caught instanceof SocialSendError && caught.code === 'unavailable') {
+      caught.reasonUk += ` ${detail}`;
       throw caught;
-    throw unavailable();
+    }
+    const failure = unavailable();
+    failure.reasonUk += ` ${detail}`;
+    throw failure;
   }
 }
