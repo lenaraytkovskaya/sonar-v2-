@@ -24,6 +24,163 @@ function fake(...responses: (object | Response | Error)[]) {
 }
 const adapter = (network: typeof fetch) =>
   createWhatsAppAdapter({ apiKey: 'private-test-key' }, network);
+describe('explicit webhook repair', () => {
+  const hook = {
+    url: 'http://web:3000/api/webhooks/waha',
+    events: ['message'],
+    customHeaders: [{ name: 'X-Api-Key', value: 'private-test-key' }],
+  };
+  it.each([
+    null,
+    {},
+    { webhooks: [{ ...hook, customHeaders: null }] },
+    {
+      webhooks: [
+        { ...hook, customHeaders: [{ name: 'x-api-key', value: 'wrong' }] },
+      ],
+    },
+    { webhooks: [{ ...hook, events: ['session.status'] }] },
+    { webhooks: [hook, hook] },
+  ])(
+    'repairs invalid config once, then diagnoses true and skips repeated PUT: %j',
+    async (initial) => {
+      let current = initial;
+      const network = vi.fn<typeof fetch>(async (_url, options) => {
+        if (options?.method === 'PUT')
+          current = JSON.parse(String(options.body)).config;
+        return Response.json({ ...working, config: current });
+      });
+      const client = adapter(network);
+      expect(await client.repairWebhook()).toMatchObject({ status: 'WORKING' });
+      await client.repairWebhook();
+      expect(await client.diagnoseWebhook()).toMatchObject({
+        expectedUrlConfigured: true,
+        messageEventConfigured: true,
+        apiKeyMatches: true,
+      });
+      expect(
+        network.mock.calls.filter(([, options]) => options?.method !== 'GET'),
+      ).toHaveLength(1);
+      expect(
+        network.mock.calls.find(
+          ([, options]) => options?.method === 'PUT',
+        )?.[0],
+      ).toBe('http://waha:3000/api/sessions/default');
+    },
+  );
+  it('preserves unrelated config, foreign hooks, managed events and non-key headers', async () => {
+    const other = {
+      url: 'https://foreign.invalid/hook',
+      events: ['*'],
+      customHeaders: [{ name: 'Authorization', value: 'other-secret' }],
+    };
+    const current = {
+      proxy: { server: 'private-proxy' },
+      noweb: { store: { enabled: true } },
+      metadata: { owner: 'private' },
+      debug: false,
+      webhooks: [
+        other,
+        {
+          ...hook,
+          retries: { attempts: 2 },
+          events: ['session.status'],
+          customHeaders: [
+            { name: 'X-Trace', value: 'keep' },
+            ...hook.customHeaders,
+            { name: 'x-api-key', value: 'wrong' },
+          ],
+        },
+      ],
+    };
+    const fixed = {
+      ...current,
+      webhooks: [
+        other,
+        {
+          ...current.webhooks[1],
+          events: ['session.status', 'message'],
+          customHeaders: [
+            { name: 'X-Trace', value: 'keep' },
+            ...hook.customHeaders,
+          ],
+        },
+      ],
+    };
+    const network = fake(
+      { ...working, config: current },
+      {},
+      { ...working, config: fixed },
+    );
+    const result = await adapter(network).repairWebhook();
+    expect(JSON.parse(String(network.mock.calls[1][1]?.body))).toEqual({
+      name: 'default',
+      config: fixed,
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /private|other-secret|customHeaders|webhooks/,
+    );
+  });
+  it.each(['message', '*'])(
+    'does not update correct %s config or perform writes in refresh',
+    async (event) => {
+      const network = fake(
+        { ...working, config: { webhooks: [{ ...hook, events: [event] }] } },
+        working,
+      );
+      const client = adapter(network);
+      await client.repairWebhook();
+      await client.getSession();
+      expect(
+        network.mock.calls.every(([, options]) => options?.method === 'GET'),
+      ).toBe(true);
+    },
+  );
+  it.each([
+    new Response('private-test-key config', { status: 500 }),
+    new Error('private-test-key network'),
+    {},
+  ])(
+    'rejects failed or unconfirmed PUT without leaking provider content: %j',
+    async (response) => {
+      const network = fake(working, response, working);
+      await expect(adapter(network).repairWebhook()).rejects.toMatchObject({
+        reasonUk: expect.not.stringMatching(/private-test-key|config|network/),
+      });
+    },
+  );
+  it.each([
+    { config: 'private' },
+    { config: { webhooks: 'private' } },
+    { status: ['WORKING'] },
+  ])('fails closed before PUT on malformed data: %j', async (data) => {
+    const network = fake({ ...working, ...data });
+    await expect(adapter(network).repairWebhook()).rejects.toMatchObject({
+      code: 'waha_response',
+    });
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+  it.each(['start', 'restart'] as const)(
+    'preserves config on %s without restarting twice after PUT',
+    async (operation) => {
+      const network = fake(
+        working,
+        working,
+        {},
+        { ...working, config: { webhooks: [hook] } },
+        working,
+      );
+      await adapter(network)[operation]();
+      expect(network.mock.calls.map(([, options]) => options?.method)).toEqual([
+        'GET',
+        'GET',
+        'PUT',
+        'GET',
+        'GET',
+      ]);
+    },
+  );
+});
 describe('read-only session webhook diagnostics', () => {
   const hook = {
     url: 'http://web:3000/api/webhooks/waha',

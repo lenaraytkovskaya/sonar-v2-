@@ -68,6 +68,8 @@ async function handle(request: Request, method: string) {
         progress = await whatsapp.refreshWhatsAppAccount(data.id, user.id);
       else if (method === 'POST' && data.action === 'restart')
         progress = await whatsapp.restartWhatsAppAccount(data.id, user.id);
+      else if (method === 'POST' && data.action === 'repair-webhook')
+        progress = await whatsapp.repairWhatsAppWebhook(data.id, user.id);
       else if (method === 'PATCH') {
         if (
           (data.enabled === undefined && data.dailyLimit === undefined) ||

@@ -11,7 +11,7 @@ import { logActivity } from './tasks.js';
 
 type Adapter = Pick<
   typeof whatsappAdapter,
-  'start' | 'getSession' | 'getQr' | 'restart' | 'logout'
+  'start' | 'getSession' | 'getQr' | 'restart' | 'logout' | 'repairWebhook'
 >;
 type Status = 'active' | 'qr' | 'starting' | 'failed' | 'stopped';
 export interface WhatsAppAccount {
@@ -106,7 +106,7 @@ type AccountRow = Awaited<ReturnType<typeof lock>>;
 async function external(
   c: PoolClient,
   account: AccountRow,
-  operation: 'start' | 'refresh' | 'restart' | 'logout',
+  operation: 'start' | 'refresh' | 'restart' | 'logout' | 'repair-webhook',
   userId: string,
   adapter: Adapter,
 ): Promise<WhatsAppAccountState> {
@@ -123,7 +123,9 @@ async function external(
         ? adapter.getSession()
         : operation === 'start'
           ? adapter.start()
-          : adapter.restart());
+          : operation === 'repair-webhook'
+            ? adapter.repairWebhook()
+            : adapter.restart());
       // WAHA fails a session whose QR codes expired unscanned; while the page is open, start over.
       if (
         operation === 'refresh' &&
@@ -237,7 +239,7 @@ export async function connectWhatsAppAccount(
 async function lifecycle(
   id: string,
   userId: string,
-  operation: 'refresh' | 'restart' | 'logout',
+  operation: 'refresh' | 'restart' | 'logout' | 'repair-webhook',
   adapter: Adapter,
 ) {
   return transaction(async (c) =>
@@ -254,6 +256,11 @@ export const restartWhatsAppAccount = (
   userId: string,
   adapter: Adapter = whatsappAdapter,
 ) => lifecycle(id, userId, 'restart', adapter);
+export const repairWhatsAppWebhook = (
+  id: string,
+  userId: string,
+  adapter: Adapter = whatsappAdapter,
+) => lifecycle(id, userId, 'repair-webhook', adapter);
 export async function logoutWhatsAppAccount(
   id: string,
   userId: string,

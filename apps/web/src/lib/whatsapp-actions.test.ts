@@ -1,15 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, list, connect, refresh, restart, update, logout, diagnose } =
-  vi.hoisted(() => ({
-    session: vi.fn(),
-    list: vi.fn(),
-    connect: vi.fn(),
-    refresh: vi.fn(),
-    restart: vi.fn(),
-    update: vi.fn(),
-    logout: vi.fn(),
-    diagnose: vi.fn(),
-  }));
+const {
+  session,
+  list,
+  connect,
+  refresh,
+  restart,
+  repair,
+  update,
+  logout,
+  diagnose,
+} = vi.hoisted(() => ({
+  session: vi.fn(),
+  list: vi.fn(),
+  connect: vi.fn(),
+  refresh: vi.fn(),
+  restart: vi.fn(),
+  repair: vi.fn(),
+  update: vi.fn(),
+  logout: vi.fn(),
+  diagnose: vi.fn(),
+}));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
@@ -23,6 +33,7 @@ vi.mock('@sonar/db/whatsapp', () => ({
   connectWhatsAppAccount: connect,
   refreshWhatsAppAccount: refresh,
   restartWhatsAppAccount: restart,
+  repairWhatsAppWebhook: repair,
   updateWhatsAppAccount: update,
   logoutWhatsAppAccount: logout,
   diagnoseWhatsAppWebhook: diagnose,
@@ -72,6 +83,7 @@ beforeEach(() => {
     qr: 'data:image/png;base64,YWJj',
   });
   restart.mockResolvedValue({ id, status: 'starting' });
+  repair.mockResolvedValue({ id, status: 'starting', apiKey: 'private' });
   update.mockResolvedValue(true);
   logout.mockResolvedValue(true);
 });
@@ -79,10 +91,38 @@ describe('WhatsApp account API', () => {
   it('requires authentication for reads and all mutations', async () => {
     session.mockResolvedValue({});
     expect((await GET(read())).status).toBe(401);
+    expect((await POST(request({ action: 'repair-webhook', id }))).status).toBe(
+      401,
+    );
+    expect(repair).not.toHaveBeenCalled();
     for (const route of [POST, PATCH, DELETE])
       expect((await route(request({ id }))).status).toBe(401);
     expect(list).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+  it('protects repair by origin and id, binds it to actor and redacts its result/errors', async () => {
+    expect(
+      (
+        await POST(
+          request({ action: 'repair-webhook', id }, 'https://other.example'),
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (await POST(request({ action: 'repair-webhook', id: 'bad' }))).status,
+    ).toBe(400);
+    expect(repair).not.toHaveBeenCalled();
+    const response = await POST(request({ action: 'repair-webhook', id }));
+    expect(repair).toHaveBeenCalledWith(id, 'actor');
+    expect((await response.json()).progress).toEqual({
+      id,
+      status: 'starting',
+      reasonUk: null,
+    });
+    repair.mockRejectedValueOnce(Error('private-test-key config'));
+    const failed = await POST(request({ action: 'repair-webhook', id }));
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: uk.email.error });
   });
   it('rejects cross-origin mutations before external calls', async () => {
     for (const route of [POST, PATCH, DELETE])

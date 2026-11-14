@@ -224,9 +224,13 @@ export function createWhatsAppAdapter(
         return null;
       throw error;
     }
+    return sessionOf(data);
+  }
+  function sessionOf(data: Record<string, unknown>): WhatsAppSession {
     if (
+      typeof data.status !== 'string' ||
       !['WORKING', 'SCAN_QR_CODE', 'STARTING', 'STOPPED', 'FAILED'].includes(
-        String(data.status),
+        data.status,
       )
     )
       throw new WhatsAppSendError(
@@ -257,11 +261,99 @@ export function createWhatsAppAdapter(
       ],
     };
   }
+  const object = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  function sessionConfig(data: Record<string, unknown>) {
+    if (data.config != null && !object(data.config))
+      throw new WhatsAppSendError(
+        'waha_response',
+        'Некоректна конфігурація WhatsApp.',
+      );
+    const current = (data.config ?? {}) as Record<string, unknown>;
+    if (current.webhooks != null && !Array.isArray(current.webhooks))
+      throw new WhatsAppSendError(
+        'waha_response',
+        'Некоректна конфігурація WhatsApp.',
+      );
+    return current;
+  }
+  const isKey = (header: unknown) =>
+    object(header) &&
+    typeof header.name === 'string' &&
+    header.name.toLowerCase() === 'x-api-key';
+  const managedHooks = (current: Record<string, unknown>) =>
+    ((current.webhooks ?? []) as unknown[]).filter(
+      (hook): hook is Record<string, unknown> =>
+        object(hook) && hook.url === webhookUrl,
+    );
+  function webhookCorrect(current: Record<string, unknown>) {
+    const hooks = managedHooks(current),
+      hook = hooks[0];
+    if (
+      hooks.length !== 1 ||
+      !hook ||
+      !Array.isArray(hook.events) ||
+      !(hook.events.includes('message') || hook.events.includes('*')) ||
+      !Array.isArray(hook.customHeaders)
+    )
+      return false;
+    const keys = hook.customHeaders.filter(isKey);
+    return (
+      keys.length > 0 &&
+      keys.every(
+        (header) =>
+          header.value === (config.apiKey ?? process.env.WAHA_API_KEY),
+      )
+    );
+  }
   async function configureWebhook() {
+    const data = await request('/api/sessions/default');
+    const session = sessionOf(data),
+      current = sessionConfig(data);
+    if (webhookCorrect(current)) return { session, changed: false };
+    const hooks = managedHooks(current),
+      first = hooks[0] ?? {};
+    const events = [
+      ...new Set(
+        hooks.flatMap((hook) =>
+          Array.isArray(hook.events) ? hook.events : [],
+        ),
+      ),
+    ];
+    if (!events.includes('message') && !events.includes('*'))
+      events.push('message');
+    const hook = {
+      ...first,
+      url: webhookUrl,
+      events,
+      customHeaders: [
+        ...(Array.isArray(first.customHeaders)
+          ? first.customHeaders.filter((header) => !isKey(header))
+          : []),
+        ...webhookConfig().webhooks[0]!.customHeaders,
+      ],
+    };
+    // PUT replaces the full config and restarts a running session (WAHA Sessions docs).
+    // Never use it in polling; preserve unrelated config and other webhook destinations.
     await request('/api/sessions/default', 'PUT', {
       name: 'default',
-      config: webhookConfig(),
+      config: {
+        ...current,
+        webhooks: [
+          ...((current.webhooks ?? []) as unknown[]).filter(
+            (item) => !object(item) || item.url !== webhookUrl,
+          ),
+          hook,
+        ],
+      },
     });
+    const updated = await request('/api/sessions/default');
+    if (!webhookCorrect(sessionConfig(updated)))
+      throw new WhatsAppSendError(
+        'waha_webhook',
+        'Не вдалося підтвердити налаштування отримання повідомлень WhatsApp. Повторіть відновлення.',
+      );
+    return { session: sessionOf(updated), changed: true };
   }
   async function createSession() {
     await request('/api/sessions', 'POST', {
@@ -273,6 +365,9 @@ export function createWhatsAppAdapter(
   }
   return {
     getSession,
+    async repairWebhook() {
+      return (await configureWebhook()).session;
+    },
     async diagnoseWebhook(): Promise<WhatsAppWebhookDiagnostic> {
       const result: WhatsAppWebhookDiagnostic = {
         // Global env webhooks are not included in GET session config (WAHA docs).
@@ -369,17 +464,19 @@ export function createWhatsAppAdapter(
     async start() {
       const session = await getSession();
       if (!session) return createSession();
-      await configureWebhook();
+      const { changed } = await configureWebhook();
       if (session.status === 'STOPPED')
         await request('/api/sessions/default/start', 'POST');
-      else if (session.status === 'FAILED')
+      else if (session.status === 'FAILED' && !changed)
         await request('/api/sessions/default/restart', 'POST');
       return getSession();
     },
     async restart() {
-      if (!(await getSession())) return createSession();
-      await configureWebhook();
-      await request('/api/sessions/default/restart', 'POST');
+      const session = await getSession();
+      if (!session) return createSession();
+      const { changed } = await configureWebhook();
+      if (!changed || session.status === 'STOPPED')
+        await request('/api/sessions/default/restart', 'POST');
       return getSession();
     },
     async logout() {
