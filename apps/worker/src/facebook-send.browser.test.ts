@@ -3,7 +3,8 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createSocialSendBrowser } from './social-send-browser.js';
 
 // Synthetic generic wrappers. Only labels, relationships and Lexical attributes
-// come from root's English UI observations; no live account data or invented IDs.
+// come from root's English UI observations; exact HTML branch relationships are
+// a structural assumption pending live DOM, not a captured Facebook fixture.
 const markup = `
 <style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
 <nav aria-label="Account"><a href="/100000000000009/">Synthetic self</a></nav>
@@ -11,7 +12,7 @@ const markup = `
 <div id="chats"></div>
 <script>
 const o = window.fixtureOptions;
-const body = o.bodyPending ? 'Pending review' : 'Synthetic message';
+const body = o.bodySending ? 'Sending' : o.bodyPending ? 'Pending review' : 'Synthetic message';
 const recipient = o.company ? 'synthetic_company' : '100000000000001';
 const label = 'Synthetic Recipient';
 function row(own = true, text = body, time = '4 November 2026, 20:15') {
@@ -23,7 +24,7 @@ function row(own = true, text = body, time = '4 November 2026, 20:15') {
   return wrapper;
 }
 function chat(id, target, name) {
-  const scope = document.createElement('section'); scope.id = id;
+  const scope = document.createElement('div'); scope.id = id;
   // Header-like generic container, deliberately not a header element.
   scope.innerHTML = '<div><a href="https://www.facebook.com/' + target + '/">' + name + '</a>' +
     '<div role="button" aria-label="Chat settings" aria-haspopup="menu"></div>' +
@@ -55,6 +56,11 @@ function wire(scope) {
     const next = row(!o.incoming, body, o.sameTimestamp ? '4 November 2026, 20:15' : '4 November 2026, 20:16');
     if (o.missingSelf) next.querySelector('h2').textContent = 'Synthetic Recipient';
     if (o.pending || o.failed) next.insertAdjacentHTML('beforeend', '<span>' + (o.pending ? 'Sending' : 'Not sent. Retry') + '</span>');
+    if (o.nestedPending || o.nestedFailed) next.firstElementChild.insertAdjacentHTML('beforeend', '<div><span>' + (o.nestedPending ? 'Sending' : 'Not sent. Retry') + '</span></div>');
+    if (o.statusLabel) next.firstElementChild.insertAdjacentHTML('beforeend', '<span aria-label="Not sent. Retry"></span>');
+    if (o.hiddenStatus) next.firstElementChild.insertAdjacentHTML('beforeend', '<span hidden>Sending</span>');
+    if (o.bodyStatusLabel) next.querySelector('span').insertAdjacentHTML('beforeend', '<i aria-label="Sending"></i>');
+    if (o.bodyWrapper) next.querySelector('span').innerHTML = '<span>' + body + '</span>';
     if (o.pendingSettles) { next.insertAdjacentHTML('beforeend', '<span class="status">Sending</span>'); setTimeout(() => next.querySelector('.status').remove(), 40); }
     destination.append(next); editor.textContent = '';
     if (o.recipientAfterSend) scope.querySelector('a').href = '/100000000000002/';
@@ -70,6 +76,14 @@ document.querySelector('#open').onclick = () => {
     document.querySelector('#chats').append(scope); wire(scope);
     if (o.noSettingsLabel) scope.querySelector('[aria-label="Chat settings"]').removeAttribute('aria-label');
     if (o.headerProfilePhp) scope.querySelector('a').href = '/profile.php?id=' + recipient;
+    if (o.outsideProfileLink) {
+      const layout = document.createElement('div'); document.querySelector('#chats').replaceWith(layout);
+      layout.innerHTML = '<a href="/100000000000001/">' + label + '</a>';
+      const chats = document.createElement('div'); chats.id = 'chats'; layout.append(chats); chats.append(scope);
+      scope.querySelector('a').replaceWith(document.createTextNode(label));
+    }
+    if (o.outsideHeaderLink) scope.append(scope.querySelector('a'));
+    if (o.headerLinkInMessages) region(scope).append(scope.querySelector('a'));
     if (o.globalLinkOnly) { scope.querySelector('a').remove(); document.querySelector('nav').insertAdjacentHTML('beforeend', '<a href="/' + recipient + '/">' + label + '</a>'); }
     if (o.draft) scope.querySelector('[contenteditable]').textContent = 'Existing draft';
   };
@@ -111,14 +125,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await context.addInitScript({
         content: `window.fixtureOptions = ${JSON.stringify(options)}`,
       });
+      let marked = false;
       await context.route('**/*', (route) => {
         requests.push(route.request().url());
         if (route.request().url() !== target)
           return route.abort('blockedbyclient');
+        if (options.networkAbort || (marked && options.markerNetwork))
+          return route.abort('connectionrefused');
+        const status =
+          options.rateLimit || (marked && options.markerRateLimit)
+            ? 429
+            : options.serviceUnavailable || (marked && options.marker503)
+              ? 503
+              : options.proxyFailure
+                ? 407
+                : 200;
         return route.fulfill({
           contentType: 'text/html',
-          status: options.rateLimit ? 429 : 200,
-          body: markup,
+          status,
+          body:
+            status >= 400 || options.noAuth
+              ? '<h1>Service unavailable</h1>'
+              : options.login
+                ? '<input type="password">'
+                : markup,
         });
       });
       const adapter = createSocialSendBrowser(
@@ -126,6 +156,65 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       );
       const mark = vi.fn(async () => {
         events.push('mark');
+        marked = true;
+        if (
+          options.markerNetwork ||
+          options.marker503 ||
+          options.markerRateLimit
+        )
+          await page.goto(target).catch(() => {});
+        if (
+          options.clickStable ||
+          Object.keys(options).some((key) => key.startsWith('click')) ||
+          options.documentCaptureRecipient
+        )
+          await page.evaluate((options) => {
+            const scope = document.querySelector('#target')!;
+            const button = scope.querySelector(
+              '[aria-label="Press Enter to send"]',
+            )!;
+            const mutate = () => {
+              const editor = scope.querySelector('[contenteditable]')!;
+              if (options.clickRecipient || options.documentCaptureRecipient) {
+                scope
+                  .querySelector('a')!
+                  .setAttribute('href', '/100000000000002/');
+                scope.querySelector('a')!.textContent = 'Other Recipient';
+                editor.setAttribute('aria-label', 'Write to Other Recipient');
+                scope
+                  .querySelector('[aria-label^="Messages in conversation"]')!
+                  .setAttribute(
+                    'aria-label',
+                    'Messages in conversation with Other Recipient',
+                  );
+              }
+              if (options.clickComposer)
+                editor.replaceWith(editor.cloneNode(true));
+              if (options.clickBody) editor.textContent = 'Changed draft';
+              if (options.clickButton)
+                button.replaceWith(button.cloneNode(true));
+              if (options.clickDuplicateButton)
+                button.after(button.cloneNode(true));
+              if (options.clickDisabled)
+                button.setAttribute('aria-disabled', 'true');
+              if (options.clickReparent) scope.append(button);
+            };
+            if (options.documentCaptureRecipient)
+              document.addEventListener('click', mutate, {
+                capture: true,
+                once: true,
+              });
+            else {
+              button.animate(
+                [
+                  { transform: 'translateX(0px)' },
+                  { transform: 'translateX(20px)' },
+                ],
+                { duration: 200, fill: 'forwards' },
+              );
+              setTimeout(mutate, 60);
+            }
+          }, options);
         if (options.markerOutgoing)
           await page.evaluate(() => {
             const region = document.querySelector(
@@ -174,7 +263,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
             400,
             target,
-            options.bodyPending ? 'Pending review' : 'Synthetic message',
+            options.bodySending
+              ? 'Sending'
+              : options.bodyPending
+                ? 'Pending review'
+                : 'Synthetic message',
             mark,
           ),
         close: () => context.close(),
@@ -191,6 +284,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { sameTimestamp: true },
       { bodyPending: true },
       { pendingSettles: true },
+      { bodySending: true },
+      { bodySending: true, bodyWrapper: true },
+      { hiddenStatus: true },
+      { clickStable: true },
     ])(
       'sends once to a bound direct profile/Page and confirms a distinct outgoing (%j)',
       async (options) => {
@@ -214,6 +311,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { wrongRecipient: true },
       { wrongRecipient: true, neighbour: true },
       { globalLinkOnly: true },
+      { outsideProfileLink: true, wrongRecipient: true },
+      { outsideHeaderLink: true },
+      { headerLinkInMessages: true },
       { draft: true },
       { unavailable: true },
       { noAction: true },
@@ -241,6 +341,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { eraseOnly: true },
       { pending: true },
       { failed: true },
+      { nestedPending: true },
+      { nestedFailed: true },
+      { statusLabel: true },
+      { bodyStatusLabel: true },
+      { bodySending: true, nestedPending: true },
     ])(
       'does not confirm old/incoming/neighbour/rerendered/pending text or editor disappearance (%j)',
       async (options) => {
@@ -265,6 +370,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { markerBody: true },
       { markerFailure: true },
       { markerClose: true },
+      { clickRecipient: true },
+      { clickComposer: true },
+      { clickBody: true },
+      { clickButton: true },
+      { clickDuplicateButton: true },
+      { clickDisabled: true },
+      { clickReparent: true },
+      { documentCaptureRecipient: true },
+      { markerNetwork: true },
+      { marker503: true },
     ])(
       'does not dispatch or rebind after a durable marker failure/change (%j)',
       async (options) => {
@@ -281,7 +396,27 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { networkAbort: true },
+      { serviceUnavailable: true },
+      { proxyFailure: true },
+      { noAuth: true },
+    ])(
+      'does not invalidate cookies for transport/missing chrome (%j)',
+      async (options) => {
+        const f = await fixture(options);
+        try {
+          await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.events).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
       { checkpoint: true },
+      { login: true },
+      { markerRateLimit: true },
       { markerCheckpoint: true },
       { afterSendCheckpoint: true },
       { rateLimit: true },
@@ -291,12 +426,19 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         const f = await fixture(options);
         try {
           await expect(f.send()).rejects.toMatchObject(
-            options.rateLimit
+            options.rateLimit || options.markerRateLimit
               ? { code: 'rate_limit' }
-              : { code: 'session_invalid', reason: 'checkpoint' },
+              : {
+                  code: 'session_invalid',
+                  reason: options.login ? 'login_required' : 'checkpoint',
+                },
           );
           expect(f.mark).toHaveBeenCalledTimes(
-            options.markerCheckpoint || options.afterSendCheckpoint ? 1 : 0,
+            options.markerCheckpoint ||
+              options.afterSendCheckpoint ||
+              options.markerRateLimit
+              ? 1
+              : 0,
           );
           expect(
             f.events.filter((event) => event.startsWith('send:')).length,

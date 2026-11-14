@@ -4,6 +4,7 @@ import { socialTarget } from '@sonar/core';
 import {
   SocialSendError,
   SocialSessionCheckError,
+  socialSessionCheckReason,
 } from '@sonar/core/social-session';
 
 // English labels and Lexical attributes observed by root in Facebook's floating
@@ -22,6 +23,21 @@ async function conversation(page: Page, recipient: string, body: string) {
       const regionSelector = '[aria-label^="Messages in conversation with "]';
       const composerSelector =
         '[contenteditable="true"][role="textbox"][data-lexical-editor="true"][aria-label^="Write to "]';
+      const composerContainer = '[aria-label="Thread composer"]';
+      const branch = (scope: Element, node: Element) => {
+        while (node.parentElement && node.parentElement !== scope)
+          node = node.parentElement;
+        return node.parentElement === scope ? node : null;
+      };
+      const headerControls = (header: Element) => {
+        const labels = all(header, 'button, [role="button"]').map((node) =>
+          normalize(node.getAttribute('aria-label') || node.textContent),
+        );
+        return (
+          labels.includes('Chat settings') ||
+          (labels.includes('Minimise chat') && labels.includes('Close chat'))
+        );
+      };
       const forbidden =
         'nav, [role="navigation"], aside, [role="complementary"]';
       const identity = (anchor: Element) => {
@@ -70,15 +86,25 @@ async function conversation(page: Page, recipient: string, body: string) {
                 `Messages in conversation with ${name}`
             )
               break;
-            const links = all(scope, 'a[href]').filter(
-              (link) => !region.contains(link) && !editor.contains(link),
+            // Structural assumption pending live DOM: the nearest shared chat
+            // container has separate header, message and Thread composer branches.
+            // Stop here; a profile-page ancestor cannot establish chat identity.
+            const composer = editor.closest(composerContainer);
+            if (!composer || !scope.contains(composer)) break;
+            const headers = Array.from(scope.children).filter(
+              (child) =>
+                child !== branch(scope, region) &&
+                child !== branch(scope, composer) &&
+                headerControls(child),
             );
+            if (headers.length !== 1) break;
+            const header = headers[0]!;
+            const links = all(header, 'a[href]');
             const recipientLinks = links.filter(
               (link) =>
                 identity(link) === recipient &&
                 normalize(link.textContent) === name,
             );
-            if (!recipientLinks.length) continue;
             if (
               recipientLinks.length !== 1 ||
               links.some(
@@ -89,6 +115,8 @@ async function conversation(page: Page, recipient: string, body: string) {
             candidates.push({
               scope,
               region,
+              composer,
+              header,
               editor,
               link: recipientLinks[0]!,
               name,
@@ -97,13 +125,33 @@ async function conversation(page: Page, recipient: string, body: string) {
           }
         }
         if (candidates.length !== 1) return null;
-        const { scope, region, editor, link, name } = candidates[0]!;
+        const { scope, region, composer, header, editor, link, name } =
+          candidates[0]!;
         const sendButtons = () =>
           all(
-            scope,
+            composer,
             '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]',
           );
+        const parents = [scope, region, composer, header, editor, link].map(
+          (node) => node.parentElement,
+        );
         const valid = (filled: boolean) =>
+          [scope, region, composer, header, editor, link].every(
+            (node, index) => node.parentElement === parents[index],
+          ) &&
+          header.parentElement === scope &&
+          headerControls(header) &&
+          header.contains(link) &&
+          all(header, 'a[href]').filter(
+            (anchor) => identity(anchor) === recipient,
+          ).length === 1 &&
+          !all(header, 'a[href]').some(
+            (anchor) => identity(anchor) && identity(anchor) !== recipient,
+          ) &&
+          !header.contains(region) &&
+          !header.contains(composer) &&
+          composer.contains(editor) &&
+          editor.closest(composerContainer) === composer &&
           scope.isConnected &&
           region.isConnected &&
           editor.isConnected &&
@@ -181,20 +229,41 @@ async function conversation(page: Page, recipient: string, body: string) {
             )
           )
             return null;
+          // Exclude only the actual body subtree, never its labelled row.
+          // Inspect direct visible text and labels to catch nested status siblings
+          // without interpreting a message such as "Sending" as delivery status.
+          const bodies = all(row, '*').filter(
+            (node) =>
+              normalize(node.textContent) === normalize(body) &&
+              normalize(node.parentElement?.textContent ?? '') !==
+                normalize(body) &&
+              !node.closest('h2, [role="heading"]'),
+          );
+          if (bodies.length !== 1) return null;
+          const messageBody = bodies[0]!;
           if (
             all(wrapper, '[aria-busy="true"], [role="progressbar"]').length ||
-            all(wrapper, '*')
-              .filter(
-                (node) =>
-                  !row.contains(node) &&
-                  node !== buttons[0] &&
-                  !buttons[0]!.contains(node),
-              )
-              .some((node) =>
-                /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b/i.test(
-                  [node.textContent, node.getAttribute('aria-label')].join(' '),
-                ),
-              )
+            [wrapper, ...all(wrapper, '*')].some((node) => {
+              const inBody = messageBody.contains(node);
+              if (buttons[0]!.contains(node)) return false;
+              const text = Array.from(node.childNodes)
+                .filter((child) => child.nodeType === Node.TEXT_NODE)
+                .map((child) => child.textContent)
+                .join(' ');
+              const label =
+                node === row ||
+                (node === messageBody &&
+                  normalize(node.getAttribute('aria-label')) ===
+                    normalize(body))
+                  ? ''
+                  : node.getAttribute('aria-label');
+              return /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b/i.test(
+                [
+                  inBody && node.getAttribute('role') !== 'status' ? '' : text,
+                  label,
+                ].join(' '),
+              );
+            })
           )
             return null;
           return JSON.stringify([
@@ -204,7 +273,55 @@ async function conversation(page: Page, recipient: string, body: string) {
         };
         let baseline: Element[] = [];
         let signatures: (string | null)[] = [];
+        let blocked = false;
+        let cleanup = () => {};
+        const guardDispatch = (button: Element) => {
+          const parent = button.parentElement;
+          const guard = (event: Event) => {
+            const onButton = event.composedPath().includes(button);
+            if (event.currentTarget === window && !onButton) return;
+            blocked ||=
+              !onButton ||
+              !valid(true) ||
+              sendButtons()[0] !== button ||
+              button.parentElement !== parent ||
+              !visible(button) ||
+              button.matches(':disabled') ||
+              Boolean(button.closest('[aria-disabled="true"], [inert]')) ||
+              (event instanceof MouseEvent &&
+                !button.contains(
+                  document.elementFromPoint(event.clientX, event.clientY),
+                ));
+            if (blocked) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          };
+          const events = [
+            'pointerdown',
+            'mousedown',
+            'pointerup',
+            'mouseup',
+            'click',
+          ];
+          // As in IG, capture at the chat boundary runs after document capture.
+          // This guards UI consistency, not arbitrary changes in final handlers.
+          for (const boundary of [window, scope, button])
+            for (const event of events)
+              boundary.addEventListener(event, guard, {
+                capture: true,
+                passive: false,
+              });
+          cleanup = () => {
+            for (const boundary of [window, scope, button])
+              for (const event of events)
+                boundary.removeEventListener(event, guard, true);
+          };
+        };
         return {
+          guardDispatch,
+          blocked: () => blocked,
+          cleanup: () => cleanup(),
           editor,
           scope,
           region,
@@ -267,7 +384,18 @@ export async function sendFacebook(
   });
   const check = async () => {
     if (restricted) throw new SocialSessionCheckError('rate_limit');
-    await assertSession();
+    try {
+      await assertSession();
+    } catch (error) {
+      // Missing auth chrome is not evidence that cookies expired (e.g. an error
+      // document or failed navigation). Only observed login/challenge UI pauses.
+      if (
+        error instanceof SocialSessionCheckError &&
+        error.reason === 'unknown_auth'
+      )
+        throw unavailable();
+      throw error;
+    }
   };
   const unavailable = () =>
     new SocialSendError(
@@ -275,12 +403,22 @@ export async function sendFacebook(
       `[facebook/${phase}] Не підтверджено одержувача активного діалогу, поле або кнопку повідомлення Facebook.`,
     );
   try {
-    const response = await page.goto(target.canonicalUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-    });
+    const response = await page
+      .goto(target.canonicalUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+      })
+      .catch((error: unknown) => {
+        throw new SocialSessionCheckError(
+          socialSessionCheckReason(error, 'network') === 'timeout'
+            ? 'timeout'
+            : 'network',
+        );
+      });
     if (response?.status() === 429)
       throw new SocialSessionCheckError('rate_limit');
+    if (response && (response.status() === 407 || response.status() >= 500))
+      throw new SocialSessionCheckError('network');
     await check();
     if (response && response.status() >= 400) throw unavailable();
     phase = 'profile';
@@ -338,9 +476,19 @@ export async function sendFacebook(
         ))
       )
         throw unavailable();
-      await state.evaluate((state) => state!.arm());
+      if (
+        !(await state.evaluate((state, button) => {
+          if (!state?.valid(true) || state.button() !== button) return false;
+          state.arm();
+          state.guardDispatch(button);
+          return true;
+        }, button))
+      )
+        throw unavailable();
       phase = 'confirmation';
       await button.click(); // Exactly one dispatch, never retry after the marker.
+      if (await state.evaluate((state) => state!.blocked()))
+        throw unavailable();
       await page.waitForFunction((state) => state?.confirmed(), state, {
         timeout: timeoutMs,
       });
@@ -354,6 +502,7 @@ export async function sendFacebook(
       // profile URL; do not fabricate a /messages/t/ thread identifier.
       return target.canonicalUrl;
     } finally {
+      await state.evaluate((state) => state?.cleanup()).catch(() => {});
       await state.dispose();
     }
   } catch (error) {
@@ -379,6 +528,8 @@ export async function sendFacebook(
         'delivery_uncertain',
         `[facebook/${phase}] Доставку не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично.`,
       );
+    if (caught instanceof SocialSendError && caught.code === 'unavailable')
+      throw caught;
     throw unavailable();
   }
 }
