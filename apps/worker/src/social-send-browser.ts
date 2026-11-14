@@ -121,8 +121,10 @@ async function messageButtonFailure(
 }
 const composerLabel =
   /^(?:message|повідомлення|сообщение|написати повідомлення|напишіть повідомлення|написать сообщение)(?:…|\.{3})?$/i;
-const conversationHeaders =
-  ':is(header, [role="banner"]):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"]) *)';
+const conversationHeaderElements =
+  'header, [role="banner"], div[data-pagelet="IGDInboxHeaderOffMsys"]';
+// Count nested semantic headers/pagelets once, retaining all their recipient links.
+const conversationHeaders = `:is(${conversationHeaderElements}):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"], ${conversationHeaderElements}) *)`;
 async function instagramDialog(page: Page, handle: string) {
   await page.waitForURL(
     /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
@@ -562,7 +564,7 @@ async function sendInstagram(
       .filter({ visible: true })
       .and(
         page.locator(
-          ':not(:is(aside, nav, header, [role="banner"], [role="complementary"], [role="navigation"]) *)',
+          `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
         ),
       );
     const composerNode = await composer.elementHandle();
