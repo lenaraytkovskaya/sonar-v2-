@@ -18,6 +18,8 @@ function pagination(value: unknown) {
     : null;
 }
 export type InstagramInboxPage = {
+  mailboxId: string | null;
+  actors: { viewerId: unknown; mailboxId: unknown }[];
   messages: SocialInboxMessage[];
   inbox: ReturnType<typeof pagination>;
   threads: { id: string; url: string; page: ReturnType<typeof pagination> }[];
@@ -34,6 +36,8 @@ export function parseInstagramInbox(
   if (!Object.keys(mailbox).length) return null;
   const connection = object(mailbox.threads_by_folder);
   const result: InstagramInboxPage = {
+    mailboxId: digits(mailbox.id) ? mailbox.id : null,
+    actors: [],
     messages: [],
     inbox: pagination(connection.page_info),
     threads: [],
@@ -50,11 +54,19 @@ export function parseInstagramInbox(
   }
   for (const edge of connection.edges) {
     const thread = object(object(object(edge).node).as_ig_direct_thread);
+    const viewer = object(thread.viewer);
+    result.actors.push({
+      viewerId: viewer.id,
+      mailboxId: viewer.interop_messaging_user_fbid,
+    });
+    if (thread.folder !== 'PRIMARY') {
+      result.skipped.push('unsupported_folder');
+      continue;
+    }
     if (thread.is_group === true) {
       result.skipped.push('group_unsupported');
       continue;
     }
-    const viewer = object(thread.viewer);
     const users = Array.isArray(thread.users) ? thread.users.map(object) : [];
     const peers = users.filter((user) => user.id !== viewer.id);
     const peer = peers[0] ?? {};
@@ -148,4 +160,30 @@ export function parseInstagramInbox(
     }
   }
   return result;
+}
+
+/** Only the observed empty Requests + spam response proves coverage here. */
+export function parseInstagramRequests(
+  value: unknown,
+  expectedMailbox: string,
+) {
+  const data = object(object(value).data);
+  const boxes = [
+    object(data.get_slide_mailbox_for_iris_subscription),
+    object(data.spamMailbox),
+  ];
+  return (
+    !Array.isArray(object(value).errors) &&
+    boxes.every((box) => {
+      const connection = object(box.threads_by_folder);
+      const page = pagination(connection.page_info);
+      return (
+        box.id === expectedMailbox &&
+        Array.isArray(connection.edges) &&
+        connection.edges.length === 0 &&
+        page?.more === false &&
+        page.cursor === null
+      );
+    })
+  );
 }

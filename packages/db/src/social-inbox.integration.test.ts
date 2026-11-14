@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import {
   encryptSocialCookies,
@@ -123,6 +124,127 @@ beforeAll(async () => {
     [company, peer],
   );
 });
+it.skipIf(!enabled)(
+  'persists observed Instagram sender IDs without invented profiles, deduplicates and keeps partial watermark',
+  async () => {
+    const id = randomUUID();
+    const watermark = '2026-11-13T10:00:00.000Z';
+    const { parseInstagramInbox } =
+      await import('../../../apps/worker/src/instagram-inbox-parser.js');
+    const parsed = parseInstagramInbox(
+      JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../apps/worker/src/instagram-inbox.fixture.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ),
+      now.toISOString(),
+    )!;
+    const cookies = encryptSocialCookies(
+      JSON.stringify([
+        {
+          name: 'sessionid',
+          value: 'stub',
+          domain: '.instagram.com',
+          session: true,
+        },
+        {
+          name: 'ds_user_id',
+          value: '900000000000004',
+          domain: '.instagram.com',
+          session: true,
+        },
+      ]),
+      'instagram',
+      process.env.AUTH_SECRET!,
+    );
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,status,daily_limit,settings) values($1,'instagram','Observed inbox test','','active',20,$2)",
+      [
+        id,
+        {
+          sessionStatus: 'valid',
+          cookiesEncrypted: cookies,
+          proxyIndex: 0,
+          proxyFingerprint: socialProxyFingerprint({
+            server: 'http://proxy.invalid:8000',
+          }),
+          inboxSync: { watermark },
+        },
+      ],
+    );
+    try {
+      const adapter: import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter =
+        {
+          async sync(_account, _checkpoint, persist) {
+            await persist({ messages: parsed.messages, resumeAnchor: null });
+            await persist({ messages: parsed.messages, resumeAnchor: null });
+            return {
+              complete: false,
+              reason: 'unsupported_dom',
+              skipped: ['general_folder_unsupported'],
+            };
+          },
+        };
+      expect(
+        await worker.runSocialInboxSync({ accountId: id }, adapter, now),
+      ).toMatchObject({
+        status: 'done',
+        result: {
+          created: 5,
+          complete: false,
+          skipped: ['general_folder_unsupported'],
+        },
+      });
+      const rows = (
+        await db.sonarPool.query('select * from messages where account_id=$1', [
+          id,
+        ])
+      ).rows;
+      expect(rows).toHaveLength(5);
+      const outgoing = rows.filter((row) => row.direction === 'out');
+      expect(outgoing).toHaveLength(4);
+      outgoing.forEach((row) => {
+        expect(row.social_meta.senderPlatformId).toBe('900000000000003');
+        expect(row.social_meta.senderProfile).toBeUndefined();
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as n from tasks where type='ai.inbound' and payload->>'messageId'=any($1::text[])",
+            [rows.map((row) => row.id)],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(
+        (
+          await db.sonarPool.query(
+            'select settings from channel_accounts where id=$1',
+            [id],
+          )
+        ).rows[0].settings.inboxSync,
+      ).toMatchObject({ watermark, complete: false });
+    } finally {
+      await db.sonarPool.query(
+        "delete from tasks where payload->>'messageId' in(select id::text from messages where account_id=$1)",
+        [id],
+      );
+      await db.sonarPool.query('delete from messages where account_id=$1', [
+        id,
+      ]);
+      await db.sonarPool.query(
+        'delete from conversations where account_id=$1',
+        [id],
+      );
+      await db.sonarPool.query('delete from channel_accounts where id=$1', [
+        id,
+      ]);
+    }
+  },
+);
 it.skipIf(!enabled)(
   'imports both directions once, scopes threads to accounts, matches unambiguously and queues only inbound AI',
   async () => {

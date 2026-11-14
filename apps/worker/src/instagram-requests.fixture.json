@@ -1,0 +1,25 @@
+{
+  "data": {
+    "get_slide_mailbox_for_iris_subscription": {
+      "iris_inactive_subscription_uq_seq_id": "1000",
+      "threads_by_folder": {
+        "edges": [],
+        "page_info": {
+          "end_cursor": null,
+          "has_next_page": false
+        }
+      },
+      "id": "900000000000003"
+    },
+    "spamMailbox": {
+      "threads_by_folder": {
+        "edges": [],
+        "page_info": {
+          "end_cursor": null,
+          "has_next_page": false
+        }
+      },
+      "id": "900000000000003"
+    }
+  }
+}

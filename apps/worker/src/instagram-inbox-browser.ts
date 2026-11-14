@@ -14,6 +14,7 @@ import {
 } from './social-inbox.js';
 import {
   parseInstagramInbox,
+  parseInstagramRequests,
   type InstagramInboxPage,
 } from './instagram-inbox-parser.js';
 
@@ -28,13 +29,20 @@ export async function captureInstagramInbox(
   timeoutMs: number,
   persistBatch: (batch: SocialInboxBatch) => Promise<void>,
   assertSession = () => assertSocialSession(page, 'instagram', timeoutMs),
+  expectedViewerId?: string,
 ) {
+  if (!expectedViewerId || !/^\d+$/.test(expectedViewerId))
+    throw new SocialSessionCheckError('unknown_auth');
   let pending = Promise.resolve();
   let failure: unknown;
   let revision = 0;
+  // Latest pages drive UI traversal only; they never establish continuous coverage.
   const state: { inbox: InstagramInboxPage['inbox'] } = { inbox: null };
   let seenMailbox = false;
   let invalid = false;
+  let mailboxId: string | null = null;
+  let unprovenChain = false;
+  let requestsCovered = false;
   const skipped = new Set<string>();
   const seen = new Map<string, string>();
   const threads = new Map<string, InstagramInboxPage['threads'][number]>();
@@ -48,6 +56,20 @@ export async function captureInstagramInbox(
       response.request().method() !== 'POST'
     )
       return;
+    const request = response.request();
+    const frame = request.frame();
+    if (
+      frame !== page.mainFrame() ||
+      new URL(frame.url()).origin !== origin ||
+      !/^\/direct\/(?:inbox\/|requests\/|t\/\d+\/?)$/.test(
+        new URL(frame.url()).pathname,
+      ) ||
+      new URL(request.url()).origin !== origin
+    ) {
+      invalid = true;
+      skipped.add('untrusted_response_origin');
+      return;
+    }
     const responseScope = scope;
     pending = pending
       .then(async () => {
@@ -65,12 +87,44 @@ export async function captureInstagramInbox(
           invalid = true;
           return;
         }
+        if (responseScope === `${origin}/direct/requests/`) {
+          const friendlyName = new URLSearchParams(
+            request.postData() ?? '',
+          ).get('fb_api_req_friendly_name');
+          if (friendlyName !== 'PolarisDirectMessageRequestQuery') return;
+          if (!mailboxId || !parseInstagramRequests(body, mailboxId)) {
+            skipped.add('requests_shape_unsupported');
+            return;
+          }
+          await assertSession();
+          requestsCovered = true;
+          revision++;
+          await persistBatch({ messages: [], resumeAnchor: null });
+          return;
+        }
         const parsed = parseInstagramInbox(body, new Date().toISOString());
         if (!parsed) return;
         await assertSession();
+        if (
+          !parsed.mailboxId ||
+          (!mailboxId && parsed.actors.length === 0) ||
+          (mailboxId !== null && parsed.mailboxId !== mailboxId) ||
+          parsed.actors.some(
+            (actor) =>
+              actor.viewerId !== expectedViewerId ||
+              actor.mailboxId !== parsed.mailboxId,
+          )
+        )
+          throw new SocialSessionCheckError('unknown_auth');
+        mailboxId ??= parsed.mailboxId;
         seenMailbox = true;
         revision++;
         if (responseScope === 'inbox') state.inbox = parsed.inbox;
+        // Continuation request variables have not been captured/verified. A later
+        // terminal page cannot prove that any intervening provider page was seen.
+        unprovenChain ||=
+          parsed.inbox?.more === true ||
+          parsed.threads.some((thread) => thread.page?.more === true);
         if (!parsed.inbox) {
           invalid = true;
           skipped.add('missing_pagination');
@@ -180,18 +234,27 @@ export async function captureInstagramInbox(
       if (!(await waitForCapture(before))) break;
     }
     await drain();
-    await assertSession();
-    detach();
-    await drain();
-    const complete =
+    if (
       seenMailbox &&
       !invalid &&
       skipped.size === 0 &&
-      state.inbox?.more === false &&
-      [...threads.values()].every((thread) => thread.page?.more === false);
+      Date.now() < deadline
+    ) {
+      const before = revision;
+      await navigate(`${origin}/direct/requests/`);
+      await waitForCapture(before);
+    }
+    await assertSession();
+    detach();
+    await drain();
+    if (unprovenChain) skipped.add('pagination_chain_unverified');
+    if (!requestsCovered) skipped.add('requests_and_spam_unverified');
+    // No observed General fixture or reliable account capability evidence exists.
+    // PRIMARY and empty Requests/spam cannot advance an account-wide watermark.
+    skipped.add('general_folder_unsupported');
     return {
-      complete,
-      ...(!complete ? { reason: 'unsupported_dom' as const } : {}),
+      complete: false,
+      reason: 'unsupported_dom' as const,
       skipped: [...skipped],
     };
   } catch (error) {
@@ -222,8 +285,28 @@ export function createSocialInboxAdapter(
             : 'Адаптер історії LinkedIn не підтримується; синхронізацію не активовано.',
         );
       const timeoutMs = await timeout();
+      const actorCookies = account.session.cookies.filter(
+        (cookie) =>
+          cookie.name === 'ds_user_id' &&
+          [
+            '.instagram.com',
+            'instagram.com',
+            'www.instagram.com',
+            '.www.instagram.com',
+          ].includes(cookie.domain) &&
+          cookie.path === '/',
+      );
+      if (actorCookies.length !== 1 || !/^\d+$/.test(actorCookies[0]!.value))
+        throw new SocialSessionCheckError('unknown_auth');
+      const expectedViewerId = actorCookies[0]!.value;
       return browser.withPage(account, account.session, timeoutMs, (page) =>
-        captureInstagramInbox(page, timeoutMs, persistBatch),
+        captureInstagramInbox(
+          page,
+          timeoutMs,
+          persistBatch,
+          undefined,
+          expectedViewerId,
+        ),
       );
     },
   };

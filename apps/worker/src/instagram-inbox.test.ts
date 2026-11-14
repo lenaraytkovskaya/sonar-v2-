@@ -3,7 +3,10 @@ import { expect, it, vi } from 'vitest';
 import type { Page, Response } from 'playwright';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
 import { validateSocialInboxMessage } from '@sonar/core/social-inbox';
-import { parseInstagramInbox } from './instagram-inbox-parser.js';
+import {
+  parseInstagramInbox,
+  parseInstagramRequests,
+} from './instagram-inbox-parser.js';
 
 vi.mock('./social-inbox.js', () => ({
   SocialInboxAdapterError: class extends Error {
@@ -20,6 +23,13 @@ import {
   createSocialInboxAdapter,
 } from './instagram-inbox-browser.js';
 
+const requestsFixture = () =>
+  JSON.parse(
+    readFileSync(
+      new URL('./instagram-requests.fixture.json', import.meta.url),
+      'utf8',
+    ),
+  );
 const observedAt = '2026-11-14T12:00:00.000Z';
 const fixture = () =>
   JSON.parse(
@@ -152,16 +162,28 @@ function browser(
   initial: unknown[],
   scrollResponses: unknown[][] = [],
   url = 'https://www.instagram.com/api/graphql',
+  later: unknown[] = initial,
 ) {
   let listener: ((response: Response) => void) | undefined;
   let currentUrl = '';
   const events: string[] = [];
+  let navigations = 0;
+  const frame = { url: () => currentUrl };
+  const requestFrame = vi.fn(() => frame);
   const emit = (values: unknown[]) =>
     values.forEach((value) =>
       listener?.({
         url: () => url,
         status: () => 200,
-        request: () => ({ method: () => 'POST' }),
+        request: () => ({
+          method: () => 'POST',
+          url: () => url,
+          frame: requestFrame,
+          postData: () =>
+            currentUrl.endsWith('/requests/')
+              ? 'fb_api_req_friendly_name=PolarisDirectMessageRequestQuery'
+              : '',
+        }),
         json: async () => value,
       } as unknown as Response),
     );
@@ -176,10 +198,17 @@ function browser(
     goto: vi.fn(async (target: string) => {
       currentUrl = target;
       events.push('navigate');
-      emit(initial);
+      emit(
+        target.endsWith('/requests/')
+          ? [requestsFixture()]
+          : navigations++ === 0
+            ? initial
+            : later,
+      );
       return { status: () => 200 };
     }),
     url: () => currentUrl,
+    mainFrame: () => frame,
     waitForTimeout: async () => {
       await new Promise((resolve) => setTimeout(resolve, 2));
     },
@@ -200,15 +229,24 @@ function browser(
   });
   const assert = vi.fn(async () => {});
   const run = () =>
-    captureInstagramInbox(page as unknown as Page, 50, persist, assert);
-  return { page, events, batches, persist, assert, run };
+    captureInstagramInbox(
+      page as unknown as Page,
+      100,
+      persist,
+      assert,
+      '900000000000004',
+    );
+  return { page, events, batches, persist, assert, requestFrame, run };
 }
 
 it('attaches before navigation, serially persists every chunk and deduplicates repeat captures', async () => {
   const f = browser([fixture(), fixture()]);
-  expect(await f.run()).toMatchObject({ complete: true, skipped: [] });
+  expect(await f.run()).toMatchObject({
+    complete: false,
+    skipped: ['general_folder_unsupported'],
+  });
   expect(f.events.slice(0, 2)).toEqual(['listen', 'navigate']);
-  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0, 0]);
   expect(f.events).toEqual([
     'listen',
     'navigate',
@@ -216,16 +254,22 @@ it('attaches before navigation, serially persists every chunk and deduplicates r
     'persist-end',
     'persist-start',
     'persist-end',
+    'navigate',
+    'persist-start',
+    'persist-end',
   ]);
   expect(f.page.off).toHaveBeenCalledOnce();
-  expect(f.assert).toHaveBeenCalledTimes(4);
+  expect(f.assert).toHaveBeenCalledTimes(6);
 });
 
 it('awaits persistence before bounded inbox scrolling and requires a captured terminal page', async () => {
   const first = fixture();
   mailbox(first).threads_by_folder.page_info.has_next_page = true;
   const f = browser([first], [[fixture()]]);
-  expect(await f.run()).toMatchObject({ complete: true });
+  expect(await f.run()).toMatchObject({
+    complete: false,
+    skipped: expect.arrayContaining(['pagination_chain_unverified']),
+  });
   expect(f.events.indexOf('scroll')).toBeGreaterThan(
     f.events.indexOf('persist-end'),
   );
@@ -238,7 +282,10 @@ it('scrolls only the observed message container for incomplete thread history', 
   const first = fixture();
   thread(first).slide_messages.page_info.has_next_page = true;
   const f = browser([first], [[fixture()]]);
-  expect(await f.run()).toMatchObject({ complete: true });
+  expect(await f.run()).toMatchObject({
+    complete: false,
+    skipped: expect.arrayContaining(['pagination_chain_unverified']),
+  });
   expect(f.page.goto).toHaveBeenNthCalledWith(
     2,
     'https://www.instagram.com/direct/t/900000000000005/',
@@ -306,7 +353,17 @@ it('delegates account, pinned session and configured timeout to the shared brows
     id: 'test',
     channel: 'instagram' as const,
     settings: {},
-    session: {} as never,
+    session: {
+      cookies: [
+        {
+          name: 'ds_user_id',
+          value: '900000000000004',
+          domain: '.instagram.com',
+          path: '/',
+        },
+      ],
+      proxy: { server: 'http://proxy.invalid' },
+    } as never,
   };
   const withPage = vi.fn(async () => ({ complete: true }));
   const adapter = createSocialInboxAdapter(async () => 12345, {
@@ -345,3 +402,118 @@ it.each(['facebook', 'linkedin'] as const)(
     });
   },
 );
+
+// Regressions derived from /tmp/sonar101-review-de665ef/review.test.ts.
+it('never treats PRIMARY-only evidence as account-wide completion', async () => {
+  const f = browser([fixture()]);
+  const result = await f.run();
+  expect(result.complete).toBe(false);
+  expect(result.skipped).toContain('general_folder_unsupported');
+});
+it('does not close an unproven history gap with an unrelated terminal response', async () => {
+  const first = fixture();
+  thread(first).slide_messages.page_info = {
+    has_next_page: true,
+    end_cursor: 'REQUIRED-NEXT-CURSOR',
+  };
+  const terminal = fixture();
+  thread(terminal).slide_messages.edges = [
+    structuredClone(thread(terminal).slide_messages.edges[0]),
+  ];
+  thread(terminal).slide_messages.edges[0].node.id = '987654321';
+  thread(terminal).slide_messages.page_info.end_cursor = 'UNRELATED-TERMINAL';
+  const f = browser([first], [], undefined, [terminal]);
+  const result = await f.run();
+  expect(result.complete).toBe(false);
+  expect(result.skipped).toContain('pagination_chain_unverified');
+});
+it('rejects a second mailbox/viewer before its batch is persisted', async () => {
+  const a = fixture(),
+    b = fixture();
+  mailbox(b).id = '800000000000003';
+  thread(b).viewer.interop_messaging_user_fbid = mailbox(b).id;
+  thread(b).viewer.id = '800000000000004';
+  thread(b).viewer_id = thread(b).viewer.id;
+  thread(b).thread_id = '800000000000005';
+  thread(b).users[0].username = 'other_account_peer';
+  thread(b).slide_messages.edges.forEach(
+    (e: { node: { id: string; sender_fbid: string } }, i: number) => {
+      e.node.id = String(800000000000010 + i);
+      if (e.node.sender_fbid === '900000000000003')
+        e.node.sender_fbid = mailbox(b).id;
+    },
+  );
+  const f = browser([a, b]);
+  await expect(f.run()).rejects.toMatchObject({ reason: 'unknown_auth' });
+  expect(f.batches).toHaveLength(1);
+  expect(f.batches[0]?.messages).toHaveLength(5);
+});
+
+it('rejects the first actor when it differs from the authorized session identity', async () => {
+  const value = fixture();
+  thread(value).viewer.id = '800000000000004';
+  thread(value).viewer_id = thread(value).viewer.id;
+  const f = browser([value]);
+  await expect(f.run()).rejects.toMatchObject({ reason: 'unknown_auth' });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+it('rejects a foreign request frame before persisting its response', async () => {
+  const f = browser([fixture()]);
+  f.requestFrame.mockReturnValue({
+    url: () => 'https://www.instagram.com/unrelated-popup/',
+  });
+  const result = await f.run();
+  expect(result.complete).toBe(false);
+  expect(result.skipped).toContain('untrusted_response_origin');
+  expect(f.persist).not.toHaveBeenCalled();
+});
+it('retains an earlier committed batch when second-batch persistence fails', async () => {
+  const next = fixture();
+  thread(next).slide_messages.edges[0].node.id = '123456789';
+  const f = browser([fixture(), next]);
+  f.persist.mockImplementationOnce(async (batch) => {
+    f.batches.push(batch);
+  });
+  f.persist.mockRejectedValueOnce(new Error('second batch failed'));
+  await expect(f.run()).rejects.toThrow('second batch failed');
+  expect(f.batches).toHaveLength(1);
+  expect(f.batches[0]?.messages).toHaveLength(5);
+});
+it('preserves full multiline Unicode text independently of snippets and opaque cursors', () => {
+  const value = fixture();
+  const text = '  Вітаю 👋\n' + 'довгий текст '.repeat(1000) + '\nкінець  ';
+  const message = thread(value).slide_messages.edges[0].node;
+  message.text_body = text;
+  message.content.text_body = text;
+  message.igd_snippet = 'truncated';
+  expect(parseInstagramInbox(value, observedAt)?.messages[0]?.body).toBe(text);
+});
+it('accepts only the observed empty Requests/spam coverage for the pinned mailbox', () => {
+  const value = requestsFixture();
+  expect(parseInstagramRequests(value, '900000000000003')).toBe(true);
+  expect(parseInstagramRequests(value, '800000000000003')).toBe(false);
+  value.data.spamMailbox.threads_by_folder.edges.push({ node: {} });
+  expect(parseInstagramRequests(value, '900000000000003')).toBe(false);
+});
+it('refuses to open a context when authorized ds_user_id is missing', async () => {
+  const withPage = vi.fn();
+  const adapter = createSocialInboxAdapter(async () => 100, {
+    withPage,
+  } as unknown as Parameters<typeof createSocialInboxAdapter>[1]);
+  await expect(
+    adapter.sync(
+      {
+        id: 'test',
+        channel: 'instagram',
+        settings: {},
+        session: {
+          cookies: [],
+          proxy: { server: 'http://proxy.invalid' },
+        } as never,
+      },
+      { watermark: null, cycleStartedAt: null, resumeAnchor: null },
+      async () => {},
+    ),
+  ).rejects.toMatchObject({ reason: 'unknown_auth' });
+  expect(withPage).not.toHaveBeenCalled();
+});
