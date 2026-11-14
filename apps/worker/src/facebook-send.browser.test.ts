@@ -136,6 +136,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         page = value;
       });
       const events: string[] = [];
+      const dispatchPhases: string[] = [];
       const requests: string[] = [];
       const target = options.company
         ? 'https://www.facebook.com/synthetic_company/'
@@ -143,6 +144,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await context.exposeBinding('fixtureEvent', (_source, event: string) => {
         events.push(event);
       });
+      await context.exposeBinding(
+        'fixtureDispatch',
+        (_source, phase: string) => {
+          dispatchPhases.push(phase);
+        },
+      );
       await context.addInitScript({
         content: `window.fixtureOptions = ${JSON.stringify(options)}`,
       });
@@ -194,7 +201,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             const button = scope.querySelector(
               '[aria-label="Press Enter to send"]',
             )!;
-            const mutate = () => {
+            const mutate = (event: Event) => {
+              void (
+                window as unknown as {
+                  fixtureDispatch: (phase: string) => Promise<void>;
+                }
+              ).fixtureDispatch(event.type);
               const editor = scope.querySelector('[contenteditable]')!;
               if (options.clickRecipient || options.documentCaptureRecipient) {
                 scope
@@ -228,21 +240,19 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                   scope.querySelector('[aria-label="Thread composer"]')!,
                 );
             };
-            if (options.documentCaptureRecipient)
-              document.addEventListener('click', mutate, {
+            // Synchronize with the real dispatch after the guard is armed.
+            // An animation plus a timer does not guarantee mutation before click.
+            // Document capture runs between the window and scope/button guards.
+            document.addEventListener(
+              options.documentCaptureRecipient || options.documentCaptureButton
+                ? 'click'
+                : 'pointerdown',
+              mutate,
+              {
                 capture: true,
                 once: true,
-              });
-            else {
-              button.animate(
-                [
-                  { transform: 'translateX(0px)' },
-                  { transform: 'translateX(20px)' },
-                ],
-                { duration: 200, fill: 'forwards' },
-              );
-              setTimeout(mutate, 60);
-            }
+              },
+            );
           }, options);
         if (options.markerOutgoing)
           await page.evaluate(() => {
@@ -283,6 +293,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
       return {
         events,
+        dispatchPhases,
         requests,
         mark,
         target,
@@ -337,6 +348,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.requests).toEqual([f.target]);
+          expect(f.dispatchPhases).toEqual(
+            options.clickStable ? ['pointerdown'] : [],
+          );
         } finally {
           await f.close();
         }
@@ -423,6 +437,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { clickComposer: true },
       { clickBody: true },
       { clickButton: true },
+      // A detached button still receives the in-flight click unless guarded.
+      { clickButton: true, documentCaptureButton: true },
       { clickDuplicateButton: true },
       { clickDisabled: true },
       { clickReparent: true },
@@ -446,6 +462,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           });
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.events).toEqual(['open', 'input:target', 'mark']);
+          expect(f.dispatchPhases).toEqual(
+            options.documentCaptureRecipient || options.documentCaptureButton
+              ? ['click']
+              : Object.keys(options).some((key) => key.startsWith('click'))
+                ? ['pointerdown']
+                : [],
+          );
         } finally {
           await f.close();
         }
