@@ -196,6 +196,16 @@ export async function captureInstagramInbox(
         if (!parsed) return;
         capture.parsed = Math.min(capture.parsed + 1, 2);
         await checkSession('capture_auth');
+        // An empty response carries no viewer proof. It cannot bind identity or
+        // replace pagination from an attributable response, even after binding.
+        if (
+          parsed.emptyEdges &&
+          parsed.mailboxId &&
+          parsed.inbox &&
+          parsed.skipped.length === 0 &&
+          (mailboxId === null || parsed.mailboxId === mailboxId)
+        )
+          return;
         stage = 'actor';
         // Preserve the original rejection predicates; classify without adopting another namespace.
         const reason: ActorDiagnostic['reason'] | undefined = !parsed.mailboxId
@@ -384,6 +394,7 @@ export async function captureInstagramInbox(
     await checkSession('auth');
     detach();
     await drain();
+    if (!seenMailbox) skipped.add('no_verified_mailbox');
     if (unprovenChain) skipped.add('pagination_chain_unverified');
     if (!requestsCovered) skipped.add('requests_and_spam_unverified');
     // No observed General fixture or reliable account capability evidence exists.
@@ -397,6 +408,7 @@ export async function captureInstagramInbox(
   } catch (error) {
     await drain();
     if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+    if (!seenMailbox) skipped.add('no_verified_mailbox');
     return {
       complete: false,
       reason: 'unsupported_dom' as const,
