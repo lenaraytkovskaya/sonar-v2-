@@ -140,6 +140,34 @@
           main.querySelector(
             '[data-pagelet="IGDComposerForCannes"] [contenteditable]',
           ) || main.querySelector('[contenteditable], textarea:not([id])');
+        const mutateDialog = (phase) => {
+          if (f.mismatchPhase !== phase) return;
+          if (f.headerMismatch)
+            conversationHeader.insertAdjacentHTML(
+              'beforeend',
+              '<a href="/synthetic_private_recipient/">Synthetic private label</a><a href="/another_private_recipient/">Private label</a><a href="/direct/inbox/">Inbox</a><a hidden href="/hidden_private_recipient/">Hidden</a>',
+            );
+          if (f.replaceContainer) main.replaceWith(main.cloneNode(true));
+          if (f.dialogUrlParts) {
+            const url = new URL(location.href);
+            if (f.dialogUrlParts.includes('path'))
+              url.pathname = '/direct/t/synthetic-private-thread/';
+            if (f.dialogUrlParts.includes('query'))
+              url.search = '?synthetic_private_query=value';
+            if (f.dialogUrlParts.includes('hash'))
+              url.hash = '#synthetic-private-hash';
+            history.replaceState({}, '', url);
+          }
+        };
+        mutateDialog('initial');
+        composer?.addEventListener('input', () => mutateDialog('after_fill'), {
+          once: true,
+        });
+        document.addEventListener(
+          'fixture-marker',
+          () => mutateDialog('after_marker'),
+          { once: true },
+        );
         if (composer)
           composer.onkeydown = (event) => {
             if (event.key !== 'Enter') return;
@@ -152,6 +180,7 @@
               row.textContent = composer.value ?? composer.textContent;
               main.querySelector('#messages').append(row);
             }
+            mutateDialog('after_send');
           };
       };
       if (f.delayedDialog) setTimeout(open, 60);
