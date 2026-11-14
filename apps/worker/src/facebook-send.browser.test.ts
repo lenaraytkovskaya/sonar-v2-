@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -106,6 +107,10 @@ function wire(scope) {
     if (o.bodyWrapper) next.querySelector('span').innerHTML = '<span>' + body + '</span>';
     if (o.pendingSettles) { next.insertAdjacentHTML('beforeend', '<span class="status">Sending</span>'); setTimeout(() => next.querySelector('.status').remove(), 40); }
     destination.append(next); editor.textContent = '';
+    if (o.lateFailure) setTimeout(() => next.insertAdjacentHTML('beforeend', '<span>Not sent. Retry</span>'), 120);
+    if (o.lateNoAuth) setTimeout(() => document.querySelector('nav').remove(), 120);
+    if (o.lateNetwork || o.lateHttp) setTimeout(() => fetch('/synthetic-transmission').catch(() => {}), 120);
+    if (o.transmissionTick) setTimeout(() => window.fixtureEvent('transmission:alive'), 120);
     if (o.recipientAfterSend) scope.querySelector('a').href = '/100000000000002/';
   });
 }
@@ -115,6 +120,7 @@ document.querySelector('#open').onclick = () => {
   const show = () => {
     const scope = chat('target', o.wrongRecipient ? '100000000000002' : recipient, label);
     if (o.oldOnly || o.sameTimestamp || o.rerenderAfterSend) region(scope).append(row());
+    if (o.saturatedCounts) for (let i = 0; i < 100; i++) region(scope).append(row());
 
     document.querySelector('#chats').append(scope); wire(scope);
     if (o.noSettingsLabel) scope.querySelector('[aria-label="Chat settings"]').removeAttribute('aria-label');
@@ -243,6 +249,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     });
     async function fixture(options: Record<string, boolean | undefined> = {}) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
+      await context.addCookies([
+        {
+          name: 'c_user',
+          value: '100000000000009',
+          domain: '.facebook.com',
+          path: '/',
+        },
+      ]);
       let page: Page;
       context.on('page', (value) => {
         page = value;
@@ -294,6 +308,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       let marked = false;
       await context.route('**/*', (route) => {
         requests.push(route.request().url());
+        if (
+          options.lateHttp &&
+          route.request().url().endsWith('/synthetic-transmission')
+        )
+          return route.fulfill({ status: 503, body: 'Synthetic failure' });
         if (route.request().url() !== target)
           return route.abort('blockedbyclient');
         if (options.networkAbort || (marked && options.markerNetwork))
@@ -778,7 +797,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             value && typeof value === 'object'
               ? Object.values(value).flatMap(scalars)
               : [value];
-          for (const value of scalars(diagnostic))
+          for (const value of scalars({
+            ...diagnostic,
+            transmission: undefined,
+          }))
             if (typeof value === 'number') {
               expect(value).toBeGreaterThanOrEqual(0);
               expect(value).toBeLessThanOrEqual(9);
@@ -805,6 +827,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { observed: true, company: true },
       { observed: true, neighbour: true },
       { observed: true, sameTimestamp: true },
+      { observed: true, saturatedCounts: true },
       { observed: true, bodySending: true },
       { observed: true, pendingSettles: true },
       {},
@@ -833,19 +856,84 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       async (options) => {
         const f = await fixture(options);
         try {
-          await expect(f.send()).resolves.toBe(f.target);
+          const result = await f.send();
+          expect(result).toMatchObject({
+            outcome: 'facebook_dispatched_unconfirmed',
+            dialogUrl: f.target,
+            observation: {
+              inputExactMatch: true,
+              dispatchPerformed: true,
+              lateError: 'none',
+            },
+          });
           expect(f.events).toEqual([
             'open',
             'input:target',
             'mark',
             'send:target',
           ]);
+          if (options.saturatedCounts)
+            expect(result).toMatchObject({
+              observation: {
+                outgoingBefore: 99,
+                outgoingAfter: 99,
+                newOutgoing: true,
+              },
+            });
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.requests).toEqual([f.target]);
           expect(f.dispatchPhases).toEqual(
             options.clickStable || options.clickIncidental
               ? ['pointerdown']
               : [],
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('keeps the original page open for the bounded transmission period without claiming delivery', async () => {
+      const f = await fixture({ observed: true, transmissionTick: true });
+      try {
+        const result = await f.send();
+        expect(result).toMatchObject({
+          outcome: 'facebook_dispatched_unconfirmed',
+          observation: {
+            senderFingerprint: createHash('sha256')
+              .update('100000000000009')
+              .digest('hex')
+              .slice(0, 12),
+            lateError: 'none',
+          },
+        });
+        if (typeof result === 'string')
+          throw Error('Unexpected verified result');
+        expect(result.observation.outgoingAfter).toBeGreaterThan(
+          result.observation.outgoingBefore,
+        );
+        expect(result.observation.observationMs).toBeGreaterThanOrEqual(400);
+        expect(result.observation.observationMs).toBeLessThan(2000);
+        expect(f.events).toContain('transmission:alive');
+        expect(JSON.stringify(result)).not.toContain('100000000000009');
+      } finally {
+        await f.close();
+      }
+    });
+    it.each(['lateFailure', 'lateNoAuth', 'lateNetwork', 'lateHttp'])(
+      'observes %s before closing the original page',
+      async (kind) => {
+        const f = await fixture({ observed: true, [kind]: true });
+        const started = Date.now();
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'delivery_uncertain',
+            reasonUk: expect.stringContaining(
+              `"lateError":"${kind === 'lateFailure' ? 'outgoing_changed' : kind === 'lateNetwork' ? 'network' : kind === 'lateHttp' ? 'http_error' : 'session'}"`,
+            ),
+          });
+          expect(Date.now() - started).toBeLessThan(2000);
+          expect(f.events.filter((event) => event.startsWith('send:'))).toEqual(
+            ['send:target'],
           );
         } finally {
           await f.close();

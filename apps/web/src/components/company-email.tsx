@@ -5,7 +5,12 @@ import { useRouter } from 'next/navigation';
 import type { getCompanyChat } from '@sonar/db/outreach';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
-import { channelLabel, messageStatus } from '@/lib/outreach-labels';
+import {
+  channelLabel,
+  messageStatus,
+  facebookHistoryLink,
+  facebookDispatched,
+} from '@/lib/outreach-labels';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -40,6 +45,8 @@ export function Draft({
   const editable = ['draft', 'awaiting_approval', 'awaiting_manual'].includes(
     message.status,
   );
+  const historyLink = facebookHistoryLink(message.status, message);
+  const dispatched = facebookDispatched(message.status, message);
   const manual = ['form', 'social'].includes(message.channel);
   const changed = subject !== message.subject || body !== message.body;
   const save = () => act('save', { messageId: message.id, subject, body });
@@ -60,7 +67,7 @@ export function Draft({
             ? uk.outreach.incoming
             : uk.outreach.outgoing}
         </span>
-        <span>{messageStatus(message.status)}</span>
+        <span>{messageStatus(message.status, message)}</span>
         <span>
           {uk.outreach.sources[
             message.source as keyof typeof uk.outreach.sources
@@ -181,7 +188,19 @@ export function Draft({
           <p className="whitespace-pre-wrap break-words">{message.body}</p>
         </>
       )}
-      {message.reasonUk && <p className="text-err">{message.reasonUk}</p>}
+      {historyLink && (
+        <a
+          href={historyLink}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm underline"
+        >
+          {uk.outreach.verifyFacebook}
+        </a>
+      )}
+      {message.reasonUk && !dispatched && (
+        <p className="text-err">{message.reasonUk}</p>
+      )}
     </section>
   );
 }

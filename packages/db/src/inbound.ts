@@ -289,7 +289,7 @@ export async function getConversationChat(
   const conversation =
     conversations.find((c) => c.id === conversationId) ?? null;
   const { rows: messages } = await sonarPool.query<OutreachMessage>(
-    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by created_at desc,id desc limit $2`,
+    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by created_at desc,id desc limit $2`,
     [conversationId, historyLimit ?? null],
   );
   messages.reverse();

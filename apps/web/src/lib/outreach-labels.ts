@@ -44,10 +44,37 @@ export const channelLabel = (channel: string, value = '') => {
         phone: uk.outreach.call,
       }[channel] ?? channel);
 };
-export const messageStatus = (status: string) =>
-  uk.email.statuses[status as keyof typeof uk.email.statuses] ??
-  (status === 'skipped'
-    ? uk.outreach.skipped
-    : status === 'received'
-      ? uk.inbound.received
-      : status);
+type DeliveryContext = {
+  channel: string;
+  toValue: string;
+  reasonUk?: string | null;
+  providerId?: string | null;
+};
+export const facebookDispatched = (status: string, message?: DeliveryContext) =>
+  status === 'sent' &&
+  message?.channel === 'social' &&
+  socialNetwork(message.toValue) === 'facebook' &&
+  message.reasonUk === uk.outreach.facebookDispatched;
+export const facebookHistoryLink = (
+  status: string,
+  message: DeliveryContext,
+) => {
+  if (!facebookDispatched(status, message) || !message.providerId) return null;
+  try {
+    const url = new URL(message.providerId);
+    return url.protocol === 'https:' && socialNetwork(url.href) === 'facebook'
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+};
+export const messageStatus = (status: string, message?: DeliveryContext) =>
+  facebookDispatched(status, message)
+    ? uk.outreach.facebookDispatched
+    : (uk.email.statuses[status as keyof typeof uk.email.statuses] ??
+      (status === 'skipped'
+        ? uk.outreach.skipped
+        : status === 'received'
+          ? uk.inbound.received
+          : status));

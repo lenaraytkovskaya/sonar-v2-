@@ -920,7 +920,11 @@ async function sendInstagram(
     throw stagedFailure(stage, kind);
   }
 }
-export async function assertSocialSession(page: Page, network: SocialNetwork) {
+export async function assertSocialSession(
+  page: Page,
+  network: SocialNetwork,
+  timeoutMs?: number,
+) {
   const url = new URL(page.url());
   if (
     url.protocol !== 'https:' ||
@@ -977,7 +981,7 @@ export async function assertSocialSession(page: Page, network: SocialNetwork) {
       .locator(authenticated)
       .filter({ visible: true })
       .first()
-      .waitFor({ state: 'visible' });
+      .waitFor({ state: 'visible', timeout: timeoutMs });
   } catch (error) {
     throw Object.assign(
       new SocialSessionCheckError(
@@ -1162,8 +1166,14 @@ export function createSocialSendBrowser(
           if (account.channel === 'instagram')
             return sendInstagram(page, target, timeoutMs, body, beforeSend);
           if (account.channel === 'facebook')
-            return sendFacebook(page, target, timeoutMs, body, beforeSend, () =>
-              assertSocialSession(page, 'facebook'),
+            return sendFacebook(
+              page,
+              target,
+              timeoutMs,
+              body,
+              beforeSend,
+              (sessionTimeoutMs) =>
+                assertSocialSession(page, 'facebook', sessionTimeoutMs),
             );
           await page.goto(target.canonicalUrl, {
             waitUntil: 'domcontentloaded',

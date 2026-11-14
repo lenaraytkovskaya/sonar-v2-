@@ -1,4 +1,8 @@
-import { SocialSendError } from '@sonar/core/social-session';
+import {
+  SocialSendError,
+  facebookDispatchReason,
+  type FacebookDispatchResult,
+} from '@sonar/core/social-session';
 import type { PoolClient } from 'pg';
 import {
   EmailSendError,
@@ -712,7 +716,7 @@ export type SendAccount = {
 export type ChannelSender = (
   request: EmailRequest,
   account?: SendAccount,
-) => Promise<string>;
+) => Promise<string | FacebookDispatchResult>;
 export async function sendEmailMessage(
   messageId: string,
   taskId: string,
@@ -796,7 +800,15 @@ export async function sendEmailMessage(
     if (['sent', 'delivered', 'read'].includes(m.status))
       return finish({
         status: 'done',
-        result: { messageId, providerId: m.provider_id },
+        result: {
+          messageId,
+          providerId: m.provider_id,
+          ...(channel === 'social' &&
+          socialTarget(m.to_value)?.network === 'facebook' &&
+          m.reason_uk === facebookDispatchReason
+            ? { delivery: 'unconfirmed' }
+            : {}),
+        },
       });
     if (await isContactBlocked(c, m.company_id, m.to_value, m.country_code))
       return finish(
@@ -1117,6 +1129,7 @@ export async function sendEmailMessage(
     const recordDelivery = async (
       providerId: string,
       reasonUk: string | null = null,
+      observation?: FacebookDispatchResult['observation'],
     ): Promise<TaskOutcome> => {
       await transaction(async (tx) => {
         await tx.query(
@@ -1128,15 +1141,27 @@ export async function sendEmailMessage(
           [m.company_id],
         );
         await logActivity(
-          'message.sent',
+          observation ? 'message.dispatched' : 'message.sent',
           'company',
           m.company_id,
           null,
-          { messageId, providerId, taskId },
+          {
+            messageId,
+            providerId,
+            taskId,
+            ...(observation ? { delivery: 'unconfirmed', observation } : {}),
+          },
           tx,
         );
       });
-      return { status: 'done', result: { messageId, providerId } };
+      return {
+        status: 'done',
+        result: {
+          messageId,
+          providerId,
+          ...(observation ? { delivery: 'unconfirmed', observation } : {}),
+        },
+      };
     };
     try {
       const providerId =
@@ -1165,6 +1190,38 @@ export async function sendEmailMessage(
                 : {}),
             })
           : await send(request);
+      if (typeof providerId !== 'string') {
+        const facts = providerId.observation;
+        const marker = await c.query(
+          'select first_attempt_at from messages where id=$1',
+          [messageId],
+        );
+        if (
+          channel !== 'social' ||
+          account.channel !== 'facebook' ||
+          providerId.outcome !== 'facebook_dispatched_unconfirmed' ||
+          !marker.rows[0]?.first_attempt_at ||
+          !facts.inputExactMatch ||
+          !facts.dispatchPerformed ||
+          !facts.newOutgoing ||
+          facts.lateError !== 'none' ||
+          socialTarget(providerId.dialogUrl)?.network !== 'facebook' ||
+          socialTarget(providerId.dialogUrl)?.handle !==
+            socialTarget(request.to)?.handle
+        )
+          throw new SocialSendError(
+            'delivery_uncertain',
+            'Перевірте чат вручну',
+          );
+        return await recordDelivery(
+          providerId.dialogUrl,
+          facebookDispatchReason,
+          facts,
+        );
+      }
+      // FB browser text alone is never a verified delivery receipt.
+      if (channel === 'social' && account.channel === 'facebook')
+        throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
       return await recordDelivery(providerId);
     } catch (error) {
       if (channel === 'social') {

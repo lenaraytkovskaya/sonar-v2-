@@ -27,6 +27,7 @@ export interface OutreachMessage {
   status: string;
   toValue: string;
   reasonUk: string | null;
+  providerId?: string | null;
   classification: string | null;
   needsHuman: boolean;
   readAt: Date | null;
@@ -48,6 +49,7 @@ export interface OutreachConversation {
   status: string;
   lastMessage: string | null;
   lastStatus: string | null;
+  lastReasonUk?: string | null;
   lastAt: Date | null;
 }
 export interface DraftInput {
@@ -62,12 +64,12 @@ const invalid = (reason: string): never => {
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
 const automatic = ['email', 'telegram', 'whatsapp'];
-const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
+const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
   filters: {
