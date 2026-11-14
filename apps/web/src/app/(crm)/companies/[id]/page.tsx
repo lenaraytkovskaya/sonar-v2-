@@ -8,6 +8,7 @@ import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
+import { CompanyTabs } from '@/components/company-tabs';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { ProzorroCompany } from '@/components/prozorro-company';
 import { CompanySocial } from '@/components/company-social';
@@ -364,7 +365,7 @@ export default async function Page({
           enrich={c.place_id.startsWith('manual:')}
         />
       </header>
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Section title={uk.company.score}>
           {mainScore ? (
             <>
@@ -434,65 +435,6 @@ export default async function Page({
             <p className="text-sm text-muted-foreground">{uk.company.noData}</p>
           )}
         </Section>
-        <Section
-          title={uk.company.googleData}
-          action={
-            map && (
-              <a
-                className="inline-flex items-center gap-1 text-xs text-accent"
-                href={map}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <MapPin aria-hidden="true" className="size-3.5" />
-                {uk.company.maps}
-              </a>
-            )
-          }
-        >
-          <p className="text-sm">{c.address ?? uk.company.noData}</p>
-          <p className="text-sm text-muted-foreground">
-            {uk.google.businessStatus[
-              c.business_status as keyof typeof uk.google.businessStatus
-            ] ??
-              c.business_status ??
-              '—'}
-          </p>
-          {siteStatus && (
-            <p className="text-xs text-muted-foreground">
-              {uk.scanner.kinds.site_status}:{' '}
-              {siteStatus.value?.reason ?? uk.tasks.status.done}
-            </p>
-          )}
-          {websiteCandidates.map((fact) => (
-            <div
-              key={fact.id}
-              className="space-y-1 border-t border-border pt-2"
-            >
-              <p className="text-xs text-muted-foreground">
-                {uk.company.websiteCandidate}
-              </p>
-              <a
-                className="block break-all text-sm text-accent"
-                href={fact.site.website}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {fact.site.website}
-              </a>
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                {
-                  uk.company.sources[
-                    fact.source as keyof typeof uk.company.sources
-                  ]
-                }{' '}
-                · <LocalTime value={fact.found_at} dateOnly />
-                <SourceLink url={fact.source_url} />
-              </p>
-              <WebsiteCandidate companyId={id} factId={fact.id} />
-            </div>
-          ))}
-        </Section>
         <Section title={uk.company.registry}>
           {registryName ? (
             <p className="text-sm font-medium">{String(registryName.value)}</p>
@@ -511,281 +453,440 @@ export default async function Page({
           </p>
         </Section>
       </div>
-
-      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="min-w-0 space-y-3">
-          <Section title={uk.analysis.title}>
-            {!campaigns.length && (
-              <p className="text-sm text-muted-foreground">
-                {uk.company.noData}
-              </p>
-            )}
-            {[...campaigns]
-              .sort(
-                (a, b) =>
-                  Number(b.id === selectedCampaign) -
-                  Number(a.id === selectedCampaign),
-              )
-              .map((campaign, index) => (
-                <section
-                  key={campaign.id}
-                  className={cn(
-                    'space-y-2 text-sm',
-                    index > 0 && 'border-t border-border pt-3',
-                  )}
+      <CompanyTabs
+        key={id}
+        tabs={[
+          {
+            key: 'googleMaps',
+            label: uk.company.sectionTabs.googleMaps,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section
+                  title={uk.company.googleData}
+                  action={
+                    map && (
+                      <a
+                        className="inline-flex items-center gap-1 text-xs text-accent"
+                        href={map}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <MapPin aria-hidden="true" className="size-3.5" />
+                        {uk.company.maps}
+                      </a>
+                    )
+                  }
                 >
-                  {campaigns.length > 1 && (
-                    <h3 className="font-semibold">{campaign.name}</h3>
-                  )}
-                  <CompanyAnalysis
-                    companyId={id}
-                    campaignId={campaign.id}
-                    analysis={analyses.find(
-                      (row) => row.campaign_id === campaign.id,
-                    )}
-                  />
-                </section>
-              ))}
-          </Section>
-          {orderedScores.length > 0 && (
-            <Collapsible title={uk.scoring.details}>
-              {orderedScores.map((row) => (
-                <section key={row.campaign_id} className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <Link
-                      className="text-accent"
-                      href={'/campaigns?campaign=' + row.campaign_id}
-                    >
-                      {row.campaign_name}
-                    </Link>
-                    <Score value={row.score} compact />
-                  </div>
-                  <table className="w-full text-left text-sm">
-                    <thead className="text-xs text-muted-foreground">
-                      <tr>
-                        {[
-                          uk.company.score,
-                          uk.scoring.value,
-                          uk.scoring.weight,
-                          uk.scoring.contribution,
-                        ].map((label) => (
-                          <th key={label} className="px-2 py-1 font-medium">
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {row.breakdown.features.map((feature) => (
-                        <tr
-                          key={feature.feature}
-                          className="border-t border-border"
-                        >
-                          <th scope="row" className="px-2 py-1 font-normal">
-                            {
-                              uk.campaign.weights[
-                                feature.feature as keyof typeof uk.campaign.weights
-                              ]
-                            }
-                          </th>
-                          <td
-                            className={cn(
-                              'px-2 py-1 tabular-nums',
-                              feature.value >= 0.7
-                                ? 'text-ok'
-                                : feature.value > 0
-                                  ? 'text-wait'
-                                  : 'text-err',
-                            )}
-                          >
-                            {(feature.value * 100).toFixed(0)}%
-                          </td>
-                          <td className="px-2 py-1 tabular-nums">
-                            {feature.weight}
-                          </td>
-                          <td className="px-2 py-1 tabular-nums">
-                            {feature.contribution.toFixed(1)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </section>
-              ))}
-            </Collapsible>
-          )}
-        </div>
-
-        <div className="min-w-0 space-y-3">
-          <Section title={`${uk.company.contacts} · ${contacts.length}`}>
-            <ManualEntry companyId={id} />
-            {!contacts.length && (
-              <p className="text-sm text-muted-foreground">
-                {uk.company.noData}
-              </p>
-            )}
-            <ul className="text-sm">
-              {sortedContacts.slice(0, visibleContacts).map(contactRow)}
-            </ul>
-            {sortedContacts.length > visibleContacts && (
-              <details className="text-sm">
-                <summary className="cursor-pointer text-accent">
-                  {uk.company.more}: {sortedContacts.length - visibleContacts}
-                </summary>
-                <ul>{sortedContacts.slice(visibleContacts).map(contactRow)}</ul>
-              </details>
-            )}
-          </Section>
-          <Section title={uk.company.registry}>
-            <RegistryMatch companyId={c.id} candidates={candidates} />
-            {registryFacts.length > 0 && (
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-                {registryFacts.map((fact) => (
-                  <div key={fact.id} className="contents">
-                    <dt className="text-muted-foreground">
-                      {uk.registry.kinds[
-                        fact.kind as keyof typeof uk.registry.kinds
-                      ] ?? fact.kind}
-                    </dt>
-                    <dd className="break-words">
-                      {fact.kind === 'registry_match_method'
-                        ? (uk.registry.methods[
-                            String(
-                              fact.value,
-                            ) as keyof typeof uk.registry.methods
-                          ] ?? String(fact.value))
-                        : fact.kind === 'founders' && Array.isArray(fact.value)
-                          ? fact.value
-                              .map((f: { name: string | null; role: string }) =>
-                                [f.name, f.role].filter(Boolean).join(' · '),
-                              )
-                              .join('; ')
-                          : String(fact.value)}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            {registryFacts[0] && (
-              <p className="text-xs text-muted-foreground">
-                {uk.company.sources.registry} ·{' '}
-                <LocalTime value={registryFacts[0].found_at} dateOnly />
-              </p>
-            )}
-          </Section>
-          <Section title={uk.social.title}>
-            <CompanySocial
-              companyId={c.id}
-              initial={social}
-              contacts={contacts}
-            />
-          </Section>
-          <Section title={uk.prozorro.title}>
-            <ProzorroCompany
-              companyId={id}
-              snapshot={prozorro}
-              allowManualCode={!codes.some((fact) => fact.code)}
-            />
-          </Section>
-          <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
-            {!siteFacts.length && (
-              <p className="text-muted-foreground">{uk.company.noData}</p>
-            )}
-            {siteFacts.map((fact) => (
-              <div key={fact.id} className="min-w-0">
-                {fact.kind === 'schema_org' ? (
-                  <details>
-                    <summary className="cursor-pointer">
-                      {uk.scanner.kinds.schema_org}
-                    </summary>
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-2 text-xs">
-                      {JSON.stringify(fact.value, null, 2)}
-                    </pre>
-                  </details>
-                ) : (
-                  <p className="flex items-center gap-1.5">
-                    <span>
-                      <span className="text-muted-foreground">
-                        {uk.scanner.kinds[
-                          fact.kind as keyof typeof uk.scanner.kinds
-                        ] ?? fact.kind}
-                        :
-                      </span>{' '}
-                      {fact.kind === 'site_status'
-                        ? (fact.value.reason ?? uk.tasks.status.done)
-                        : fact.kind === 'captcha'
-                          ? (uk.scanner.captchas[
-                              fact.value as keyof typeof uk.scanner.captchas
-                            ] ?? String(fact.value))
-                          : typeof fact.value === 'string'
-                            ? fact.value
-                            : JSON.stringify(fact.value)}
-                    </span>
-                    <SourceLink url={fact.source_url} />
+                  <p className="text-sm">{c.address ?? uk.company.noData}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {uk.google.businessStatus[
+                      c.business_status as keyof typeof uk.google.businessStatus
+                    ] ??
+                      c.business_status ??
+                      '—'}
                   </p>
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'website',
+            label: uk.company.sectionTabs.website,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={uk.company.website}>
+                  {website ? (
+                    <a
+                      className="break-all text-sm text-accent"
+                      href={website.website}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {website.website}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {uk.company.noData}
+                    </p>
+                  )}
+                  {siteStatus && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.scanner.kinds.site_status}:{' '}
+                      {siteStatus.value?.reason ?? uk.tasks.status.done}
+                    </p>
+                  )}
+                  {websiteCandidates.map((fact) => (
+                    <div
+                      key={fact.id}
+                      className="space-y-1 border-t border-border pt-2"
+                    >
+                      <p className="text-xs text-muted-foreground">
+                        {uk.company.websiteCandidate}
+                      </p>
+                      <a
+                        className="block break-all text-sm text-accent"
+                        href={fact.site.website}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {fact.site.website}
+                      </a>
+                      <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                        {
+                          uk.company.sources[
+                            fact.source as keyof typeof uk.company.sources
+                          ]
+                        }{' '}
+                        · <LocalTime value={fact.found_at} dateOnly />
+                        <SourceLink url={fact.source_url} />
+                      </p>
+                      <WebsiteCandidate companyId={id} factId={fact.id} />
+                    </div>
+                  ))}
+                </Section>
+                <Section title={`${uk.scanner.facts} · ${siteFacts.length}`}>
+                  {!siteFacts.length && (
+                    <p className="text-muted-foreground">{uk.company.noData}</p>
+                  )}
+                  {siteFacts.map((fact) => (
+                    <div key={fact.id} className="min-w-0">
+                      {fact.kind === 'schema_org' ? (
+                        <details>
+                          <summary className="cursor-pointer">
+                            {uk.scanner.kinds.schema_org}
+                          </summary>
+                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-raised p-2 text-xs">
+                            {JSON.stringify(fact.value, null, 2)}
+                          </pre>
+                        </details>
+                      ) : (
+                        <p className="flex items-center gap-1.5">
+                          <span>
+                            <span className="text-muted-foreground">
+                              {uk.scanner.kinds[
+                                fact.kind as keyof typeof uk.scanner.kinds
+                              ] ?? fact.kind}
+                              :
+                            </span>{' '}
+                            {fact.kind === 'site_status'
+                              ? (fact.value.reason ?? uk.tasks.status.done)
+                              : fact.kind === 'captcha'
+                                ? (uk.scanner.captchas[
+                                    fact.value as keyof typeof uk.scanner.captchas
+                                  ] ?? String(fact.value))
+                                : typeof fact.value === 'string'
+                                  ? fact.value
+                                  : JSON.stringify(fact.value)}
+                          </span>
+                          <SourceLink url={fact.source_url} />
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'social',
+            label: uk.company.sectionTabs.social,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={uk.social.title}>
+                  <CompanySocial
+                    companyId={c.id}
+                    initial={social}
+                    contacts={contacts}
+                  />
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'registry',
+            label: uk.company.sectionTabs.registry,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={uk.company.registry}>
+                  <RegistryMatch companyId={c.id} candidates={candidates} />
+                  {registryFacts.length > 0 && (
+                    <dl className="grid sm:grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+                      {registryFacts.map((fact) => (
+                        <div key={fact.id} className="contents">
+                          <dt className="text-muted-foreground">
+                            {uk.registry.kinds[
+                              fact.kind as keyof typeof uk.registry.kinds
+                            ] ?? fact.kind}
+                          </dt>
+                          <dd className="break-words">
+                            {fact.kind === 'registry_match_method'
+                              ? (uk.registry.methods[
+                                  String(
+                                    fact.value,
+                                  ) as keyof typeof uk.registry.methods
+                                ] ?? String(fact.value))
+                              : fact.kind === 'founders' &&
+                                  Array.isArray(fact.value)
+                                ? fact.value
+                                    .map(
+                                      (f: {
+                                        name: string | null;
+                                        role: string;
+                                      }) =>
+                                        [f.name, f.role]
+                                          .filter(Boolean)
+                                          .join(' · '),
+                                    )
+                                    .join('; ')
+                                : String(fact.value)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                  {registryFacts[0] && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.company.sources.registry} ·{' '}
+                      <LocalTime value={registryFacts[0].found_at} dateOnly />
+                    </p>
+                  )}
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'analysis',
+            label: uk.company.sectionTabs.analysis,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={uk.analysis.title}>
+                  {!campaigns.length && (
+                    <p className="text-sm text-muted-foreground">
+                      {uk.company.noData}
+                    </p>
+                  )}
+                  {[...campaigns]
+                    .sort(
+                      (a, b) =>
+                        Number(b.id === selectedCampaign) -
+                        Number(a.id === selectedCampaign),
+                    )
+                    .map((campaign, index) => (
+                      <section
+                        key={campaign.id}
+                        className={cn(
+                          'space-y-2 text-sm',
+                          index > 0 && 'border-t border-border pt-3',
+                        )}
+                      >
+                        {campaigns.length > 1 && (
+                          <h3 className="font-semibold">{campaign.name}</h3>
+                        )}
+                        <CompanyAnalysis
+                          companyId={id}
+                          campaignId={campaign.id}
+                          analysis={analyses.find(
+                            (row) => row.campaign_id === campaign.id,
+                          )}
+                        />
+                      </section>
+                    ))}
+                </Section>
+                {orderedScores.length > 0 && (
+                  <Collapsible title={uk.scoring.details}>
+                    {orderedScores.map((row) => (
+                      <section key={row.campaign_id} className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <Link
+                            className="text-accent"
+                            href={'/campaigns?campaign=' + row.campaign_id}
+                          >
+                            {row.campaign_name}
+                          </Link>
+                          <Score value={row.score} compact />
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-sm">
+                            <thead className="text-xs text-muted-foreground">
+                              <tr>
+                                {[
+                                  uk.company.score,
+                                  uk.scoring.value,
+                                  uk.scoring.weight,
+                                  uk.scoring.contribution,
+                                ].map((label) => (
+                                  <th
+                                    key={label}
+                                    className="px-2 py-1 font-medium"
+                                  >
+                                    {label}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {row.breakdown.features.map((feature) => (
+                                <tr
+                                  key={feature.feature}
+                                  className="border-t border-border"
+                                >
+                                  <th
+                                    scope="row"
+                                    className="px-2 py-1 font-normal"
+                                  >
+                                    {
+                                      uk.campaign.weights[
+                                        feature.feature as keyof typeof uk.campaign.weights
+                                      ]
+                                    }
+                                  </th>
+                                  <td
+                                    className={cn(
+                                      'px-2 py-1 tabular-nums',
+                                      feature.value >= 0.7
+                                        ? 'text-ok'
+                                        : feature.value > 0
+                                          ? 'text-wait'
+                                          : 'text-err',
+                                    )}
+                                  >
+                                    {(feature.value * 100).toFixed(0)}%
+                                  </td>
+                                  <td className="px-2 py-1 tabular-nums">
+                                    {feature.weight}
+                                  </td>
+                                  <td className="px-2 py-1 tabular-nums">
+                                    {feature.contribution.toFixed(1)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    ))}
+                  </Collapsible>
                 )}
               </div>
-            ))}
-          </Collapsible>
-          <Collapsible
-            title={uk.company.history}
-            count={history.length + scans.length}
-          >
-            {campaigns.map((row) => (
-              <p key={row.id}>
-                <Link
-                  className="text-accent"
-                  href={'/campaigns?campaign=' + row.id}
+            ),
+          },
+          {
+            key: 'contacts',
+            label: uk.company.sectionTabs.contacts,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={`${uk.company.contacts} · ${contacts.length}`}>
+                  <ManualEntry companyId={id} />
+                  {!contacts.length && (
+                    <p className="text-sm text-muted-foreground">
+                      {uk.company.noData}
+                    </p>
+                  )}
+                  <ul className="text-sm">
+                    {sortedContacts.slice(0, visibleContacts).map(contactRow)}
+                  </ul>
+                  {sortedContacts.length > visibleContacts && (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer text-accent">
+                        {uk.company.more}:{' '}
+                        {sortedContacts.length - visibleContacts}
+                      </summary>
+                      <ul>
+                        {sortedContacts.slice(visibleContacts).map(contactRow)}
+                      </ul>
+                    </details>
+                  )}
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'prozorro',
+            label: uk.company.sectionTabs.prozorro,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section title={uk.prozorro.title}>
+                  <ProzorroCompany
+                    companyId={id}
+                    snapshot={prozorro}
+                    allowManualCode={!codes.some((fact) => fact.code)}
+                  />
+                </Section>
+              </div>
+            ),
+          },
+          {
+            key: 'history',
+            label: uk.company.sectionTabs.history,
+            content: (
+              <div className="min-w-0 space-y-3">
+                <Section
+                  title={`${uk.company.history} · ${history.length + scans.length}`}
                 >
-                  {row.name}
-                </Link>{' '}
-                ·{' '}
-                {row.batch_id
-                  ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
-                  : uk.manual.withoutBatch}{' '}
-                · <LocalTime value={row.added_at} />
-              </p>
-            ))}
-            {scans.map((scan) => (
-              <div key={scan.id}>
-                <p>
-                  {uk.scanner.title} ·{' '}
-                  {uk.tasks.status[scan.status as keyof typeof uk.tasks.status]}{' '}
-                  · <LocalTime value={scan.created_at} />
-                </p>
-                {scan.reason_uk && (
-                  <p className="text-muted-foreground">{scan.reason_uk}</p>
-                )}
-                <ScanSummary result={scan.result} />
+                  {campaigns.map((row) => (
+                    <p key={row.id}>
+                      <Link
+                        className="text-accent"
+                        href={'/campaigns?campaign=' + row.id}
+                      >
+                        {row.name}
+                      </Link>{' '}
+                      ·{' '}
+                      {row.batch_id
+                        ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
+                        : uk.manual.withoutBatch}{' '}
+                      · <LocalTime value={row.added_at} />
+                    </p>
+                  ))}
+                  {scans.map((scan) => (
+                    <div key={scan.id}>
+                      <p>
+                        {uk.scanner.title} ·{' '}
+                        {
+                          uk.tasks.status[
+                            scan.status as keyof typeof uk.tasks.status
+                          ]
+                        }{' '}
+                        · <LocalTime value={scan.created_at} />
+                      </p>
+                      {scan.reason_uk && (
+                        <p className="text-muted-foreground">
+                          {scan.reason_uk}
+                        </p>
+                      )}
+                      <ScanSummary result={scan.result} />
+                    </div>
+                  ))}
+                  <ul className="space-y-1">
+                    {history.map((row) => (
+                      <li key={row.id}>
+                        {row.action === 'company.website.adopted'
+                          ? uk.company.websiteAdopted
+                          : row.action === 'company.found'
+                            ? uk.company.added
+                            : (uk.manual.activities[
+                                row.action as keyof typeof uk.manual.activities
+                              ] ??
+                              uk.scanner.activities[
+                                row.action as keyof typeof uk.scanner.activities
+                              ] ??
+                              uk.registry.activities[
+                                row.action as keyof typeof uk.registry.activities
+                              ] ??
+                              uk.company.activity)}{' '}
+                        <span className="text-xs text-muted-foreground">
+                          · {row.user_name ?? uk.appName} ·{' '}
+                          <LocalTime value={row.created_at} />
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
               </div>
-            ))}
-            <ul className="space-y-1">
-              {history.map((row) => (
-                <li key={row.id}>
-                  {row.action === 'company.website.adopted'
-                    ? uk.company.websiteAdopted
-                    : row.action === 'company.found'
-                      ? uk.company.added
-                      : (uk.manual.activities[
-                          row.action as keyof typeof uk.manual.activities
-                        ] ??
-                        uk.scanner.activities[
-                          row.action as keyof typeof uk.scanner.activities
-                        ] ??
-                        uk.registry.activities[
-                          row.action as keyof typeof uk.registry.activities
-                        ] ??
-                        uk.company.activity)}{' '}
-                  <span className="text-xs text-muted-foreground">
-                    · {row.user_name ?? uk.appName} ·{' '}
-                    <LocalTime value={row.created_at} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Collapsible>
-        </div>
-      </div>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }
