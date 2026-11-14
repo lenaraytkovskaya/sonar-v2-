@@ -12,6 +12,7 @@ import {
 } from '@sonar/core/social-session';
 import { socialTarget, type SocialNetwork } from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
+import { sendFacebook } from './facebook-send-browser.js';
 
 export type SocialSessionAccount = {
   id: string;
@@ -34,8 +35,6 @@ const sendLabel = /^(?:send|надіслати|отправить)$/i;
 const outgoing = {
   instagram:
     '[role="row"]:has([style*="align-items: flex-end"]), [role="row"]:has([style*="align-self: flex-end"]), [aria-label^="You sent"], [aria-label^="Ви надіслали"]',
-  facebook:
-    '[aria-label^="You sent"], [aria-label^="Ви надіслали"], [aria-label^="Вы отправили"]',
   linkedin:
     '.msg-s-message-list__event--own, .msg-s-message-list__event--is-from-me',
 };
@@ -1162,37 +1161,24 @@ export function createSocialSendBrowser(
         return await withPage(account, session, timeoutMs, async (page) => {
           if (account.channel === 'instagram')
             return sendInstagram(page, target, timeoutMs, body, beforeSend);
+          if (account.channel === 'facebook')
+            return sendFacebook(page, target, timeoutMs, body, beforeSend, () =>
+              assertSocialSession(page, 'facebook'),
+            );
           await page.goto(target.canonicalUrl, {
             waitUntil: 'domcontentloaded',
             timeout: timeoutMs,
           });
           await assertSocialSession(page, account.channel);
-          if (
-            account.channel === 'facebook' &&
-            !(await page.locator('a[href*="page_transparency"]').count()) &&
-            !(await page
-              .getByText(
-                /^(?:Page transparency|Прозорість сторінки|Прозрачность страницы)$/i,
-              )
-              .count())
-          )
-            throw failure('unavailable');
-          if (account.channel === 'facebook') {
-            await page.goto(
-              `https://m.me/${encodeURIComponent(target.handle)}`,
-              { waitUntil: 'domcontentloaded', timeout: timeoutMs },
+          const messageButton = page
+            .getByRole('button', { name: messageLabel })
+            .first();
+          if (!(await messageButton.isVisible()))
+            throw new SocialSendError(
+              'unavailable',
+              'Сторінка LinkedIn не приймає повідомлень',
             );
-          } else {
-            const messageButton = page
-              .getByRole('button', { name: messageLabel })
-              .first();
-            if (!(await messageButton.isVisible()))
-              throw new SocialSendError(
-                'unavailable',
-                'Сторінка LinkedIn не приймає повідомлень',
-              );
-            await messageButton.click();
-          }
+          await messageButton.click();
           await assertSocialSession(page, account.channel);
           const composer = page
             .locator(

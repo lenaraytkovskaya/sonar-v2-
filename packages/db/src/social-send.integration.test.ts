@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, expect, it, vi } from 'vitest';
-import { SocialSendError } from '@sonar/core/social-session';
+import {
+  SocialSendError,
+  SocialSessionCheckError,
+} from '@sonar/core/social-session';
 import { campaignSchema } from '@sonar/core';
 const enabled = process.env.RUN_DB_TESTS === '1';
-it.skipIf(!enabled)(
-  'queues only human social replies and guards attempts, limits, sessions and refusals',
-  async () => {
+it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
+  'queues only human %s replies and guards durable attempts, limits, sessions and refusals',
+  async (network) => {
     const { sonarPool } = await import('./index.js');
     const { sendEmailMessage } = await import('./email.js');
     const {
@@ -73,11 +76,11 @@ it.skipIf(!enabled)(
         rows: [contact],
       } = await sonarPool.query(
         "insert into contacts(company_id,kind,value,normalized,source) values($1,'social',$2,$2,'manual') returning id",
-        [company, `https://www.instagram.com/sonar_test/`],
+        [company, `https://www.${network}.com/sonar_test/`],
       );
       await sonarPool.query(
-        `insert into channel_accounts(id,channel,name,address,daily_limit,owner_id,settings) values($1,'instagram','Social send','instagram',20,$2,'{"sessionStatus":"valid"}')`,
-        [account, user],
+        `insert into channel_accounts(id,channel,name,address,daily_limit,owner_id,settings) values($1,$3,'Social send',$3,20,$2,'{"sessionStatus":"valid"}')`,
+        [account, user, network],
       );
       const conversationId = await ensureContactConversation(contact.id);
       expect((await getConversationChat(conversationId)).socialAvailable).toBe(
@@ -186,6 +189,57 @@ it.skipIf(!enabled)(
       });
       expect(ambiguous).toHaveBeenCalledTimes(1);
       await reset();
+      // Browser transport failures keep the session valid. After its durable
+      // marker the adapter reports uncertainty, and the DB must never retry it.
+      for (const attempted of [false, true]) {
+        await reset();
+        const message = await create();
+        const transport = vi.fn(async (_request, a) => {
+          if (attempted) {
+            await a!.beforeSend!();
+            throw new SocialSendError(
+              'delivery_uncertain',
+              'Перевірте чат вручну',
+            );
+          }
+          throw new SocialSessionCheckError('network');
+        });
+        expect(await send(message.id, transport)).toMatchObject({
+          status: attempted ? 'paused' : 'skipped',
+          reasonCode: attempted
+            ? 'social_delivery_uncertain'
+            : 'social_unavailable',
+        });
+        expect(
+          (
+            await sonarPool.query(
+              'select status,settings from channel_accounts where id=$1',
+              [account],
+            )
+          ).rows[0],
+        ).toMatchObject({
+          status: 'active',
+          settings: { sessionStatus: 'valid' },
+        });
+        expect(
+          (
+            await sonarPool.query(
+              'select status,first_attempt_at from messages where id=$1',
+              [message.id],
+            )
+          ).rows[0],
+        ).toEqual({
+          status: 'failed',
+          first_attempt_at: attempted ? now : null,
+        });
+        if (attempted) {
+          expect(await send(message.id, transport)).toMatchObject({
+            status: 'paused',
+            reasonCode: 'social_delivery_uncertain',
+          });
+          expect(transport).toHaveBeenCalledOnce();
+        }
+      }
       // Rate limits pause the account without invalidating cookies or retrying attempts.
       for (const attempted of [false, true]) {
         await reset();
