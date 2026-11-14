@@ -24,6 +24,10 @@ it.skipIf(!enabled)(
         name: 'Profile',
       })),
       getQr: vi.fn(async () => 'data:image/png;base64,cXItc2VjcmV0'),
+      repairWebhook: vi.fn(async (): Promise<WhatsAppSession> => ({
+        status: 'STARTING',
+        phone: null,
+      })),
       restart: vi.fn(async (): Promise<WhatsAppSession> => ({
         status: 'STARTING',
         phone: null,
@@ -193,6 +197,41 @@ it.skipIf(!enabled)(
       });
       expect(JSON.stringify(saved.settings)).not.toContain('cXItc2VjcmV0');
       expect(saved.settings).not.toHaveProperty('apiKey');
+      for (const [id, actor] of [
+        [accountId, other],
+        [randomUUID(), user],
+      ])
+        await expect(
+          accounts.repairWhatsAppWebhook(id, actor, adapter),
+        ).rejects.toThrow('не знайдено');
+      expect(adapter.repairWebhook).not.toHaveBeenCalled();
+      expect(
+        await accounts.repairWhatsAppWebhook(accountId, user, adapter),
+      ).toMatchObject({ status: 'starting' });
+      adapter.repairWebhook.mockRejectedValueOnce(
+        Error('private-test-key config'),
+      );
+      expect(
+        await accounts.repairWhatsAppWebhook(accountId, user, adapter),
+      ).toMatchObject({
+        status: 'failed',
+        reasonUk: 'Не вдалося виконати запит WhatsApp.',
+      });
+      const repairs = (
+        await db.sonarPool.query(
+          "select status,reason_code,reason_uk,payload,result from tasks where subject_id=$1 and type='whatsapp.account.repair-webhook' order by started_at",
+          [accountId],
+        )
+      ).rows;
+      expect(repairs.map((task) => task.status)).toEqual(['done', 'failed']);
+      expect(repairs[1]).toMatchObject({
+        reason_code: 'waha_error',
+        reason_uk: 'Не вдалося виконати запит WhatsApp.',
+      });
+      expect(JSON.stringify(repairs)).not.toMatch(/private-test-key|config/);
+      expect(adapter.logout).toHaveBeenCalledTimes(1);
+      await accounts.refreshWhatsAppAccount(accountId, user, adapter);
+      await accounts.logoutWhatsAppAccount(accountId, user, adapter);
       await accounts.updateWhatsAppAccount(accountId, { enabled: true }, user);
       expect(
         (await accounts.listWhatsAppAccounts()).find((a) => a.id === accountId),

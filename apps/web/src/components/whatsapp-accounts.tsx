@@ -174,7 +174,22 @@ export function WhatsAppAccounts({
               {uk.forms.save}
             </Button>
           </form>
+          <p className="text-sm text-muted-foreground">
+            {uk.whatsapp.repairWebhookHint}
+          </p>
           <div className="flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              disabled={pending || !configured}
+              onClick={() =>
+                void mutate('POST', {
+                  action: 'repair-webhook',
+                  id: account.id,
+                })
+              }
+            >
+              {uk.whatsapp.repairWebhook}
+            </Button>
             {account.status === 'active' && (
               <Button
                 variant="outline"
