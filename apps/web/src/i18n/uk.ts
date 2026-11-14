@@ -454,6 +454,16 @@ export const uk = {
     },
   },
   company: {
+    sectionTabs: {
+      googleMaps: 'Google Maps',
+      website: 'Сайт',
+      social: 'Соцмережі',
+      registry: 'ЄДР',
+      analysis: 'Аналіз',
+      contacts: 'Контакти',
+      prozorro: 'Prozorro',
+      history: 'Історія',
+    },
     tabs: 'Розділи компанії',
     overviewTab: 'Огляд',
     contactTab: 'Звʼязатися',
