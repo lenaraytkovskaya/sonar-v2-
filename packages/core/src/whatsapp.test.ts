@@ -24,6 +24,166 @@ function fake(...responses: (object | Response | Error)[]) {
 }
 const adapter = (network: typeof fetch) =>
   createWhatsAppAdapter({ apiKey: 'private-test-key' }, network);
+describe('read-only session webhook diagnostics', () => {
+  const hook = {
+    url: 'http://web:3000/api/webhooks/waha',
+    events: ['message'],
+    customHeaders: [{ name: 'x-api-key', value: 'private-test-key' }],
+  };
+  it.each([
+    'STOPPED',
+    'STARTING',
+    'SCAN_QR_CODE',
+    'FAILED',
+    'PASSKEY_REQUIRED',
+    'PASSKEY_CONFIRMATION_REQUIRED',
+  ])(
+    'reports %s without exposing session details or claiming a global webhook is absent',
+    async (status) => {
+      expect(
+        await adapter(fake({ status, config: null })).diagnoseWebhook(),
+      ).toMatchObject({
+        scope: 'session_config_only',
+        sessionState: status,
+        providerError: 'none',
+        expectedUrlConfigured: false,
+        messageEventConfigured: false,
+        apiKeyMatches: false,
+        webhookReachability: 'not_checked',
+      });
+    },
+  );
+  it.each([
+    [[hook], true, true, true],
+    [[{ ...hook, events: ['*'] }], true, true, true],
+    [[], false, false, false],
+    [[{ ...hook, url: `${hook.url}/wrong` }], false, false, false],
+    [[{ ...hook, events: ['message.any'] }], true, false, false],
+    [[{ ...hook, customHeaders: null }], true, true, false],
+    [
+      [{ ...hook, customHeaders: [{ name: 'X-Api-Key', value: 'wrong' }] }],
+      true,
+      true,
+      false,
+    ],
+    [
+      [
+        { ...hook, events: ['session.status'] },
+        { ...hook, url: 'http://other' },
+      ],
+      true,
+      false,
+      false,
+    ],
+    [
+      [
+        {
+          ...hook,
+          customHeaders: [
+            ...hook.customHeaders,
+            { name: 'X-Api-Key', value: 'wrong' },
+          ],
+        },
+      ],
+      true,
+      true,
+      false,
+    ],
+  ])(
+    'matches URL, event and key on the same hook: %j',
+    async (webhooks, url, event, key) => {
+      const network = fake({
+        ...working,
+        config: { webhooks, proxy: 'private-proxy' },
+        raw: 'private-data',
+      });
+      const diagnostic = await adapter(network).diagnoseWebhook();
+      expect(diagnostic).toEqual({
+        scope: 'session_config_only',
+        webhookReachability: 'not_checked',
+        providerReachability: 'reachable',
+        providerError: 'none',
+        sessionState: 'WORKING',
+        expectedUrlConfigured: url,
+        messageEventConfigured: event,
+        apiKeyMatches: key,
+      });
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(network.mock.calls[0]).toEqual([
+        'http://waha:3000/api/sessions/default',
+        expect.objectContaining({ method: 'GET', body: undefined }),
+      ]);
+      expect(JSON.stringify(diagnostic)).not.toMatch(
+        /private|380671|Team|http:|headers|config"/i,
+      );
+    },
+  );
+  it.each([
+    [
+      new Response('private-key', { status: 401 }),
+      'reachable',
+      'unauthorized',
+      'unknown',
+    ],
+    [
+      new Response('private-key', { status: 403 }),
+      'reachable',
+      'unauthorized',
+      'unknown',
+    ],
+    [
+      new Response('private-key', { status: 404 }),
+      'reachable',
+      'session_missing',
+      'missing',
+    ],
+    [
+      new Response('private-key', { status: 429 }),
+      'reachable',
+      'rate_limited',
+      'unknown',
+    ],
+    [
+      new Response('private-key', { status: 500 }),
+      'reachable',
+      'provider_error',
+      'unknown',
+    ],
+    [new Error('private-key'), 'unreachable', 'provider_error', 'unknown'],
+    [new Response('private-key'), 'reachable', 'invalid_response', 'unknown'],
+    [{ status: 'private-key' }, 'reachable', 'invalid_response', 'unknown'],
+    [
+      { ...working, config: { webhooks: 'private-key' } },
+      'reachable',
+      'invalid_response',
+      'WORKING',
+    ],
+  ])(
+    'classifies failures without exposing provider content: %j',
+    async (response, reachability, error, state) => {
+      const diagnostic = await adapter(fake(response)).diagnoseWebhook();
+      expect(diagnostic).toMatchObject({
+        providerReachability: reachability,
+        providerError: error,
+        sessionState: state,
+        expectedUrlConfigured: 'unknown',
+        apiKeyMatches: 'unknown',
+      });
+      expect(JSON.stringify(diagnostic)).not.toContain('private');
+    },
+  );
+  it('does not request WAHA when the backend key is absent', async () => {
+    const network = fake();
+    expect(
+      await createWhatsAppAdapter({ apiKey: '' }, network).diagnoseWebhook(),
+    ).toMatchObject({
+      providerReachability: 'not_checked',
+      providerError: 'not_configured',
+      apiKeyMatches: 'unknown',
+    });
+    expect(network).not.toHaveBeenCalled();
+  });
+});
 describe('WhatsApp WAHA Core adapter', () => {
   it('normalizes wa.me, international numbers and campaign countries', () => {
     expect(

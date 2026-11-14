@@ -75,6 +75,28 @@ export type WhatsAppSession = {
   phone: string | null;
   name?: string;
 };
+export type WhatsAppWebhookDiagnostic = {
+  scope: 'session_config_only';
+  webhookReachability: 'not_checked';
+  providerReachability: 'reachable' | 'unreachable' | 'not_checked';
+  providerError:
+    | 'none'
+    | 'not_configured'
+    | 'unauthorized'
+    | 'session_missing'
+    | 'rate_limited'
+    | 'invalid_response'
+    | 'provider_error';
+  sessionState:
+    | WhatsAppSession['status']
+    | 'PASSKEY_REQUIRED'
+    | 'PASSKEY_CONFIRMATION_REQUIRED'
+    | 'unknown'
+    | 'missing';
+  expectedUrlConfigured: boolean | 'unknown';
+  messageEventConfigured: boolean | 'unknown';
+  apiKeyMatches: boolean | 'unknown';
+};
 export type WhatsAppSendRequest = {
   accountId: string;
   to: string;
@@ -86,6 +108,7 @@ export function createWhatsAppAdapter(
   config: { baseUrl?: string; apiKey?: string } = {},
   network: typeof fetch = (...args) => fetch(...args),
 ) {
+  const webhookUrl = 'http://web:3000/api/webhooks/waha';
   async function request(
     path: string,
     method = 'GET',
@@ -222,7 +245,7 @@ export function createWhatsAppAdapter(
     return {
       webhooks: [
         {
-          url: 'http://web:3000/api/webhooks/waha',
+          url: webhookUrl,
           events: ['message'],
           customHeaders: [
             {
@@ -250,6 +273,90 @@ export function createWhatsAppAdapter(
   }
   return {
     getSession,
+    async diagnoseWebhook(): Promise<WhatsAppWebhookDiagnostic> {
+      const result: WhatsAppWebhookDiagnostic = {
+        // Global env webhooks are not included in GET session config (WAHA docs).
+        scope: 'session_config_only',
+        webhookReachability: 'not_checked',
+        providerReachability: 'not_checked',
+        providerError: 'none',
+        sessionState: 'unknown',
+        expectedUrlConfigured: 'unknown',
+        messageEventConfigured: 'unknown',
+        apiKeyMatches: 'unknown',
+      };
+      try {
+        const data = await request('/api/sessions/default');
+        result.providerReachability = 'reachable';
+        const states = [
+          'WORKING',
+          'SCAN_QR_CODE',
+          'STARTING',
+          'STOPPED',
+          'FAILED',
+          'PASSKEY_REQUIRED',
+          'PASSKEY_CONFIRMATION_REQUIRED',
+        ];
+        if (!states.includes(String(data.status)))
+          throw new WhatsAppSendError('waha_response', '');
+        result.sessionState =
+          data.status as WhatsAppWebhookDiagnostic['sessionState'];
+        const object = (value: unknown): value is Record<string, unknown> =>
+          !!value && typeof value === 'object' && !Array.isArray(value);
+        if (data.config != null && !object(data.config))
+          throw new WhatsAppSendError('waha_response', '');
+        const hooks = (data.config as Record<string, unknown> | null)?.webhooks;
+        if (hooks != null && !Array.isArray(hooks))
+          throw new WhatsAppSendError('waha_response', '');
+        const expected = (hooks ?? []).filter(
+          (hook: unknown) => object(hook) && hook.url === webhookUrl,
+        ) as Record<string, unknown>[];
+        const message = expected.filter(
+          (hook) =>
+            Array.isArray(hook.events) &&
+            (hook.events.includes('message') || hook.events.includes('*')),
+        );
+        result.expectedUrlConfigured = expected.length > 0;
+        result.messageEventConfigured = message.length > 0;
+        const key = config.apiKey ?? process.env.WAHA_API_KEY;
+        result.apiKeyMatches = message.some((hook) => {
+          const headers = hook.customHeaders;
+          if (!Array.isArray(headers)) return false;
+          const keys = headers.filter(
+            (header: unknown) =>
+              object(header) &&
+              typeof header.name === 'string' &&
+              header.name.toLowerCase() === 'x-api-key',
+          );
+          // Conflicting duplicate headers cannot be considered a match.
+          return (
+            keys.length > 0 && keys.every((header) => header.value === key)
+          );
+        });
+      } catch (error) {
+        const code = whatsappError(error).code;
+        result.providerReachability =
+          code === 'waha_config'
+            ? 'not_checked'
+            : code === 'waha_unreachable'
+              ? 'unreachable'
+              : 'reachable';
+        result.providerError =
+          code === 'waha_config'
+            ? 'not_configured'
+            : code === 'waha_auth'
+              ? 'unauthorized'
+              : code === 'session_missing'
+                ? 'session_missing'
+                : code === 'rate_limit'
+                  ? 'rate_limited'
+                  : code === 'waha_response'
+                    ? 'invalid_response'
+                    : 'provider_error';
+        if (code === 'session_missing') result.sessionState = 'missing';
+      }
+      return result;
+    },
     async phoneByLid(lid: string): Promise<string | null> {
       if (!/^[1-9]\d*@lid$/.test(lid)) return null;
       const data = await request(

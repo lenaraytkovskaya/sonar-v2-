@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, list, connect, refresh, restart, update, logout } = vi.hoisted(
-  () => ({
+const { session, list, connect, refresh, restart, update, logout, diagnose } =
+  vi.hoisted(() => ({
     session: vi.fn(),
     list: vi.fn(),
     connect: vi.fn(),
@@ -8,8 +8,8 @@ const { session, list, connect, refresh, restart, update, logout } = vi.hoisted(
     restart: vi.fn(),
     update: vi.fn(),
     logout: vi.fn(),
-  }),
-);
+    diagnose: vi.fn(),
+  }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
@@ -25,6 +25,7 @@ vi.mock('@sonar/db/whatsapp', () => ({
   restartWhatsAppAccount: restart,
   updateWhatsAppAccount: update,
   logoutWhatsAppAccount: logout,
+  diagnoseWhatsAppWebhook: diagnose,
 }));
 import { GET, POST, PATCH, DELETE } from '../app/api/whatsapp-accounts/route';
 import { uk } from '../i18n/uk';
@@ -141,6 +142,44 @@ describe('WhatsApp account API', () => {
     expect(await response.json()).toEqual({ accounts: [account] });
     expect(refresh).not.toHaveBeenCalled();
     expect(restart).not.toHaveBeenCalled();
+    expect(diagnose).not.toHaveBeenCalled();
+  });
+  it('requires authentication and a valid explicit diagnostic action', async () => {
+    const readDiagnostic = (query: string) =>
+      new Request(`http://localhost/api/whatsapp-accounts?${query}`);
+    session.mockResolvedValueOnce({});
+    expect(
+      (await GET(readDiagnostic(`action=diagnose-webhook&id=${id}`))).status,
+    ).toBe(401);
+    for (const query of [
+      'action=diagnose-webhook',
+      'action=diagnose-webhook&id=bad',
+      `action=other&id=${id}`,
+    ])
+      expect((await GET(readDiagnostic(query))).status).toBe(400);
+    expect(diagnose).not.toHaveBeenCalled();
+  });
+  it('returns diagnostic JSON through GET with the authenticated owner and no account mutations', async () => {
+    const diagnostic = { scope: 'session_config_only', apiKeyMatches: false };
+    diagnose.mockResolvedValueOnce(diagnostic);
+    const response = await GET(
+      new Request(
+        `http://localhost/api/whatsapp-accounts?action=diagnose-webhook&id=${id}`,
+      ),
+    );
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.json()).toEqual({ diagnostic });
+    expect(diagnose).toHaveBeenCalledWith(id, 'actor');
+    for (const operation of [list, connect, refresh, restart, update, logout])
+      expect(operation).not.toHaveBeenCalled();
+    diagnose.mockRejectedValueOnce(Error('private-key and config'));
+    const failed = await GET(
+      new Request(
+        `http://localhost/api/whatsapp-accounts?action=diagnose-webhook&id=${id}`,
+      ),
+    );
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: uk.email.error });
   });
   it('polls status through a protected mutation and clears QR once connected', async () => {
     const response = await POST(request({ action: 'refresh', id }));
