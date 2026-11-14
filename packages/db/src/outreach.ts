@@ -463,7 +463,7 @@ export async function saveOutreachDraft(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, input.contactId, channel],
     );
     const {
@@ -710,7 +710,7 @@ export async function logOutreachCall(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,'call') on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,'call') on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, input.contactId],
     );
     const {

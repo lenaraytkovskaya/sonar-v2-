@@ -90,6 +90,7 @@ export async function enqueueTask(
   key: string,
   payload: object = {},
   existingClient?: PoolClient,
+  startAfter?: Date,
 ) {
   const save = async (client: PoolClient) => {
     const { rows } = await client.query(
@@ -115,7 +116,7 @@ export async function enqueueTask(
       );
       id = resumed[0]?.id;
     }
-    if (id) await dispatch(client, id, type);
+    if (id) await dispatch(client, id, type, startAfter);
     return id ?? null;
   };
   return existingClient ? save(existingClient) : transaction(save);

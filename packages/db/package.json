@@ -79,6 +79,14 @@
     "./social-accounts": {
       "types": "./dist/social-accounts.d.ts",
       "default": "./dist/social-accounts.js"
+    },
+    "./social-inbox": {
+      "types": "./dist/social-inbox.d.ts",
+      "default": "./dist/social-inbox.js"
+    },
+    "./social-action": {
+      "types": "./dist/social-action.d.ts",
+      "default": "./dist/social-action.js"
     }
   },
   "files": [

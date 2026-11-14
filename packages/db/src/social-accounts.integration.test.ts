@@ -291,7 +291,7 @@ it.skipIf(!enabled)(
       ).toBeNull();
       expect(
         await accounts.acquireSocialFetchSession(c, 'instagram', 2, now),
-      ).toEqual({ runAt: new Date('2026-11-13T10:01:30Z') });
+      ).toEqual({ runAt: new Date('2026-11-13T10:02:00Z') });
       const tomorrow = new Date('2026-11-14T00:00:00Z');
       expect(
         await accounts.acquireSocialFetchSession(c, 'instagram', 1, tomorrow),

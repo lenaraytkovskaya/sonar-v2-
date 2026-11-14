@@ -1,4 +1,5 @@
 import { registerInboundTasks } from './inbound.js';
+import { registerSocialInboxTasks } from './social-inbox.js';
 import { registerSocialTasks, closeSocialBrowser } from './social.js';
 import {
   registerSocialSessionTasks,
@@ -30,6 +31,7 @@ const started = (async () => {
   await boss.createQueue(queueName);
   await registerEmailTasks();
   await registerInboundTasks();
+  await registerSocialInboxTasks();
   await registerDraftTasks();
   await registerAnalysisTasks();
   await registerScoringTasks();

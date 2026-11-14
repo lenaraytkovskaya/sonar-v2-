@@ -13,6 +13,7 @@ import {
 } from '@sonar/core/social-session';
 import type { SocialNetwork } from '@sonar/core';
 import { sonarPool } from './index.js';
+import { reserveSocialAction } from './social-action.js';
 import { EmailValidationError, transaction } from './email.js';
 import { enqueueTask, logActivity, type TaskOutcome } from './tasks.js';
 
@@ -93,7 +94,13 @@ export async function acquireSocialFetchSession(
         (runtime.count ?? 0) >= dailyLimit
       )
         continue;
-      const next = Date.parse(runtime.nextAt ?? '');
+      const next = Math.max(
+        Date.parse(runtime.nextAt ?? '') || 0,
+        Date.parse(
+          (account.settings.socialAction as { nextAt?: string } | undefined)
+            ?.nextAt ?? '',
+        ) || 0,
+      );
       if (next > now.getTime()) {
         nextAt = Math.min(nextAt, next);
         continue;
@@ -142,6 +149,8 @@ export async function reserveSocialFetchSession(
     ]);
     if (!task) throw new Error('Unknown social request');
     if (!task.result?.sessionFetchAccountId) {
+      if (await reserveSocialAction(c, id, 'fetch', now))
+        throw new Error('Social action spacing changed during reservation');
       await c.query(
         `update channel_accounts set settings=jsonb_set(settings,'{sessionFetch}',jsonb_build_object('day',$2::text,'count',case when settings->'sessionFetch'->>'day'=$2 then coalesce((settings->'sessionFetch'->>'count')::int,0)+1 else 1 end,'nextAt',$3::text)) where id=$1`,
         [

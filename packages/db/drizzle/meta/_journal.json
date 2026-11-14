@@ -239,6 +239,13 @@
       "when": 1794540000006,
       "tag": "0033_social_proxy_reservation",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794540000007,
+      "tag": "0034_social_inbox",
+      "breakpoints": true
     }
   ]
 }

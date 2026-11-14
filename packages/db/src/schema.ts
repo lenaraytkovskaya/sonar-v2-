@@ -56,26 +56,36 @@ export const taskStatus = pgEnum('task_status', [
   'failed',
   'paused',
 ]);
-export const tasks = pgTable('tasks', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  type: text('type').notNull(),
-  status: taskStatus('status').notNull().default('queued'),
-  subjectType: text('subject_type'),
-  subjectId: text('subject_id'),
-  batchId: uuid('batch_id'),
-  idempotencyKey: text('idempotency_key').notNull().unique(),
-  attempts: integer('attempts').notNull().default(0),
-  reasonCode: text('reason_code'),
-  reasonUk: text('reason_uk'),
-  payload: jsonb('payload').notNull().default({}),
-  result: jsonb('result'),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  startedAt: timestamp('started_at', { withTimezone: true }),
-  finishedAt: timestamp('finished_at', { withTimezone: true }),
-  dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
-});
+export const tasks = pgTable(
+  'tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    type: text('type').notNull(),
+    status: taskStatus('status').notNull().default('queued'),
+    subjectType: text('subject_type'),
+    subjectId: text('subject_id'),
+    batchId: uuid('batch_id'),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    attempts: integer('attempts').notNull().default(0),
+    reasonCode: text('reason_code'),
+    reasonUk: text('reason_uk'),
+    payload: jsonb('payload').notNull().default({}),
+    result: jsonb('result'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('social_inbox_one_account_job')
+      .on(sql`(${t.payload}->>'accountId')`)
+      .where(
+        sql`${t.type} = 'social.inbox.sync' and ${t.status} in ('queued','running')`,
+      ),
+  ],
+);
 export const activityLog = pgTable('activity_log', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -430,7 +440,7 @@ export const doNotContact = pgTable(
     unique('do_not_contact_target').on(t.kind, t.valueNormalized),
     check(
       'block_kind',
-      sql`${t.kind} in ('company','email','domain','phone','telegram','whatsapp','viber','form')`,
+      sql`${t.kind} in ('company','email','domain','phone','telegram','whatsapp','viber','form','social')`,
     ),
   ],
 );
@@ -443,6 +453,7 @@ export const conversations = pgTable(
     contactId: uuid('contact_id').references(() => contacts.id),
     accountId: uuid('account_id').references(() => channelAccounts.id),
     peerValue: text('peer_value'),
+    providerThreadId: text('provider_thread_id'),
     status: text('status').notNull().default('open'),
     channel: text('channel').notNull().default('email'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -452,13 +463,15 @@ export const conversations = pgTable(
   (t) => [
     uniqueIndex('conversation_inbound_peer')
       .on(t.accountId, t.channel, t.peerValue)
-      .where(sql`${t.peerValue} is not null`),
-    unique('conversation_company_campaign_contact_channel').on(
-      t.companyId,
-      t.campaignId,
-      t.contactId,
-      t.channel,
-    ),
+      .where(sql`${t.peerValue} is not null and ${t.providerThreadId} is null`),
+    uniqueIndex('conversation_social_thread')
+      .on(t.accountId, t.providerThreadId)
+      .where(
+        sql`${t.channel} = 'social' and ${t.providerThreadId} is not null`,
+      ),
+    uniqueIndex('conversation_company_campaign_contact_channel')
+      .on(t.companyId, t.campaignId, t.contactId, t.channel)
+      .where(sql`${t.providerThreadId} is null`),
   ],
 );
 export const messages = pgTable(
@@ -484,6 +497,8 @@ export const messages = pgTable(
     firstAttemptAt: timestamp('first_attempt_at', { withTimezone: true }),
     quotaDay: text('quota_day'),
     providerId: text('provider_id'),
+    externalMessageId: text('external_message_id'),
+    socialMeta: jsonb('social_meta'),
     rfcMessageId: text('rfc_message_id'),
     classification: text('classification'),
     needsHuman: boolean('needs_human').notNull().default(false),
@@ -500,7 +515,12 @@ export const messages = pgTable(
   (t) => [
     uniqueIndex('message_inbound_provider')
       .on(t.channel, t.accountId, t.providerId)
-      .where(sql`${t.direction} = 'in'`),
+      .where(sql`${t.direction} = 'in' and ${t.channel} <> 'social'`),
+    uniqueIndex('message_social_external')
+      .on(sql`(${t.socialMeta}->>'network')`, t.accountId, t.externalMessageId)
+      .where(
+        sql`${t.channel} = 'social' and ${t.externalMessageId} is not null`,
+      ),
     check(
       'message_classification',
       sql`${t.classification} in ('interest','question','price','contract','complaint','refusal','autoreply')`,

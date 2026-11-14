@@ -25,6 +25,7 @@ import {
 } from '@sonar/core/whatsapp';
 import { listWhatsAppAccounts } from './whatsapp.js';
 import { sonarPool } from './index.js';
+import { reserveSocialAction } from './social-action.js';
 import {
   enqueueTask,
   logActivity,
@@ -512,7 +513,7 @@ export async function createCompanyMessage(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, contact.id, channel],
     );
     const status = messageStatusForMode(
@@ -1109,6 +1110,17 @@ export async function sendEmailMessage(
         [messageId, now, request, rfcMessageId],
       );
     }
+    if (channel === 'social') {
+      const runAt = await reserveSocialAction(c, account.id, 'send', now);
+      if (runAt)
+        return finish(
+          deferred(
+            runAt,
+            'social_action_gate',
+            'Надсилання після спільної паузи дій акаунта.',
+          ),
+        );
+    }
     if (m.quota_day !== day)
       await c.query('update messages set quota_day=$2 where id=$1', [
         messageId,
@@ -1130,12 +1142,34 @@ export async function sendEmailMessage(
       providerId: string,
       reasonUk: string | null = null,
       observation?: FacebookDispatchResult['observation'],
+      identity?: Pick<FacebookDispatchResult, 'externalMessageId' | 'threadId'>,
     ): Promise<TaskOutcome> => {
       await transaction(async (tx) => {
         await tx.query(
           "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=$4 where id=$1",
           [messageId, providerId, now, reasonUk],
         );
+        if (channel === 'social' && identity?.externalMessageId) {
+          if (
+            identity.externalMessageId.length > 1000 ||
+            /[\p{Cc}]/u.test(identity.externalMessageId)
+          )
+            throw new SocialSendError(
+              'delivery_uncertain',
+              'Перевірте ID повідомлення вручну',
+            );
+          await tx.query(
+            "update messages set external_message_id=$2,social_meta=coalesce(social_meta,'{}'::jsonb)||$3::jsonb where id=$1",
+            [
+              messageId,
+              identity.externalMessageId,
+              JSON.stringify({
+                network: account.channel,
+                ...(identity.threadId ? { threadId: identity.threadId } : {}),
+              }),
+            ],
+          );
+        }
         await tx.query(
           "update companies set status='contacted',updated_at=now() where id=$1 and status in ('new','enriching','ready')",
           [m.company_id],
@@ -1217,6 +1251,7 @@ export async function sendEmailMessage(
           providerId.dialogUrl,
           facebookDispatchReason,
           facts,
+          providerId,
         );
       }
       // FB browser text alone is never a verified delivery receipt.

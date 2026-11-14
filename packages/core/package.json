@@ -19,6 +19,10 @@
     "./social-session": {
       "types": "./dist/social-session.d.ts",
       "default": "./dist/social-session.js"
+    },
+    "./social-inbox": {
+      "types": "./dist/social-inbox.d.ts",
+      "default": "./dist/social-inbox.js"
     }
   },
   "files": [
