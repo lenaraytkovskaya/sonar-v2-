@@ -19,6 +19,7 @@ function pagination(value: unknown) {
 }
 export type InstagramInboxPage = {
   mailboxId: string | null;
+  emptyEdges: boolean;
   actors: { viewerId: unknown; mailboxId: unknown }[];
   messages: SocialInboxMessage[];
   inbox: ReturnType<typeof pagination>;
@@ -37,6 +38,8 @@ export function parseInstagramInbox(
   const connection = object(mailbox.threads_by_folder);
   const result: InstagramInboxPage = {
     mailboxId: digits(mailbox.id) ? mailbox.id : null,
+    emptyEdges:
+      Array.isArray(connection.edges) && connection.edges.length === 0,
     actors: [],
     messages: [],
     inbox: pagination(connection.page_info),

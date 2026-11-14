@@ -129,6 +129,23 @@ export type SocialSessionCheckDiagnostic = {
     persisted: number;
     httpStatus: number | null;
   };
+  actor?: {
+    reason:
+      | 'mailbox_missing'
+      | 'initial_actors_empty'
+      | 'mailbox_changed'
+      | 'viewer_mismatch'
+      | 'actor_mailbox_mismatch';
+    hasPreviousMailbox: boolean;
+    hasMailbox: boolean;
+    hasActors: boolean;
+    emptyEdges: boolean;
+    allViewersMatchExpected: boolean;
+    anyViewerMatchesExpected: boolean;
+    anyActorMailboxMatchesExpected: boolean;
+    responseMailboxMatchesExpected: boolean;
+    allActorMailboxesMatchResponse: boolean;
+  };
 };
 /** Rebuild from fixed keys; never persist arbitrary browser/callback properties. */
 export function safeSocialSessionDiagnostic(
@@ -198,6 +215,39 @@ export function safeSocialSessionDiagnostic(
       capture[key] = Math.min(count, 2);
     }
   }
+  let actor: SocialSessionCheckDiagnostic['actor'];
+  if (d.actor !== undefined) {
+    if (
+      !d.actor ||
+      ![
+        'mailbox_missing',
+        'initial_actors_empty',
+        'mailbox_changed',
+        'viewer_mismatch',
+        'actor_mailbox_mismatch',
+      ].includes(d.actor.reason)
+    )
+      return;
+    const facts = {} as Omit<
+      NonNullable<SocialSessionCheckDiagnostic['actor']>,
+      'reason'
+    >;
+    for (const key of [
+      'hasPreviousMailbox',
+      'hasMailbox',
+      'hasActors',
+      'emptyEdges',
+      'allViewersMatchExpected',
+      'anyViewerMatchesExpected',
+      'anyActorMailboxMatchesExpected',
+      'responseMailboxMatchesExpected',
+      'allActorMailboxesMatchResponse',
+    ] as const) {
+      if (typeof d.actor[key] !== 'boolean') return;
+      facts[key] = d.actor[key];
+    }
+    actor = { reason: d.actor.reason, ...facts };
+  }
   return {
     version: 1,
     stage: d.stage,
@@ -206,6 +256,7 @@ export function safeSocialSessionDiagnostic(
     errorKind: d.errorKind,
     visible,
     ...(capture ? { capture } : {}),
+    ...(actor ? { actor } : {}),
   };
 }
 export class SocialSessionCheckError extends SocialSendError {
