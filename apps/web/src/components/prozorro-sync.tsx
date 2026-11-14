@@ -12,6 +12,7 @@ type Progress = {
 };
 type SyncState = {
   'prozorro.enabled'?: boolean;
+  'prozorro.full_sync.enabled'?: boolean;
   'prozorro.tender.progress'?: Progress;
   'prozorro.contract.progress'?: Progress;
 };
@@ -42,7 +43,7 @@ export function ProzorroSync() {
       clearInterval(timer);
     };
   }, []);
-  const act = async (action: 'start' | 'pause') => {
+  const act = async (action: 'start' | 'pause' | 'enable' | 'disable') => {
     setPending(true);
     setError('');
     try {
@@ -62,65 +63,82 @@ export function ProzorroSync() {
   };
   return (
     <Card className="space-y-4 p-6">
-      <h2 className="font-heading text-base font-bold">{uk.prozorro.title}</h2>
-      <div className="flex flex-wrap gap-3">
-        <Button
-          disabled={!loaded || pending || data['prozorro.enabled'] === true}
-          onClick={() => void act('start')}
-        >
-          {uk.prozorro.start}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={!loaded || pending || data['prozorro.enabled'] !== true}
-          onClick={() => void act('pause')}
-        >
-          {uk.prozorro.pause}
-        </Button>
-      </div>
-      <div role="status" className="grid gap-4 sm:grid-cols-2">
-        {(['tender', 'contract'] as const).map((feed) => {
-          const progress = data[`prozorro.${feed}.progress`];
-          return (
-            <section key={feed} className="space-y-1 text-sm">
-              <h3 className="font-semibold">{uk.prozorro[feed]}</h3>
-              <p>
-                {
-                  uk.tasks.status[
-                    data['prozorro.enabled'] === false
-                      ? 'paused'
-                      : (progress?.status ?? 'queued')
-                  ]
-                }
-              </p>
-              <p>
-                {uk.prozorro.documents}:{' '}
-                {(progress?.documents ?? 0).toLocaleString('uk-UA')}
-              </p>
-              <p>
-                {uk.prozorro.rows}:{' '}
-                {(progress?.rows ?? 0).toLocaleString('uk-UA')}
-              </p>
-              <p>
-                {uk.prozorro.cursorDate}:{' '}
-                {progress?.cursorDate
-                  ? new Date(progress.cursorDate).toLocaleString('uk-UA')
-                  : '—'}
-              </p>
-              {data['prozorro.enabled'] === false ? (
-                <p>{progress?.reasonUk ?? uk.prozorro.paused}</p>
-              ) : (
-                progress?.reasonUk && <p>{progress.reasonUk}</p>
-              )}
-            </section>
-          );
-        })}
-      </div>
-      {error && (
-        <p role="alert" className="text-err">
-          {error}
-        </p>
-      )}
+      <label className="flex min-h-11 items-center gap-3">
+        <input
+          type="checkbox"
+          checked={data['prozorro.enabled'] === true}
+          disabled={!loaded || pending}
+          onChange={(e) => void act(e.target.checked ? 'enable' : 'disable')}
+        />
+        {uk.prozorro.enabled}
+      </label>
+      <details>
+        <summary className="cursor-pointer font-heading text-base font-bold">
+          {uk.prozorro.fullSync}
+        </summary>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            disabled={
+              !loaded || pending || data['prozorro.full_sync.enabled'] === true
+            }
+            onClick={() => void act('start')}
+          >
+            {uk.prozorro.start}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={
+              !loaded || pending || data['prozorro.full_sync.enabled'] !== true
+            }
+            onClick={() => void act('pause')}
+          >
+            {uk.prozorro.pause}
+          </Button>
+        </div>
+        <div role="status" className="grid gap-4 sm:grid-cols-2">
+          {(['tender', 'contract'] as const).map((feed) => {
+            const progress = data[`prozorro.${feed}.progress`];
+            return (
+              <section key={feed} className="space-y-1 text-sm">
+                <h3 className="font-semibold">{uk.prozorro[feed]}</h3>
+                <p>
+                  {
+                    uk.tasks.status[
+                      data['prozorro.full_sync.enabled'] === false
+                        ? 'paused'
+                        : (progress?.status ?? 'queued')
+                    ]
+                  }
+                </p>
+                <p>
+                  {uk.prozorro.documents}:{' '}
+                  {(progress?.documents ?? 0).toLocaleString('uk-UA')}
+                </p>
+                <p>
+                  {uk.prozorro.rows}:{' '}
+                  {(progress?.rows ?? 0).toLocaleString('uk-UA')}
+                </p>
+                <p>
+                  {uk.prozorro.cursorDate}:{' '}
+                  {progress?.cursorDate
+                    ? new Date(progress.cursorDate).toLocaleString('uk-UA')
+                    : '—'}
+                </p>
+                {data['prozorro.full_sync.enabled'] === false ? (
+                  <p>{progress?.reasonUk ?? uk.prozorro.paused}</p>
+                ) : (
+                  progress?.reasonUk && <p>{progress.reasonUk}</p>
+                )}
+              </section>
+            );
+          })}
+        </div>
+        {error && (
+          <p role="alert" className="text-err">
+            {error}
+          </p>
+        )}
+      </details>
     </Card>
   );
 }

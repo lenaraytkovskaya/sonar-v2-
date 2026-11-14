@@ -119,6 +119,7 @@ export function TaskOverview() {
       'registry.phones.sync': uk.registry.sync,
       'prozorro.sync': uk.prozorro.title,
       'prozorro.lookup': uk.prozorro.title,
+      'prozorro.company': uk.prozorro.title,
       'ai.models': uk.tasks.aiModels,
       'ai.assist': uk.tasks.aiAssist,
       'ai.drafts': uk.outreach.generate,

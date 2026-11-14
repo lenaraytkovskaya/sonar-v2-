@@ -34,3 +34,5 @@ export * from './outreach.js';
 export * from './inbound.js';
 
 export * from './social.js';
+
+export * from './prozorro-company.js';

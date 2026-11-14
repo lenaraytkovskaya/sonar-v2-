@@ -246,6 +246,13 @@
       "when": 1794540000007,
       "tag": "0034_social_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794540000008,
+      "tag": "0035_prozorro_company",
+      "breakpoints": true
     }
   ]
 }

@@ -41,9 +41,7 @@ vi.mock('@sonar/db/tasks', () => ({
 }));
 vi.mock('./prozorro-http.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./prozorro-http.js')>()),
-  ProzorroHttp: class {
-    get = state.get;
-  },
+  sharedProzorroHttp: () => ({ get: state.get }),
 }));
 import { runProzorroSync } from './prozorro.js';
 const settings: Record<string, unknown> = {
@@ -81,7 +79,9 @@ beforeEach(() => {
           }).map(([key, value]) => ({ key, value })),
         };
       if (
-        sql.includes("select value from settings where key='prozorro.enabled'")
+        sql.includes(
+          "select value from settings where key='prozorro.full_sync.enabled'",
+        )
       )
         return { rows: [{ value: state.enabled }] };
       if (sql.includes('set value=value||jsonb_build_object')) {

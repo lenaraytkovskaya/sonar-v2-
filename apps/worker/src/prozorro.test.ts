@@ -143,3 +143,32 @@ describe('Prozorro HTTP and checkpointing', () => {
     ).toThrow();
   });
 });
+it('never retries before a long server Retry-After and serializes concurrent requests', async () => {
+  const wait = vi.fn(async () => {});
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(
+      new Response('', { status: 429, headers: { 'retry-after': '3600' } }),
+    );
+  await expect(
+    new ProzorroHttp(config, request, wait).get('tenders'),
+  ).rejects.toThrow('HTTP 429');
+  expect(request).toHaveBeenCalledTimes(1);
+  let release!: (response: Response) => void;
+  const concurrent = vi
+    .fn<typeof fetch>()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    )
+    .mockResolvedValue(Response.json({ ok: true }));
+  const client = new ProzorroHttp(config, concurrent, async () => {});
+  const first = client.get('tenders/first'),
+    second = client.get('tenders/second');
+  await vi.waitFor(() => expect(concurrent).toHaveBeenCalledTimes(1));
+  release(Response.json({ ok: true }));
+  await Promise.all([first, second]);
+  expect(concurrent).toHaveBeenCalledTimes(2);
+});

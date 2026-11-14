@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { ProzorroSearch } from './prozorro-search';
 import { uk } from '@/i18n/uk';
 import { CompanyCard, type CompanyCardRow } from './company-card';
 
@@ -48,6 +49,7 @@ export function CampaignCompanies({ campaignId }: { campaignId: string }) {
           </Link>
         )}
       </div>
+      <ProzorroSearch campaignId={campaignId} />
       {error && (
         <p role="alert" className="text-sm text-err">
           {uk.tasks.error}

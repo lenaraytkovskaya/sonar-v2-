@@ -21,6 +21,7 @@ export async function GET(request: Request) {
         'retention.google_days',
         'registry.phones.progress',
         'prozorro.enabled',
+        'prozorro.full_sync.enabled',
         'prozorro.tender.progress',
         'prozorro.contract.progress',
         ...scannerKeys,

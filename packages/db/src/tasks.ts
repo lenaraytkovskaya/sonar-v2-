@@ -116,6 +116,22 @@ export async function enqueueTask(
       );
       id = resumed[0]?.id;
     }
+    if (!id && type === 'prozorro.company') {
+      const { rows: skipped } = await client.query(
+        "select payload from tasks where idempotency_key=$1 and status='skipped' and reason_code='prozorro_missing_edrpou'",
+        [key],
+      );
+      if (skipped.length) {
+        const { prozorroCompanyCode } = await import('./prozorro.js');
+        if (await prozorroCompanyCode(skipped[0].payload.companyId, client)) {
+          const { rows: resumed } = await client.query(
+            "update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null where idempotency_key=$1 and status='skipped' and reason_code='prozorro_missing_edrpou' returning id",
+            [key],
+          );
+          id = resumed[0]?.id;
+        }
+      }
+    }
     if (id) await dispatch(client, id, type, startAfter);
     return id ?? null;
   };
@@ -459,12 +475,12 @@ export async function enqueueProzorroSync(userId?: string | null) {
     );
     if (userId) {
       await client.query(
-        "update settings set value='true',updated_at=now() where key='prozorro.enabled'",
+        "update settings set value='true',updated_at=now() where key='prozorro.full_sync.enabled'",
       );
       await logActivity('prozorro.start', 'settings', null, userId, {}, client);
     }
     const { rows } = await client.query(
-      "select value from settings where key='prozorro.enabled'",
+      "select value from settings where key='prozorro.full_sync.enabled'",
     );
     if (rows[0]?.value !== true) return;
     // A killed worker can exhaust pg-boss retries before updating the CRM task.
@@ -490,25 +506,87 @@ export async function enqueueProzorroSync(userId?: string | null) {
     }
   });
 }
-export async function enqueueProzorroLookup(companyId: string) {
-  const key = `prozorro.lookup:${companyId}:${new Date().toISOString().slice(0, 10)}`;
-  const created = await enqueueTask('prozorro.lookup', key, { companyId });
-  if (created)
-    await sonarPool.query(
-      "update tasks set subject_type='company',subject_id=$2 where id=$1",
-      [created, companyId],
+export async function enqueueProzorroCompany(
+  companyId: string,
+  userId: string | null = null,
+  existingClient?: PoolClient,
+) {
+  const save = async (client: PoolClient) => {
+    const key = `prozorro.company:${companyId}:${new Date().toISOString().slice(0, 10)}`;
+    const created = await enqueueTask(
+      'prozorro.company',
+      key,
+      { companyId },
+      client,
     );
-  else {
-    const { rows } = await sonarPool.query(
-      'select status from tasks where idempotency_key=$1',
+    if (created) {
+      await client.query(
+        "update tasks set subject_type='company',subject_id=$2 where id=$1",
+        [created, companyId],
+      );
+      await logActivity(
+        'prozorro.company.queued',
+        'company',
+        companyId,
+        userId,
+        {},
+        client,
+      );
+    }
+    const { rows } = await client.query(
+      'select id,status from tasks where idempotency_key=$1',
       [key],
     );
-    if (!['queued', 'running'].includes(rows[0]?.status))
-      await finishEnrichment(companyId);
-  }
+    return { ...rows[0], created: !!created };
+  };
+  return existingClient ? save(existingClient) : transaction(save);
+}
+export async function enqueueCampaignProzorro(
+  campaignId: string,
+  userId: string,
+) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      `select distinct cc.company_id from campaign_companies cc
+      where cc.campaign_id=$1 and not exists(select 1 from company_facts f
+      where f.company_id=cc.company_id and f.kind='prozorro_company' and f.found_at>now()-interval '30 days')`,
+      [campaignId],
+    );
+    let count = 0;
+    for (const row of rows)
+      if (
+        (await enqueueProzorroCompany(row.company_id, userId, client)).created
+      )
+        count++;
+    return count;
+  });
+}
+// Compatibility entry point for the enrichment chain; no local full-feed lookup is queued.
+export async function enqueueProzorroLookup(companyId: string) {
+  const { rows } = await sonarPool.query(
+    "select value from settings where key='prozorro.enabled'",
+  );
+  const { rows: matched } = await sonarPool.query(
+    "select 1 from company_facts where company_id=$1 and source='registry' and kind='registry_entity'",
+    [companyId],
+  );
+  const { rows: registryTask } = await sonarPool.query(
+    "select status from tasks where type='registry.match' and payload->>'companyId'=$1 order by created_at desc limit 1",
+    [companyId],
+  );
+  if (
+    rows[0]?.value !== true ||
+    !matched.length ||
+    registryTask[0]?.status !== 'done'
+  )
+    return finishEnrichment(companyId);
+  const task = await enqueueProzorroCompany(companyId);
+  if (!['queued', 'running'].includes(task.status))
+    await finishEnrichment(companyId);
+  return task;
 }
 
-// Enrichment chain: site.scan -> registry.match -> prozorro.lookup -> company.score.
+// Enrichment chain: site.scan -> registry.match -> prozorro.company -> company.score.
 // Each stage is its own task; a failed stage never blocks the next one.
 export async function enqueueEnrichment(
   companyId: string,
