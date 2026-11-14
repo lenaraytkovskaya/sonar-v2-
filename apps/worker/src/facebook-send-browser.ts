@@ -57,6 +57,20 @@ async function conversation(page: Page, recipient: string, body: string) {
           return null;
         }
       };
+      const namesRecipient = (link: Element, name: string) => {
+        const text = normalize(link.textContent);
+        const label = normalize(link.getAttribute('aria-label'));
+        // The live avatar link has no text; its exact accessible name binds it
+        // to the composer/log name. Reject contradictory labels or text.
+        return (label || text) === name && (!text || text === name);
+      };
+      const headersIn = (scope: Element, region: Element, composer: Element) =>
+        Array.from(scope.children).filter(
+          (child) =>
+            child !== branch(scope, region) &&
+            child !== branch(scope, composer) &&
+            headerControls(child),
+        );
       return () => {
         const candidates = [];
         for (const editor of all(document, composerSelector)) {
@@ -86,24 +100,35 @@ async function conversation(page: Page, recipient: string, body: string) {
                 `Messages in conversation with ${name}`
             )
               break;
-            // Structural assumption pending live DOM: the nearest shared chat
-            // container has separate header, message and Thread composer branches.
-            // Stop here; a profile-page ancestor cannot establish chat identity.
             const composer = editor.closest(composerContainer);
             if (!composer || !scope.contains(composer)) break;
-            const headers = Array.from(scope.children).filter(
-              (child) =>
-                child !== branch(scope, region) &&
-                child !== branch(scope, composer) &&
-                headerControls(child),
-            );
+            const contentScope = scope;
+            let headers = headersIn(scope, region, composer);
+            if (!headers.length) {
+              // Support the observed header/body split when the nearest shared
+              // messages/composer container is the body rather than the chat root.
+              // Allow only that immediate two-branch parent, never an ancestor
+              // search that could borrow a profile-page link outside this chat.
+              const parent = scope.parentElement;
+              if (
+                headerControls(contentScope) ||
+                !parent ||
+                parent === document.body ||
+                all(parent, ':scope > *').length !== 2 ||
+                all(parent, regionSelector).length !== 1 ||
+                all(parent, composerSelector).length !== 1 ||
+                all(parent, forbidden).length
+              )
+                break;
+              scope = parent;
+              headers = headersIn(scope, region, composer);
+            }
             if (headers.length !== 1) break;
             const header = headers[0]!;
             const links = all(header, 'a[href]');
             const recipientLinks = links.filter(
               (link) =>
-                identity(link) === recipient &&
-                normalize(link.textContent) === name,
+                identity(link) === recipient && namesRecipient(link, name),
             );
             if (
               recipientLinks.length !== 1 ||
@@ -114,6 +139,7 @@ async function conversation(page: Page, recipient: string, body: string) {
               break;
             candidates.push({
               scope,
+              contentScope,
               region,
               composer,
               header,
@@ -125,20 +151,41 @@ async function conversation(page: Page, recipient: string, body: string) {
           }
         }
         if (candidates.length !== 1) return null;
-        const { scope, region, composer, header, editor, link, name } =
-          candidates[0]!;
+        const {
+          scope,
+          contentScope,
+          region,
+          composer,
+          header,
+          editor,
+          link,
+          name,
+        } = candidates[0]!;
         const sendButtons = () =>
           all(
             composer,
             '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]',
           );
-        const parents = [scope, region, composer, header, editor, link].map(
-          (node) => node.parentElement,
-        );
+        const pinned = [
+          scope,
+          contentScope,
+          region,
+          composer,
+          header,
+          editor,
+          link,
+        ];
+        const parents = pinned.map((node) => node.parentElement);
         const valid = (filled: boolean) =>
-          [scope, region, composer, header, editor, link].every(
+          pinned.every(
             (node, index) => node.parentElement === parents[index],
           ) &&
+          contentScope.contains(region) &&
+          contentScope.contains(composer) &&
+          (contentScope === scope ||
+            (contentScope.parentElement === scope &&
+              all(scope, ':scope > *').length === 2 &&
+              !headerControls(contentScope))) &&
           header.parentElement === scope &&
           headerControls(header) &&
           header.contains(link) &&
@@ -167,7 +214,7 @@ async function conversation(page: Page, recipient: string, body: string) {
           !editor.contains(link) &&
           !scope.closest(forbidden) &&
           identity(link) === recipient &&
-          normalize(link.textContent) === name &&
+          namesRecipient(link, name) &&
           editor.getAttribute('aria-label') === `Write to ${name}` &&
           region.getAttribute('aria-label') ===
             `Messages in conversation with ${name}` &&
