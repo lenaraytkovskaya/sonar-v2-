@@ -689,12 +689,119 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      {},
+      { existingMessage: true },
+      { preserveComposer: true },
+      { innerDialog: true },
+      { textarea: true, lexical: false },
+      { body: 'First line\nSecond line' },
+      { clearComposer: true },
+    ])(
+      'accepts the observed container replacement after fill in the same conversation (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          mismatchPhase: 'after_fill',
+          replaceContainer: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.events).toEqual([
+            'open',
+            'replace:container',
+            'mark',
+            'send',
+          ]);
+          expect(f.inputs).toEqual([
+            'textarea' in options ? 'textarea' : 'textbox',
+          ]);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      { replacementCase: 'recipient' },
+      { replacementCase: 'sidebar' },
+      { replacementCase: 'dialogs' },
+      { replacementCase: 'composers' },
+      { replacementCase: 'foreign' },
+      { replacementCase: 'unrelated' },
+      { replacementCase: 'empty' },
+      { replacementCase: 'readonly' },
+      { dialogUrlParts: ['path'] },
+    ])('blocks an unsafe replacement after fill (%j)', async (options) => {
+      const f = await fixture({
+        pageletHeader: true,
+        lexical: true,
+        mismatchPhase: 'after_fill',
+        replaceContainer: true,
+        ...options,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.events).toEqual(['open', 'replace:container']);
+        expect(f.inputs).toEqual(['textbox']);
+      } finally {
+        await f.close();
+      }
+    });
+    it.each(['switchRecipient', 'switchContainer', 'switchComposer'])(
+      'does not rebind again when %s occurs after the replacement was marked',
+      async (option) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          mismatchPhase: 'after_fill',
+          replaceContainer: true,
+          [option]: true,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'delivery_uncertain',
+          });
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual(['open', 'replace:container', 'mark']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('does not confirm a cloned old outgoing message or retry after rerender', async () => {
+      const f = await fixture({
+        pageletHeader: true,
+        lexical: true,
+        mismatchPhase: 'after_fill',
+        replaceContainer: true,
+        existingMessage: true,
+        noConfirmation: true,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(f.mark).toHaveBeenCalledOnce();
+        expect(f.events).toEqual(['open', 'replace:container', 'mark', 'send']);
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
       ...['initial', 'after_fill', 'after_marker', 'after_send'].map(
         (mismatchPhase) => ({ mismatchPhase, headerMismatch: true }),
       ),
       ...['after_fill', 'after_marker', 'after_send'].flatMap(
         (mismatchPhase) => [
-          { mismatchPhase, replaceContainer: true },
+          ...(mismatchPhase === 'after_fill'
+            ? []
+            : [{ mismatchPhase, replaceContainer: true }]),
           { mismatchPhase, dialogUrlParts: ['path', 'query', 'hash'] },
           {
             mismatchPhase,
@@ -747,8 +854,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           expect(f.mark).toHaveBeenCalledTimes(postMarker ? 1 : 0);
           expect(f.events).toEqual([
             'open',
+            ...(containerChanged && options.mismatchPhase !== 'after_send'
+              ? ['replace:container']
+              : []),
             ...(postMarker ? ['mark'] : []),
             ...(options.mismatchPhase === 'after_send' ? ['send'] : []),
+            ...(containerChanged && options.mismatchPhase === 'after_send'
+              ? ['replace:container']
+              : []),
           ]);
           expect(f.inputs).toEqual(
             options.mismatchPhase === 'initial' ? [] : ['textbox'],
