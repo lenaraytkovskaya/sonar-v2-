@@ -39,6 +39,15 @@ async function handle(request: Request, method: string) {
   const whatsapp = await import('@sonar/db/whatsapp');
   const { EmailValidationError } = await import('@sonar/db/email');
   try {
+    const query = new URL(request.url).searchParams;
+    if (method === 'GET' && query.has('action')) {
+      const id = query.get('id');
+      if (query.get('action') !== 'diagnose-webhook' || !validId(id))
+        return invalid();
+      return respond({
+        diagnostic: await whatsapp.diagnoseWhatsAppWebhook(id, user.id),
+      });
+    }
     let progress: Progress | undefined;
     if (method === 'POST' && data?.action === 'start') {
       if (

@@ -43,6 +43,38 @@ it.skipIf(!enabled)(
         adapter,
       );
       accountId = connected.id;
+      const diagnostic = {
+        scope: 'session_config_only',
+        webhookReachability: 'not_checked',
+        providerReachability: 'reachable',
+        providerError: 'none',
+        sessionState: 'WORKING',
+        expectedUrlConfigured: true,
+        messageEventConfigured: true,
+        apiKeyMatches: false,
+      } as const;
+      const reader = { diagnoseWebhook: vi.fn(async () => diagnostic) };
+      const snapshot = async () =>
+        (
+          await db.sonarPool.query(
+            `select to_jsonb(a) as account,(select count(*) from tasks where subject_id=a.id::text) as tasks,(select count(*) from activity_log where user_id=$2) as activity from channel_accounts a where id=$1`,
+            [accountId, user],
+          )
+        ).rows;
+      const beforeDiagnostic = await snapshot();
+      for (const [id, actor] of [
+        [accountId, other],
+        [randomUUID(), user],
+      ])
+        await expect(
+          accounts.diagnoseWhatsAppWebhook(id, actor, reader),
+        ).rejects.toThrow('не знайдено');
+      expect(reader.diagnoseWebhook).not.toHaveBeenCalled();
+      expect(
+        await accounts.diagnoseWhatsAppWebhook(accountId, user, reader),
+      ).toEqual(diagnostic);
+      expect(reader.diagnoseWebhook).toHaveBeenCalledTimes(1);
+      expect(await snapshot()).toEqual(beforeDiagnostic);
       expect(connected).toMatchObject({
         status: 'qr',
         qr: 'data:image/png;base64,cXItc2VjcmV0',

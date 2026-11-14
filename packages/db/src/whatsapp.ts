@@ -89,6 +89,19 @@ async function lock(c: PoolClient, id: string, userId: string) {
   if (!account) invalid('Акаунт WhatsApp не знайдено.');
   return account;
 }
+export async function diagnoseWhatsAppWebhook(
+  id: string,
+  userId: string,
+  adapter: Pick<typeof whatsappAdapter, 'diagnoseWebhook'> = whatsappAdapter,
+) {
+  // Same owner gate as account mutations, without locks, writes or a transaction.
+  const { rowCount } = await sonarPool.query(
+    "select id from channel_accounts where id=$1 and channel='whatsapp' and owner_id=$2",
+    [id, userId],
+  );
+  if (!rowCount) invalid('Акаунт WhatsApp не знайдено.');
+  return adapter.diagnoseWebhook();
+}
 type AccountRow = Awaited<ReturnType<typeof lock>>;
 async function external(
   c: PoolClient,
