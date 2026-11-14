@@ -107,6 +107,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await page.evaluate(
             'document.querySelector("main :is(header, [data-pagelet=IGDInboxHeaderOffMsys]) a").href = "/other/"',
           );
+        if (options.mismatchPhase === 'after_marker')
+          await page.evaluate(
+            'document.dispatchEvent(new Event("fixture-marker"))',
+          );
         if (options.markerRateLimit)
           await page.evaluate(
             'fetch("/api/v1/direct/fixture/").then(response => response.status)',
@@ -655,7 +659,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             stage,
             errorKind,
             code,
-            reasonUk: expect.stringContaining(`[${stage}/${errorKind}]`),
+            reasonUk: expect.stringContaining(
+              option === 'groupRecipient'
+                ? '[branch=header_recipient_mismatch; phase=initial; visible_anchors=2+; recognized_profiles=2+; mismatched_profiles=1]'
+                : `[${stage}/${errorKind}]`,
+            ),
           });
           expect(f.mark).not.toHaveBeenCalled();
           expect(f.events).not.toContain('send');
@@ -675,6 +683,76 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           });
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.events).toEqual(['open', 'mark', 'send']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      ...['initial', 'after_fill', 'after_marker', 'after_send'].map(
+        (mismatchPhase) => ({ mismatchPhase, headerMismatch: true }),
+      ),
+      ...['after_fill', 'after_marker', 'after_send'].flatMap(
+        (mismatchPhase) => [
+          { mismatchPhase, replaceContainer: true },
+          { mismatchPhase, dialogUrlParts: ['path', 'query', 'hash'] },
+          {
+            mismatchPhase,
+            replaceContainer: true,
+            dialogUrlParts: ['path', 'query', 'hash'],
+          },
+        ],
+      ),
+      ...['path', 'query', 'hash'].map((part) => ({
+        mismatchPhase: 'after_fill',
+        dialogUrlParts: [part],
+      })),
+    ])(
+      'retains bounded mismatch diagnostics in reasonUk (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          ...options,
+        });
+        try {
+          const error = await f.send().catch((error) => error);
+          const postMarker = ['after_marker', 'after_send'].includes(
+            options.mismatchPhase,
+          );
+          expect(error).toMatchObject({
+            code: postMarker ? 'delivery_uncertain' : 'unavailable',
+            stage: 'dialog',
+            errorKind: 'mismatch',
+          });
+          const headerMismatch = 'headerMismatch' in options;
+          const containerChanged = 'replaceContainer' in options;
+          const parts =
+            'dialogUrlParts' in options ? (options.dialogUrlParts ?? []) : [];
+          const branch = headerMismatch
+            ? 'header_recipient_mismatch'
+            : containerChanged
+              ? 'container_changed'
+              : 'dialog_url_changed';
+          const details = headerMismatch
+            ? 'visible_anchors=2+; recognized_profiles=2+; mismatched_profiles=2+'
+            : `container_changed=${containerChanged}; dialog_url_changed=${parts.length > 0}; origin_changed=false; path_changed=${parts.includes('path')}; query_changed=${parts.includes('query')}; hash_changed=${parts.includes('hash')}`;
+          expect(error.reasonUk).toBe(
+            `[dialog/mismatch] Діалог Instagram з потрібним одержувачем не підтверджено. [branch=${branch}; phase=${options.mismatchPhase}; ${details}]`,
+          );
+          expect(error.message).toBe(error.reasonUk);
+          expect(error.reasonUk).not.toMatch(
+            /https?:|fixture|private|Recipient|Synthetic message/,
+          );
+          expect(f.mark).toHaveBeenCalledTimes(postMarker ? 1 : 0);
+          expect(f.events).toEqual([
+            'open',
+            ...(postMarker ? ['mark'] : []),
+            ...(options.mismatchPhase === 'after_send' ? ['send'] : []),
+          ]);
+          expect(f.inputs).toEqual(
+            options.mismatchPhase === 'initial' ? [] : ['textbox'],
+          );
         } finally {
           await f.close();
         }

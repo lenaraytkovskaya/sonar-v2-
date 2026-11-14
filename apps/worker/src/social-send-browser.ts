@@ -125,7 +125,31 @@ const conversationHeaderElements =
   'header, [role="banner"], div[data-pagelet="IGDInboxHeaderOffMsys"]';
 // Count nested semantic headers/pagelets once, retaining all their recipient links.
 const conversationHeaders = `:is(${conversationHeaderElements}):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"], ${conversationHeaderElements}) *)`;
-async function instagramDialog(page: Page, handle: string) {
+type DialogPhase = 'initial' | 'after_fill' | 'after_marker' | 'after_send';
+function dialogMismatch(
+  phase: DialogPhase,
+  detail:
+    | {
+        visibleAnchors: number;
+        recognizedProfiles: number;
+        mismatchedProfiles: number;
+      }
+    | { containerChanged: boolean; originalUrl: string; currentUrl: string },
+) {
+  const error = stagedFailure('dialog', 'mismatch');
+  if ('visibleAnchors' in detail) {
+    const count = (value: number) => (value > 1 ? '2+' : String(value));
+    error.reasonUk += ` [branch=header_recipient_mismatch; phase=${phase}; visible_anchors=${count(detail.visibleAnchors)}; recognized_profiles=${count(detail.recognizedProfiles)}; mismatched_profiles=${count(detail.mismatchedProfiles)}]`;
+  } else {
+    const original = new URL(detail.originalUrl);
+    const current = new URL(detail.currentUrl);
+    // Only comparisons leave this function; never retain URL values or identifiers.
+    error.reasonUk += ` [branch=${detail.containerChanged ? 'container_changed' : 'dialog_url_changed'}; phase=${phase}; container_changed=${detail.containerChanged}; dialog_url_changed=${detail.currentUrl !== detail.originalUrl}; origin_changed=${current.origin !== original.origin}; path_changed=${current.pathname !== original.pathname}; query_changed=${current.search !== original.search}; hash_changed=${current.hash !== original.hash}]`;
+  }
+  error.message = error.reasonUk;
+  return error;
+}
+async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
   await page.waitForURL(
     /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
   );
@@ -156,16 +180,25 @@ async function instagramDialog(page: Page, handle: string) {
     .evaluateAll((elements) =>
       elements.map((element) => element.getAttribute('href')),
     );
+  let recognizedProfiles = 0;
+  let mismatchedProfiles = 0;
   for (const href of links) {
     const profile = href && socialTarget(new URL(href, page.url()).href);
     if (
       profile &&
       profile.network === 'instagram' &&
-      profile.kind !== 'unsupported' &&
-      profile.handle !== handle
-    )
-      throw stagedFailure('dialog', 'mismatch');
+      profile.kind !== 'unsupported'
+    ) {
+      recognizedProfiles++;
+      if (profile.handle !== handle) mismatchedProfiles++;
+    }
   }
+  if (mismatchedProfiles)
+    throw dialogMismatch(phase, {
+      visibleAnchors: links.length,
+      recognizedProfiles,
+      mismatchedProfiles,
+    });
   return dialog;
 }
 async function sendInstagram(
@@ -545,7 +578,7 @@ async function sendInstagram(
     }
     await assertSession();
     stage = 'dialog';
-    const dialog = await instagramDialog(page, target.handle);
+    const dialog = await instagramDialog(page, target.handle, 'initial');
     const dialogUrl = page.url();
     const dialogNode = await dialog.elementHandle();
     stage = 'composer';
@@ -570,18 +603,21 @@ async function sendInstagram(
     const composerNode = await composer.elementHandle();
     if (!composerNode) throw stagedFailure(stage, 'unconfirmed');
     await composerNode.fill(body);
-    const verifyDialog = async () => {
+    const verifyDialog = async (phase: Exclude<DialogPhase, 'initial'>) => {
       await assertSession();
       stage = 'dialog';
-      const current = await instagramDialog(page, target.handle);
-      if (
-        !(await current.evaluate(
-          (node, original) => node === original,
-          dialogNode,
-        )) ||
-        page.url() !== dialogUrl
-      )
-        throw stagedFailure(stage, 'mismatch');
+      const current = await instagramDialog(page, target.handle, phase);
+      const containerChanged = !(await current.evaluate(
+        (node, original) => node === original,
+        dialogNode,
+      ));
+      const currentUrl = page.url();
+      if (containerChanged || currentUrl !== dialogUrl)
+        throw dialogMismatch(phase, {
+          containerChanged,
+          originalUrl: dialogUrl,
+          currentUrl,
+        });
       if (
         !(await composer.evaluate(
           (node, original) => node === original,
@@ -594,17 +630,17 @@ async function sendInstagram(
       .locator(outgoing.instagram)
       .filter({ has: page.getByText(body, { exact: true }) });
     const count = await ownMessages.count();
-    await verifyDialog();
+    await verifyDialog('after_fill');
     stage = 'attempt';
     await beforeSend();
     attempted = true;
-    await verifyDialog();
+    await verifyDialog('after_marker');
     stage = 'confirmation';
     await composerNode.press('Enter');
     await ownMessages
       .nth(count)
       .waitFor({ state: 'visible', timeout: timeoutMs });
-    await verifyDialog();
+    await verifyDialog('after_send');
     stage = 'confirmation';
     return await confirmedDialogUrl(page, 'instagram');
   } catch (caught) {
@@ -634,8 +670,20 @@ async function sendInstagram(
             kind === 'timeout' ? kind : 'unconfirmed',
             'session_invalid',
           );
-    if (attempted || stage === 'attempt')
+    if (attempted || stage === 'attempt') {
+      if (
+        error instanceof SocialSendError &&
+        'stage' in error &&
+        error.stage === 'dialog' &&
+        'errorKind' in error &&
+        error.errorKind === 'mismatch'
+      ) {
+        // Preserve safe mismatch diagnostics without making a durable attempt retryable.
+        error.code = 'delivery_uncertain';
+        throw error;
+      }
       throw stagedFailure(stage, kind, 'delivery_uncertain');
+    }
     if (error instanceof SocialSendError && 'stage' in error) throw error;
     throw stagedFailure(stage, kind);
   }
