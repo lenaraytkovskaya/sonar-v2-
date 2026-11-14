@@ -19,7 +19,7 @@ vi.mock('pg-boss', () => ({
     send = state.send;
   },
 }));
-import { enqueueProzorroLookup } from './tasks.js';
+import { enqueueProzorroCompany, enqueueProzorroLookup } from './tasks.js';
 import {
   prozorroCompanyCode,
   saveProzorroCompanySnapshot,
@@ -101,4 +101,14 @@ it('persists one snapshot and deduplicates contacts with normalized conflict key
   ).toBe(true);
   expect(state.query.mock.calls.at(-1)?.[0]).toBe('commit');
   expect(state.release).toHaveBeenCalled();
+});
+
+it('reports pending work when another producer holds the company lock before its insert is visible', async () => {
+  state.query.mockResolvedValue({ rows: [] });
+  expect(await enqueueProzorroCompany('company')).toEqual({
+    id: null,
+    status: 'queued',
+    created: false,
+  });
+  expect(state.send).not.toHaveBeenCalled();
 });

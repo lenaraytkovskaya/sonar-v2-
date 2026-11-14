@@ -579,7 +579,11 @@ export async function enqueueProzorroCompany(
         "update tasks set payload=payload||'{\"pendingRefresh\":true}'::jsonb where id=(select id from tasks where type='prozorro.company' and payload->>'companyId'=$1 order by created_at desc limit 1) returning id,status",
         [companyId],
       );
-      return { ...rows[0], created: false };
+      return {
+        id: rows[0]?.id ?? null,
+        status: rows[0]?.status === 'running' ? 'running' : 'queued',
+        created: false,
+      };
     }
     await recoverProzorroCompany(client, companyId);
     const { prozorroCompanyCode } = await import('./prozorro.js');
