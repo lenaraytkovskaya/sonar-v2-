@@ -27,6 +27,7 @@ function row(own = true, text = body, time = '4 November 2026, 20:15') {
   if (o.observed) {
     const template = document.createElement('template'); template.innerHTML = observedChat;
     const wrapper = template.content.querySelector('[aria-label^="At "]').closest('[role="article"]');
+    if (o.noMessageId) for (const node of [wrapper,...wrapper.querySelectorAll('[data-message-id]')]) node.removeAttribute('data-message-id');
     const content = wrapper.querySelector('[aria-label^="At "]');
     const sent = wrapper.querySelector('[aria-label^="Enter, Message sent "]');
     content.setAttribute('aria-label', 'At ' + time + ', ' + (own ? 'You' : 'Synthetic Recipient') + ': ' + text);
@@ -887,6 +888,27 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? ['pointerdown']
               : [],
           );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([false, true])(
+      'retains an observed provider ID only when present (%s)',
+      async (stableMessageId) => {
+        const f = await fixture({
+          observed: true,
+          noMessageId: !stableMessageId,
+        });
+        try {
+          const result = await f.send();
+          expect(result).toHaveProperty(
+            'outcome',
+            'facebook_dispatched_unconfirmed',
+          );
+          expect(
+            (result as { externalMessageId?: string }).externalMessageId,
+          ).toBe(stableMessageId ? 'synthetic-id-5' : undefined);
         } finally {
           await f.close();
         }

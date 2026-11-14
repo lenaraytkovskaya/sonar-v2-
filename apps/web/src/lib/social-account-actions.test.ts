@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, list, save, update, check } = vi.hoisted(() => ({
+const { session, list, save, update, check, sync } = vi.hoisted(() => ({
   session: vi.fn(),
   list: vi.fn(),
   save: vi.fn(),
   update: vi.fn(),
   check: vi.fn(),
+  sync: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
@@ -15,6 +16,7 @@ vi.mock('@sonar/db/social-accounts', () => ({
   saveSocialAccount: save,
   updateSocialAccount: update,
   checkSocialSession: check,
+  syncSocialInbox: sync,
   getSocialProxyCount: () => 2,
 }));
 vi.mock('@sonar/db/email', () => ({
@@ -116,4 +118,47 @@ describe('social account API', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: uk.email.error });
   });
+});
+
+it('queues only the server-authorized account action and returns its existing task receipt', async () => {
+  sync.mockResolvedValue({ id: 'manual-task', created: false });
+  const response = await POST(request({ action: 'syncInbox', id }));
+  expect(response.status).toBe(202);
+  expect(sync).toHaveBeenCalledWith(id, 'actor');
+  expect((await response.json()).inboxSync).toEqual({
+    id: 'manual-task',
+    created: false,
+  });
+  expect(save).not.toHaveBeenCalled();
+});
+it('rejects unauthenticated, cross-origin and client-supplied manual privilege fields before enqueue', async () => {
+  session.mockResolvedValue({});
+  expect((await POST(request({ action: 'syncInbox', id }))).status).toBe(401);
+  session.mockResolvedValue({ user: { id: 'actor' } });
+  expect(
+    (await POST(request({ action: 'syncInbox', id }, 'https://other.example')))
+      .status,
+  ).toBe(401);
+  for (const extra of [
+    { mode: 'manual' },
+    { requestedBy: 'other' },
+    { accountId: id },
+    { network: 'instagram' },
+  ])
+    expect(
+      (await POST(request({ action: 'syncInbox', id, ...extra }))).status,
+    ).toBe(400);
+  expect((await POST(request({ action: 'syncInbox', id: 'bad' }))).status).toBe(
+    400,
+  );
+  expect(sync).not.toHaveBeenCalled();
+});
+
+it('returns an account authorization failure before listing success or accepting a task', async () => {
+  const { EmailValidationError } = await import('@sonar/db/email');
+  sync.mockRejectedValueOnce(new EmailValidationError('Акаунт недоступний.'));
+  const response = await POST(request({ action: 'syncInbox', id }));
+  expect(response.status).toBe(400);
+  expect(sync).toHaveBeenCalledWith(id, 'actor');
+  expect(list).not.toHaveBeenCalled();
 });

@@ -21,7 +21,16 @@ async function handle(request: Request, method: string) {
   const { EmailValidationError } = await import('@sonar/db/email');
   try {
     let queued = false;
-    if (method === 'POST' && data?.action === 'check') {
+    let inboxSync;
+    if (method === 'POST' && data?.action === 'syncInbox') {
+      if (
+        !validId(data.id) ||
+        Object.keys(data).some((key) => !['action', 'id'].includes(key))
+      )
+        return invalid();
+      inboxSync = await db.syncSocialInbox(data.id, user.id);
+      queued = true;
+    } else if (method === 'POST' && data?.action === 'check') {
       if (!validId(data.id)) return invalid();
       await db.checkSocialSession(data.id, user.id);
       queued = true;
@@ -61,7 +70,7 @@ async function handle(request: Request, method: string) {
         return invalid();
       await db.updateSocialAccount(data.id, { enabled: data.enabled }, user.id);
     } else if (method !== 'GET') return invalid();
-    const accounts = (await db.listSocialAccounts()).map((account) => ({
+    const accounts = (await db.listSocialAccounts(user.id)).map((account) => ({
       id: account.id,
       name: account.name,
       network: account.network,
@@ -75,8 +84,12 @@ async function handle(request: Request, method: string) {
       nextSendAt: account.nextSendAt,
       proxyIndex: account.proxyIndex,
       ownerName: account.ownerName,
+      canSyncInbox: account.canSyncInbox,
     }));
-    return respond({ accounts }, queued ? 202 : 200);
+    return respond(
+      { accounts, ...(inboxSync ? { inboxSync } : {}) },
+      queued ? 202 : 200,
+    );
   } catch (error) {
     return respond(
       {

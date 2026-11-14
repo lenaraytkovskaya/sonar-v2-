@@ -140,7 +140,7 @@ export async function recordInbound(input: InboundInput) {
       const {
         rows: [created],
       } = await c.query(
-        `insert into conversations(company_id,campaign_id,contact_id,channel,account_id,peer_value) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,contact_id,channel) do update set channel=excluded.channel returning *`,
+        `insert into conversations(company_id,campaign_id,contact_id,channel,account_id,peer_value) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning *`,
         [
           companyId,
           campaign?.campaign_id ?? null,
@@ -311,8 +311,8 @@ export async function getConversationChat(
   const socialAvailable = network
     ? ((
         await sonarPool.query(
-          "select exists(select 1 from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid') as available",
-          [network],
+          "select exists(select 1 from channel_accounts a join conversations v on v.id=$2 where a.channel=$1 and a.status='active' and a.settings->>'sessionStatus'='valid' and (v.provider_thread_id is null or v.account_id=a.id)) as available",
+          [network, conversationId],
         )
       ).rows[0].available as boolean)
     : false;
@@ -435,7 +435,7 @@ export async function ensureContactConversation(
     const {
       rows: [conversation],
     } = await c.query(
-      'select id from conversations where company_id=$1 and campaign_id=$2 and contact_id=$3 and channel=$4',
+      'select id from conversations where company_id=$1 and campaign_id=$2 and contact_id=$3 and channel=$4 and provider_thread_id is null',
       [contact.company_id, campaign.campaign_id, contactId, channel],
     );
     return String(conversation.id);
@@ -544,8 +544,8 @@ async function reply(
       const {
         rows: [account],
       } = await c.query(
-        "select id from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid' order by created_at,id limit 1",
-        [target!.network],
+        "select id from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid' and ($2::uuid is null or id=$2) order by created_at,id limit 1",
+        [target!.network, v.provider_thread_id ? v.account_id : null],
       );
       if (!account) invalid('Підключіть активний акаунт для цієї соцмережі.');
       last.account_id = account.id;

@@ -90,6 +90,7 @@ export async function enqueueTask(
   key: string,
   payload: object = {},
   existingClient?: PoolClient,
+  startAfter?: Date,
 ) {
   const save = async (client: PoolClient) => {
     const { rows } = await client.query(
@@ -115,7 +116,7 @@ export async function enqueueTask(
       );
       id = resumed[0]?.id;
     }
-    if (id) await dispatch(client, id, type);
+    if (id) await dispatch(client, id, type, startAfter);
     return id ?? null;
   };
   return existingClient ? save(existingClient) : transaction(save);
@@ -213,6 +214,14 @@ export async function enqueueRegistryMatch(
 export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const {
+      rows: [identity],
+    } = await client.query('select type from tasks where id=$1', [id]);
+    // Match reconciler lock ordering: orchestration lock before task row locks.
+    if (identity?.type === 'social.inbox.sync')
+      await client.query(
+        "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
+      );
+    const {
       rows: [original],
     } = await client.query('select * from tasks where id=$1 for update', [id]);
     if (
@@ -222,6 +231,54 @@ export async function retryTask(id: string, userId: string) {
       original.type.startsWith('whatsapp.account.')
     )
       return false;
+    if (original.type === 'social.inbox.sync') {
+      if (original.status === 'done') return false;
+      if (original.payload.mode === 'manual') {
+        const {
+          rows: [owned],
+        } = await client.query(
+          "select id from channel_accounts where id=$1 and owner_id=$2 and channel='instagram' and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false'",
+          [original.payload.accountId, userId],
+        );
+        if (!owned || original.payload.requestedBy !== userId) return false;
+        if (!['queued', 'running'].includes(original.status)) {
+          const {
+            rows: [closing],
+          } = await client.query(
+            "select id from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1 and state in ('created','retry','active') limit 1",
+            [id],
+          );
+          if (closing) return false;
+        }
+      }
+      const {
+        rows: [active],
+      } = await client.query(
+        "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
+        [original.payload.accountId],
+      );
+      if (active) {
+        if (active.id !== id) {
+          await client.query(
+            "update tasks set result=coalesce(result,'{}'::jsonb)||jsonb_build_object('retryTaskId',$2::text) where id=$1",
+            [id, active.id],
+          );
+          await logActivity(
+            'task.retry',
+            'task',
+            id,
+            userId,
+            { activeTaskId: active.id },
+            client,
+          );
+        }
+        return true;
+      }
+      await client.query(
+        "update tasks set result=result-'retryTaskId' where id=$1 and result ? 'retryTaskId'",
+        [id],
+      );
+    }
     if (original.type === 'google.request') {
       const {
         rows: [parent],

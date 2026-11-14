@@ -15,6 +15,7 @@ import {
 } from '@sonar/core/social-session';
 import type { SocialNetwork } from '@sonar/core';
 import { sonarPool } from './index.js';
+import { reserveSocialAction } from './social-action.js';
 import { EmailValidationError, transaction } from './email.js';
 import { enqueueTask, logActivity, type TaskOutcome } from './tasks.js';
 
@@ -33,6 +34,7 @@ export interface SocialAccount {
   nextSendAt: Date | null;
   proxyIndex: number;
   ownerName: string | null;
+  canSyncInbox: boolean;
 }
 export interface SocialSessionAccount {
   id: string;
@@ -95,7 +97,13 @@ export async function acquireSocialFetchSession(
         (runtime.count ?? 0) >= dailyLimit
       )
         continue;
-      const next = Date.parse(runtime.nextAt ?? '');
+      const next = Math.max(
+        Date.parse(runtime.nextAt ?? '') || 0,
+        Date.parse(
+          (account.settings.socialAction as { nextAt?: string } | undefined)
+            ?.nextAt ?? '',
+        ) || 0,
+      );
       if (next > now.getTime()) {
         nextAt = Math.min(nextAt, next);
         continue;
@@ -144,6 +152,8 @@ export async function reserveSocialFetchSession(
     ]);
     if (!task) throw new Error('Unknown social request');
     if (!task.result?.sessionFetchAccountId) {
+      if (await reserveSocialAction(c, id, 'fetch', now))
+        throw new Error('Social action spacing changed during reservation');
       await c.query(
         `update channel_accounts set settings=jsonb_set(settings,'{sessionFetch}',jsonb_build_object('day',$2::text,'count',case when settings->'sessionFetch'->>'day'=$2 then coalesce((settings->'sessionFetch'->>'count')::int,0)+1 else 1 end,'nextAt',$3::text)) where id=$1`,
         [
@@ -212,13 +222,17 @@ export function getSocialProxyCount(): number {
     return 0;
   }
 }
-export async function listSocialAccounts(): Promise<SocialAccount[]> {
+export async function listSocialAccounts(
+  userId?: string,
+): Promise<SocialAccount[]> {
   const { rows } = await sonarPool.query<SocialAccount>(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
     coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
     a.next_send_at as "nextSendAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
+    coalesce(a.owner_id=$1::uuid and a.channel='instagram' and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
+    [userId ?? null],
   );
   return rows;
 }
@@ -435,6 +449,70 @@ export async function checkSocialSession(id: string, userId: string) {
     return { id: taskId, created: !!taskId };
   });
 }
+/** Owner action only. The persisted receipt, not a client flag, authorizes one run. */
+export async function syncSocialInbox(id: string, userId: string) {
+  return transaction(async (c) => {
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
+    );
+    const account = await lock(c, id, userId);
+    if (
+      account.channel !== 'instagram' ||
+      account.status !== 'active' ||
+      account.settings.enabled === false ||
+      account.settings.sessionStatus !== 'valid'
+    )
+      invalid(
+        'Ручна синхронізація доступна лише власнику активного Instagram із підтвердженою сесією.',
+      );
+    try {
+      resolveSocialSession(account);
+    } catch (error) {
+      invalid(
+        error instanceof SocialSendError
+          ? error.reasonUk
+          : 'Перевірте сесію та закріплений проксі акаунта.',
+      );
+    }
+    // The account lock proves no browser for this account is still running.
+    // Recover only this owner's abandoned manual task, without polling/reconcile.
+    await c.query(
+      `update tasks t set status='failed',finished_at=now(),reason_code='social_inbox_interrupted',
+      reason_uk='Разову синхронізацію перервано. Повторіть вручну.'
+      where t.type='social.inbox.sync' and t.payload->>'accountId'=$1 and t.payload->>'mode'='manual'
+      and t.status in ('queued','running') and not exists(select 1 from pgboss.job j
+        where j.name='social.inbox.sync' and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))`,
+      [id],
+    );
+    const {
+      rows: [pending],
+    } = await c.query(
+      "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
+      [id],
+    );
+    if (pending) return { id: String(pending.id), created: false };
+    const taskId = await enqueueTask(
+      'social.inbox.sync',
+      `social.inbox.sync:${id}:${randomUUID()}`,
+      { accountId: id, mode: 'manual', requestedBy: userId },
+      c,
+    );
+    if (!taskId) throw new Error('Manual inbox task was not created');
+    await c.query(
+      "update tasks set subject_type='channel_account',subject_id=$2 where id=$1",
+      [taskId, id],
+    );
+    await logActivity(
+      'social.inbox.manual.queued',
+      'channel_account',
+      id,
+      userId,
+      { taskId },
+      c,
+    );
+    return { id: taskId as string, created: true };
+  });
+}
 export async function withSocialSessionCheck(
   id: string,
   check: (account: SocialSessionAccount) => Promise<{
@@ -442,42 +520,62 @@ export async function withSocialSessionCheck(
     reason?: SocialSessionCheckReason;
     diagnostic?: SocialSessionCheckDiagnostic;
   }>,
+  now = new Date(),
 ): Promise<TaskOutcome> {
-  return transaction(async (c) => {
+  const c = await sonarPool.connect();
+  let locked = false;
+  let inTransaction = false;
+  try {
+    // Keep the common account lock across the callback, without a SQL transaction.
+    await c.query(
+      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+      [id],
+    );
+    locked = true;
+    await c.query('begin');
+    inTransaction = true;
     const account = await lock(c, id);
     let valid = false;
     let diagnostic: SocialSessionCheckDiagnostic | undefined;
     let reason: SocialSessionCheckReason | undefined;
     try {
       resolveSocialSession(account);
-      const result = await check(account);
-      valid = result.valid;
-      diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
-      if (!valid)
-        reason =
-          result.reason &&
-          Object.hasOwn(socialSessionCheckReasons, result.reason)
-            ? result.reason
-            : 'unknown_auth';
     } catch (error) {
       reason = socialSessionCheckReason(error);
+    }
+    const runAt = reason
+      ? null
+      : await reserveSocialAction(c, id, 'check', now);
+    await c.query('commit');
+    inTransaction = false;
+    if (runAt)
+      return {
+        status: 'deferred',
+        runAt,
+        reasonCode: 'social_action_gate',
+        reasonUk: 'Перевірка сесії після спільної паузи дій акаунта.',
+      };
+    if (!reason) {
+      try {
+        const result = await check(account);
+        valid = result.valid;
+        diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
+        if (!valid)
+          reason =
+            result.reason &&
+            Object.hasOwn(socialSessionCheckReasons, result.reason)
+              ? result.reason
+              : 'unknown_auth';
+      } catch (error) {
+        reason = socialSessionCheckReason(error);
+      }
     }
     const reasonUk = reason ? socialSessionCheckReasons[reason] : null;
     const invalidCookies =
       reason === 'login_required' || reason === 'cookies_invalid';
-    const settings = {
-      ...account.settings,
-      sessionStatus: valid
-        ? 'valid'
-        : invalidCookies
-          ? 'invalid'
-          : 'unconfirmed',
-      checkedAt: new Date().toISOString(),
-      sessionCheckReason: reason ?? null,
-      reasonUk,
-    };
+    // Merge only session fields so the committed action reservation survives.
     await c.query(
-      'update channel_accounts set status=$2,settings=$3 where id=$1',
+      'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
       [
         id,
         account.settings.enabled === false
@@ -485,7 +583,16 @@ export async function withSocialSessionCheck(
           : valid
             ? 'active'
             : 'paused',
-        settings,
+        {
+          sessionStatus: valid
+            ? 'valid'
+            : invalidCookies
+              ? 'invalid'
+              : 'unconfirmed',
+          checkedAt: now.toISOString(),
+          sessionCheckReason: reason ?? null,
+          reasonUk,
+        },
       ],
     );
     return valid
@@ -496,5 +603,11 @@ export async function withSocialSessionCheck(
           reasonCode: `social_session_${reason}`,
           reasonUk: reasonUk!,
         };
-  });
+  } catch (error) {
+    if (inTransaction) await c.query('rollback');
+    throw error;
+  } finally {
+    if (locked) await releaseSocialFetchSession(c, id);
+    c.release();
+  }
 }

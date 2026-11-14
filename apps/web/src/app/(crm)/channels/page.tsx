@@ -1,7 +1,9 @@
 import { PageHeader } from '@/components/shared';
 import { ChannelTabs } from '@/components/channel-tabs';
 import { uk } from '@/i18n/uk';
+import { getSession } from '@/lib/auth';
 export default async function Page() {
+  const user = (await getSession()).user;
   const { listEmailAccounts, listFormAccounts } =
     await import('@sonar/db/email');
   const { listManualFormMessages } = await import('@sonar/db/forms');
@@ -19,7 +21,7 @@ export default async function Page() {
       listManualFormMessages(),
       listTelegramAccounts(),
       listWhatsAppAccounts(),
-      listSocialAccounts(),
+      listSocialAccounts(user?.id),
       getSocialAccountProxyIndex(),
     ]);
   return (

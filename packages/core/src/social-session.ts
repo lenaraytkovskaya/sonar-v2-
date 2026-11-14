@@ -42,6 +42,8 @@ import type { SocialNetwork } from './social.js';
 export const facebookDispatchReason = 'Відправлено, перевірте в чаті';
 export type FacebookDispatchResult = {
   outcome: 'facebook_dispatched_unconfirmed';
+  externalMessageId?: string;
+  threadId?: string;
   dialogUrl: string;
   observation: {
     inputExactMatch: boolean;

@@ -1,0 +1,192 @@
+{
+  "data": {
+    "get_slide_mailbox_for_iris_subscription": {
+      "__typename": "SlideMailbox",
+      "iris_inactive_subscription_uq_seq_id": "redacted",
+      "threads_by_folder": {
+        "edges": [
+          {
+            "node": {
+              "as_ig_direct_thread": {
+                "id": "900000000000000",
+                "last_activity_timestamp_ms": "1700008152516",
+                "folder": "PRIMARY",
+                "thread_subtype": "IG_ONLY_ONE_TO_ONE",
+                "users": [
+                  {
+                    "ai_agent_type": null,
+                    "id": "900000000000001",
+                    "friendship_status": {
+                      "blocking": false,
+                      "is_restricted": false
+                    },
+                    "supervision_info": null,
+                    "interop_messaging_user_fbid": "900000000000002",
+                    "full_name": "Example peer",
+                    "username": "example_peer",
+                    "is_verified": false,
+                    "aigm_account_label_info": {
+                      "attribution_label_text": null,
+                      "is_auto_detected": false,
+                      "is_enabled": false,
+                      "is_manually_enabled": false
+                    },
+                    "profile_pic_url": "https://example.invalid/image.png",
+                    "latest_reel_media": 0,
+                    "latest_besties_reel_media": 0,
+                    "reel_media_seen_timestamp": null
+                  }
+                ],
+                "thread_key": "900000000000002",
+                "thread_fbid": "900000000000000",
+                "is_group": false,
+                "system_folder": "INBOX",
+                "marked_as_unread": false,
+                "slide_read_receipts": [
+                  {
+                    "participant_fbid": "900000000000002",
+                    "watermark_timestamp_ms": "1700006983436"
+                  },
+                  {
+                    "participant_fbid": "900000000000003",
+                    "watermark_timestamp_ms": "1700008152517"
+                  }
+                ],
+                "is_pin": false,
+                "thread_label": 0,
+                "input_mode": 0,
+                "viewer_id": "900000000000004",
+                "nicknames": [],
+                "thread_id": "900000000000005",
+                "slide_messages": {
+                  "edges": [
+                    {
+                      "node": {
+                        "sender_fbid": "900000000000002",
+                        "timestamp_ms": "1700008152516",
+                        "id": "900000000000006",
+                        "__typename": "SlideMessage",
+                        "content_type": "TEXT",
+                        "text_body": "Synthetic test message 1",
+                        "igd_snippet": "Synthetic test message 1",
+                        "expiration_timestamp_ms": null,
+                        "view_expiration_timestamp_ms": null,
+                        "content": {
+                          "__typename": "SlideMessageText",
+                          "text_body": "Synthetic test message 1"
+                        }
+                      },
+                      "cursor": "900000000000007"
+                    },
+                    {
+                      "node": {
+                        "sender_fbid": "900000000000003",
+                        "timestamp_ms": "1700006983435",
+                        "id": "900000000000008",
+                        "__typename": "SlideMessage",
+                        "content_type": "TEXT",
+                        "text_body": "Synthetic test message 2",
+                        "igd_snippet": "Synthetic test message 3",
+                        "expiration_timestamp_ms": null,
+                        "view_expiration_timestamp_ms": null,
+                        "content": {
+                          "__typename": "SlideMessageText",
+                          "text_body": "Synthetic test message 2"
+                        }
+                      },
+                      "cursor": "900000000000009"
+                    },
+                    {
+                      "node": {
+                        "sender_fbid": "900000000000003",
+                        "timestamp_ms": "1700006175503",
+                        "id": "900000000000010",
+                        "__typename": "SlideMessage",
+                        "content_type": "TEXT",
+                        "text_body": "Synthetic test message 4",
+                        "igd_snippet": "Synthetic test message 5",
+                        "expiration_timestamp_ms": null,
+                        "view_expiration_timestamp_ms": null,
+                        "content": {
+                          "__typename": "SlideMessageText",
+                          "text_body": "Synthetic test message 4"
+                        }
+                      },
+                      "cursor": "900000000000011"
+                    },
+                    {
+                      "node": {
+                        "sender_fbid": "900000000000003",
+                        "timestamp_ms": "1700005030446",
+                        "id": "900000000000012",
+                        "__typename": "SlideMessage",
+                        "content_type": "TEXT",
+                        "text_body": "Synthetic test message 6",
+                        "igd_snippet": "Synthetic test message 7",
+                        "expiration_timestamp_ms": null,
+                        "view_expiration_timestamp_ms": null,
+                        "content": {
+                          "__typename": "SlideMessageText",
+                          "text_body": "Synthetic test message 6"
+                        }
+                      },
+                      "cursor": "900000000000013"
+                    },
+                    {
+                      "node": {
+                        "sender_fbid": "900000000000003",
+                        "timestamp_ms": "1700078082765",
+                        "id": "900000000000014",
+                        "__typename": "SlideMessage",
+                        "content_type": "TEXT",
+                        "text_body": "Synthetic test message 8",
+                        "igd_snippet": "Synthetic test message 9",
+                        "expiration_timestamp_ms": null,
+                        "view_expiration_timestamp_ms": null,
+                        "content": {
+                          "__typename": "SlideMessageText",
+                          "text_body": "Synthetic test message 8"
+                        }
+                      },
+                      "cursor": "900000000000015"
+                    }
+                  ],
+                  "page_info": {
+                    "end_cursor": "900000000000016",
+                    "has_next_page": false
+                  }
+                },
+                "thread_title": "Example peer",
+                "usersWithoutViewer": [
+                  {
+                    "is_internal_user": null,
+                    "id": "900000000000001"
+                  }
+                ],
+                "viewer": {
+                  "id": "900000000000004",
+                  "interop_messaging_user_fbid": "900000000000003",
+                  "profile_pic_url": "https://example.invalid/image.png"
+                },
+                "thread_image_url": null,
+                "messaging_folder_tag": "INBOX",
+                "ig_direct_event": null,
+                "is_muted": false,
+                "takedown_data": null
+              },
+              "id": "900000000000000",
+              "__typename": "SlideThread"
+            },
+            "cursor": "900000000000017"
+          }
+        ],
+        "page_info": {
+          "end_cursor": "900000000000018",
+          "has_next_page": false
+        }
+      },
+      "id": "900000000000003",
+      "pinned_threads_v2": []
+    }
+  }
+}

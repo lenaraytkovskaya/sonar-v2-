@@ -1229,6 +1229,7 @@ export function createSocialSendBrowser(
     });
   }
   return {
+    withPage,
     async check(
       account: SocialSessionAccount,
       session: SocialBrowserSession,

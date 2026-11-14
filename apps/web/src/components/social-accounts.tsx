@@ -69,9 +69,13 @@ export function SocialAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
       setNotice(
-        method === 'POST' && 'action' in fields
-          ? uk.socialAccounts.checkQueued
-          : uk.outreach.saved,
+        method === 'POST' && 'action' in fields && fields.action === 'syncInbox'
+          ? result.inboxSync?.created
+            ? uk.socialAccounts.syncInboxQueued
+            : uk.socialAccounts.syncInboxExisting
+          : method === 'POST' && 'action' in fields
+            ? uk.socialAccounts.checkQueued
+            : uk.outreach.saved,
       );
       return true;
     } catch (error) {
@@ -145,6 +149,18 @@ export function SocialAccounts({
             </p>
           )}
           <div className="flex flex-wrap gap-2">
+            {account.network === 'instagram' && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !account.canSyncInbox}
+                onClick={() =>
+                  void mutate('POST', { action: 'syncInbox', id: account.id })
+                }
+              >
+                {uk.socialAccounts.syncInbox}
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -187,6 +203,11 @@ export function SocialAccounts({
               {account.enabled ? uk.email.disable : uk.email.enable}
             </Button>
           </div>
+          {account.network === 'instagram' && (
+            <p className="text-muted-foreground">
+              {uk.socialAccounts.syncInboxHint}
+            </p>
+          )}
         </section>
       ))}
       <form

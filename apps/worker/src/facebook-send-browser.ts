@@ -648,6 +648,32 @@ async function conversation(
             baseline = rows();
             signatures = baseline.map(sentRow);
           },
+          externalMessageId: () => {
+            const added = rows().filter(
+              (row) => !baseline.includes(row) && sentRow(row) !== null,
+            );
+            if (added.length !== 1) return undefined;
+            const row = added[0]!;
+            const ids = new Set<string>();
+            const nodes = [
+              row,
+              ...Array.from(row.querySelectorAll('[data-message-id]')),
+            ];
+            let parent = row.parentElement;
+            while (parent && parent !== region && region.contains(parent)) {
+              if (
+                rows().filter((other) => parent!.contains(other)).length !== 1
+              )
+                break;
+              nodes.push(parent);
+              parent = parent.parentElement;
+            }
+            for (const node of nodes) {
+              const id = node.getAttribute('data-message-id');
+              if (id?.trim()) ids.add(id);
+            }
+            return ids.size === 1 ? [...ids][0] : undefined;
+          },
           confirmed: () => {
             if (!verify(false)) return false;
             if (
@@ -956,6 +982,9 @@ export async function sendFacebook(
         outcome: 'facebook_dispatched_unconfirmed',
         dialogUrl: target.canonicalUrl,
         observation: facts,
+        externalMessageId: await state.evaluate((state) =>
+          state?.externalMessageId(),
+        ),
       };
     } catch (error) {
       // Only retrieve memory captured by the failing check/dispatch/last poll.
