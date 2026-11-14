@@ -201,6 +201,26 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
     });
   return dialog;
 }
+function instagramComposer(page: Page, dialog: Locator) {
+  return dialog
+    .getByRole('textbox', { name: composerLabel })
+    .or(dialog.getByPlaceholder(composerLabel))
+    .or(
+      dialog
+        .getByRole('textbox')
+        .and(
+          dialog.locator(
+            '[contenteditable="true"][aria-placeholder="Message..." i]:not([aria-readonly="true"])',
+          ),
+        ),
+    )
+    .filter({ visible: true })
+    .and(
+      page.locator(
+        `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
+      ),
+    );
+}
 async function sendInstagram(
   page: Page,
   target: { canonicalUrl: string; handle: string },
@@ -578,59 +598,87 @@ async function sendInstagram(
     }
     await assertSession();
     stage = 'dialog';
-    const dialog = await instagramDialog(page, target.handle, 'initial');
+    let dialog = await instagramDialog(page, target.handle, 'initial');
     const dialogUrl = page.url();
-    const dialogNode = await dialog.elementHandle();
+    let dialogNode = await dialog.elementHandle();
     stage = 'composer';
-    const composer = dialog
-      .getByRole('textbox', { name: composerLabel })
-      .or(dialog.getByPlaceholder(composerLabel))
-      .or(
-        dialog
-          .getByRole('textbox')
-          .and(
-            dialog.locator(
-              '[contenteditable="true"][aria-placeholder="Message..." i]:not([aria-readonly="true"])',
-            ),
-          ),
-      )
-      .filter({ visible: true })
-      .and(
-        page.locator(
-          `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
-        ),
-      );
-    const composerNode = await composer.elementHandle();
+    let composerNode = await instagramComposer(page, dialog).elementHandle();
     if (!composerNode) throw stagedFailure(stage, 'unconfirmed');
     await composerNode.fill(body);
     const verifyDialog = async (phase: Exclude<DialogPhase, 'initial'>) => {
       await assertSession();
       stage = 'dialog';
       const current = await instagramDialog(page, target.handle, phase);
-      const containerChanged = !(await current.evaluate(
+      const currentNode = await current.elementHandle();
+      if (!currentNode) throw stagedFailure(stage, 'unconfirmed');
+      const containerChanged = !(await currentNode.evaluate(
         (node, original) => node === original,
         dialogNode,
       ));
       const currentUrl = page.url();
-      if (containerChanged || currentUrl !== dialogUrl)
+      // A rerender before the durable attempt may replace the entire subtree.
+      // After the marker, keep the pinned nodes and never rebind or send again.
+      if (
+        (containerChanged && phase !== 'after_fill') ||
+        currentUrl !== dialogUrl
+      )
         throw dialogMismatch(phase, {
           containerChanged,
           originalUrl: dialogUrl,
           currentUrl,
         });
+      const currentComposer = await instagramComposer(
+        page,
+        current,
+      ).elementHandle();
+      if (!currentComposer) throw stagedFailure('composer', 'unconfirmed');
+      const sameComposer = await currentComposer.evaluate(
+        (node, original) => node === original,
+        composerNode,
+      );
       if (
-        !(await composer.evaluate(
-          (node, original) => node === original,
-          composerNode,
+        (!sameComposer && !containerChanged) ||
+        (phase !== 'after_send' &&
+          (!(await currentComposer.isEditable()) ||
+            !(await currentComposer.isEnabled()))) ||
+        !(await currentNode.evaluate(
+          (container, { composer, expectedBody }) => {
+            // Lexical paragraphs add line breaks. Match visible text with the
+            // same whitespace normalization as getByText in confirmation.
+            const normalize = (text: string) =>
+              text.replace(/\s+/g, ' ').trim();
+            const text =
+              composer instanceof HTMLTextAreaElement ||
+              composer instanceof HTMLInputElement
+                ? composer.value
+                : (composer as HTMLElement).innerText;
+            return (
+              container.isConnected &&
+              composer.isConnected &&
+              container.contains(composer) &&
+              (expectedBody === null ||
+                normalize(text) === normalize(expectedBody))
+            );
+          },
+          {
+            composer: currentComposer,
+            expectedBody: phase === 'after_send' ? null : body,
+          },
         ))
       )
         throw stagedFailure('composer', 'mismatch');
+      if (phase === 'after_fill') {
+        dialog = current;
+        dialogNode = currentNode;
+        composerNode = currentComposer;
+      }
     };
+    await verifyDialog('after_fill');
+    // Snapshot matching outgoing messages only in the revalidated current chat.
     const ownMessages = dialog
       .locator(outgoing.instagram)
       .filter({ has: page.getByText(body, { exact: true }) });
     const count = await ownMessages.count();
-    await verifyDialog('after_fill');
     stage = 'attempt';
     await beforeSend();
     attempted = true;

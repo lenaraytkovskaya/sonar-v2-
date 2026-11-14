@@ -9,7 +9,7 @@
 </main>
 <script>
   const f = window.fixtureOptions || {};
-  const main = document.querySelector('main');
+  let main = document.querySelector('main');
   if (f.outerDialog || f.outerMain) {
     const outer = document.createElement('div');
     outer.setAttribute('role', f.outerDialog ? 'dialog' : 'main');
@@ -136,10 +136,11 @@
           'beforeend',
           '<textarea id="decoy" placeholder="Search"></textarea>',
         );
-        const composer =
+        const findComposer = () =>
           main.querySelector(
             '[data-pagelet="IGDComposerForCannes"] [contenteditable]',
           ) || main.querySelector('[contenteditable], textarea:not([id])');
+        let composer = findComposer();
         const mutateDialog = (phase) => {
           if (f.mismatchPhase !== phase) return;
           if (f.headerMismatch)
@@ -147,7 +148,46 @@
               'beforeend',
               '<a href="/synthetic_private_recipient/">Synthetic private label</a><a href="/another_private_recipient/">Private label</a><a href="/direct/inbox/">Inbox</a><a hidden href="/hidden_private_recipient/">Hidden</a>',
             );
-          if (f.replaceContainer) main.replaceWith(main.cloneNode(true));
+          if (f.replaceContainer) {
+            const previous = main;
+            main = main.cloneNode(true);
+            if (f.preserveComposer) findComposer().replaceWith(composer);
+            previous.replaceWith(main);
+            conversationHeader = main.querySelector(
+              ':is(header, [data-pagelet="IGDInboxHeaderOffMsys"])',
+            );
+            composer = findComposer();
+            if (f.replacementCase === 'recipient')
+              conversationHeader.querySelector('a').href = '/other/';
+            if (f.replacementCase === 'sidebar') {
+              const sidebar = document.createElement('aside');
+              sidebar.append(conversationHeader.cloneNode(true));
+              conversationHeader.innerHTML =
+                '<span>Unconfirmed recipient</span>';
+              main.append(sidebar);
+            }
+            if (f.replacementCase === 'dialogs')
+              main.insertAdjacentHTML(
+                'afterend',
+                '<div role="dialog"><header><a href="/fixture_company/">Recipient</a></header><textarea placeholder="Message"></textarea></div>',
+              );
+            if (f.replacementCase === 'composers')
+              composer.after(composer.cloneNode(true));
+            if (f.replacementCase === 'foreign') {
+              const foreign = document.createElement('div');
+              foreign.setAttribute('role', 'dialog');
+              foreign.innerHTML =
+                '<header><a href="/other/">Other</a></header>';
+              foreign.append(composer);
+              main.append(foreign);
+            }
+            if (f.replacementCase === 'unrelated')
+              document.body.append(composer);
+            if (f.replacementCase === 'empty') composer.textContent = '';
+            if (f.replacementCase === 'readonly')
+              composer.setAttribute('aria-readonly', 'true');
+            window.fixtureEvent('replace:container');
+          }
           if (f.dialogUrlParts) {
             const url = new URL(location.href);
             if (f.dialogUrlParts.includes('path'))
@@ -169,19 +209,20 @@
           { once: true },
         );
         if (composer)
-          composer.onkeydown = (event) => {
-            if (event.key !== 'Enter') return;
+          document.addEventListener('keydown', (event) => {
+            if (event.target !== composer || event.key !== 'Enter') return;
             event.preventDefault();
             window.fixtureEvent('send');
             if (f.postLogin) main.innerHTML = '<input type="password">';
             else if (!f.noConfirmation) {
               const row = document.createElement('div');
               row.setAttribute('aria-label', 'You sent');
-              row.textContent = composer.value ?? composer.textContent;
+              row.textContent = composer.value ?? composer.innerText;
               main.querySelector('#messages').append(row);
             }
+            if (f.clearComposer) composer.textContent = '';
             mutateDialog('after_send');
-          };
+          });
       };
       if (f.delayedDialog) setTimeout(open, 60);
       else open();
