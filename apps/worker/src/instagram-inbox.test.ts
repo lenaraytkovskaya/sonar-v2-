@@ -576,7 +576,13 @@ it('rejects a second mailbox/viewer before its batch is persisted', async () => 
     },
   );
   const f = browser([a, b]);
-  await expect(f.run()).rejects.toMatchObject({ reason: 'unknown_auth' });
+  await expect(f.run()).rejects.toMatchObject({
+    reason: 'unknown_auth',
+    diagnostic: {
+      actor: { reason: 'mailbox_changed', hasPreviousMailbox: true },
+      capture: { verified: 1, persisted: 1 },
+    },
+  });
   expect(f.batches).toHaveLength(1);
   expect(f.batches[0]?.messages).toHaveLength(5);
 });
@@ -591,6 +597,104 @@ it('rejects the first actor when it differs from the authorized session identity
     diagnostic: {
       stage: 'actor',
       capture: { parsed: 1, verified: 0, persisted: 0 },
+    },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
+it.each([
+  'missing-mailbox',
+  'empty-edges',
+  'missing-edges',
+  'viewer-mismatch',
+  'actor-mailbox-mismatch',
+  'mixed-viewers',
+])(
+  'reports bounded actor facts for %s before persisting even with a later valid response',
+  async (kind) => {
+    const value = fixture();
+    if (kind === 'missing-mailbox') delete mailbox(value).id;
+    if (kind === 'empty-edges') mailbox(value).threads_by_folder.edges = [];
+    if (kind === 'missing-edges') delete mailbox(value).threads_by_folder.edges;
+    if (kind === 'viewer-mismatch') thread(value).viewer.id = '800000000000004';
+    if (kind === 'actor-mailbox-mismatch')
+      thread(value).viewer.interop_messaging_user_fbid = '800000000000003';
+    if (kind === 'mixed-viewers') {
+      const foreign = structuredClone(
+        mailbox(value).threads_by_folder.edges[0],
+      );
+      foreign.node.as_ig_direct_thread.viewer.id = '800000000000004';
+      mailbox(value).threads_by_folder.edges.push(foreign);
+    }
+    const f = browser([value, fixture()]);
+    const reason =
+      kind === 'missing-mailbox'
+        ? 'mailbox_missing'
+        : ['empty-edges', 'missing-edges'].includes(kind)
+          ? 'initial_actors_empty'
+          : kind === 'actor-mailbox-mismatch'
+            ? 'actor_mailbox_mismatch'
+            : 'viewer_mismatch';
+    const hasActors = ![
+      'missing-mailbox',
+      'empty-edges',
+      'missing-edges',
+    ].includes(kind);
+    const error = await f.run().catch((error) => error);
+    expect(error).toMatchObject({
+      reason: 'unknown_auth',
+      diagnostic: {
+        stage: 'actor',
+        capture: { received: 2, parsed: 1, verified: 0, persisted: 0 },
+        actor: {
+          reason,
+          hasPreviousMailbox: false,
+          hasMailbox: kind !== 'missing-mailbox',
+          hasActors,
+          emptyEdges: kind === 'empty-edges',
+          allViewersMatchExpected: kind === 'actor-mailbox-mismatch',
+          anyViewerMatchesExpected: [
+            'actor-mailbox-mismatch',
+            'mixed-viewers',
+          ].includes(kind),
+          anyActorMailboxMatchesExpected: false,
+          responseMailboxMatchesExpected: false,
+          allActorMailboxesMatchResponse:
+            hasActors && kind !== 'actor-mailbox-mismatch',
+        },
+      },
+    });
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(f.page.off).toHaveBeenCalledOnce();
+    expect(JSON.stringify(error.diagnostic)).not.toMatch(
+      /900000|800000|https:|Synthetic|example_peer/,
+    );
+  },
+);
+
+it('distinguishes the messaging namespace matching the expected identity without accepting it as viewer identity', async () => {
+  const value = fixture();
+  const f = browser([value]);
+  await expect(
+    captureInstagramInbox(
+      f.page as unknown as Page,
+      100,
+      f.persist,
+      f.assert,
+      mailbox(value).id,
+    ),
+  ).rejects.toMatchObject({
+    diagnostic: {
+      stage: 'actor',
+      actor: {
+        reason: 'viewer_mismatch',
+        allViewersMatchExpected: false,
+        anyViewerMatchesExpected: false,
+        anyActorMailboxMatchesExpected: true,
+        responseMailboxMatchesExpected: true,
+        allActorMailboxesMatchResponse: true,
+      },
+      capture: { verified: 0, persisted: 0 },
     },
   });
   expect(f.persist).not.toHaveBeenCalled();

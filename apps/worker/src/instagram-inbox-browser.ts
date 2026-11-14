@@ -27,6 +27,7 @@ const inboxContainer =
   '[data-pagelet="IGDInboxThreadListScrollableAreaPagelet"]';
 const messagesContainer = '[data-pagelet="IGDMessagesList"]';
 type CaptureDiagnostic = NonNullable<SocialSessionCheckDiagnostic['capture']>;
+type ActorDiagnostic = NonNullable<SocialSessionCheckDiagnostic['actor']>;
 const emptyCapture = (): CaptureDiagnostic => ({
   received: 0,
   parsed: 0,
@@ -41,6 +42,7 @@ async function diagnose(
   stage: SocialSessionCheckDiagnostic['stage'],
   navigationHttpStatus: number | null,
   capture: CaptureDiagnostic,
+  actor?: ActorDiagnostic,
 ) {
   if (!(error instanceof SocialSessionCheckError) || error.diagnostic)
     return error;
@@ -80,6 +82,7 @@ async function diagnose(
             login: 0,
           },
       capture: { ...capture },
+      ...(actor ? { actor } : {}),
     };
   })().catch(() => undefined);
   return error;
@@ -98,7 +101,8 @@ export async function captureInstagramInbox(
   const diagnosed = (
     error: unknown,
     stage: SocialSessionCheckDiagnostic['stage'],
-  ) => diagnose(error, page, stage, navigationHttpStatus, capture);
+    actor?: ActorDiagnostic,
+  ) => diagnose(error, page, stage, navigationHttpStatus, capture, actor);
   const checkSession = async (stage: 'auth' | 'capture_auth') => {
     try {
       await assertSession();
@@ -151,6 +155,7 @@ export async function captureInstagramInbox(
     }
     const responseScope = scope;
     let stage: SocialSessionCheckDiagnostic['stage'] = 'http';
+    let actor: ActorDiagnostic | undefined;
     pending = pending
       .then(async () => {
         if (failure) return;
@@ -192,17 +197,51 @@ export async function captureInstagramInbox(
         capture.parsed = Math.min(capture.parsed + 1, 2);
         await checkSession('capture_auth');
         stage = 'actor';
-        if (
-          !parsed.mailboxId ||
-          (!mailboxId && parsed.actors.length === 0) ||
-          (mailboxId !== null && parsed.mailboxId !== mailboxId) ||
-          parsed.actors.some(
-            (actor) =>
-              actor.viewerId !== expectedViewerId ||
-              actor.mailboxId !== parsed.mailboxId,
-          )
-        )
+        // Preserve the original rejection predicates; classify without adopting another namespace.
+        const reason: ActorDiagnostic['reason'] | undefined = !parsed.mailboxId
+          ? 'mailbox_missing'
+          : !mailboxId && parsed.actors.length === 0
+            ? 'initial_actors_empty'
+            : mailboxId !== null && parsed.mailboxId !== mailboxId
+              ? 'mailbox_changed'
+              : parsed.actors.some(
+                    (value) => value.viewerId !== expectedViewerId,
+                  )
+                ? 'viewer_mismatch'
+                : parsed.actors.some(
+                      (value) => value.mailboxId !== parsed.mailboxId,
+                    )
+                  ? 'actor_mailbox_mismatch'
+                  : undefined;
+        if (reason) {
+          const hasActors = parsed.actors.length > 0;
+          actor = {
+            reason,
+            hasPreviousMailbox: mailboxId !== null,
+            hasMailbox: Boolean(parsed.mailboxId),
+            hasActors,
+            emptyEdges: parsed.emptyEdges,
+            allViewersMatchExpected:
+              hasActors &&
+              parsed.actors.every(
+                (value) => value.viewerId === expectedViewerId,
+              ),
+            anyViewerMatchesExpected: parsed.actors.some(
+              (value) => value.viewerId === expectedViewerId,
+            ),
+            anyActorMailboxMatchesExpected: parsed.actors.some(
+              (value) => value.mailboxId === expectedViewerId,
+            ),
+            responseMailboxMatchesExpected:
+              parsed.mailboxId === expectedViewerId,
+            allActorMailboxesMatchResponse:
+              hasActors &&
+              parsed.actors.every(
+                (value) => value.mailboxId === parsed.mailboxId,
+              ),
+          };
           throw new SocialSessionCheckError('unknown_auth');
+        }
         capture.verified = Math.min(capture.verified + 1, 2);
         mailboxId ??= parsed.mailboxId;
         seenMailbox = true;
@@ -243,7 +282,7 @@ export async function captureInstagramInbox(
         capture.persisted = Math.min(capture.persisted + 1, 2);
       })
       .catch(async (error) => {
-        failure ??= await diagnosed(error, stage);
+        failure ??= await diagnosed(error, stage, actor);
       });
   };
   const drain = async () => {

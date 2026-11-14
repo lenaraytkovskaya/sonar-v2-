@@ -275,4 +275,34 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
       capture: { ...inbox.capture, httpStatus: 999 },
     }),
   ).toBeUndefined();
+  const actor = {
+    reason: 'viewer_mismatch',
+    hasPreviousMailbox: false,
+    hasMailbox: true,
+    hasActors: true,
+    emptyEdges: false,
+    allViewersMatchExpected: false,
+    anyViewerMatchesExpected: false,
+    anyActorMailboxMatchesExpected: true,
+    responseMailboxMatchesExpected: true,
+    allActorMailboxesMatchResponse: true,
+  };
+  const withActor = {
+    ...inbox,
+    stage: 'actor',
+    actor: { ...actor, viewerId: 'private', cookie: 'secret' },
+  };
+  expect(safeSocialSessionDiagnostic(withActor)?.actor).toEqual(actor);
+  expect(
+    safeSocialSessionDiagnostic({
+      ...withActor,
+      actor: { ...actor, reason: 'private' },
+    }),
+  ).toBeUndefined();
+  expect(
+    safeSocialSessionDiagnostic({
+      ...withActor,
+      actor: { ...actor, anyViewerMatchesExpected: 'true' },
+    }),
+  ).toBeUndefined();
 });

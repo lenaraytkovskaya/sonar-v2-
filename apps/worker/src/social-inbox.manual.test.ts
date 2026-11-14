@@ -69,7 +69,7 @@ it.each(['unknown_auth', 'login_required'] as const)(
     }));
     const diagnostic = {
       version: 1,
-      stage: 'capture_auth',
+      stage: 'actor',
       urlKind: 'inbox',
       navigationHttpStatus: 200,
       errorKind: 'timeout',
@@ -87,12 +87,25 @@ it.each(['unknown_auth', 'login_required'] as const)(
         persisted: 0,
         httpStatus: 200,
       },
+      actor: {
+        reason: 'viewer_mismatch',
+        hasPreviousMailbox: false,
+        hasMailbox: true,
+        hasActors: true,
+        emptyEdges: false,
+        allViewersMatchExpected: false,
+        anyViewerMatchesExpected: false,
+        anyActorMailboxMatchesExpected: true,
+        responseMailboxMatchesExpected: true,
+        allActorMailboxesMatchResponse: true,
+      },
     } as const;
     const error = new SocialSessionCheckError(reason);
     const unsafeDiagnostic = {
       ...diagnostic,
       rawUrl: 'https://private.test/?cookie=secret',
       capture: { ...diagnostic.capture, received: 999, viewerId: 'private' },
+      actor: { ...diagnostic.actor, viewerId: 'private', cookie: 'secret' },
     };
     error.diagnostic = unsafeDiagnostic;
     const result = await runSocialInboxSync(
