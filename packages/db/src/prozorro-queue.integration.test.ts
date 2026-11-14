@@ -13,7 +13,7 @@ it.skipIf(!enabled)(
     await admin.createQueue('prozorro.sync');
     const previous = (
       await db.sonarPool.query(
-        "select value from settings where key='prozorro.enabled'",
+        "select value from settings where key='prozorro.full_sync.enabled'",
       )
     ).rows[0]?.value;
     const before = (
@@ -23,7 +23,7 @@ it.skipIf(!enabled)(
     ).rows.map((r) => r.id);
     try {
       await db.sonarPool.query(
-        "update settings set value='true' where key='prozorro.enabled'",
+        "update settings set value='true' where key='prozorro.full_sync.enabled'",
       );
       const orphanId = randomUUID();
       await db.sonarPool.query(
@@ -76,7 +76,7 @@ it.skipIf(!enabled)(
         ids,
       ]);
       await db.sonarPool.query(
-        "update settings set value=$1 where key='prozorro.enabled'",
+        "update settings set value=$1 where key='prozorro.full_sync.enabled'",
         [JSON.stringify(previous)],
       );
       await admin.stop();

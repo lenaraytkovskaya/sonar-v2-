@@ -9,6 +9,7 @@ import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { CompanyAnalysis } from '@/components/company-analysis';
+import { ProzorroCompany } from '@/components/prozorro-company';
 import { CompanySocial } from '@/components/company-social';
 import { SiteScan } from '@/components/site-scan';
 import { WebsiteCandidate } from '@/components/website-candidate';
@@ -124,12 +125,12 @@ export default async function Page({
   if (!validId(id)) notFound();
   const { getCompany } = await import('@sonar/db/companies');
   const { getCompanyChat } = await import('@sonar/db/outreach');
-  const { getProzorroCompanySummary } = await import('@sonar/db/prozorro');
+  const { getProzorroCompanySnapshot } = await import('@sonar/db/prozorro');
   const { getCompanySocial } = await import('@sonar/db/social');
   const [data, messaging, prozorro, social] = await Promise.all([
     getCompany(id),
     getCompanyChat(id),
-    getProzorroCompanySummary(id),
+    getProzorroCompanySnapshot(id),
     getCompanySocial(id),
   ]);
   if (!data) notFound();
@@ -181,11 +182,6 @@ export default async function Page({
     (fact) =>
       fact.kind === 'registry_status' &&
       /припин|ліквід|банкрут/i.test(String(fact.value)),
-  );
-  const prozorroContacts = contacts.filter(
-    (contact) =>
-      ['phone', 'email'].includes(contact.kind) &&
-      (contact.source === 'prozorro' || contact.meta?.alsoInProzorro),
   );
   const sortedContacts = [...contacts].sort(
     (a, b) =>
@@ -508,7 +504,8 @@ export default async function Page({
           )}
           <p className="text-sm text-muted-foreground">
             {uk.prozorro.title} · {uk.prozorro.purchases}:{' '}
-            {prozorro.count.toLocaleString('uk-UA')}
+            {(prozorro?.matched ?? 0).toLocaleString('uk-UA')} ·{' '}
+            {uk.prozorro.sample}
           </p>
         </Section>
       </div>
@@ -681,49 +678,9 @@ export default async function Page({
               contacts={contacts}
             />
           </Section>
-          <Collapsible title={uk.prozorro.title} count={prozorro.count}>
-            {prozorroContacts.map((contact) => (
-              <p key={contact.id}>
-                {uk.company.kinds[contact.kind as 'phone' | 'email']}:{' '}
-                <a className="text-accent" href={contactHref(contact)}>
-                  {contact.normalized}
-                </a>
-              </p>
-            ))}
-            {facts
-              .filter(
-                (fact) =>
-                  fact.source === 'prozorro' && fact.kind === 'contact_person',
-              )
-              .map((fact) => (
-                <p key={fact.id} className="flex items-center gap-1.5">
-                  {uk.prozorro.contactPerson}: {String(fact.value)}
-                  <SourceLink url={fact.source_url} />
-                </p>
-              ))}
-            {!prozorro.latest.length && (
-              <p className="text-muted-foreground">{uk.prozorro.empty}</p>
-            )}
-            {prozorro.latest.map((purchase) => (
-              <div
-                className="space-y-0.5 border-t border-border pt-2"
-                key={`${purchase.docType}:${purchase.docId}`}
-              >
-                <p className="flex items-start gap-1.5">
-                  {purchase.title ?? uk.prozorro.untitled}
-                  <SourceLink url={purchase.sourceUrl} />
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  <LocalTime value={purchase.date} dateOnly /> ·{' '}
-                  {uk.prozorro.roles[purchase.role]} ·{' '}
-                  {purchase.amount === null
-                    ? '—'
-                    : Number(purchase.amount).toLocaleString('uk-UA')}{' '}
-                  {purchase.currency}
-                </p>
-              </div>
-            ))}
-          </Collapsible>
+          <Section title={uk.prozorro.title}>
+            <ProzorroCompany companyId={id} snapshot={prozorro} />
+          </Section>
           <Collapsible title={uk.scanner.facts} count={siteFacts.length}>
             {!siteFacts.length && (
               <p className="text-muted-foreground">{uk.company.noData}</p>

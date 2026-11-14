@@ -1,3 +1,4 @@
+import { registerProzorroCompanyTasks } from './prozorro-company.js';
 import { statfs } from 'node:fs/promises';
 import { extractProzorroDocument } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
@@ -5,13 +6,15 @@ import { saveProzorroPage, matchProzorroCompany } from '@sonar/db/prozorro';
 import {
   boss,
   runTask,
-  enqueueProzorroSync,
   finishEnrichment,
   TaskFailure,
   type TaskOutcome,
 } from '@sonar/db/tasks';
-import { ProzorroHttp, readProzorroFeed } from './prozorro-http.js';
-let sharedHttp: { config: string; client: ProzorroHttp } | undefined;
+import {
+  ProzorroHttp,
+  sharedProzorroHttp,
+  readProzorroFeed,
+} from './prozorro-http.js';
 export type ProzorroProgress = {
   offset: string;
   documents: number;
@@ -98,13 +101,10 @@ export async function runProzorroSync(payload: {
       retryDelayMs: number('retry_delay_ms', 1, 60000),
       userAgent: config['scanner.user_agent'],
     };
-    const serialized = JSON.stringify(httpConfig);
-    if (sharedHttp?.config !== serialized)
-      sharedHttp = { config: serialized, client: new ProzorroHttp(httpConfig) };
-    const http = sharedHttp.client;
+    const http = sharedProzorroHttp(httpConfig);
     const check = async () => {
       const { rows: enabled } = await client.query(
-        "select value from settings where key='prozorro.enabled'",
+        "select value from settings where key='prozorro.full_sync.enabled'",
       );
       if (enabled[0]?.value !== true)
         throw new SyncPaused('Синхронізацію призупинено користувачем.');
@@ -153,7 +153,7 @@ export async function runProzorroSync(payload: {
     );
     if (paused) {
       await client.query(
-        "update settings set value='false',updated_at=now() where key='prozorro.enabled'",
+        "update settings set value='false',updated_at=now() where key='prozorro.full_sync.enabled'",
       );
       return { status: 'paused', reasonCode: 'prozorro_paused', reasonUk };
     }
@@ -189,10 +189,6 @@ export async function registerProzorroTasks() {
       await finishEnrichment((payload as { companyId: string }).companyId);
     },
   );
-  await boss.createQueue('sonar.prozorro.schedule');
-  await boss.work('sonar.prozorro.schedule', async () => {
-    await enqueueProzorroSync();
-  });
-  await boss.schedule('sonar.prozorro.schedule', '0 * * * *');
-  await enqueueProzorroSync();
+  await boss.unschedule('sonar.prozorro.schedule');
+  await registerProzorroCompanyTasks();
 }

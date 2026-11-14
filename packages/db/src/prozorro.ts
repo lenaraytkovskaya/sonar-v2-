@@ -193,3 +193,165 @@ export async function getProzorroCompanySummary(companyId: string) {
     })),
   };
 }
+
+// Current bounded company lookup snapshot is separate from the retained full-feed index.
+export async function getProzorroCompanySnapshot(companyId: string) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select id from companies where id=$1 for update', [
+      companyId,
+    ]);
+    const code = await prozorroCompanyCode(companyId, client, true);
+    const { rows } = await client.query<{
+      value: import('@sonar/core').ProzorroCompanySnapshot;
+    }>(
+      "select value from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and value->>'code'=$2 order by found_at desc limit 1",
+      [companyId, code],
+    );
+    await client.query('commit');
+    return rows[0]?.value ?? null;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Session ownership spans HTTP and terminal task bookkeeping, without an open transaction.
+// Reconciliation uses the same key, so even an expired job with a live worker is not replaced.
+export async function acquireProzorroCompanyLease(companyId: string) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query(
+      "select pg_advisory_lock(hashtextextended('prozorro.company:'||$1,0))",
+      [companyId],
+    );
+  } catch (error) {
+    client.release(true);
+    throw error;
+  }
+  return async () => {
+    let destroy = false;
+    try {
+      await client.query(
+        "select pg_advisory_unlock(hashtextextended('prozorro.company:'||$1,0))",
+        [companyId],
+      );
+    } catch {
+      destroy = true;
+    } finally {
+      client.release(destroy);
+    }
+  };
+}
+export async function prozorroCompanyCode(
+  companyId: string,
+  client: Pick<PoolClient, 'query'> = sonarPool,
+  lock = false,
+) {
+  const { rows } = await client.query(
+    "select value,source from company_facts where company_id=$1 and kind='edrpou' and source in ('registry','manual','website','ai') order by (source='registry') desc,found_at desc" +
+      (lock ? ' for share' : ''),
+    [companyId],
+  );
+  const trusted = rows.some((r) => r.source === 'registry')
+    ? rows.filter((r) => r.source === 'registry')
+    : rows;
+  const codes = [
+    ...new Set(
+      trusted
+        .map((r) =>
+          prozorroCode(
+            typeof r.value === 'object' && r.value
+              ? r.value.valid === false
+                ? null
+                : r.value.code
+              : r.value,
+          ),
+        )
+        .filter((x): x is string => !!x),
+    ),
+  ];
+  return codes.length === 1 ? codes[0]! : null;
+}
+export async function saveProzorroCompanySnapshot(
+  companyId: string,
+  snapshot: import('@sonar/core').ProzorroCompanySnapshot,
+) {
+  const client = await sonarPool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select id from companies where id=$1 for update', [
+      companyId,
+    ]);
+    if (
+      (await prozorroCompanyCode(companyId, client, true)) !== snapshot.code
+    ) {
+      await client.query('commit');
+      return false;
+    }
+    const { rows: newer } = await client.query(
+      "select 1 from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and found_at>$2 and value->>'code'=$3",
+      [companyId, snapshot.checkedAt, snapshot.code],
+    );
+    if (newer.length) {
+      await client.query('commit');
+      return true;
+    }
+    await client.query(
+      "delete from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro'",
+      [companyId],
+    );
+    await client.query(
+      "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'prozorro_company',$2,'prozorro',$3,$4)",
+      [
+        companyId,
+        JSON.stringify(snapshot),
+        `https://prozorro.gov.ua/uk/search/tender?tenderer=${snapshot.code}`,
+        snapshot.checkedAt,
+      ],
+    );
+    for (const contact of snapshot.tenders.flatMap((t) => t.contacts)) {
+      if (contact.kind === 'name') {
+        await client.query(
+          `insert into company_facts(company_id,kind,value,source,source_url,found_at)
+          values($1,'contact_person',$2,'prozorro',$3,$4)
+          on conflict(company_id,kind,source,(md5(value::text))) do update set source_url=excluded.source_url,found_at=excluded.found_at where company_facts.found_at <= excluded.found_at`,
+          [
+            companyId,
+            JSON.stringify(contact.value),
+            contact.sourceUrl,
+            contact.date,
+          ],
+        );
+      } else {
+        await client.query(
+          `insert into contacts(company_id,kind,value,normalized,source,source_url,found_at,meta)
+          values($1,$2,$3,$3,'prozorro',$4,$5,$6)
+          on conflict(company_id,kind,normalized) do update set meta=contacts.meta||case when coalesce(contacts.meta#>>'{prozorro,date}','') <= excluded.meta#>>'{prozorro,date}' then excluded.meta else '{"alsoInProzorro":true}'::jsonb end,
+          source_url=case when contacts.source='prozorro' and contacts.found_at<=excluded.found_at then excluded.source_url else contacts.source_url end,
+          found_at=case when contacts.source='prozorro' then greatest(contacts.found_at,excluded.found_at) else contacts.found_at end`,
+          [
+            companyId,
+            contact.kind,
+            contact.value,
+            contact.sourceUrl,
+            contact.date,
+            JSON.stringify({
+              alsoInProzorro: true,
+              prozorro: { sourceUrl: contact.sourceUrl, date: contact.date },
+            }),
+          ],
+        );
+      }
+    }
+    await client.query('commit');
+    return true;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}

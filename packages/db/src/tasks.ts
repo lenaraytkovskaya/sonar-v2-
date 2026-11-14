@@ -73,9 +73,18 @@ async function dispatch(
     producerStarted = undefined;
     throw error;
   }));
+  const { rows: identity } =
+    type === 'prozorro.company'
+      ? await client.query('select payload from tasks where id=$1', [id])
+      : { rows: [] };
   await producer.send(
     type,
-    { taskId: id },
+    {
+      taskId: id,
+      ...(type === 'prozorro.company'
+        ? { version: identity[0]?.payload.version ?? null }
+        : {}),
+    },
     {
       db: dbFor(client),
       startAfter,
@@ -215,7 +224,16 @@ export async function retryTask(id: string, userId: string) {
   return transaction(async (client) => {
     const {
       rows: [identity],
-    } = await client.query('select type from tasks where id=$1', [id]);
+    } = await client.query('select type,payload from tasks where id=$1', [id]);
+    if (identity?.type === 'prozorro.company')
+      return (
+        await enqueueProzorroCompany(
+          identity.payload.companyId,
+          userId,
+          client,
+          { taskId: id, retry: true },
+        )
+      ).created;
     // Match reconciler lock ordering: orchestration lock before task row locks.
     if (identity?.type === 'social.inbox.sync')
       await client.query(
@@ -391,7 +409,7 @@ export async function runTask(
   afterTerminal?: (payload: object) => Promise<void>,
 ) {
   await boss.work<
-    { taskId: string },
+    { taskId: string; version?: string | null },
     unknown,
     { includeMetadata: true; batchSize: number }
   >(type, { includeMetadata: true, batchSize: 1 }, async ([job]) => {
@@ -402,31 +420,61 @@ export async function runTask(
     );
     const task = rows[0];
     if (!task) return;
-    await executeTask(
-      async () => {
-        if (task.type !== type) throw new Error('Unknown task type');
-        const outcome = await handler(task.payload, task.id);
-        if (outcome.status === 'deferred')
-          await transaction((client) =>
-            dispatch(client, task.id, type, outcome.runAt),
-          );
-        return outcome;
-      },
-      async (status, result, code, reason) => {
-        await sonarPool.query(
-          `update tasks set status=$2::text::task_status,
+    const release =
+      type === 'prozorro.company'
+        ? await (
+            await import('./prozorro.js')
+          ).acquireProzorroCompanyLease(task.payload.companyId)
+        : undefined;
+    try {
+      if (type === 'prozorro.company') {
+        const { rows: current } = await sonarPool.query(
+          "select 1 from tasks where id=$1 and status in ('queued','running') and coalesce(payload->>'version','')=$2",
+          [task.id, job.data.version ?? ''],
+        );
+        if (
+          !current.length ||
+          (task.payload.version ?? '') !== (job.data.version ?? '')
+        )
+          return;
+      }
+      await executeTask(
+        async () => {
+          if (task.type !== type) throw new Error('Unknown task type');
+          const outcome = await handler(task.payload, task.id);
+          if (
+            type === 'prozorro.company' &&
+            'reasonCode' in outcome &&
+            outcome.reasonCode === 'prozorro_identity_changed'
+          )
+            await sonarPool.query(
+              'update tasks set payload=payload||\'{"pendingRefresh":true}\'::jsonb where id=$1',
+              [task.id],
+            );
+          if (outcome.status === 'deferred')
+            await transaction((client) =>
+              dispatch(client, task.id, type, outcome.runAt),
+            );
+          return outcome;
+        },
+        async (status, result, code, reason) => {
+          await sonarPool.query(
+            `update tasks set status=$2::text::task_status,
     result=case when type='social.inbox.sync' and $2::text='running' then '{}'::jsonb else coalesce($3::jsonb,result) end,
     reason_code=$4, reason_uk=$5,
     attempts=attempts+case when $2::text='running' then 1 else 0 end,
     started_at=case when $2::text='running' then now() else started_at end,
     finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
-          [task.id, status, result ?? null, code ?? null, reason ?? null],
-        );
-        if (['done', 'skipped', 'failed', 'paused'].includes(status))
-          await afterTerminal?.(task.payload);
-      },
-      job.retryCount < job.retryLimit,
-    );
+            [task.id, status, result ?? null, code ?? null, reason ?? null],
+          );
+          if (['done', 'skipped', 'failed', 'paused'].includes(status))
+            await afterTerminal?.(task.payload);
+        },
+        job.retryCount < job.retryLimit,
+      );
+    } finally {
+      await release?.();
+    }
   });
 }
 
@@ -459,12 +507,12 @@ export async function enqueueProzorroSync(userId?: string | null) {
     );
     if (userId) {
       await client.query(
-        "update settings set value='true',updated_at=now() where key='prozorro.enabled'",
+        "update settings set value='true',updated_at=now() where key='prozorro.full_sync.enabled'",
       );
       await logActivity('prozorro.start', 'settings', null, userId, {}, client);
     }
     const { rows } = await client.query(
-      "select value from settings where key='prozorro.enabled'",
+      "select value from settings where key='prozorro.full_sync.enabled'",
     );
     if (rows[0]?.value !== true) return;
     // A killed worker can exhaust pg-boss retries before updating the CRM task.
@@ -490,25 +538,191 @@ export async function enqueueProzorroSync(userId?: string | null) {
     }
   });
 }
+type ProzorroEnqueueOptions = {
+  taskId?: string;
+  retry?: boolean;
+  onlyIfStale?: boolean;
+};
+const prozorroLiveJobs = `select t.id,t.status,t.payload from tasks t join pgboss.job j on j.name='prozorro.company' and j.data->>'taskId'=t.id::text
+  where t.type='prozorro.company' and t.payload->>'companyId'=$1 and j.state in ('created','retry','active') limit 1`;
+async function lockProzorroCompany(client: PoolClient, companyId: string) {
+  const { rows } = await client.query(
+    "select pg_try_advisory_xact_lock(hashtextextended('prozorro.company:'||$1,0)) as locked",
+    [companyId],
+  );
+  if (!rows[0]?.locked) return false;
+  await client.query('select id from companies where id=$1 for update', [
+    companyId,
+  ]);
+  return true;
+}
+async function recoverProzorroCompany(client: PoolClient, companyId: string) {
+  return client.query(
+    `update tasks t set status='failed',finished_at=now(),reason_code='prozorro_company_interrupted',
+    reason_uk='Попередній пошук у Prozorro перервано. Повторіть завдання.'
+    where type='prozorro.company' and payload->>'companyId'=$1 and status in ('queued','running')
+    and not exists(select 1 from pgboss.job j where j.name='prozorro.company' and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))`,
+    [companyId],
+  );
+}
+export async function enqueueProzorroCompany(
+  companyId: string,
+  userId: string | null = null,
+  existingClient?: PoolClient,
+  options: ProzorroEnqueueOptions = {},
+) {
+  const save = async (client: PoolClient) => {
+    const key = `prozorro.company:${companyId}:${new Date().toISOString().slice(0, 10)}`;
+    if (!(await lockProzorroCompany(client, companyId))) {
+      // A code correction requested during HTTP is revisited after the owner finishes.
+      const { rows } = await client.query(
+        "update tasks set payload=payload||'{\"pendingRefresh\":true}'::jsonb where id=(select id from tasks where type='prozorro.company' and payload->>'companyId'=$1 order by created_at desc limit 1) returning id,status",
+        [companyId],
+      );
+      return {
+        id: rows[0]?.id ?? null,
+        status: rows[0]?.status === 'running' ? 'running' : 'queued',
+        created: false,
+      };
+    }
+    await recoverProzorroCompany(client, companyId);
+    const { prozorroCompanyCode } = await import('./prozorro.js');
+    const code = await prozorroCompanyCode(companyId, client, true);
+    const { rows: live } = await client.query(prozorroLiveJobs, [companyId]);
+    if (live[0]) {
+      if ((live[0].payload.code ?? null) !== code)
+        await client.query(
+          'update tasks set payload=payload||\'{"pendingRefresh":true}\'::jsonb where id=$1',
+          [live[0].id],
+        );
+      return { id: live[0].id, status: live[0].status, created: false };
+    }
+    if (options.onlyIfStale) {
+      const { rows: fresh } = await client.query(
+        "select 1 from company_facts where company_id=$1 and kind='prozorro_company' and source='prozorro' and value->>'code'=$2 and found_at>now()-interval '30 days'",
+        [companyId, code],
+      );
+      if (fresh.length) return { id: null, status: 'done', created: false };
+    }
+    const { rows: previous } = await client.query(
+      "select * from tasks where type='prozorro.company' and " +
+        (options.taskId ? 'id=$1' : 'idempotency_key=$1') +
+        ' for update',
+      [options.taskId ?? key],
+    );
+    const old = previous[0];
+    const payload = { companyId, code, version: randomUUID() };
+    let created: string | null = null;
+    if (old) {
+      const oldCode = old.payload.code ?? old.result?.code ?? null;
+      const changed = oldCode !== code;
+      const retryable =
+        options.retry && ['failed', 'paused', 'skipped'].includes(old.status);
+      const resolved =
+        old.reason_code === 'prozorro_missing_edrpou' && code !== null;
+      if (changed || retryable || resolved) {
+        await client.query(
+          "update tasks set payload=$2,result=null,status='queued',reason_code=null,reason_uk=null,finished_at=null,dismissed_at=null where id=$1",
+          [old.id, payload],
+        );
+        await dispatch(client, old.id, 'prozorro.company');
+        created = old.id;
+      } else if (old.payload.pendingRefresh) {
+        await client.query(
+          "update tasks set payload=payload-'pendingRefresh' where id=$1",
+          [old.id],
+        );
+      }
+    } else
+      created = await enqueueTask('prozorro.company', key, payload, client);
+    if (created) {
+      await client.query(
+        "update tasks set subject_type='company',subject_id=$2 where id=$1",
+        [created, companyId],
+      );
+      await logActivity(
+        'prozorro.company.queued',
+        'company',
+        companyId,
+        userId,
+        {},
+        client,
+      );
+    }
+    const { rows } = await client.query(
+      'select id,status from tasks where id=$1 or idempotency_key=$2 order by created_at desc limit 1',
+      [old?.id ?? created, key],
+    );
+    return { ...rows[0], created: !!created };
+  };
+  return existingClient ? save(existingClient) : transaction(save);
+}
+export async function reconcileProzorroCompanyTasks() {
+  const { rows } = await sonarPool.query(
+    "select distinct payload->>'companyId' as company_id from tasks where type='prozorro.company' and (status in ('queued','running') or payload @> '{\"pendingRefresh\":true}') order by company_id",
+  );
+  for (const { company_id: companyId } of rows)
+    await transaction(async (client) => {
+      if (!(await lockProzorroCompany(client, companyId))) return;
+      await recoverProzorroCompany(client, companyId);
+      const { rows: pending } = await client.query(
+        "select id from tasks where type='prozorro.company' and payload->>'companyId'=$1 and payload @> '{\"pendingRefresh\":true}' order by created_at desc limit 1",
+        [companyId],
+      );
+      if (pending[0])
+        await enqueueProzorroCompany(companyId, null, client, {
+          taskId: pending[0].id,
+        });
+    });
+}
+export async function enqueueCampaignProzorro(
+  campaignId: string,
+  userId: string,
+) {
+  return transaction(async (client) => {
+    const { rows } = await client.query(
+      'select distinct cc.company_id from campaign_companies cc where cc.campaign_id=$1 order by cc.company_id',
+      [campaignId],
+    );
+    let count = 0;
+    for (const row of rows)
+      if (
+        (
+          await enqueueProzorroCompany(row.company_id, userId, client, {
+            onlyIfStale: true,
+          })
+        ).created
+      )
+        count++;
+    return count;
+  });
+}
+// Compatibility entry point for the enrichment chain; no local full-feed lookup is queued.
 export async function enqueueProzorroLookup(companyId: string) {
-  const key = `prozorro.lookup:${companyId}:${new Date().toISOString().slice(0, 10)}`;
-  const created = await enqueueTask('prozorro.lookup', key, { companyId });
-  if (created)
-    await sonarPool.query(
-      "update tasks set subject_type='company',subject_id=$2 where id=$1",
-      [created, companyId],
-    );
-  else {
-    const { rows } = await sonarPool.query(
-      'select status from tasks where idempotency_key=$1',
-      [key],
-    );
-    if (!['queued', 'running'].includes(rows[0]?.status))
-      await finishEnrichment(companyId);
-  }
+  const { rows } = await sonarPool.query(
+    "select value from settings where key='prozorro.enabled'",
+  );
+  const { rows: matched } = await sonarPool.query(
+    "select 1 from company_facts where company_id=$1 and source='registry' and kind='registry_entity'",
+    [companyId],
+  );
+  const { rows: registryTask } = await sonarPool.query(
+    "select status from tasks where type='registry.match' and payload->>'companyId'=$1 order by created_at desc limit 1",
+    [companyId],
+  );
+  if (
+    rows[0]?.value !== true ||
+    !matched.length ||
+    registryTask[0]?.status !== 'done'
+  )
+    return finishEnrichment(companyId);
+  const task = await enqueueProzorroCompany(companyId);
+  if (!['queued', 'running'].includes(task.status))
+    await finishEnrichment(companyId);
+  return task;
 }
 
-// Enrichment chain: site.scan -> registry.match -> prozorro.lookup -> company.score.
+// Enrichment chain: site.scan -> registry.match -> prozorro.company -> company.score.
 // Each stage is its own task; a failed stage never blocks the next one.
 export async function enqueueEnrichment(
   companyId: string,

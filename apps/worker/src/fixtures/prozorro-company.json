@@ -1,0 +1,384 @@
+{
+  "evidence": {
+    "capturedAt": "2026-11-14",
+    "page": "https://prozorro.gov.ua/uk/search/tender",
+    "steps": "Учасник → 41165490 → select ТОВ СТО ПРАЙД",
+    "request": {
+      "method": "POST",
+      "url": "https://prozorro.gov.ua/api/search/tenders?tenderer%5B0%5D=41165490",
+      "body": null
+    },
+    "sortQuery": "sort_by=dateCreated&order=desc",
+    "publicationStartQuery": "date[notice][start]=2026-11-14",
+    "sanitization": "Search rows projected to public tenderID/date fields; original row count/order and pagination metadata retained. Detail addresses, descriptions, documents and contact data removed. Test contacts are synthetic.",
+    "dateFilterObservation": {
+      "request": {
+        "method": "POST",
+        "body": null,
+        "url": "https://prozorro.gov.ua/api/search/tenders?tenderer%5B0%5D=41165490&date%5Bnotice%5D%5Bstart%5D=2025-11-14&date%5Bnotice%5D%5Bend%5D=2026-11-14&sort_by=dateCreated&order=desc"
+      },
+      "response": {
+        "page": 0,
+        "per_page": 20,
+        "total": 0,
+        "data": []
+      },
+      "observation": "Empty despite verified September 2026 reporting tender. Use newest-first participant search with local tenderID publication day bounds; total is all-time, possibly capped at 1000."
+    }
+  },
+  "search": {
+    "page": 0,
+    "per_page": 20,
+    "total": 79,
+    "data": [
+      {
+        "tenderID": "UA-2026-10-06-004685-a"
+      },
+      {
+        "tenderID": "UA-2026-09-11-006716-a"
+      },
+      {
+        "tenderID": "UA-2026-05-29-006768-a"
+      },
+      {
+        "tenderID": "UA-2026-05-26-011223-a"
+      },
+      {
+        "tenderID": "UA-2026-02-25-005855-a"
+      },
+      {
+        "tenderID": "UA-2026-02-25-005639-a"
+      },
+      {
+        "tenderID": "UA-2026-02-19-012022-a"
+      },
+      {
+        "tenderID": "UA-2026-02-19-011411-a"
+      },
+      {
+        "tenderID": "UA-2026-02-11-013720-a"
+      },
+      {
+        "tenderID": "UA-2026-02-05-015398-a"
+      },
+      {
+        "tenderID": "UA-2026-01-27-000306-a"
+      },
+      {
+        "tenderID": "UA-2026-01-23-010866-a"
+      },
+      {
+        "tenderID": "UA-2026-01-23-009912-a"
+      },
+      {
+        "tenderID": "UA-2025-12-15-005097-a"
+      },
+      {
+        "tenderID": "UA-2025-12-02-010300-a"
+      },
+      {
+        "tenderID": "UA-2025-10-02-006274-a"
+      },
+      {
+        "tenderID": "UA-2025-06-25-009633-a"
+      },
+      {
+        "tenderID": "UA-2025-04-15-013474-a"
+      },
+      {
+        "tenderID": "UA-2025-04-04-003936-a"
+      },
+      {
+        "tenderID": "UA-2025-04-04-002044-a"
+      }
+    ]
+  },
+  "summary": {
+    "id": "df69abdd40ee452c9b7b30f07d0e2ac5",
+    "tenderID": "UA-2026-09-11-006716-a"
+  },
+  "detail": {
+    "data": {
+      "date": "2026-09-11T12:47:14.863130+03:00",
+      "dateModified": "2026-09-11T12:47:14.863130+03:00",
+      "tenderID": "UA-2026-09-11-006716-a",
+      "title": "Послуги з поточного ремонту автомобіля",
+      "procuringEntity": {
+        "name": "КОМУНАЛЬНЕ НЕКОМЕРЦІЙНЕ ПІДПРИЄМСТВО \"ЦЕНТР ПЕРВИННОЇ МЕДИКО - САНІТАРНОЇ ДОПОМОГИ ШИШАЦЬКОЇ СЕЛИЩНОЇ РАДИ",
+        "identifier": {
+          "scheme": "UA-EDR",
+          "id": "38257649",
+          "legalName": "КОМУНАЛЬНЕ НЕКОМЕРЦІЙНЕ ПІДПРИЄМСТВО \"ЦЕНТР ПЕРВИННОЇ МЕДИКО - САНІТАРНОЇ ДОПОМОГИ ШИШАЦЬКОЇ СЕЛИЩНОЇ РАДИ"
+        },
+        "kind": "general"
+      },
+      "items": [
+        {
+          "id": "4dfce26e59634ca09b95b27e5597bb7d",
+          "unit": {
+            "name": "послуга",
+            "code": "E48"
+          },
+          "quantity": 1.0,
+          "classification": {
+            "scheme": "ДК021",
+            "id": "50110000-9"
+          },
+          "deliveryDate": {
+            "endDate": "2026-09-11T00:00:00+03:00"
+          },
+          "deliveryAddress": {
+            "streetAddress": "вул. Світла,б.6а",
+            "locality": "с. Щербані",
+            "region": "Полтавська область",
+            "countryName": "Україна"
+          }
+        }
+      ],
+      "value": {
+        "amount": 5297.1,
+        "currency": "UAH",
+        "valueAddedTaxIncluded": true
+      },
+      "status": "complete",
+      "awards": [
+        {
+          "id": "9946d94acd71455b99875334aa746bce",
+          "qualified": true,
+          "status": "active",
+          "date": "2026-09-11T12:47:12.003364+03:00",
+          "suppliers": [
+            {
+              "name": "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ \"СТО ПРАЙД\"",
+              "identifier": {
+                "scheme": "UA-EDR",
+                "id": "41165490",
+                "legalName": "ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ \"СТО ПРАЙД\""
+              },
+              "scale": "mid"
+            }
+          ],
+          "value": {
+            "amount": 5297.1,
+            "currency": "UAH",
+            "valueAddedTaxIncluded": true
+          }
+        }
+      ],
+      "contracts": [
+        {
+          "id": "fb86899dd9c4416099b0164200b75056",
+          "status": "active",
+          "awardID": "9946d94acd71455b99875334aa746bce",
+          "date": "2026-09-11T12:47:14.863130+03:00",
+          "contractID": "UA-2026-09-11-006716-a-a1",
+          "title": "Послуги з поточного ремонту автомобіля",
+          "value": {
+            "amount": 5297.1,
+            "currency": "UAH",
+            "valueAddedTaxIncluded": true,
+            "amountNet": 4414.25
+          }
+        }
+      ],
+      "id": "df69abdd40ee452c9b7b30f07d0e2ac5"
+    }
+  },
+  "pagination": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://prozorro.gov.ua/api/search/tenders?tenderer%5B0%5D=41165490&page=2",
+        "body": null
+      },
+      "response": {
+        "data": [
+          {
+            "tenderID": "UA-2025-04-01-010497-a"
+          },
+          {
+            "tenderID": "UA-2025-03-13-011073-a"
+          },
+          {
+            "tenderID": "UA-2025-03-13-007318-a"
+          },
+          {
+            "tenderID": "UA-2025-03-13-007198-a"
+          },
+          {
+            "tenderID": "UA-2025-02-17-005532-a"
+          },
+          {
+            "tenderID": "UA-2025-02-05-009337-a"
+          },
+          {
+            "tenderID": "UA-2025-02-05-009164-a"
+          },
+          {
+            "tenderID": "UA-2025-02-05-009001-a"
+          },
+          {
+            "tenderID": "UA-2025-02-05-008930-a"
+          },
+          {
+            "tenderID": "UA-2025-02-05-008886-a"
+          },
+          {
+            "tenderID": "UA-2025-02-04-015753-a"
+          },
+          {
+            "tenderID": "UA-2025-01-24-009773-a"
+          },
+          {
+            "tenderID": "UA-2024-12-30-008329-a"
+          },
+          {
+            "tenderID": "UA-2024-12-25-008025-a"
+          },
+          {
+            "tenderID": "UA-2024-12-24-001309-a"
+          },
+          {
+            "tenderID": "UA-2024-12-23-006149-a"
+          },
+          {
+            "tenderID": "UA-2024-12-23-005244-a"
+          },
+          {
+            "tenderID": "UA-2024-09-05-003494-a"
+          },
+          {
+            "tenderID": "UA-2024-08-23-007525-a"
+          },
+          {
+            "tenderID": "UA-2024-08-23-006725-a"
+          }
+        ],
+        "page": 2,
+        "per_page": 20,
+        "total": 79
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://prozorro.gov.ua/api/search/tenders?tenderer%5B0%5D=41165490&page=1",
+        "body": null
+      },
+      "response": {
+        "data": [
+          {
+            "tenderID": "UA-2026-10-06-004685-a"
+          },
+          {
+            "tenderID": "UA-2026-09-11-006716-a"
+          },
+          {
+            "tenderID": "UA-2026-05-29-006768-a"
+          },
+          {
+            "tenderID": "UA-2026-05-26-011223-a"
+          },
+          {
+            "tenderID": "UA-2026-02-25-005855-a"
+          },
+          {
+            "tenderID": "UA-2026-02-25-005639-a"
+          },
+          {
+            "tenderID": "UA-2026-02-19-012022-a"
+          },
+          {
+            "tenderID": "UA-2026-02-19-011411-a"
+          },
+          {
+            "tenderID": "UA-2026-02-11-013720-a"
+          },
+          {
+            "tenderID": "UA-2026-02-05-015398-a"
+          },
+          {
+            "tenderID": "UA-2026-01-27-000306-a"
+          },
+          {
+            "tenderID": "UA-2026-01-23-010866-a"
+          },
+          {
+            "tenderID": "UA-2026-01-23-009912-a"
+          },
+          {
+            "tenderID": "UA-2025-12-15-005097-a"
+          },
+          {
+            "tenderID": "UA-2025-12-02-010300-a"
+          },
+          {
+            "tenderID": "UA-2025-10-02-006274-a"
+          },
+          {
+            "tenderID": "UA-2025-06-25-009633-a"
+          },
+          {
+            "tenderID": "UA-2025-04-15-013474-a"
+          },
+          {
+            "tenderID": "UA-2025-04-04-003936-a"
+          },
+          {
+            "tenderID": "UA-2025-04-04-002044-a"
+          }
+        ],
+        "page": 1,
+        "per_page": 20,
+        "total": 79
+      }
+    }
+  ],
+  "liveVerification": {
+    "checkedAt": "2026-11-14T22:08:07.192Z",
+    "from": "2025-11-14",
+    "to": "2026-11-14",
+    "searchTotal": 79,
+    "searchTotalScope": "all_time",
+    "searchPages": 4,
+    "searchRows": 79,
+    "periodParticipationCount": 15,
+    "periodCountExact": true,
+    "inspected": 5,
+    "matched": 5,
+    "wins": 5,
+    "wonAmounts": {
+      "UAH": 259589.7
+    },
+    "scope": "Wins and amounts only from the five official tender details, not the 15 publication-period search participations. Read-only standalone run at 1 request/second, no DB queries.",
+    "verifiedTenderIds": [
+      {
+        "tenderID": "UA-2026-10-06-004685-a",
+        "id": "0d153ce65f07463e8eb6f7c0dff67888",
+        "sourceUrl": "https://prozorro.gov.ua/tender/UA-2026-10-06-004685-a"
+      },
+      {
+        "tenderID": "UA-2026-09-11-006716-a",
+        "id": "df69abdd40ee452c9b7b30f07d0e2ac5",
+        "sourceUrl": "https://prozorro.gov.ua/tender/UA-2026-09-11-006716-a"
+      },
+      {
+        "tenderID": "UA-2026-05-29-006768-a",
+        "id": "dc614ff1c5e94323a32d9705b5026263",
+        "sourceUrl": "https://prozorro.gov.ua/tender/UA-2026-05-29-006768-a"
+      },
+      {
+        "tenderID": "UA-2026-05-26-011223-a",
+        "id": "a4efba8a005a4d5f9f3bf2803ba1496c",
+        "sourceUrl": "https://prozorro.gov.ua/tender/UA-2026-05-26-011223-a"
+      },
+      {
+        "tenderID": "UA-2026-02-25-005855-a",
+        "id": "59e5eb5ea4b24764968109734b30be72",
+        "sourceUrl": "https://prozorro.gov.ua/tender/UA-2026-02-25-005855-a"
+      }
+    ],
+    "httpRequests": 14,
+    "httpStatuses": [200]
+  }
+}
