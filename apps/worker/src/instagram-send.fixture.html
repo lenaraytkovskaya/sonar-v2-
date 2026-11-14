@@ -9,6 +9,28 @@
 </main>
 <script>
   const f = window.fixtureOptions || {};
+  const selfLink = (handle) =>
+    `<a href="/${handle}/" role="link" tabindex="0"><span role="link" tabindex="-1"><img width="24" height="24" alt="${handle}'s profile picture"></span></a>`;
+  if (f.observedMessage) {
+    const rail = document.createElement('div');
+    rail.id = 'fixture-rail';
+    rail.innerHTML =
+      '<a href="/">Home</a><a href="/reels/">Reels</a><a href="/direct/inbox/">Messages</a><a href="/explore/">Search</a>';
+    if (f.malformedLink)
+      rail.insertAdjacentHTML(
+        'beforeend',
+        '<a href="http://[">Invalid link</a>',
+      );
+    const self = document.createElement('div');
+    self.innerHTML = selfLink('fixture_sender');
+    if (f.senderPictureMismatch)
+      self.querySelector('img').alt = "another_sender's profile picture";
+    if (!f.senderMissing) rail.append(self);
+    if (f.ambiguousSender)
+      rail.insertAdjacentHTML('beforeend', selfLink('another_sender'));
+    document.body.prepend(rail);
+    if (f.senderOutsideRail) document.body.prepend(self);
+  }
   let main = document.querySelector('main');
   if (f.outerDialog || f.outerMain) {
     const outer = document.createElement('div');
@@ -119,9 +141,57 @@
             'beforeend',
             '<div role="dialog"><header><a href="/other/">Other recipient</a></header><textarea placeholder="Message"></textarea></div>',
           );
+        if (f.observedMessage) {
+          const list = document.createElement('div');
+          list.id = 'messages';
+          list.dataset.pagelet = 'IGDMessagesList';
+          main.querySelector('#messages').replaceWith(list);
+          main.insertAdjacentHTML('beforeend', selfLink('fixture_company'));
+          const sidebar = document.createElement('aside');
+          sidebar.innerHTML = selfLink('sidebar_person');
+          document.body.append(sidebar);
+        }
+        let messageIndex = 0;
+        const appendMessage = (text, author = 'fixture_sender') => {
+          const row = document.createElement('div');
+          if (f.observedMessage) {
+            // Confirmed article subtree from ROOT's 2026-11-14 inspection.
+            row.style.opacity = '1';
+            const id = `fixture-message-label-${messageIndex++}`;
+            row.innerHTML = `<div><div role="group" tabindex="-1"></div><div><div><div><div aria-labelledby="${id}" aria-roledescription="message" role="article" tabindex="0"><div id="${id}" role="none"><div role="none"><div><div role="presentation"><span dir="auto"><div dir="auto"></div></span></div></div></div></div></div><div style="--x-width:96px"></div><div role="group" aria-label="Message actions" data-igd-message-actions-hidden="true"><div><span><div><div role="button" tabindex="0" aria-label="Reply to message from ${author}"><svg role="img" aria-label="Reply to message from ${author}"></svg></div></div></span></div></div></div></div></div></div>`;
+            row.querySelector('span > div').textContent = text;
+            if (f.noMessageActions)
+              row.querySelector('[aria-label="Message actions"]').remove();
+            if (f.neighborActions) {
+              const neighbor = row.cloneNode(true);
+              const neighborId = `fixture-message-label-${messageIndex++}`;
+              neighbor.querySelector('[id]').id = neighborId;
+              neighbor
+                .querySelector('[role="article"]')
+                .setAttribute('aria-labelledby', neighborId);
+              neighbor.querySelector('[dir="auto"] > div').textContent =
+                'Other body';
+              row.querySelector('[aria-label="Message actions"]').remove();
+              main.querySelector('#messages').append(neighbor);
+            }
+            if (f.multipleArticles)
+              row
+                .querySelector('[role="article"]')
+                .after(row.querySelector('[role="article"]').cloneNode(true));
+          } else {
+            row.setAttribute('aria-label', 'You sent');
+            const span = document.createElement('span');
+            span.textContent = text;
+            row.append(span);
+          }
+          main.querySelector('#messages').append(row);
+          if (f.prependMessage) main.querySelector('#messages').prepend(row);
+        };
         if (f.existingMessage)
-          main.querySelector('#messages').innerHTML =
-            '<div aria-label="You sent"><span>Synthetic message</span></div>';
+          appendMessage(
+            f.existingBody ?? 'Synthetic message',
+            f.existingAuthor,
+          );
         if (f.wrongRecipient)
           document.body.insertAdjacentHTML(
             'beforeend',
@@ -142,6 +212,8 @@
           ) || main.querySelector('[contenteditable], textarea:not([id])');
         let composer = findComposer();
         const mutateDialog = (phase) => {
+          if (phase === 'after_marker' && f.markerMessage)
+            appendMessage('Synthetic message');
           if (f.mismatchPhase !== phase) return;
           if (f.headerMismatch)
             conversationHeader.insertAdjacentHTML(
@@ -215,11 +287,26 @@
             window.fixtureEvent('send');
             if (f.postLogin) main.innerHTML = '<input type="password">';
             else if (!f.noConfirmation) {
-              const row = document.createElement('div');
-              row.setAttribute('aria-label', 'You sent');
-              row.textContent = composer.value ?? composer.innerText;
-              main.querySelector('#messages').append(row);
+              appendMessage(
+                composer.value ?? composer.innerText,
+                f.messageAuthor,
+              );
             }
+            if (f.cloneOldMessage) {
+              const list = main.querySelector('#messages');
+              list.replaceChildren(
+                ...Array.from(list.childNodes).map((node) =>
+                  node.cloneNode(true),
+                ),
+              );
+            }
+            if (f.rewriteOldBody)
+              main.querySelector('#messages [dir="auto"] > div').textContent =
+                'Synthetic message';
+            if (f.switchSenderAfterSend)
+              document.querySelector(
+                '#fixture-rail a[href="/fixture_sender/"]',
+              ).outerHTML = selfLink('another_sender');
             if (f.clearComposer) composer.textContent = '';
             mutateDialog('after_send');
           });

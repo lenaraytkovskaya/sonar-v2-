@@ -774,6 +774,93 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it.each([
+      {},
+      { existingMessage: true },
+      { existingMessage: true, existingAuthor: 'fixture_company' },
+      { malformedLink: true },
+      { mismatchPhase: 'after_fill', replaceContainer: true },
+      { body: 'First line\nSecond line', clearComposer: true },
+    ])(
+      'confirms a new article by its associated current-session sender (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          observedMessage: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual([
+            'open',
+            ...('replaceContainer' in options ? ['replace:container'] : []),
+            'mark',
+            'send',
+          ]);
+          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      { messageAuthor: 'fixture_company' },
+      { messageAuthor: 'another_sender' },
+      { noConfirmation: true },
+      { existingMessage: true, noConfirmation: true },
+      { existingMessage: true, noConfirmation: true, cloneOldMessage: true },
+      { existingMessage: true, prependMessage: true },
+      {
+        existingMessage: true,
+        existingBody: 'Old other body',
+        noConfirmation: true,
+        rewriteOldBody: true,
+      },
+      {
+        existingMessage: true,
+        messageAuthor: 'fixture_company',
+        cloneOldMessage: true,
+      },
+      { senderMissing: true },
+      { senderPictureMismatch: true },
+      { senderOutsideRail: true },
+      { ambiguousSender: true },
+      { switchSenderAfterSend: true },
+      { noMessageActions: true },
+      { neighborActions: true },
+      { multipleArticles: true },
+      {
+        markerMessage: true,
+        mismatchPhase: 'after_marker',
+        noConfirmation: true,
+      },
+    ])(
+      'keeps delivery uncertain without new attributable outgoing evidence (%j)',
+      async (options) => {
+        const f = await fixture({
+          pageletHeader: true,
+          lexical: true,
+          observedMessage: true,
+          ...options,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'delivery_uncertain',
+            stage: 'confirmation',
+            errorKind: 'timeout',
+          });
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it('does not confirm a cloned old outgoing message or retry after rerender', async () => {
       const f = await fixture({
         pageletHeader: true,
