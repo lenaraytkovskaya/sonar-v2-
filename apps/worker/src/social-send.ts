@@ -2,6 +2,7 @@ import {
   resolveSocialSession,
   SocialSendError,
   socialSessionCheckReason,
+  SocialSessionCheckError,
 } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { sendEmailMessage, type ChannelSender } from '@sonar/db/email';
@@ -81,7 +82,13 @@ export async function runSocialSessionCheck(input: { accountId: string }) {
       );
       return { valid: true };
     } catch (error) {
-      return { valid: false, reason: socialSessionCheckReason(error) };
+      return {
+        valid: false,
+        reason: socialSessionCheckReason(error),
+        ...(error instanceof SocialSessionCheckError && error.diagnostic
+          ? { diagnostic: error.diagnostic }
+          : {}),
+      };
     }
   });
 }

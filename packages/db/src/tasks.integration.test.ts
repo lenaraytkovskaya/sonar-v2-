@@ -17,7 +17,7 @@ it.skipIf(!enabled)(
       `tasks.${queue}`,
       { retryLimit: 0, retryDelay: 1, expireInSeconds: 60 },
     ]);
-    let fail = true;
+    let phase: 'failed' | 'paused' | 'done' = 'failed';
     const key = randomUUID();
     const ids = await Promise.all(
       Array.from({ length: 10 }, () => enqueueTask(queue, key)),
@@ -26,7 +26,14 @@ it.skipIf(!enabled)(
     const id = ids.find(Boolean);
     await boss.start();
     await runTask(queue, async () => {
-      if (fail) throw Error('offline');
+      if (phase === 'failed') throw Error('offline');
+      if (phase === 'paused')
+        return {
+          status: 'paused',
+          result: { valid: false, diagnostic: { version: 1 } },
+          reasonCode: 'social_session_unknown_auth',
+          reasonUk: 'Сесію не підтверджено.',
+        };
       return { status: 'done', result: { recovered: true } };
     });
     const wait = async (status: string) => {
@@ -41,7 +48,11 @@ it.skipIf(!enabled)(
       throw Error(`Missing state ${status}`);
     };
     expect((await wait('failed')).reason_uk).toBeTruthy();
-    fail = false;
+    phase = 'paused';
+    await sonarPool.query('update tasks set result=$2 where id=$1', [
+      id,
+      { stale: true },
+    ]);
     const {
       rows: [user],
     } = await sonarPool.query(
@@ -52,6 +63,12 @@ it.skipIf(!enabled)(
       Array.from({ length: 10 }, () => retryTask(id, user.id)),
     );
     expect(retries.filter(Boolean)).toHaveLength(1);
+    expect((await wait('paused')).result).toEqual({
+      valid: false,
+      diagnostic: { version: 1 },
+    });
+    phase = 'done';
+    expect(await retryTask(id, user.id)).toBe(true);
     expect((await wait('done')).result).toEqual({ recovered: true });
     expect(
       (
@@ -60,7 +77,7 @@ it.skipIf(!enabled)(
           [id],
         )
       ).rows[0].n,
-    ).toBe(1);
+    ).toBe(2);
     await sonarPool.query('delete from activity_log where entity_id=$1', [id]);
     await sonarPool.query('delete from tasks where id=$1', [id]);
     await sonarPool.query('delete from users where id=$1', [user.id]);

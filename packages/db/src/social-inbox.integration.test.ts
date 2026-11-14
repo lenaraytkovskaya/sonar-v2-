@@ -873,13 +873,27 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
-  'keeps the account lock but no SQL transaction open during a session check callback',
+  'keeps the account lock without an open transaction and preserves sanitized paused diagnostics',
   async () => {
     const { withSocialSessionCheck } = await import('./social-accounts.js');
     await resetGate();
     let idleTransactions: unknown[] = [];
     let lockedDuringCallback = true;
     let committedCount = 0;
+    const diagnostic = {
+      version: 1,
+      stage: 'auth',
+      urlKind: 'feed',
+      navigationHttpStatus: 200,
+      errorKind: 'timeout',
+      visible: {
+        legacyAuth: 0,
+        semanticAuth: 0,
+        captcha: 0,
+        checkpoint: 0,
+        login: 0,
+      },
+    } as const;
     const result = await withSocialSessionCheck(
       account,
       async () => {
@@ -911,14 +925,29 @@ it.skipIf(!enabled)(
         } finally {
           c.release();
         }
-        return { valid: true };
+        return {
+          valid: false,
+          reason: 'unknown_auth',
+          diagnostic: {
+            ...diagnostic,
+            rawUrl: 'https://private.invalid/?token=secret',
+          },
+        };
       },
       now,
     );
-    expect(result).toMatchObject({ status: 'done' });
+    expect(result).toMatchObject({
+      status: 'paused',
+      result: { valid: false, diagnostic },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private|token|secret|rawUrl/);
     expect(idleTransactions).toEqual([]);
     expect(lockedDuringCallback).toBe(false);
     expect(committedCount).toBe(1);
+    await db.sonarPool.query(
+      'update channel_accounts set status=\'active\',settings=settings||\'{"sessionStatus":"valid"}\'::jsonb where id=$1',
+      [account],
+    );
   },
 );
 it.skipIf(!enabled)(

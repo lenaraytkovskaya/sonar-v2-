@@ -35,6 +35,26 @@ describe('task transitions', () => {
       );
     },
   );
+  it('passes the current paused result through instead of discarding it', async () => {
+    const save = vi.fn(async () => {});
+    const result = { valid: false, diagnostic: { version: 1 } };
+    await executeTask(
+      async () => ({
+        status: 'paused',
+        result,
+        reasonCode: 'social_session_unknown_auth',
+        reasonUk: 'Причина',
+      }),
+      save,
+      false,
+    );
+    expect(save).toHaveBeenLastCalledWith(
+      'paused',
+      result,
+      'social_session_unknown_auth',
+      'Причина',
+    );
+  });
   it('keeps a deferred operation queued with an explanatory reason', async () => {
     const save = vi.fn(async () => {});
     await executeTask(
