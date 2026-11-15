@@ -1,8 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const { budgeted } = vi.hoisted(() => ({
+const { budgeted, connect } = vi.hoisted(() => ({
+  connect: vi.fn(),
   budgeted: vi.fn(async (_service, _estimate, _id, run) => run()),
 }));
-vi.mock('@sonar/db', () => ({ sonarPool: {} }));
+vi.mock('@sonar/db', () => ({ sonarPool: { connect } }));
 vi.mock('@sonar/db/budget', async (original) => ({
   ...(await original<object>()),
   runBudgetedRequest: budgeted,
@@ -14,7 +15,12 @@ vi.mock('@sonar/db/tasks', () => ({
   TaskFailure: class extends Error {},
 }));
 import { OpenRouterError } from '@sonar/core';
-import { aiEvidencePage, aiSiteFallback, scanSite } from './site.js';
+import {
+  aiEvidencePage,
+  aiSiteFallback,
+  scanSite,
+  runSiteScan,
+} from './site.js';
 import {
   publicAddress,
   SiteHttp,
@@ -314,4 +320,28 @@ it('does not turn a billing persistence failure into a successful scan', async (
   await expect(
     aiSiteFallback(pages, 'UA', config, 'task', aiClient('{}')),
   ).rejects.toThrow('settlement storage unavailable');
+});
+
+it('does not fetch a queued website after a newer manual replacement', async () => {
+  const client = {
+    query: vi.fn(async (sql: string) => ({
+      rows: sql.includes('pg_try_advisory_lock')
+        ? [{ locked: true }]
+        : sql.includes('from companies')
+          ? [{ website: 'https://example.org/' }]
+          : [],
+    })),
+    release: vi.fn(),
+  };
+  connect.mockResolvedValue(client);
+  expect(
+    await runSiteScan(
+      { companyId: 'c', website: 'https://example.com/' },
+      'task',
+    ),
+  ).toMatchObject({ status: 'skipped', reasonCode: 'source_changed' });
+  expect(
+    client.query.mock.calls.some(([sql]) => sql.includes('from settings')),
+  ).toBe(false);
+  expect(client.release).toHaveBeenCalledOnce();
 });

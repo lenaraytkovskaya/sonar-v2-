@@ -8,6 +8,7 @@ import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
+import { ManualSource } from '@/components/manual-source';
 import { CompanyTabs } from '@/components/company-tabs';
 import { CompanyAnalysis } from '@/components/company-analysis';
 import { ProzorroCompany } from '@/components/prozorro-company';
@@ -151,7 +152,9 @@ export default async function Page({
     (fact) =>
       fact.source !== 'registry' &&
       fact.source !== 'prozorro' &&
-      fact.kind !== 'social_profile' &&
+      !['social_profile', 'manual_source', 'google_place'].includes(
+        fact.kind,
+      ) &&
       !['page_text', 'registry_rejected', 'website_candidate'].includes(
         fact.kind,
       ),
@@ -197,6 +200,9 @@ export default async function Page({
       Number(a.campaign_id === selectedCampaign),
   );
   const mainScore = orderedScores[0];
+  const manualMaps = facts.some(
+    (f) => f.kind === 'manual_source' && f.value?.source === 'googleMaps',
+  );
   const map = normalizeWebsite(c.google_maps_uri)?.website;
   const website = normalizeWebsite(c.website ?? undefined);
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
@@ -477,6 +483,41 @@ export default async function Page({
                     )
                   }
                 >
+                  <ManualSource
+                    companyId={id}
+                    source="googleMaps"
+                    current={c.google_maps_uri}
+                  />
+                  {facts
+                    .filter(
+                      (f) =>
+                        f.kind === 'google_place' &&
+                        f.source_url === c.google_maps_uri &&
+                        (!f.expires_at || new Date(f.expires_at) > new Date()),
+                    )
+                    .slice(0, 1)
+                    .map((f) => (
+                      <div key={f.id} className="space-y-1 text-sm">
+                        <p className="font-medium">
+                          {uk.manualSource.collected}
+                        </p>
+                        <p>{f.value.displayName?.text}</p>
+                        <p>{f.value.formattedAddress}</p>
+                        <p>
+                          {f.value.rating ?? '—'} ·{' '}
+                          {f.value.userRatingCount ?? 0} {uk.company.reviews}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {uk.company.sources.google} ·{' '}
+                          <LocalTime value={f.found_at} />
+                        </p>
+                      </div>
+                    ))}
+                  {manualMaps && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.manualSource.originalGoogle}
+                    </p>
+                  )}
                   <p className="text-sm">{c.address ?? uk.company.noData}</p>
                   <p className="text-sm text-muted-foreground">
                     {uk.google.businessStatus[
@@ -495,6 +536,11 @@ export default async function Page({
             content: (
               <div className="min-w-0 space-y-3">
                 <Section title={uk.company.website}>
+                  <ManualSource
+                    companyId={id}
+                    source="website"
+                    current={c.website}
+                  />
                   {website ? (
                     <a
                       className="break-all text-sm text-accent"
@@ -593,6 +639,7 @@ export default async function Page({
             content: (
               <div className="min-w-0 space-y-3">
                 <Section title={uk.social.title}>
+                  <ManualSource companyId={id} source="social" />
                   <CompanySocial
                     companyId={c.id}
                     initial={social}
@@ -608,6 +655,7 @@ export default async function Page({
             content: (
               <div className="min-w-0 space-y-3">
                 <Section title={uk.company.registry}>
+                  <ManualSource companyId={id} source="registry" />
                   <RegistryMatch companyId={c.id} candidates={candidates} />
                   {registryFacts.length > 0 && (
                     <dl className="grid sm:grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
@@ -860,24 +908,33 @@ export default async function Page({
                   <ul className="space-y-1">
                     {history.map((row) => (
                       <li key={row.id}>
-                        {row.action === 'company.website.adopted'
-                          ? uk.company.websiteAdopted
-                          : row.action === 'company.found'
-                            ? uk.company.added
-                            : (uk.manual.activities[
-                                row.action as keyof typeof uk.manual.activities
-                              ] ??
-                              uk.scanner.activities[
-                                row.action as keyof typeof uk.scanner.activities
-                              ] ??
-                              uk.registry.activities[
-                                row.action as keyof typeof uk.registry.activities
-                              ] ??
-                              uk.company.activity)}{' '}
+                        {row.action === 'company.source.manual'
+                          ? uk.manualSource.history
+                          : row.action === 'company.website.adopted'
+                            ? uk.company.websiteAdopted
+                            : row.action === 'company.found'
+                              ? uk.company.added
+                              : (uk.manual.activities[
+                                  row.action as keyof typeof uk.manual.activities
+                                ] ??
+                                uk.scanner.activities[
+                                  row.action as keyof typeof uk.scanner.activities
+                                ] ??
+                                uk.registry.activities[
+                                  row.action as keyof typeof uk.registry.activities
+                                ] ??
+                                uk.company.activity)}{' '}
                         <span className="text-xs text-muted-foreground">
                           · {row.user_name ?? uk.appName} ·{' '}
                           <LocalTime value={row.created_at} />
                         </span>
+                        {row.action === 'company.source.manual' && (
+                          <p className="break-all text-xs text-muted-foreground">
+                            {String(row.details?.target ?? '')}
+                            {row.details?.previous &&
+                              ` · ${uk.manualSource.previous}: ${String(row.details.previous)}`}
+                          </p>
+                        )}
                       </li>
                     ))}
                   </ul>

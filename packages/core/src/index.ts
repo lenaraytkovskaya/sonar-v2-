@@ -27,6 +27,7 @@ export * from './scoring.js';
 export * from './analysis.js';
 export * from './email.js';
 export * from './manual.js';
+export * from './manual-source.js';
 export * from './prozorro.js';
 export * from './platforms.js';
 export * from './outreach.js';

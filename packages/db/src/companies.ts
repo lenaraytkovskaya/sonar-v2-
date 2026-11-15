@@ -233,6 +233,7 @@ export async function* exportCompanies(filters: CompanyFilters) {
 }
 
 export * from './manual.js';
+export * from './manual-source.js';
 
 export class WebsiteCandidateError extends Error {}
 

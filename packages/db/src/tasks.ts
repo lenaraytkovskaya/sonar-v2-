@@ -74,16 +74,22 @@ async function dispatch(
     producerStarted = undefined;
     throw error;
   }));
-  const { rows: identity } =
-    type === 'prozorro.company'
-      ? await client.query('select payload from tasks where id=$1', [id])
-      : { rows: [] };
+  const { rows: identity } = ['prozorro.company', 'google.company'].includes(
+    type,
+  )
+    ? await client.query('select payload from tasks where id=$1', [id])
+    : { rows: [] };
   await producer.send(
     type,
     {
       taskId: id,
-      ...(type === 'prozorro.company'
-        ? { version: identity[0]?.payload.version ?? null }
+      ...(['prozorro.company', 'google.company'].includes(type)
+        ? {
+            version:
+              type === 'google.company'
+                ? String(identity[0]?.payload.resolveVersion ?? 0)
+                : (identity[0]?.payload.version ?? null),
+          }
         : {}),
     },
     {
@@ -135,6 +141,7 @@ export async function enqueueSiteScan(
   companyId: string,
   userId: string | null,
   existingClient?: PoolClient,
+  requestKey?: string,
 ) {
   const save = async (client: PoolClient) => {
     const {
@@ -148,7 +155,7 @@ export async function enqueueSiteScan(
     let key = `site.scan:${companyId}:${day}`;
     // Automatic runs scan once a day; a person pressing the button again after the
     // previous scan finished gets a fresh scan instead of the old result.
-    if (userId) {
+    if (userId && !requestKey) {
       const {
         rows: [latest],
       } = await client.query(
@@ -159,7 +166,13 @@ export async function enqueueSiteScan(
         key = `${key}:${Date.now()}`;
       else if (latest) key = latest.idempotency_key;
     }
-    const created = await enqueueTask('site.scan', key, { companyId }, client);
+    key = requestKey ?? key;
+    const created = await enqueueTask(
+      'site.scan',
+      key,
+      { companyId, website: company.website },
+      client,
+    );
     if (created) {
       await client.query(
         "update tasks set subject_type='company',subject_id=$2 where id=$1",
@@ -221,7 +234,11 @@ export async function enqueueRegistryMatch(
     return { ...task, created: !!created };
   });
 }
-export async function retryTask(id: string, userId: string) {
+export async function retryTask(
+  id: string,
+  userId: string,
+  expectedSocialVersion?: number,
+) {
   return transaction(async (client) => {
     const {
       rows: [identity],
@@ -235,6 +252,15 @@ export async function retryTask(id: string, userId: string) {
           { taskId: id, retry: true },
         )
       ).created;
+    if (identity?.type === 'google.company') {
+      const {
+        rows: [lease],
+      } = await client.query(
+        'select pg_try_advisory_xact_lock(hashtextextended($1,0)) as locked',
+        [`google.company:${id}`],
+      );
+      if (!lease.locked) return false;
+    }
     // Match reconciler lock ordering: orchestration lock before task row locks.
     if (identity?.type === 'social.inbox.sync')
       await client.query(
@@ -247,6 +273,7 @@ export async function retryTask(id: string, userId: string) {
       !original ||
       original.result?.billingPending ||
       original.type === 'social.request' ||
+      original.type === 'google.resolve' ||
       original.type.startsWith('whatsapp.account.')
     )
       return false;
@@ -320,6 +347,11 @@ export async function retryTask(id: string, userId: string) {
     if (original.type === 'social.fetch') {
       if (!['failed', 'paused', 'skipped'].includes(original.status))
         return false;
+      if (
+        expectedSocialVersion !== undefined &&
+        (original.payload.requestVersion ?? 0) !== expectedSocialVersion
+      )
+        return false;
       const { prepareSocialRetry } = await import('./social.js');
       if (!(await prepareSocialRetry(client, original))) return false;
     }
@@ -327,6 +359,54 @@ export async function retryTask(id: string, userId: string) {
       "select id from spend_events where task_id=$1 and (meta ? 'error' or meta ? 'reconciliation')",
       [id],
     );
+    if (original.type === 'google.company') {
+      if (
+        !['failed', 'paused', 'skipped'].includes(original.status) ||
+        original.result?.retryTaskId
+      )
+        return false;
+      if (settled.length) {
+        // A known failure/reconciliation is immutable accounting evidence. A new
+        // queued task is a new budgeted attempt, linked back to the saved source.
+        const nextId = await enqueueTask(
+          original.type,
+          `${original.idempotency_key}:retry`,
+          original.payload,
+          client,
+        );
+        if (!nextId) return false;
+        await client.query(
+          'update tasks set subject_type=$2,subject_id=$3 where id=$1',
+          [nextId, original.subject_type, original.subject_id],
+        );
+        await client.query(
+          "update tasks set dismissed_at=now(),result=coalesce(result,'{}'::jsonb)||jsonb_build_object('retryTaskId',$2::text) where id=$1",
+          [id, nextId],
+        );
+        await logActivity(
+          'task.retry',
+          'task',
+          id,
+          userId,
+          { retryTaskId: nextId },
+          client,
+        );
+        return true;
+      }
+      const {
+        rows: [receipt],
+      } = await client.query('select meta from spend_events where task_id=$1', [
+        id,
+      ]);
+      if (receipt && !receipt.meta?.response) return false;
+      if (!receipt && !original.payload.placeId)
+        await client.query(
+          "update tasks set payload=jsonb_set(payload,'{resolveVersion}',to_jsonb($2::int)) where id=$1",
+          [id, (original.payload.resolveVersion ?? 0) + 1],
+        );
+      // No receipt, or a cached success after a persistence error: safely reuse
+      // this attempt without another charge for an already successful response.
+    }
     if (
       original.type === 'ai.assist' &&
       settled.length &&
@@ -404,6 +484,30 @@ export async function executeTask(
     throw error;
   }
 }
+async function acquireGoogleCompanyLease(taskId: string) {
+  const client = await sonarPool.connect();
+  const key = `google.company:${taskId}`;
+  try {
+    await client.query('select pg_advisory_lock(hashtextextended($1,0))', [
+      key,
+    ]);
+  } catch (error) {
+    client.release(true);
+    throw error;
+  }
+  return async () => {
+    let destroy = false;
+    try {
+      await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [
+        key,
+      ]);
+    } catch {
+      destroy = true;
+    } finally {
+      client.release(destroy);
+    }
+  };
+}
 export async function runTask(
   type: string,
   handler: (payload: object, taskId: string) => Promise<TaskOutcome>,
@@ -422,12 +526,25 @@ export async function runTask(
     const task = rows[0];
     if (!task) return;
     const release =
-      type === 'prozorro.company'
-        ? await (
-            await import('./prozorro.js')
-          ).acquireProzorroCompanyLease(task.payload.companyId)
-        : undefined;
+      type === 'google.company'
+        ? await acquireGoogleCompanyLease(task.id)
+        : type === 'prozorro.company'
+          ? await (
+              await import('./prozorro.js')
+            ).acquireProzorroCompanyLease(task.payload.companyId)
+          : undefined;
     try {
+      if (type === 'google.company') {
+        const { rows: current } = await sonarPool.query(
+          "select 1 from tasks where id=$1 and status in ('queued','running') and coalesce(payload->>'resolveVersion','0')=$2",
+          [task.id, job.data.version ?? '0'],
+        );
+        if (
+          !current.length ||
+          String(task.payload.resolveVersion ?? 0) !== (job.data.version ?? '0')
+        )
+          return;
+      }
       if (type === 'prozorro.company') {
         const { rows: current } = await sonarPool.query(
           "select 1 from tasks where id=$1 and status in ('queued','running') and coalesce(payload->>'version','')=$2",
@@ -546,6 +663,34 @@ export class ProzorroCodeError extends Error {
     super(reason);
   }
 }
+// Caller holds the prozorro.company advisory lock and the company row lock.
+export async function recordManualCompanyCode(
+  client: PoolClient,
+  companyId: string,
+  manualCode: string,
+  userId: string | null,
+) {
+  const { prozorroCompanyCodes } = await import('./prozorro.js');
+  const existing = (await prozorroCompanyCodes(companyId, client, true)).filter(
+    (fact) => fact.code,
+  );
+  if (existing.some((fact) => fact.code !== manualCode))
+    throw new ProzorroCodeError('conflictingCode');
+  if (!existing.length) {
+    await client.query(
+      "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'edrpou',$2,'manual',$3,now())",
+      [companyId, JSON.stringify(manualCode), `/companies/${companyId}`],
+    );
+    await logActivity(
+      'company.edrpou.manual',
+      'company',
+      companyId,
+      userId,
+      { code: manualCode },
+      client,
+    );
+  }
+}
 type ProzorroEnqueueOptions = {
   manualCode?: string;
   taskId?: string;
@@ -600,29 +745,9 @@ export async function enqueueProzorroCompany(
       };
     }
     await recoverProzorroCompany(client, companyId);
-    const { prozorroCompanyCode, prozorroCompanyCodes } =
-      await import('./prozorro.js');
-    if (manualCode) {
-      const existing = (
-        await prozorroCompanyCodes(companyId, client, true)
-      ).filter((fact) => fact.code);
-      if (existing.some((fact) => fact.code !== manualCode))
-        throw new ProzorroCodeError('conflictingCode');
-      if (!existing.length) {
-        await client.query(
-          "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'edrpou',$2,'manual',$3,now())",
-          [companyId, JSON.stringify(manualCode), `/companies/${companyId}`],
-        );
-        await logActivity(
-          'company.edrpou.manual',
-          'company',
-          companyId,
-          userId,
-          { code: manualCode },
-          client,
-        );
-      }
-    }
+    const { prozorroCompanyCode } = await import('./prozorro.js');
+    if (manualCode)
+      await recordManualCompanyCode(client, companyId, manualCode, userId);
     const code = await prozorroCompanyCode(companyId, client, true);
     if (manualCode && code !== manualCode)
       throw new ProzorroCodeError('conflictingCode');

@@ -20,6 +20,7 @@ type SocialTask = {
   reasonUk: string | null;
   reasonCode: string | null;
 };
+export type SocialRetryIntent = { id: string; requestVersion: number };
 async function targets(
   client: Pick<PoolClient, 'query'>,
   companyId: string,
@@ -64,7 +65,12 @@ export async function enqueueCompanySocial(
   companyId: string,
   userId: string | null,
   existing?: PoolClient,
-) {
+  onlyTarget?: SocialTarget,
+): Promise<{
+  tasks: { id: string; status: string; created: boolean }[];
+  disabled: boolean;
+  retryTasks?: SocialRetryIntent[];
+}> {
   const client = existing ?? (await sonarPool.connect());
   try {
     if (!existing) await client.query('begin');
@@ -78,8 +84,10 @@ export async function enqueueCompanySocial(
       return { tasks: [], disabled: true };
     }
     const tasks: { id: string; status: string; created: boolean }[] = [];
-    const retryIds: string[] = [];
-    for (const target of await targets(client, companyId)) {
+    const retryTasks: SocialRetryIntent[] = [];
+    for (const target of onlyTarget
+      ? [onlyTarget]
+      : await targets(client, companyId)) {
       const key = `social.fetch:${target.network}:${target.handle}:${new Date().toISOString().slice(0, 10)}`;
       await client.query(
         'select pg_advisory_xact_lock(hashtextextended($1,0))',
@@ -114,7 +122,10 @@ export async function enqueueCompanySocial(
             new Date(prior.finished_at),
           );
         if (userId && ['failed', 'paused', 'skipped'].includes(prior.status))
-          retryIds.push(prior.id);
+          retryTasks.push({
+            id: prior.id,
+            requestVersion: prior.payload.requestVersion ?? 0,
+          });
         tasks.push({ id: prior.id, status: prior.status, created: false });
       } else {
         const id = await enqueueTask(
@@ -148,10 +159,11 @@ export async function enqueueCompanySocial(
     }
     if (!existing) await client.query('commit');
     if (userId && !existing)
-      for (const id of retryIds)
-        if (await retryTask(id, userId))
-          tasks.find((task) => task.id === id)!.status = 'queued';
-    return { tasks, disabled: false };
+      for (const retry of retryTasks)
+        if (await retryTask(retry.id, userId, retry.requestVersion))
+          tasks.find((task) => task.id === retry.id)!.status = 'queued';
+    // A caller-owned transaction must commit source/target changes before retrying.
+    return { tasks, disabled: false, ...(existing ? { retryTasks } : {}) };
   } catch (error) {
     if (!existing) await client.query('rollback');
     throw error;

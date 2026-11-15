@@ -67,7 +67,11 @@ it('tries each code and reports a code missing from the registry', async () => {
 });
 it('replaces the registry snapshot and saves contacts in one transaction', async () => {
   const tx = {
-    query: vi.fn().mockResolvedValue({ rows: [] }),
+    query: vi.fn(async (sql: string) => ({
+      rows: sql.startsWith('select value from company_facts')
+        ? [{ value: '40123456' }]
+        : [],
+    })),
     release: vi.fn(),
   };
   connect.mockResolvedValue(tx);
@@ -223,4 +227,67 @@ it('rejects stale candidate confirmation without writing the binding', async () 
       call[0].includes('insert into company_facts'),
     ),
   ).toBe(false);
+});
+
+it('does not save a lookup result after a concurrent manual code change', async () => {
+  const tx = prepareMatch();
+  const lookup = vi.fn().mockImplementation(async () => {
+    tx.query.mockImplementation(async (sql: string) => ({
+      rows: sql.startsWith('select value from company_facts')
+        ? [{ value: '40123457' }]
+        : [],
+    }));
+    return {
+      entity: { ...entity, edrpou: '40123456' },
+      founders: [],
+      contacts: [],
+    };
+  });
+  query.mockReset();
+  query
+    .mockResolvedValueOnce(company('UA'))
+    .mockResolvedValueOnce({ rows: [{ value: '40123456' }] })
+    .mockResolvedValueOnce({ rows: [{ value: 365 }] });
+  expect(
+    await runRegistryMatch(
+      { companyId: 'c', manualCode: '40123456' },
+      't',
+      lookup,
+    ),
+  ).toMatchObject({ status: 'skipped', reasonCode: 'registry_code_changed' });
+  expect(
+    tx.query.mock.calls.some(([sql]) =>
+      sql.includes('delete from company_facts'),
+    ),
+  ).toBe(false);
+});
+it('does not resolve a queued manual code that is no longer saved', async () => {
+  query
+    .mockResolvedValueOnce(company('UA'))
+    .mockResolvedValueOnce({ rows: [{ value: '40123457' }] });
+  const lookup = vi.fn();
+  expect(
+    await runRegistryMatch(
+      { companyId: 'c', manualCode: '40123456' },
+      't',
+      lookup,
+    ),
+  ).toMatchObject({ reasonCode: 'registry_code_changed' });
+  expect(lookup).not.toHaveBeenCalled();
+});
+
+it('accepts the same manual code from an existing registry snapshot without requiring a duplicate independent fact', async () => {
+  query
+    .mockResolvedValueOnce(company('UA'))
+    .mockResolvedValueOnce({ rows: [{ value: '40123456' }] });
+  const lookup = vi.fn().mockResolvedValue(null);
+  expect(
+    await runRegistryMatch(
+      { companyId: 'c', manualCode: '40123456' },
+      't',
+      lookup,
+    ),
+  ).toMatchObject({ reasonCode: 'registry_not_found' });
+  expect(query.mock.calls[1]![0]).toContain("'registry'");
+  expect(lookup).toHaveBeenCalledWith(expect.anything(), '40123456');
 });

@@ -30,6 +30,10 @@ import {
   type TaskOutcome,
 } from '@sonar/db/tasks';
 import type { CountryCode } from '@sonar/core';
+import {
+  runGoogleCompany,
+  type GoogleCompanyPayload,
+} from './google-company.js';
 type Search = (
   input: GoogleSearch,
   profile: GoogleProfile,
@@ -421,6 +425,10 @@ export async function runGoogleBatch(
   }
 }
 export async function registerGoogleTasks() {
+  await boss.createQueue('google.company');
+  await runTask('google.company', (payload, id) =>
+    runGoogleCompany(payload as GoogleCompanyPayload, id),
+  );
   await boss.createQueue('google.batch');
   await runTask('google.batch', async (payload) =>
     runGoogleBatch((payload as { batchId: string }).batchId),
