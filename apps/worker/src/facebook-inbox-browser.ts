@@ -184,7 +184,7 @@ export async function readFacebookThread(page: Page, ownId: string) {
 }
 
 /** Only the non-destructive restore dismissal observed by root on 2026-11-15. */
-async function dismissRestore(page: Page) {
+async function dismissRestore(page: Page, deadline: number) {
   for (const step of ['pin', 'continue'] as const) {
     await assertSessionNegatives(page, 'facebook');
     const button = await page.evaluateHandle((step) => {
@@ -204,8 +204,10 @@ async function dismissRestore(page: Page) {
         document.querySelectorAll('h2,[role="heading"][aria-level="2"]'),
       ).filter((node) => visible(node) && node.textContent?.trim() === title);
       if (headings.length !== 1) return null;
-      let scope = headings[0]!.parentElement;
-      while (scope && scope !== document.body) {
+      // Text and ancestor coincidence do not prove a modal. Unknown boundaries
+      // stay untouched until their actual semantics have been observed.
+      const scope = headings[0]!.closest('[role="dialog"][aria-modal="true"]');
+      if (scope) {
         const text = scope.textContent ?? '';
         const buttons = Array.from(
           scope.querySelectorAll('button,[role="button"]'),
@@ -238,21 +240,23 @@ async function dismissRestore(page: Page) {
           named("Don't restore messages").length === 1
         )
           return named("Don't restore messages")[0];
-        scope = scope.parentElement;
       }
       return null;
     }, step);
     try {
       const element = button.asElement();
       if (element) {
-        await element.click();
+        await element.click({ timeout: Math.max(1, deadline - Date.now()) });
         if (step === 'pin')
           await page
             .getByRole('heading', {
               name: 'Continue without restoring?',
               exact: true,
             })
-            .waitFor({ state: 'visible' });
+            .waitFor({
+              state: 'visible',
+              timeout: Math.max(1, deadline - Date.now()),
+            });
       }
     } finally {
       await button.dispose();
@@ -266,27 +270,29 @@ export async function captureFacebookInbox(
   ownId: string,
   timeoutMs: number,
   persist: (batch: SocialInboxBatch) => Promise<void>,
-  assertSession = () => assertSocialSession(page, 'facebook', timeoutMs),
+  assertSession = (budgetMs = timeoutMs) =>
+    assertSocialSession(page, 'facebook', budgetMs),
+  resumeAnchor: Record<string, unknown> | null = null,
 ) {
   const skipped = new Set([
     'pagination_unverified',
     'requests_and_archived_unverified',
   ]);
   const deadline = Date.now() + timeoutMs;
-  const navigate = async (url: string) => {
+  const navigate = async (url: string, end: number) => {
     const response = await page.goto(url, {
       waitUntil: 'domcontentloaded',
-      timeout: Math.max(1, deadline - Date.now()),
+      timeout: Math.max(1, end - Date.now()),
     });
     if (response?.status() === 429)
       throw new SocialSessionCheckError('rate_limit');
     if (!response || response.status() >= 400)
       throw new SocialSessionCheckError('unknown_auth');
     await assertSessionNegatives(page, 'facebook');
-    await dismissRestore(page);
-    await assertSession();
+    await dismissRestore(page, end);
+    await assertSession(Math.max(1, end - Date.now()));
   };
-  await navigate(`${origin}/messages/`);
+  await navigate(`${origin}/messages/`, deadline);
   const list = page
     .getByRole('region', { name: 'Thread list', exact: true })
     .getByRole('table', { name: 'Chats', exact: true });
@@ -318,36 +324,47 @@ export async function captureFacebookInbox(
     ),
   ]);
   if (!urls.length) skipped.add('no_visible_threads');
-  for (const url of urls) {
+  const next =
+    typeof resumeAnchor?.nextThreadUrl === 'string'
+      ? urls.indexOf(resumeAnchor.nextThreadUrl)
+      : -1;
+  const ordered =
+    next > 0 ? [...urls.slice(next), ...urls.slice(0, next)] : urls;
+  for (const [index, url] of ordered.entries()) {
     if (Date.now() >= deadline) {
       skipped.add('time_limit');
       break;
     }
-    await navigate(url);
+    // Reserve room for another chat, rather than dividing a large list into
+    // unusably tiny waits. The persisted rotation covers later chats next poll.
+    const perThreadMs =
+      ordered.length > 1 ? Math.max(1, Math.floor(timeoutMs / 2)) : timeoutMs;
+    const end = Math.min(deadline, Date.now() + perThreadMs);
+    let read: Awaited<ReturnType<typeof readFacebookThread>> = {
+      messages: [],
+      skipped: [],
+    };
     try {
-      await page.locator(logSelector).waitFor({
-        state: 'visible',
-        timeout: Math.max(1, deadline - Date.now()),
-      });
+      await navigate(url, end);
       await page
         .locator(`${logSelector} [aria-roledescription="message"]`)
         .first()
-        .waitFor({
-          state: 'visible',
-          timeout: Math.max(1, deadline - Date.now()),
-        });
-    } catch {
+        .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
+      read = await readFacebookThread(page, ownId);
+      await assertSession(Math.max(1, end - Date.now()));
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'TimeoutError')
+        throw error;
+      await assertSessionNegatives(page, 'facebook');
       skipped.add('history_unavailable');
-      continue;
     }
-    const read = await readFacebookThread(page, ownId);
-    await assertSession();
-    for (const reason of read.skipped) skipped.add(reason);
-    // Commit this visible chunk before leaving the thread. Always revisit the
-    // latest list next run: a resume anchor must not hide replies in earlier chats.
+    read.skipped.forEach((reason) => skipped.add(reason));
     await persist({
       messages: read.messages,
-      resumeAnchor: { threadUrl: url },
+      resumeAnchor: {
+        threadUrl: url,
+        nextThreadUrl: ordered[(index + 1) % ordered.length],
+      },
     });
   }
   return {

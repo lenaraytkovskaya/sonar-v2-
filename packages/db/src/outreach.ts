@@ -69,7 +69,7 @@ const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,(social_meta->>'providerOrder')::int desc nulls last,id desc limit 1) m on true`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ((social_meta->>'facebookInboxOrder') is null) desc,(social_meta->>'facebookInboxOrder')::int desc,created_at desc,(social_meta->>'providerOrder')::int desc nulls last,id desc limit 1) m on true`;
 const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(

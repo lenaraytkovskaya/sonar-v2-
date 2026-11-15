@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import type { SocialNetwork } from '@sonar/core';
 import {
   canonicalSocialPeer,
@@ -15,6 +16,106 @@ export const emptySocialCheckpoint = (): SocialInboxCheckpoint => ({
   resumeAnchor: null,
   cycleStartedAt: null,
 });
+
+/** Persist only observed precedence edges. Ties between disconnected windows
+ * use the previous display order; later overlap may resolve them without dates. */
+async function orderFacebookConversation(
+  c: PoolClient,
+  conversationId: string,
+  observed: Map<string, number>,
+) {
+  const { rows } = await c.query<{
+    id: string;
+    social_meta: { facebookInboxAfter?: string[] } | null;
+  }>(
+    `select id,social_meta from messages where conversation_id=$1
+    order by (social_meta->>'facebookInboxOrder')::int nulls last,created_at,(social_meta->>'providerOrder')::int nulls first,id`,
+    [conversationId],
+  );
+  const indices = new Map(rows.map((row, index) => [row.id, index]));
+  const after = rows.map(
+    (row) =>
+      new Set(
+        (row.social_meta?.facebookInboxAfter ?? []).filter((id) =>
+          indices.has(id),
+        ),
+      ),
+  );
+  const snapshot = [...observed].sort((a, b) => a[1] - b[1]);
+  for (let i = 1; i < snapshot.length; i++) {
+    if (snapshot[i - 1]![1] === snapshot[i]![1])
+      throw new Error('Неоднозначний порядок повідомлень Facebook.');
+    after[indices.get(snapshot[i]![0])!]!.add(snapshot[i - 1]![0]);
+  }
+  const edges = rows.map(() => new Set<number>()),
+    incoming = rows.map(() => 0);
+  after.forEach((ids, to) =>
+    ids.forEach((id) => {
+      const from = indices.get(id)!;
+      edges[from]!.add(to);
+      incoming[to] = incoming[to]! + 1;
+    }),
+  );
+  // A min-heap keeps the previous order for unconstrained messages in O(n log n).
+  const ready: number[] = [];
+  const push = (value: number) => {
+    let i = ready.length;
+    ready.push(value);
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (ready[parent]! <= value) break;
+      ready[i] = ready[parent]!;
+      i = parent;
+    }
+    ready[i] = value;
+  };
+  const pop = () => {
+    const first = ready[0]!,
+      last = ready.pop()!;
+    if (ready.length) {
+      let i = 0;
+      while (i * 2 + 1 < ready.length) {
+        let child = i * 2 + 1;
+        if (child + 1 < ready.length && ready[child + 1]! < ready[child]!)
+          child++;
+        if (ready[child]! >= last) break;
+        ready[i] = ready[child]!;
+        i = child;
+      }
+      ready[i] = last;
+    }
+    return first;
+  };
+  incoming.forEach((count, index) => {
+    if (!count) push(index);
+  });
+  const ordered: number[] = [];
+  while (ready.length) {
+    const index = pop();
+    ordered.push(index);
+    for (const to of edges[index]!) {
+      incoming[to] = incoming[to]! - 1;
+      if (!incoming[to]) push(to);
+    }
+  }
+  if (ordered.length !== rows.length)
+    throw new Error(
+      'Суперечливий порядок повідомлень Facebook. Перевірте чат вручну.',
+    );
+  await c.query(
+    `update messages m set social_meta=coalesce(m.social_meta,'{}'::jsonb)||jsonb_build_object('facebookInboxOrder',x.rank,'facebookInboxAfter',x.after)
+    from jsonb_to_recordset($1::jsonb) as x(id uuid,rank int,after jsonb) where m.id=x.id`,
+    [
+      JSON.stringify(
+        ordered.map((index, rank) => ({
+          id: rows[index]!.id,
+          rank,
+          after: [...after[index]!],
+        })),
+      ),
+    ],
+  );
+}
 
 /** One committed page per callback. Never infer identity from body/time. */
 export async function persistSocialInboxBatch(
@@ -40,6 +141,24 @@ export async function persistSocialInboxBatch(
       [accountId, network],
     );
     if (!account) throw new Error('Акаунт соцмережі не знайдено.');
+    if (network === 'facebook')
+      await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `facebook-inbox-order:${accountId}`,
+      ]);
+    const observations = new Map<string, Map<string, number>>();
+    const observe = (
+      conversationId: string,
+      id: string,
+      message: (typeof messages)[number],
+    ) => {
+      if (network !== 'facebook' || message.providerOrder === undefined) return;
+      const group =
+        observations.get(conversationId) ?? new Map<string, number>();
+      if (group.has(id) && group.get(id) !== message.providerOrder)
+        throw new Error('Неоднозначний порядок повідомлень Facebook.');
+      group.set(id, message.providerOrder);
+      observations.set(conversationId, group);
+    };
     let created = 0;
     const conflicts: string[] = [];
     for (const message of messages) {
@@ -54,6 +173,24 @@ export async function persistSocialInboxBatch(
         [accountId, message.externalMessageId, network],
       );
       if (prior) {
+        if (network === 'facebook') {
+          const {
+            rows: [binding],
+          } = await c.query(
+            'select account_id,peer_value from conversations where id=$1 for update',
+            [prior.conversation_id],
+          );
+          if (
+            !binding ||
+            (binding.account_id !== null && binding.account_id !== accountId) ||
+            (binding.peer_value !== null &&
+              canonicalSocialPeer(network, binding.peer_value) !==
+                message.peerProfile)
+          )
+            throw new Error(
+              'Змінився співрозмовник діалогу. Перевірте чат вручну.',
+            );
+        }
         if (
           prior.direction !== message.direction ||
           (prior.social_meta?.threadId &&
@@ -75,6 +212,7 @@ export async function persistSocialInboxBatch(
             c,
           );
         } else {
+          observe(prior.conversation_id, prior.id, message);
           const occurredAt =
             message.occurredAt ?? prior.social_meta?.occurredAt ?? null;
           await c.query(
@@ -162,6 +300,18 @@ export async function persistSocialInboxBatch(
             candidates.map((contact) => contact.id),
           ],
         );
+        if (
+          network === 'facebook' &&
+          unbound.some(
+            (row) =>
+              row.peer_value !== null &&
+              canonicalSocialPeer(network, row.peer_value) !==
+                message.peerProfile,
+          )
+        )
+          throw new Error(
+            'Змінився співрозмовник діалогу. Перевірте чат вручну.',
+          );
         if (unbound.length === 1) {
           conversation = (
             await c.query(
@@ -227,6 +377,7 @@ export async function persistSocialInboxBatch(
         ],
       );
       created++;
+      observe(conversation.id, inserted.id, message);
       if (message.direction === 'in')
         await enqueueTask(
           'ai.inbound',
@@ -246,6 +397,8 @@ export async function persistSocialInboxBatch(
         );
       }
     }
+    for (const [conversationId, observed] of observations)
+      await orderFacebookConversation(c, conversationId, observed);
     await c.query(
       "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('resumeAnchor',$2::jsonb)) where id=$1",
       [accountId, JSON.stringify(batch.resumeAnchor)],

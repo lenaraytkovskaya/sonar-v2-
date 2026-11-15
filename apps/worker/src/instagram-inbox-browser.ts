@@ -426,7 +426,7 @@ export function createSocialInboxAdapter(
   browser: Pick<typeof socialSendBrowser, 'withPage'> = socialSendBrowser,
 ): SocialInboxAdapter {
   return {
-    async sync(account, _checkpoint, persistBatch) {
+    async sync(account, checkpoint, persistBatch) {
       if (account.channel === 'facebook') {
         const actors = account.session.cookies.filter(
           (cookie) =>
@@ -450,7 +450,14 @@ export function createSocialInboxAdapter(
           throw new SocialSessionCheckError('unknown_auth');
         const timeoutMs = await timeout();
         return browser.withPage(account, account.session, timeoutMs, (page) =>
-          captureFacebookInbox(page, actors[0]!.value, timeoutMs, persistBatch),
+          captureFacebookInbox(
+            page,
+            actors[0]!.value,
+            timeoutMs,
+            persistBatch,
+            undefined,
+            checkpoint.resumeAnchor,
+          ),
         );
       }
       if (account.channel !== 'instagram')

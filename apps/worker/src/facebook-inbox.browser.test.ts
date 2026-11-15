@@ -31,7 +31,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     afterAll(async () => {
       await browser?.close();
     });
-    async function fixture(html = captured) {
+    async function fixture(
+      html: string | ((path: string) => string) = captured,
+    ) {
       const context = await browser.newContext({
         timezoneId: 'Europe/Warsaw',
         serviceWorkers: 'block',
@@ -46,9 +48,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         return route.fulfill({
           contentType: 'text/html',
           body:
-            url.pathname === '/messages/'
-              ? `<a aria-label="Your profile">Profile</a><section role="region" aria-label="Thread list"><table aria-label="Chats"><tbody><tr><td><a href="${path}">Synthetic Recipient</a></td></tr></tbody></table></section>`
-              : `<a aria-label="Your profile">Profile</a>${html}`,
+            typeof html === 'function'
+              ? `<a aria-label="Your profile">Profile</a>${html(url.pathname)}`
+              : url.pathname === '/messages/'
+                ? `<a aria-label="Your profile">Profile</a><section role="region" aria-label="Thread list"><table aria-label="Chats"><tbody><tr><td><a href="${path}">Synthetic Recipient</a></td></tr></tbody></table></section>`
+                : `<a aria-label="Your profile">Profile</a>${html}`,
         });
       });
       const page = await context.newPage();
@@ -176,16 +180,122 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
-    it('dismisses only the exact observed non-destructive restore flow even without a dialog role', async () => {
-      const restore = `<div id="pin"><button aria-label="Close" onclick="document.querySelector('#pin').remove();document.querySelector('#continuation').hidden=false">Close</button><h2>Enter your PIN to restore your chats</h2><p>Some messages are missing. Enter your PIN to restore your chat history.</p><input aria-label="PIN"><button>Forgotten PIN?</button></div><div id="continuation" hidden><h2>Continue without restoring?</h2><p>This means that you won’t see your full chat history on this device and new messages that you send or receive may not load on other new devices.</p><button>Cancel</button><button onclick="document.querySelector('#continuation').remove()">Don't restore messages</button></div>`;
-      const { page, context } = await fixture(restore + captured);
+    it.each([true, false])(
+      'dismisses the restore flow only with proven modal semantics (%s)',
+      async (proven) => {
+        const restore = `<div id="pin" role="dialog" aria-modal="true"><button aria-label="Close" onclick="document.querySelector('#pin').remove();document.querySelector('#continuation').hidden=false">Close</button><h2>Enter your PIN to restore your chats</h2><p>Some messages are missing. Enter your PIN to restore your chat history.</p><input aria-label="PIN"><button>Forgotten PIN?</button></div><div id="continuation" role="dialog" aria-modal="true" hidden><h2>Continue without restoring?</h2><p>This means that you won’t see your full chat history on this device and new messages that you send or receive may not load on other new devices.</p><button>Cancel</button><button onclick="document.querySelector('#continuation').remove()">Don't restore messages</button></div>`;
+        const { page, context } = await fixture(
+          (proven
+            ? restore
+            : restore.replaceAll('role="dialog" aria-modal="true"', '')) +
+            captured,
+        );
+        try {
+          const persist = vi.fn();
+          expect(
+            await captureFacebookInbox(page, '100000000000002', 3000, persist),
+          ).toMatchObject({ complete: false });
+          expect(persist.mock.calls[0]![0].messages).toHaveLength(4);
+          expect(await page.locator('#pin,#continuation').count()).toBe(
+            proven ? 0 : 2,
+          );
+        } finally {
+          await context.close();
+        }
+      },
+    );
+    const chats = (paths: string[]) =>
+      `<section role="region" aria-label="Thread list"><table aria-label="Chats"><tr><td>${paths.map((p) => `<a href="${p}">Chat</a>`).join('')}</td></tr></table></section>`;
+    it('does not starve a readable second chat when the first stays empty across polls', async () => {
+      const bad = '/messages/e2ee/t/900000000000099/';
+      const { page, context, navigations } = await fixture((p) =>
+        p === '/messages/'
+          ? chats([bad, path])
+          : p === bad
+            ? '<div aria-label="Messages in conversation with Empty">No available messages</div>'
+            : captured,
+      );
+      navigations.length = 0;
+      page.setDefaultTimeout(300);
       try {
-        const persist = vi.fn();
+        const batches: SocialInboxBatch[] = [];
+        for (let n = 0; n < 2; n++)
+          await captureFacebookInbox(
+            page,
+            '100000000000002',
+            350,
+            async (b) => {
+              batches.push(b);
+            },
+          );
+        expect(navigations.filter((p) => p === path)).toHaveLength(2);
+        expect(batches.flatMap((b) => b.messages)).toHaveLength(8);
+      } finally {
+        await context.close();
+      }
+    });
+    it('resumes after exhausted chats so a later readable chat gets a useful budget on a later poll', async () => {
+      const bad = Array.from(
+        { length: 5 },
+        (_, i) => `/messages/e2ee/t/90000000000009${i}/`,
+      );
+      const { page, context, navigations } = await fixture((p) =>
+        p === '/messages/'
+          ? chats([...bad, path])
+          : p === path
+            ? captured
+            : '<div aria-label="Messages in conversation with Empty">No available messages</div>',
+      );
+      navigations.length = 0;
+      page.setDefaultTimeout(300);
+      try {
+        let anchor: Record<string, unknown> | null = null;
+        const messages: SocialInboxBatch['messages'] = [];
+        for (let poll = 0; poll < 4 && !messages.length; poll++) {
+          await captureFacebookInbox(
+            page,
+            '100000000000002',
+            350,
+            async (batch) => {
+              anchor = batch.resumeAnchor;
+              messages.push(...batch.messages);
+            },
+            undefined,
+            anchor,
+          );
+        }
+        expect(navigations).toContain(path);
+        expect(messages).toHaveLength(4);
+      } finally {
+        await context.close();
+      }
+    });
+    it('never climbs from a PIN section into a page wrapper to click another Close', async () => {
+      const pin =
+        '<section id="pin"><h2>Enter your PIN to restore your chats</h2><p>Some messages are missing. Enter your PIN to restore your chat history.</p><input aria-label="PIN"><button>Forgotten PIN?</button></section>';
+      const other =
+        '<aside><button aria-label="Close" onclick="window.recordClose();document.body.dataset.unrelatedClicked=\'yes\'">Close</button></aside>';
+      const { page, context } = await fixture((p) =>
+        p === '/messages/'
+          ? `<main>${other}${pin}${chats([path])}</main>`
+          : captured,
+      );
+      page.setDefaultTimeout(300);
+      let unrelatedClicks = 0;
+      await context.exposeBinding('recordClose', () => {
+        unrelatedClicks++;
+      });
+      try {
+        await captureFacebookInbox(
+          page,
+          '100000000000002',
+          1000,
+          async () => {},
+        ).catch(() => {});
+        expect(unrelatedClicks).toBe(0);
         expect(
-          await captureFacebookInbox(page, '100000000000002', 3000, persist),
-        ).toMatchObject({ complete: false });
-        expect(persist.mock.calls[0]![0].messages).toHaveLength(4);
-        expect(await page.locator('#pin,#continuation').count()).toBe(0);
+          await page.locator('body').getAttribute('data-unrelated-clicked'),
+        ).toBeNull();
       } finally {
         await context.close();
       }
