@@ -106,10 +106,18 @@ type PopupFailureBranch =
   | 'popup_changed'
   | 'popup_association'
   | 'popup_action';
+type PopupChangeCause =
+  | 'baseline_detached'
+  | 'baseline_hidden'
+  | 'baseline_semantics'
+  | 'popup_identity'
+  | 'action_selection'
+  | 'dispatch_guard';
 async function messageButtonFailure(
   branch: PopupFailureBranch,
   page: Page,
   options: Locator,
+  cause?: PopupChangeCause,
 ) {
   const error = stagedFailure('messagebutton', 'unconfirmed');
   const [menus, dialogs, optionCount] = await Promise.all([
@@ -120,6 +128,7 @@ async function messageButtonFailure(
   // Bounded DOM counts and fixed keys only; never retain accessible names/text.
   const count = (value: number) => (value > 1 ? '2+' : String(value));
   error.reasonUk += ` [branch=${branch}; menus=${count(menus)}; dialogs=${count(dialogs)}; options=${count(optionCount)}]`;
+  if (cause) error.reasonUk += ` [change=${cause}]`;
   error.message = error.reasonUk;
   return error;
 }
@@ -545,6 +554,7 @@ async function sendInstagram(
         };
         const baselineSemantics = baseline.map(semantic);
         let openedPopup: Element | undefined;
+        let changeCause: PopupChangeCause | undefined;
         const initial: PopupFailureBranch | null = baseline.some(
           (old) =>
             old.getAttribute('role') !== 'menu' ||
@@ -563,15 +573,19 @@ async function sendInstagram(
           );
         const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
           if (initial) return initial;
-          if (
-            baseline.some(
-              (old, index) =>
-                !old.isConnected ||
-                !visible(old) ||
-                semantic(old) !== baselineSemantics[index],
-            )
-          )
-            return 'popup_changed';
+          for (const [index, old] of baseline.entries()) {
+            const cause = !old.isConnected
+              ? 'baseline_detached'
+              : !visible(old)
+                ? 'baseline_hidden'
+                : semantic(old) !== baselineSemantics[index]
+                  ? 'baseline_semantics'
+                  : undefined;
+            if (cause) {
+              changeCause = cause;
+              return 'popup_changed';
+            }
+          }
           if (
             !node.isConnected ||
             node.getAttribute('aria-haspopup') !== role ||
@@ -596,7 +610,10 @@ async function sendInstagram(
                 ).length !== 1))
           )
             return 'popup_association';
-          if (openedPopup && openedPopup !== popup) return 'popup_changed';
+          if (openedPopup && openedPopup !== popup) {
+            changeCause = 'popup_identity';
+            return 'popup_changed';
+          }
           openedPopup = popup;
           return 'ready';
         };
@@ -665,6 +682,7 @@ async function sendInstagram(
           guardAction,
           wasBlocked: () => blocked,
           actionValid: () => actionValid(),
+          changeCause: () => changeCause,
           cleanup: () => removeGuard(),
         };
       });
@@ -702,6 +720,9 @@ async function sendInstagram(
               status === 'pending' ? 'popup_missing' : status,
               page,
               options,
+              status === 'popup_changed'
+                ? await snapshot.evaluate((state) => state.changeCause())
+                : undefined,
             );
         };
         await assertPopup();
@@ -747,7 +768,12 @@ async function sendInstagram(
             { state: snapshot, popup, action: matching[0]! },
           ))
         )
-          throw await messageButtonFailure('popup_changed', page, options);
+          throw await messageButtonFailure(
+            'popup_changed',
+            page,
+            options,
+            'action_selection',
+          );
         let clickError: unknown;
         try {
           await matching[0]!.click();
@@ -761,7 +787,12 @@ async function sendInstagram(
             Boolean(clickError),
           )
         )
-          throw await messageButtonFailure('popup_changed', page, options);
+          throw await messageButtonFailure(
+            'popup_changed',
+            page,
+            options,
+            'dispatch_guard',
+          );
         if (clickError) throw clickError;
       } finally {
         await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
