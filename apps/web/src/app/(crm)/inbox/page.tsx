@@ -8,6 +8,7 @@ import {
   messageStatus,
 } from '@/lib/outreach-labels';
 import { cn } from '@/lib/utils';
+import { splitEmailHistory } from '@/lib/email-display';
 import { Card, PageHeader } from '@/components/shared';
 import { ConversationChat } from '@/components/conversation-chat';
 import { LocalTime } from '@/components/local-time';
@@ -163,8 +164,10 @@ export default async function Page({
                 {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
                 {contactLabel(row.contactValue)}
               </p>
-              <p className="line-clamp-2 text-muted-foreground">
-                {row.lastMessage || uk.email.noMessages}
+              <p className="line-clamp-2 break-words text-muted-foreground [overflow-wrap:anywhere]">
+                {row.lastMessage
+                  ? splitEmailHistory(row.lastMessage, row.channel).current
+                  : uk.email.noMessages}
               </p>
               <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
                 {row.lastStatus && (

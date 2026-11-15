@@ -16,6 +16,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
+import { MessageBody } from './message-body';
 type Chat = Awaited<ReturnType<typeof getCompanyChat>>;
 type Message = Chat['messages'][number];
 type Action = (
@@ -68,11 +69,13 @@ export function Draft({
             : uk.outreach.outgoing}
         </span>
         <span>{messageStatus(message.status, message)}</span>
-        <span>
-          {uk.outreach.sources[
-            message.source as keyof typeof uk.outreach.sources
-          ] ?? message.source}
-        </span>
+        {!(message.direction === 'in' && message.source === 'inbound') && (
+          <span>
+            {uk.outreach.sources[
+              message.source as keyof typeof uk.outreach.sources
+            ] ?? message.source}
+          </span>
+        )}
         <LocalTime value={message.sentAt ?? message.createdAt} />
       </p>
       {message.classification && (
@@ -185,7 +188,7 @@ export function Draft({
           {message.subject && (
             <h3 className="font-semibold">{message.subject}</h3>
           )}
-          <p className="whitespace-pre-wrap break-words">{message.body}</p>
+          <MessageBody body={message.body} channel={message.channel} />
         </>
       )}
       {historyLink && (
