@@ -52,6 +52,13 @@ const emptyFixture = () => {
 it('maps observed true identities, exact text, timestamps and provider IDs', () => {
   const parsed = parseInstagramInbox(fixture(), observedAt)!;
   expect(parsed.skipped).toEqual([]);
+  expect(parsed.actors[0]?.fields).toEqual({
+    directThread: 'object',
+    viewer: 'object',
+    viewerId: 'digit_string',
+    mailboxId: 'digit_string',
+    threadViewerId: 'digit_string',
+  });
   expect(parsed.inbox?.more).toBe(false);
   expect(parsed.threads[0]?.page?.more).toBe(false);
   expect(parsed.messages.map((message) => message.direction)).toEqual([
@@ -758,6 +765,58 @@ it.each([
     );
   },
 );
+
+it.each([
+  ['thread-missing', 'directThread', 'missing'],
+  ['thread-null', 'directThread', 'null'],
+  ['viewer-missing', 'viewer', 'missing'],
+  ['viewer-null', 'viewer', 'null'],
+  ['id-missing', 'viewerId', 'missing'],
+  ['id-null', 'viewerId', 'null'],
+  ['mailbox-missing', 'mailboxId', 'missing'],
+])(
+  'distinguishes unsupported %s shape from an evidenced foreign actor without accepting either',
+  async (kind, field, expectedKind) => {
+    const value = fixture();
+    const edge = mailbox(value).threads_by_folder.edges[0];
+    if (kind === 'thread-missing') delete edge.node.as_ig_direct_thread;
+    if (kind === 'thread-null') edge.node.as_ig_direct_thread = null;
+    if (kind === 'viewer-missing') delete thread(value).viewer;
+    if (kind === 'viewer-null') thread(value).viewer = null;
+    if (kind === 'id-missing') delete thread(value).viewer.id;
+    if (kind === 'id-null') thread(value).viewer.id = null;
+    if (kind === 'mailbox-missing')
+      delete thread(value).viewer.interop_messaging_user_fbid;
+    const f = browser([value, fixture()]);
+    const error = await f.run().catch((error) => error);
+    expect(error).toMatchObject({
+      reason: 'unknown_auth',
+      diagnostic: {
+        stage: 'actor',
+        actor: {
+          reason: 'actor_shape_unsupported',
+          fields: { [field!]: expectedKind },
+        },
+        capture: { parsed: 1, verified: 0, persisted: 0 },
+      },
+    });
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.diagnostic)).not.toMatch(
+      /900000|https:|Synthetic|example_peer/,
+    );
+  },
+);
+it('keeps missing actors in a mixed response fail closed before persisting the valid peer', async () => {
+  const value = fixture();
+  mailbox(value).threads_by_folder.edges.push({
+    node: { as_ig_direct_thread: null },
+  });
+  const f = browser([value]);
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: { actor: { reason: 'actor_shape_unsupported' } },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
 
 it('distinguishes the messaging namespace matching the expected identity without accepting it as viewer identity', async () => {
   const value = fixture();

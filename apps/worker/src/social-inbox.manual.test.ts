@@ -98,6 +98,13 @@ it.each(['unknown_auth', 'login_required'] as const)(
         anyActorMailboxMatchesExpected: true,
         responseMailboxMatchesExpected: true,
         allActorMailboxesMatchResponse: true,
+        fields: {
+          directThread: 'object',
+          viewer: 'object',
+          viewerId: 'digit_string',
+          mailboxId: 'digit_string',
+          threadViewerId: 'digit_string',
+        },
       },
     } as const;
     const error = new SocialSessionCheckError(reason);
@@ -105,7 +112,12 @@ it.each(['unknown_auth', 'login_required'] as const)(
       ...diagnostic,
       rawUrl: 'https://private.test/?cookie=secret',
       capture: { ...diagnostic.capture, received: 999, viewerId: 'private' },
-      actor: { ...diagnostic.actor, viewerId: 'private', cookie: 'secret' },
+      actor: {
+        ...diagnostic.actor,
+        viewerId: 'private',
+        cookie: 'secret',
+        fields: { ...diagnostic.actor.fields, rawId: 'private' },
+      },
     };
     error.diagnostic = unsafeDiagnostic;
     const result = await runSocialInboxSync(
@@ -121,8 +133,9 @@ it.each(['unknown_auth', 'login_required'] as const)(
       reasonCode: `social_inbox_${reason}`,
       result: { diagnostic },
     });
+    expect(result).not.toHaveProperty('result.diagnostic.actor.viewerId');
     expect(JSON.stringify(result)).not.toMatch(
-      /private|secret|https|viewerId|rawUrl/,
+      /private|secret|https|rawId|rawUrl/,
     );
     const update = query.mock.calls.find(([sql]) =>
       sql.startsWith("update channel_accounts set status='paused'"),
