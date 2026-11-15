@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
 import { ModelPicker } from './model-picker';
+import { CrudButton, CrudDialog } from './crud-dialog';
 import { RegistryPhoneSync } from './registry-phone-sync';
 import { ProzorroSync } from './prozorro-sync';
 import {
@@ -22,7 +23,65 @@ import {
   validScannerSettings,
   type ScannerSettings,
 } from '@/lib/scanner-settings';
+function TextSetting({
+  label,
+  value,
+  onApply,
+}: {
+  label: string;
+  value: string;
+  onApply: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
+  return (
+    <div className="space-y-3">
+      <h2 className="font-heading text-base font-bold">{label}</h2>
+      <p className="line-clamp-4 whitespace-pre-wrap break-words text-sm">
+        {value || '—'}
+      </p>
+      <CrudButton
+        action="edit"
+        aria-label={`${uk.crud.edit}: ${label}`}
+        onClick={() => {
+          setDraft(value);
+          setOpen(true);
+        }}
+      >
+        {uk.crud.edit}
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={label}
+        draft={draft}
+      >
+        <label className="block space-y-2">
+          <span>{label}</span>
+          <textarea
+            value={draft}
+            maxLength={20000}
+            onChange={(event) => setDraft(event.target.value)}
+            className="min-h-44 w-full rounded-lg border border-border bg-raised p-3"
+          />
+        </label>
+        <AiAssist text={draft} onApply={setDraft} />
+        <p className="text-sm text-muted-foreground">{uk.crud.saveSettings}</p>
+        <Button
+          onClick={() => {
+            onApply(draft);
+            setOpen(false);
+          }}
+        >
+          {uk.ai.apply}
+        </Button>
+      </CrudDialog>
+    </div>
+  );
+}
 export function SettingsPanel() {
+  const [profileIndex, setProfileIndex] = useState<number | null>(null);
+  const [profilePrice, setProfilePrice] = useState('');
   const [models, setModels] = useState<TextModel[]>([]),
     [profiles, setProfiles] = useState<GoogleProfile[]>([]),
     [googleDays, setGoogleDays] = useState(365),
@@ -194,29 +253,14 @@ export function SettingsPanel() {
           </label>
         </Card>
         <Card className="p-6">
-          <label className="block space-y-2">
-            <span>{uk.ai.about}</span>
-            <textarea
-              id="company-about"
-              value={about}
-              maxLength={20000}
-              onChange={(e) => setAbout(e.target.value)}
-              className="min-h-44 w-full rounded-lg border border-border bg-raised p-3"
-            />
-          </label>
-          <AiAssist text={about} onApply={setAbout} />
+          <TextSetting label={uk.ai.about} value={about} onApply={setAbout} />
         </Card>
         <Card className="space-y-3 p-6">
-          <label className="block space-y-2">
-            <span>{uk.analysis.prompt}</span>
-            <textarea
-              value={analysisPrompt}
-              maxLength={20000}
-              onChange={(e) => setAnalysisPrompt(e.target.value)}
-              className="min-h-44 w-full rounded-lg border border-border bg-raised p-3"
-            />
-          </label>
-          <AiAssist text={analysisPrompt} onApply={setAnalysisPrompt} />
+          <TextSetting
+            label={uk.analysis.prompt}
+            value={analysisPrompt}
+            onApply={setAnalysisPrompt}
+          />
         </Card>
         <Card className="space-y-4 p-6">
           <h2 className="font-heading text-base font-bold">
@@ -224,29 +268,63 @@ export function SettingsPanel() {
           </h2>
           <p>{uk.google.estimated}</p>
           {profiles.map((p, index) => (
-            <label className="block" key={p.id}>
-              {p.name} · {p.sku}
-              <Input
-                aria-label={`${p.name}: ${uk.google.price}`}
-                type="number"
-                min="0"
-                step="0.001"
-                value={p.priceUsd}
-                onChange={(e) =>
-                  setProfiles(
-                    profiles.map((v, i) =>
-                      i === index
-                        ? { ...v, priceUsd: e.target.valueAsNumber }
-                        : v,
-                    ),
-                  )
-                }
-              />
-              <span className="break-all text-xs text-muted-foreground">
+            <div className="space-y-2 border-b border-border pb-3" key={p.id}>
+              <p>
+                {p.name} · {p.sku} · {p.priceUsd}
+              </p>
+              <p className="break-all text-xs text-muted-foreground">
                 {p.fields.join(', ')}
-              </span>
-            </label>
+              </p>
+              <CrudButton
+                action="edit"
+                disabled={pending}
+                aria-label={`${uk.crud.editProfile}: ${p.name}`}
+                onClick={() => {
+                  setProfilePrice(String(p.priceUsd));
+                  setProfileIndex(index);
+                }}
+              >
+                {uk.crud.editProfile}
+              </CrudButton>
+            </div>
           ))}
+          <CrudDialog
+            open={profileIndex !== null}
+            onOpenChange={() => setProfileIndex(null)}
+            title={uk.crud.editProfile}
+            draft={profilePrice}
+          >
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setProfiles(
+                  profiles.map((profile, index) =>
+                    index === profileIndex
+                      ? { ...profile, priceUsd: Number(profilePrice) }
+                      : profile,
+                  ),
+                );
+                setProfileIndex(null);
+              }}
+            >
+              <label className="block space-y-2">
+                <span>{uk.google.price}</span>
+                <Input
+                  required
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={profilePrice}
+                  onChange={(event) => setProfilePrice(event.target.value)}
+                />
+              </label>
+              <p className="text-sm text-muted-foreground">
+                {uk.crud.saveSettings}
+              </p>
+              <Button>{uk.ai.apply}</Button>
+            </form>
+          </CrudDialog>
           <label className="block">
             {uk.google.retention}
             <Input
@@ -302,17 +380,13 @@ export function SettingsPanel() {
             />
             {uk.scanner.settings['scanner.ai_fallback']}
           </label>
-          <label className="block space-y-2">
-            <span>{uk.scanner.settings['scanner.ai_prompt']}</span>
-            <textarea
-              className="min-h-32 w-full rounded-lg border border-border bg-raised p-3"
-              value={String(scanner['scanner.ai_prompt'] ?? '')}
-              maxLength={20000}
-              onChange={(e) =>
-                setScanner({ ...scanner, 'scanner.ai_prompt': e.target.value })
-              }
-            />
-          </label>
+          <TextSetting
+            label={uk.scanner.settings['scanner.ai_prompt']}
+            value={String(scanner['scanner.ai_prompt'] ?? '')}
+            onApply={(value) =>
+              setScanner({ ...scanner, 'scanner.ai_prompt': value })
+            }
+          />
           <p className="text-sm text-muted-foreground">{uk.scanner.assist}</p>
           <AiAssist
             text={JSON.stringify(scanner, null, 2)}

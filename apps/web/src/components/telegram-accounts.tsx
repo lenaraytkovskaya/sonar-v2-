@@ -7,6 +7,7 @@ import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listTelegramAccounts>>[number];
 export function TelegramAccounts({
@@ -18,6 +19,8 @@ export function TelegramAccounts({
 }) {
   const router = useRouter(),
     busy = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const [limits, setLimits] = useState<Record<string, string>>({});
   const [form, setForm] = useState({ name: '', phone: '', dailyLimit: '' });
   const [login, setLogin] = useState<{
@@ -52,7 +55,9 @@ export function TelegramAccounts({
           : null,
       );
       if (result.deliveryUk) setDelivery(result.deliveryUk);
+      if (method === 'PATCH' && 'dailyLimit' in fields) setEditing(null);
       if (result.step === 'done') {
+        setOpen(false);
         setLogin(null);
         setForm({ name: '', phone: '', dailyLimit: '' });
       }
@@ -123,37 +128,72 @@ export function TelegramAccounts({
             )}
           </div>
           {account.status !== 'disconnected' && (
-            <form
-              className="flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void mutate('PATCH', {
-                  id: account.id,
-                  dailyLimit: Number(limits[account.id] ?? account.dailyLimit),
-                });
-              }}
-            >
-              <div>
-                <label htmlFor={'telegram-limit-' + account.id}>
-                  {uk.email.limit}
-                </label>
-                <Input
-                  id={'telegram-limit-' + account.id}
-                  className="w-32"
-                  type="number"
-                  min={1}
-                  step={1}
-                  required
-                  value={limits[account.id] ?? account.dailyLimit}
-                  onChange={(event) =>
-                    setLimits({ ...limits, [account.id]: event.target.value })
-                  }
-                />
-              </div>
-              <Button variant="outline" disabled={pending}>
-                {uk.forms.save}
-              </Button>
-            </form>
+            <>
+              <CrudButton
+                action="edit"
+                aria-label={`${uk.crud.editLimit}: ${account.name}`}
+                disabled={pending}
+                onClick={() => {
+                  setError('');
+                  setLimits({
+                    ...limits,
+                    [account.id]: String(account.dailyLimit),
+                  });
+                  setEditing(account.id);
+                }}
+              >
+                {uk.crud.editLimit}
+              </CrudButton>
+              <CrudDialog
+                open={editing === account.id}
+                onOpenChange={() => setEditing(null)}
+                title={`${uk.crud.editLimit}: ${account.name}`}
+                pending={pending}
+                draft={limits[account.id]}
+              >
+                <form
+                  className="flex flex-wrap items-end gap-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void mutate('PATCH', {
+                      id: account.id,
+                      dailyLimit: Number(
+                        limits[account.id] ?? account.dailyLimit,
+                      ),
+                    });
+                  }}
+                >
+                  <div>
+                    <label htmlFor={'telegram-limit-' + account.id}>
+                      {uk.email.limit}
+                    </label>
+                    <Input
+                      id={'telegram-limit-' + account.id}
+                      className="w-32"
+                      type="number"
+                      min={1}
+                      step={1}
+                      required
+                      value={limits[account.id] ?? account.dailyLimit}
+                      onChange={(event) =>
+                        setLimits({
+                          ...limits,
+                          [account.id]: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <Button variant="outline" disabled={pending}>
+                    {uk.forms.save}
+                  </Button>
+                  {error && (
+                    <p role="alert" className="text-err">
+                      {error}
+                    </p>
+                  )}
+                </form>
+              </CrudDialog>
+            </>
           )}
           {account.status !== 'disconnected' && (
             <div className="flex flex-wrap gap-3">
@@ -180,132 +220,156 @@ export function TelegramAccounts({
           )}
         </section>
       ))}
-      <form
-        className="grid gap-4 md:grid-cols-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void mutate(
-            'POST',
-            login
-              ? { action: 'complete', id: login.id, [login.step]: secret }
-              : {
-                  action: 'start',
-                  ...form,
-                  dailyLimit: Number(form.dailyLimit),
-                },
-          );
+      <CrudButton
+        disabled={pending}
+        onClick={() => {
+          setError('');
+          setOpen(true);
         }}
       >
-        {qr && !login ? (
-          <div className="space-y-2 md:col-span-3">
-            <img
-              src={qr.image}
-              alt={uk.telegram.qrAlt}
-              width={240}
-              height={240}
-              className="rounded-lg bg-white p-2"
-            />
-            <p className="text-sm">{uk.telegram.qrHint}</p>
-          </div>
-        ) : login ? (
-          <div className="md:col-span-3">
-            <label htmlFor="telegram-secret">
-              {login.step === 'code' ? uk.telegram.code : uk.telegram.password}
-            </label>
-            <Input
-              id="telegram-secret"
-              type={login.step === 'password' ? 'password' : 'text'}
-              inputMode={login.step === 'code' ? 'numeric' : undefined}
-              autoComplete="off"
-              required
-              maxLength={login.step === 'code' ? 20 : 1024}
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-            />
-            {login.step === 'code' && delivery && (
-              <p role="status" className="mt-2 text-sm">
-                {delivery}
-              </p>
-            )}
-            <p className="mt-2 text-sm text-muted-foreground">
-              {uk.telegram.secretHint}
-            </p>
-          </div>
-        ) : (
-          (['name', 'phone', 'dailyLimit'] as const).map((key) => (
-            <div key={key}>
-              <label htmlFor={'telegram-' + key}>
-                {
-                  {
-                    name: uk.email.name,
-                    phone: uk.telegram.phone,
-                    dailyLimit: uk.email.limit,
-                  }[key]
-                }
+        {uk.telegram.connect}
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={uk.telegram.connect}
+        pending={pending}
+        draft={{ form, login, qr: qr?.id, secret }}
+      >
+        <form
+          className="grid gap-4 sm:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void mutate(
+              'POST',
+              login
+                ? { action: 'complete', id: login.id, [login.step]: secret }
+                : {
+                    action: 'start',
+                    ...form,
+                    dailyLimit: Number(form.dailyLimit),
+                  },
+            );
+          }}
+        >
+          {qr && !login ? (
+            <div className="space-y-2 sm:col-span-2">
+              <img
+                src={qr.image}
+                alt={uk.telegram.qrAlt}
+                width={240}
+                height={240}
+                className="rounded-lg bg-white p-2"
+              />
+              <p className="text-sm">{uk.telegram.qrHint}</p>
+            </div>
+          ) : login ? (
+            <div className="sm:col-span-2">
+              <label htmlFor="telegram-secret">
+                {login.step === 'code'
+                  ? uk.telegram.code
+                  : uk.telegram.password}
               </label>
               <Input
-                id={'telegram-' + key}
+                id="telegram-secret"
+                type={login.step === 'password' ? 'password' : 'text'}
+                inputMode={login.step === 'code' ? 'numeric' : undefined}
+                autoComplete="off"
                 required
-                type={
-                  key === 'dailyLimit'
-                    ? 'number'
-                    : key === 'phone'
-                      ? 'tel'
-                      : 'text'
-                }
-                min={key === 'dailyLimit' ? 1 : undefined}
-                step={key === 'dailyLimit' ? 1 : undefined}
-                maxLength={200}
-                value={form[key]}
-                onChange={(event) =>
-                  setForm({ ...form, [key]: event.target.value })
-                }
+                maxLength={login.step === 'code' ? 20 : 1024}
+                value={secret}
+                onChange={(event) => setSecret(event.target.value)}
               />
-              {key === 'name' && (
-                <AiAssist
-                  text={form[key]}
-                  onApply={(text) => setForm({ ...form, [key]: text })}
-                />
+              {login.step === 'code' && delivery && (
+                <p role="status" className="mt-2 text-sm">
+                  {delivery}
+                </p>
               )}
+              <p className="mt-2 text-sm text-muted-foreground">
+                {uk.telegram.secretHint}
+              </p>
             </div>
-          ))
-        )}
-        <div className="flex gap-3 md:col-span-3">
-          {!qr && (
-            <Button disabled={pending || !configured}>
-              {pending
-                ? uk.ai.pending
-                : login
-                  ? uk.telegram.confirm
-                  : uk.telegram.connect}
-            </Button>
+          ) : (
+            (['name', 'phone', 'dailyLimit'] as const).map((key) => (
+              <div key={key}>
+                <label htmlFor={'telegram-' + key}>
+                  {
+                    {
+                      name: uk.email.name,
+                      phone: uk.telegram.phone,
+                      dailyLimit: uk.email.limit,
+                    }[key]
+                  }
+                </label>
+                <Input
+                  id={'telegram-' + key}
+                  required
+                  type={
+                    key === 'dailyLimit'
+                      ? 'number'
+                      : key === 'phone'
+                        ? 'tel'
+                        : 'text'
+                  }
+                  min={key === 'dailyLimit' ? 1 : undefined}
+                  step={key === 'dailyLimit' ? 1 : undefined}
+                  maxLength={200}
+                  value={form[key]}
+                  onChange={(event) =>
+                    setForm({ ...form, [key]: event.target.value })
+                  }
+                />
+                {key === 'name' && (
+                  <AiAssist
+                    text={form[key]}
+                    onApply={(text) => setForm({ ...form, [key]: text })}
+                  />
+                )}
+              </div>
+            ))
           )}
-          {!login && !qr && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !configured}
-              onClick={startQr}
-            >
-              {uk.telegram.connectQr}
-            </Button>
+          <div className="flex gap-3 sm:col-span-2">
+            {!qr && (
+              <Button disabled={pending || !configured}>
+                {pending
+                  ? uk.ai.pending
+                  : login
+                    ? uk.telegram.confirm
+                    : uk.telegram.connect}
+              </Button>
+            )}
+            {!login && !qr && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !configured}
+                onClick={startQr}
+              >
+                {uk.telegram.connectQr}
+              </Button>
+            )}
+            {(login || qr) && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={() => {
+                  void mutate('DELETE', { id: (login ?? qr)!.id });
+                  setSecret('');
+                }}
+              >
+                {uk.crud.cancelConnection}
+              </Button>
+            )}
+          </div>
+          {error && (
+            <p role="alert" className="text-err sm:col-span-2">
+              {error}
+            </p>
           )}
-          {(login || qr) && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={() => {
-                void mutate('DELETE', { id: (login ?? qr)!.id });
-                setSecret('');
-              }}
-            >
-              {uk.forms.cancel}
-            </Button>
-          )}
-        </div>
-      </form>
-      {error && (
+        </form>
+      </CrudDialog>
+      {!open && !editing && error && (
         <p role="alert" className="text-err">
           {error}
         </p>

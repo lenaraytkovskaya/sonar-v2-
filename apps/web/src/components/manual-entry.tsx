@@ -6,6 +6,7 @@ import { socialNetwork } from '@/lib/outreach-labels';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { CrudButton, CrudDialog } from './crud-dialog';
 
 export function ManualEntry({
   companyId,
@@ -41,17 +42,23 @@ export function ManualEntry({
     : ['name', 'website', 'city', 'countryCode'];
   return (
     <div className="mb-4 space-y-3">
-      <Button
-        type="button"
-        variant="outline"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
+      <CrudButton
+        onClick={() => {
+          setError('');
+          setOpen(true);
+        }}
       >
         {title}
-      </Button>
-      {open && (
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={title}
+        pending={pending}
+        draft={values}
+      >
         <form
-          className="space-y-4 rounded-xl border border-border bg-surface p-4"
+          className="space-y-4"
           onSubmit={async (event) => {
             event.preventDefault();
             setPending(true);
@@ -73,10 +80,12 @@ export function ManualEntry({
                 setValues({ kind: 'email', value: '', note: '' });
                 setOpen(false);
                 router.refresh();
-              } else
+              } else {
+                setOpen(false);
                 router.push(
                   `/companies/${data.id}?campaignId=${values.campaignId}`,
                 );
+              }
             } catch (error) {
               setError(error instanceof Error ? error.message : uk.ai.error);
             } finally {
@@ -191,7 +200,7 @@ export function ManualEntry({
           )}
           <Button disabled={pending}>{pending ? uk.ai.pending : title}</Button>
         </form>
-      )}
+      </CrudDialog>
     </div>
   );
 }

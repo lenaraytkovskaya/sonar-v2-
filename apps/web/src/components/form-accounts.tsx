@@ -8,6 +8,8 @@ import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { CrudButton, CrudDialog } from './crud-dialog';
+
 type Account = Awaited<ReturnType<typeof listFormAccounts>>[number];
 type Manual = Awaited<ReturnType<typeof listManualFormMessages>>;
 const blank = {
@@ -87,10 +89,12 @@ export function FormAccounts({
                   : '—'}
               </p>
             </div>
-            <Button
-              variant="outline"
+            <CrudButton
+              action="edit"
+              aria-label={`${uk.forms.edit}: ${account.name}`}
               disabled={pending}
               onClick={() => {
+                setError('');
                 setForm({
                   name: account.name,
                   fromAddress: account.fromAddress,
@@ -103,21 +107,27 @@ export function FormAccounts({
               }}
             >
               {uk.forms.edit}
-            </Button>
+            </CrudButton>
           </section>
         ))}
-        <Button
-          variant="outline"
+        <CrudButton
           disabled={pending}
           onClick={() => {
+            setError('');
             setEditing(null);
             setForm(blank);
             setOpen(true);
           }}
         >
           {uk.email.add}
-        </Button>
-        {open && (
+        </CrudButton>
+        <CrudDialog
+          open={open}
+          onOpenChange={setOpen}
+          title={editing ? uk.forms.edit : uk.email.add}
+          pending={pending}
+          draft={form}
+        >
           <form
             className="grid gap-4 md:grid-cols-2"
             onSubmit={(event) => {
@@ -180,17 +190,14 @@ export function FormAccounts({
               <Button disabled={pending}>
                 {pending ? uk.ai.pending : uk.forms.save}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => setOpen(false)}
-              >
-                {uk.forms.cancel}
-              </Button>
             </div>
+            {error && (
+              <p role="alert" className="text-err md:col-span-2">
+                {error}
+              </p>
+            )}
           </form>
-        )}
+        </CrudDialog>
       </Card>
       <Card className="space-y-4 p-5">
         <h2 className="font-heading text-base font-bold">{uk.forms.manual}</h2>
@@ -233,7 +240,7 @@ export function FormAccounts({
           </section>
         ))}
       </Card>
-      {error && (
+      {!open && error && (
         <p role="alert" className="text-err">
           {error}
         </p>

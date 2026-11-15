@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
   applyCampaignSuggestion,
@@ -15,6 +15,7 @@ import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
 import { CampaignCompanies } from './campaign-companies';
 import { runAiJob } from '@/lib/ai-job';
+import { CrudButton, CrudDialog } from './crud-dialog';
 type Row = CampaignInput & {
   id: string;
   google_progress?: Record<string, { exhausted: boolean; buffer: unknown[] }>;
@@ -101,6 +102,9 @@ export function CampaignPanel({
     scoring_weights: { ...defaultWeights, ...row.scoring_weights },
   });
   const { batches: batchProgress } = useTasks();
+  const [open, setOpen] = useState(false);
+  const selectionChanged = useRef(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]),
     [presets, setPresets] = useState<
       { id: string; name: string; data: CampaignInput }[]
@@ -135,10 +139,12 @@ export function CampaignPanel({
     const selected = new URLSearchParams(window.location.search).get(
       'campaign',
     );
-    if (selectFromUrl && selected) {
-      const row = d.campaigns.find((c: Row) => c.id === selected);
+    if (selectFromUrl && !selectionChanged.current) {
+      const row =
+        d.campaigns.find((c: Row) => c.id === selected) ?? d.campaigns[0];
       if (row) {
         setId(row.id);
+        setSelectedId(row.id);
         setForm(
           campaignSchema
             .strip()
@@ -202,6 +208,8 @@ export function CampaignPanel({
         }
       }
       await load();
+      setSelectedId(row.id);
+      setOpen(false);
       setMessage(
         kind === 'start'
           ? uk.campaign.queued
@@ -245,20 +253,28 @@ export function CampaignPanel({
       <PageHeader {...uk.pages.campaigns} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <Card className="min-w-0 space-y-3 p-4">
-          <Button
+          <CrudButton
+            disabled={pending}
             onClick={() => {
+              selectionChanged.current = true;
               setId(null);
               setForm(initialForm);
+              setDescription('');
+              setSource('form');
+              setMessage('');
+              setOpen(true);
             }}
           >
             {uk.campaign.create}
-          </Button>
+          </CrudButton>
           {rows.length === 0 && <p>{uk.campaign.empty}</p>}
           {rows.map((row) => (
             <button
-              className={`min-h-9 w-full rounded-lg p-3 text-left ${id === row.id ? 'bg-chip' : 'hover:bg-raised'}`}
+              className={`min-h-9 w-full rounded-lg p-3 text-left ${selectedId === row.id ? 'bg-chip' : 'hover:bg-raised'}`}
               key={row.id}
               onClick={() => {
+                selectionChanged.current = true;
+                setSelectedId(row.id);
                 setId(row.id);
                 setForm(
                   campaignSchema.strip().parse(
@@ -278,7 +294,87 @@ export function CampaignPanel({
             </button>
           ))}
         </Card>
-        <Card className="min-w-0 space-y-5 p-5 xl:columns-2 xl:gap-10 [&>*]:break-inside-avoid">
+        <Card className="min-w-0 space-y-4 p-5">
+          {selectedId ? (
+            <>
+              <h2 className="font-heading text-lg font-bold">
+                {rows.find((row) => row.id === selectedId)?.name}
+              </h2>
+              <CrudButton
+                action="edit"
+                disabled={pending}
+                onClick={() => {
+                  setMessage('');
+                  setOpen(true);
+                }}
+              >
+                {uk.crud.editCampaign}
+              </CrudButton>
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  disabled={
+                    pending ||
+                    exhausted ||
+                    !form.cities.length ||
+                    !form.queries.length ||
+                    !campaignSchema.safeParse(form).success
+                  }
+                  onClick={() => void act('start')}
+                >
+                  {exhausted ? uk.google.exhausted : uk.campaign.start}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => void act('score')}
+                >
+                  {uk.campaign.recalculate}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => void act('pause')}
+                >
+                  {uk.campaign.pause}
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {rows.find((row) => row.id === selectedId)?.cities.join(', ')} ·{' '}
+                {rows.find((row) => row.id === selectedId)?.queries.join(', ')}
+              </p>
+              <BatchList key={selectedId} campaignId={selectedId} />
+            </>
+          ) : (
+            <p>{uk.crud.selectCampaign}</p>
+          )}
+          {!open && message && <p role="status">{message}</p>}
+        </Card>
+      </div>
+      <CrudDialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) {
+            const saved = rows.find((row) => row.id === selectedId);
+            setId(saved?.id ?? null);
+            setForm(
+              saved
+                ? campaignSchema.strip().parse(
+                    withWeights({
+                      ...saved,
+                      budget_usd: Number(saved.budget_usd),
+                    }),
+                  )
+                : initialForm,
+            );
+            setSource('form');
+          }
+        }}
+        title={id ? uk.crud.editCampaign : uk.campaign.create}
+        pending={pending}
+        draft={{ form, description }}
+      >
+        <div className="min-w-0 space-y-5">
           <label className="block">
             {uk.campaign.presets}
             <select
@@ -375,7 +471,7 @@ export function CampaignPanel({
               setSource('ai');
             }}
           />
-          <div className="grid gap-4 sm:grid-cols-3 xl:break-before-column">
+          <div className="grid gap-4 sm:grid-cols-3">
             <label>
               {uk.campaign.batch_size}
               <select
@@ -578,12 +674,11 @@ export function CampaignPanel({
             </Button>
           </div>
           {message && <p role="status">{message}</p>}
-          {id && <BatchList key={id} campaignId={id} />}
-        </Card>
-      </div>
-      {id && (
+        </div>
+      </CrudDialog>
+      {selectedId && (
         <Card className="mt-4 p-4">
-          <CampaignCompanies key={id} campaignId={id} />
+          <CampaignCompanies key={selectedId} campaignId={selectedId} />
         </Card>
       )}
     </>

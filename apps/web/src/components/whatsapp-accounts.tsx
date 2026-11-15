@@ -7,6 +7,7 @@ import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listWhatsAppAccounts>>[number];
 export function WhatsAppAccounts({
@@ -16,6 +17,8 @@ export function WhatsAppAccounts({
   accounts: Account[];
   configured: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [current, setCurrent] = useState(accounts),
     [qr, setQr] = useState(''),
     [error, setError] = useState(''),
@@ -85,6 +88,9 @@ export function WhatsAppAccounts({
       const result = await response.json();
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
+      if (method === 'PATCH' && 'dailyLimit' in fields) setEditing(false);
+      if (method === 'POST' && 'action' in fields && fields.action === 'start')
+        setOpen(false);
       setQr(result.progress?.status === 'qr' ? (result.progress.qr ?? '') : '');
     } catch (error) {
       setError(error instanceof Error ? error.message : uk.email.error);
@@ -147,33 +153,57 @@ export function WhatsAppAccounts({
               )}
             </div>
           )}
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void mutate('PATCH', {
-                id: account.id,
-                dailyLimit: Number(limit || account.dailyLimit),
-              });
+          <CrudButton
+            action="edit"
+            disabled={pending}
+            onClick={() => {
+              setLimit(String(account.dailyLimit));
+              setError('');
+              setEditing(true);
             }}
           >
-            <div>
-              <label htmlFor="whatsapp-limit">{uk.email.limit}</label>
-              <Input
-                id="whatsapp-limit"
-                className="w-32"
-                type="number"
-                min={1}
-                step={1}
-                required
-                value={limit || account.dailyLimit}
-                onChange={(event) => setLimit(event.target.value)}
-              />
-            </div>
-            <Button variant="outline" disabled={pending}>
-              {uk.forms.save}
-            </Button>
-          </form>
+            {uk.crud.editLimit}
+          </CrudButton>
+          <CrudDialog
+            open={editing}
+            onOpenChange={setEditing}
+            title={uk.crud.editLimit}
+            pending={pending}
+            draft={limit}
+          >
+            <form
+              className="flex flex-wrap items-end gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void mutate('PATCH', {
+                  id: account.id,
+                  dailyLimit: Number(limit),
+                });
+              }}
+            >
+              <div>
+                <label htmlFor="whatsapp-limit">{uk.email.limit}</label>
+                <Input
+                  id="whatsapp-limit"
+                  className="w-32"
+                  type="number"
+                  min={1}
+                  step={1}
+                  required
+                  value={limit}
+                  onChange={(event) => setLimit(event.target.value)}
+                />
+              </div>
+              <Button variant="outline" disabled={pending}>
+                {uk.forms.save}
+              </Button>
+              {error && (
+                <p role="alert" className="text-err">
+                  {error}
+                </p>
+              )}
+            </form>
+          </CrudDialog>
           <p className="text-sm text-muted-foreground">
             {uk.whatsapp.repairWebhookHint}
           </p>
@@ -228,47 +258,72 @@ export function WhatsAppAccounts({
       ) : (
         <>
           <p>{uk.whatsapp.empty}</p>
-          <form
-            className="grid gap-4 md:grid-cols-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void mutate('POST', {
-                action: 'start',
-                name,
-                dailyLimit: Number(limit),
-              });
+          <CrudButton
+            disabled={pending}
+            onClick={() => {
+              setError('');
+              setOpen(true);
             }}
           >
-            <div>
-              <label htmlFor="whatsapp-name">{uk.email.name}</label>
-              <Input
-                id="whatsapp-name"
-                value={name}
-                maxLength={200}
-                required
-                onChange={(event) => setName(event.target.value)}
-              />
-              <AiAssist text={name} onApply={setName} />
-            </div>
-            <div>
-              <label htmlFor="whatsapp-new-limit">{uk.email.limit}</label>
-              <Input
-                id="whatsapp-new-limit"
-                type="number"
-                min={1}
-                step={1}
-                value={limit}
-                required
-                onChange={(event) => setLimit(event.target.value)}
-              />
-            </div>
-            <Button className="md:col-span-2" disabled={pending || !configured}>
-              {pending ? uk.ai.pending : uk.whatsapp.connect}
-            </Button>
-          </form>
+            {uk.whatsapp.connect}
+          </CrudButton>
+          <CrudDialog
+            open={open}
+            onOpenChange={setOpen}
+            title={uk.whatsapp.connect}
+            pending={pending}
+            draft={{ name, limit }}
+          >
+            <form
+              className="grid gap-4 sm:grid-cols-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void mutate('POST', {
+                  action: 'start',
+                  name,
+                  dailyLimit: Number(limit),
+                });
+              }}
+            >
+              <div>
+                <label htmlFor="whatsapp-name">{uk.email.name}</label>
+                <Input
+                  id="whatsapp-name"
+                  value={name}
+                  maxLength={200}
+                  required
+                  onChange={(event) => setName(event.target.value)}
+                />
+                <AiAssist text={name} onApply={setName} />
+              </div>
+              <div>
+                <label htmlFor="whatsapp-new-limit">{uk.email.limit}</label>
+                <Input
+                  id="whatsapp-new-limit"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={limit}
+                  required
+                  onChange={(event) => setLimit(event.target.value)}
+                />
+              </div>
+              <Button
+                className="sm:col-span-2"
+                disabled={pending || !configured}
+              >
+                {pending ? uk.ai.pending : uk.whatsapp.connect}
+              </Button>
+              {error && (
+                <p role="alert" className="text-err sm:col-span-2">
+                  {error}
+                </p>
+              )}
+            </form>
+          </CrudDialog>
         </>
       )}
-      {error && (
+      {!open && !editing && error && (
         <p role="alert" className="text-err">
           {error}
         </p>
