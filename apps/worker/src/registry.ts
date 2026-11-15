@@ -85,6 +85,7 @@ export async function runRegistryMatch(
     companyId: string;
     candidate?: RegistryIdentity;
     actorId?: string;
+    manualCode?: string;
   },
   taskId: string,
   lookup: typeof lookupRegistry = lookupRegistry,
@@ -110,11 +111,33 @@ export async function runRegistryMatch(
       reasonCode: 'registry_country',
       reasonUk: 'Реєстр для країни компанії ще не підключено.',
     };
+  const codeSources = payload.manualCode
+    ? "'website','ai','manual','registry'"
+    : "'website','ai','manual'";
   const { rows: evidence } = await sonarPool.query(
-    "select value from company_facts where company_id=$1 and kind='edrpou' and source in ('website','ai','manual') order by found_at desc",
+    `select value from company_facts where company_id=$1 and kind='edrpou' and source in (${codeSources}) order by found_at desc`,
     [companyId],
   );
-  const codes = registryCodes(evidence.map((row) => row.value));
+  const evidenceCodes = registryCodes(evidence.map((row) => row.value));
+  const codes = payload.manualCode ? [payload.manualCode] : evidenceCodes;
+  if (payload.manualCode && !evidenceCodes.includes(payload.manualCode))
+    return {
+      status: 'skipped',
+      reasonCode: 'registry_code_changed',
+      reasonUk:
+        'Код ЄДР змінено після запуску. Збережіть актуальний код і повторіть.',
+    };
+  const identityChanged = async (client: Pick<typeof sonarPool, 'query'>) => {
+    const { rows: currentEvidence } = await client.query(
+      `select value from company_facts where company_id=$1 and kind='edrpou' and source in (${codeSources})`,
+      [companyId],
+    );
+    const currentCodes = registryCodes(currentEvidence.map((row) => row.value));
+    return (
+      JSON.stringify([...currentCodes].sort()) !==
+      JSON.stringify([...evidenceCodes].sort())
+    );
+  };
   let match: Awaited<ReturnType<typeof lookupRegistry>> = null;
   let method = 'code';
   if (payload.candidate) {
@@ -163,6 +186,15 @@ export async function runRegistryMatch(
         await client.query('select id from companies where id=$1 for update', [
           companyId,
         ]);
+        if (await identityChanged(client)) {
+          await client.query('rollback');
+          return {
+            status: 'skipped',
+            reasonCode: 'registry_code_changed',
+            reasonUk:
+              'Код ЄДР змінено під час пошуку. Повторіть аналіз актуального коду.',
+          };
+        }
         // A confirmed/manual choice is authoritative over concurrent automatic matching.
         const { rows: choices } = await client.query(
           "select 1 from company_facts where company_id=$1 and kind='registry_match_method' and value='\"confirmed\"'::jsonb",
@@ -218,6 +250,15 @@ export async function runRegistryMatch(
     await client.query('select id from companies where id=$1 for update', [
       companyId,
     ]);
+    if (await identityChanged(client)) {
+      await client.query('rollback');
+      return {
+        status: 'skipped',
+        reasonCode: 'registry_code_changed',
+        reasonUk:
+          'Код ЄДР змінено під час пошуку. Повторіть аналіз актуального коду.',
+      };
+    }
     if (payload.candidate) {
       const { rows } = await client.query(
         `select 1 from company_facts where company_id=$1 and kind='registry_candidates'

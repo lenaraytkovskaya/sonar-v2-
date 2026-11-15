@@ -141,3 +141,26 @@ export function createGoogleClient(key: string, fetcher: typeof fetch = fetch) {
     return googlePageSchema.parse(await response.json());
   };
 }
+
+// Resolution API returns one entity per input URL, including empty entities on failure.
+export const googleMapsResolutionSchema = z
+  .object({
+    entities: z
+      .array(
+        z
+          .object({
+            place: z
+              .string()
+              .max(2048)
+              .regex(/^places\/[A-Za-z0-9_-]+$/)
+              .optional(),
+          })
+          .strict(),
+      )
+      .length(1),
+    failedRequests: z
+      .record(z.string(), z.object({ code: z.number().int() }).passthrough())
+      .optional(),
+    saveToMapsUrl: z.string().optional(),
+  })
+  .strict();
