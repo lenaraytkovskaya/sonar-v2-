@@ -24,6 +24,15 @@ import {
   createSocialInboxAdapter,
 } from './instagram-inbox-browser.js';
 
+// Structural schema reported from native Chrome Network on 2026-11-15;
+// all values are synthetic. The unread-count query carries no actor/messages.
+const unreadFixture = () =>
+  JSON.parse(
+    readFileSync(
+      new URL('./instagram-unread-count.fixture.json', import.meta.url),
+      'utf8',
+    ),
+  );
 const requestsFixture = () =>
   JSON.parse(
     readFileSync(
@@ -52,6 +61,13 @@ const emptyFixture = () => {
 it('maps observed true identities, exact text, timestamps and provider IDs', () => {
   const parsed = parseInstagramInbox(fixture(), observedAt)!;
   expect(parsed.skipped).toEqual([]);
+  expect(parsed.actors[0]?.fields).toEqual({
+    directThread: 'object',
+    viewer: 'object',
+    viewerId: 'digit_string',
+    mailboxId: 'digit_string',
+    threadViewerId: 'digit_string',
+  });
   expect(parsed.inbox?.more).toBe(false);
   expect(parsed.threads[0]?.page?.more).toBe(false);
   expect(parsed.messages.map((message) => message.direction)).toEqual([
@@ -176,21 +192,25 @@ function browser(
   let navigations = 0;
   const frame = { url: () => currentUrl };
   const requestFrame = vi.fn(() => frame);
+  const requestBodies = new Map<unknown, string>();
+  const responseStatuses = new Map<unknown, number>();
+  const readJson = vi.fn(async (value: unknown) => value);
   const emit = (values: unknown[]) =>
     values.forEach((value) =>
       listener?.({
         url: () => url,
-        status: () => 200,
+        status: () => responseStatuses.get(value) ?? 200,
         request: () => ({
           method: () => 'POST',
           url: () => url,
           frame: requestFrame,
           postData: () =>
-            currentUrl.endsWith('/requests/')
+            requestBodies.get(value) ??
+            (currentUrl.endsWith('/requests/')
               ? 'fb_api_req_friendly_name=PolarisDirectMessageRequestQuery'
-              : '',
+              : 'fb_api_req_friendly_name=PolarisDirectInboxQuery'),
         }),
-        json: async () => value,
+        json: () => readJson(value),
       } as unknown as Response),
     );
   const page = {
@@ -246,8 +266,83 @@ function browser(
       assert,
       '900000000000004',
     );
-  return { page, events, batches, persist, assert, requestFrame, emit, run };
+  return {
+    page,
+    events,
+    batches,
+    persist,
+    assert,
+    requestFrame,
+    requestBodies,
+    responseStatuses,
+    readJson,
+    emit,
+    run,
+  };
 }
+
+it('ignores the observed unread-count envelope before importing a request-correlated full inbox', async () => {
+  const unread = unreadFixture();
+  // Envelope-only parsing mistakes the legitimate partial selection for missing actor identity.
+  expect(
+    parseInstagramInbox(unread, observedAt)?.actors[0]?.fields.viewer,
+  ).toBe('missing');
+  const f = browser([unread, fixture()]);
+  f.requestBodies.set(
+    unread,
+    'fb_api_req_friendly_name=useIGDSystemFolderUnreadThreadCountQuery',
+  );
+  const result = await f.run();
+  expect(result).toMatchObject({
+    complete: false,
+    skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
+  });
+  expect(f.readJson).not.toHaveBeenCalledWith(unread);
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+  expect(f.batches.every((batch) => batch.resumeAnchor === null)).toBe(true);
+});
+it.each([
+  '',
+  'fb_api_req_friendly_name=IGDThreadDetailQuery',
+  'fb_api_req_friendly_name=PolarisDirectInboxQuery&fb_api_req_friendly_name=PolarisDirectInboxQuery',
+])(
+  'cannot establish identity or coverage from unsupported/ambiguous request metadata %s',
+  async (payload) => {
+    const value = fixture();
+    const f = browser([value]);
+    f.requestBodies.set(value, payload);
+    const result = await f.run();
+    expect(result).toMatchObject({
+      complete: false,
+      skipped: expect.arrayContaining([
+        'unsupported_query_ignored',
+        'no_verified_mailbox',
+      ]),
+    });
+    expect(f.readJson).not.toHaveBeenCalled();
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(f.page.goto).toHaveBeenCalledOnce();
+  },
+);
+it('still rejects the unread-count shape when the request claims the supported full inbox query', async () => {
+  const f = browser([unreadFixture(), fixture()]);
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: { actor: { reason: 'actor_shape_unsupported' } },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
+it('keeps rate-limit protection on ignored ancillary queries', async () => {
+  const unread = unreadFixture();
+  const f = browser([unread, fixture()]);
+  f.requestBodies.set(
+    unread,
+    'fb_api_req_friendly_name=useIGDSystemFolderUnreadThreadCountQuery',
+  );
+  f.responseStatuses.set(unread, 429);
+  await expect(f.run()).rejects.toMatchObject({ reason: 'rate_limit' });
+  expect(f.persist).not.toHaveBeenCalled();
+});
 
 it('waits past an unattributed empty observation and persists a later attributable mailbox', async () => {
   const empty = emptyFixture();
@@ -764,6 +859,58 @@ it.each([
   },
 );
 
+it.each([
+  ['thread-missing', 'directThread', 'missing'],
+  ['thread-null', 'directThread', 'null'],
+  ['viewer-missing', 'viewer', 'missing'],
+  ['viewer-null', 'viewer', 'null'],
+  ['id-missing', 'viewerId', 'missing'],
+  ['id-null', 'viewerId', 'null'],
+  ['mailbox-missing', 'mailboxId', 'missing'],
+])(
+  'distinguishes unsupported %s shape from an evidenced foreign actor without accepting either',
+  async (kind, field, expectedKind) => {
+    const value = fixture();
+    const edge = mailbox(value).threads_by_folder.edges[0];
+    if (kind === 'thread-missing') delete edge.node.as_ig_direct_thread;
+    if (kind === 'thread-null') edge.node.as_ig_direct_thread = null;
+    if (kind === 'viewer-missing') delete thread(value).viewer;
+    if (kind === 'viewer-null') thread(value).viewer = null;
+    if (kind === 'id-missing') delete thread(value).viewer.id;
+    if (kind === 'id-null') thread(value).viewer.id = null;
+    if (kind === 'mailbox-missing')
+      delete thread(value).viewer.interop_messaging_user_fbid;
+    const f = browser([value, fixture()]);
+    const error = await f.run().catch((error) => error);
+    expect(error).toMatchObject({
+      reason: 'unknown_auth',
+      diagnostic: {
+        stage: 'actor',
+        actor: {
+          reason: 'actor_shape_unsupported',
+          fields: { [field!]: expectedKind },
+        },
+        capture: { parsed: 1, verified: 0, persisted: 0 },
+      },
+    });
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.diagnostic)).not.toMatch(
+      /900000|https:|Synthetic|example_peer/,
+    );
+  },
+);
+it('keeps missing actors in a mixed response fail closed before persisting the valid peer', async () => {
+  const value = fixture();
+  mailbox(value).threads_by_folder.edges.push({
+    node: { as_ig_direct_thread: null },
+  });
+  const f = browser([value]);
+  await expect(f.run()).rejects.toMatchObject({
+    diagnostic: { actor: { reason: 'actor_shape_unsupported' } },
+  });
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
 it('distinguishes the messaging namespace matching the expected identity without accepting it as viewer identity', async () => {
   const value = fixture();
   const f = browser([value]);
@@ -854,3 +1001,83 @@ it('refuses to open a context when authorized ds_user_id is missing', async () =
   });
   expect(withPage).not.toHaveBeenCalled();
 });
+
+it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
+  'correlates real offline browser POST responses without treating unread counts as inbox actors',
+  async () => {
+    const { chromium } = await import('playwright');
+    const instance = await chromium.launch({
+      headless: true,
+      proxy: { server: 'http://127.0.0.1:9', bypass: '<-loopback>' },
+      args: ['--host-resolver-rules=MAP * ~NOTFOUND'],
+    });
+    try {
+      const context = await instance.newContext({ serviceWorkers: 'block' });
+      const queries: string[] = [];
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url());
+        if (url.origin !== 'https://www.instagram.com')
+          return route.abort('blockedbyclient');
+        if (url.pathname === '/api/graphql') {
+          const name = new URLSearchParams(
+            route.request().postData() ?? '',
+          ).get('fb_api_req_friendly_name');
+          const body =
+            name === 'useIGDSystemFolderUnreadThreadCountQuery'
+              ? unreadFixture()
+              : name === 'PolarisDirectInboxQuery'
+                ? fixture()
+                : name === 'PolarisDirectMessageRequestQuery'
+                  ? requestsFixture()
+                  : null;
+          if (!body) return route.abort('blockedbyclient');
+          queries.push(name!);
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(body),
+          });
+        }
+        if (!['/direct/inbox/', '/direct/requests/'].includes(url.pathname))
+          return route.abort('blockedbyclient');
+        const names =
+          url.pathname === '/direct/inbox/'
+            ? [
+                'useIGDSystemFolderUnreadThreadCountQuery',
+                'PolarisDirectInboxQuery',
+              ]
+            : ['PolarisDirectMessageRequestQuery'];
+        return route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: `<nav><a href="/direct/inbox/">Inbox</a></nav><script>(async () => {for (const name of ${JSON.stringify(names)}) await fetch('/api/graphql', {method:'POST', body: new URLSearchParams({fb_api_req_friendly_name:name})});})()</script>`,
+        });
+      });
+      const page = await context.newPage();
+      const batches: SocialInboxBatch[] = [];
+      const result = await captureInstagramInbox(
+        page,
+        3000,
+        async (batch) => {
+          batches.push(batch);
+        },
+        undefined,
+        '900000000000004',
+      );
+      expect(queries).toEqual([
+        'useIGDSystemFolderUnreadThreadCountQuery',
+        'PolarisDirectInboxQuery',
+        'PolarisDirectMessageRequestQuery',
+      ]);
+      expect(result).toMatchObject({
+        complete: false,
+        skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
+      });
+      expect(batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+      expect(batches.every((batch) => batch.resumeAnchor === null)).toBe(true);
+    } finally {
+      await instance.close();
+    }
+  },
+  10000,
+);

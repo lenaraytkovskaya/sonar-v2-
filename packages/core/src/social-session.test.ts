@@ -323,6 +323,35 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
     actor: { ...actor, viewerId: 'private', cookie: 'secret' },
   };
   expect(safeSocialSessionDiagnostic(withActor)?.actor).toEqual(actor);
+  const fields = {
+    directThread: 'object',
+    viewer: 'object',
+    viewerId: 'digit_string',
+    mailboxId: 'missing',
+    threadViewerId: 'null',
+  };
+  const shaped = {
+    ...withActor,
+    actor: {
+      ...actor,
+      reason: 'actor_shape_unsupported',
+      fields: { ...fields, rawId: 'private' },
+    },
+  };
+  expect(safeSocialSessionDiagnostic(shaped)?.actor).toEqual({
+    ...actor,
+    reason: 'actor_shape_unsupported',
+    fields,
+  });
+  for (const kind of ['private', null, 1, {}]) {
+    expect(
+      safeSocialSessionDiagnostic({
+        ...shaped,
+        actor: { ...shaped.actor, fields: { ...fields, viewerId: kind } },
+      }),
+    ).toBeUndefined();
+  }
+
   expect(
     safeSocialSessionDiagnostic({
       ...withActor,

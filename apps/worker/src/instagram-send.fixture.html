@@ -449,6 +449,8 @@
         if (f.duplicateMenuAction)
           popup.insertAdjacentHTML('beforeend', action.outerHTML);
         if (f.menuRateLimit) await fetch('/api/v1/direct/fixture/');
+        if (f.detachExisting) existing.remove();
+        if (f.hideExisting) existing.hidden = true;
         if (f.mutateExisting)
           existing.insertAdjacentHTML(
             'beforeend',

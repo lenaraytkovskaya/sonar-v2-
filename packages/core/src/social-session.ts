@@ -93,6 +93,12 @@ export const socialSessionCheckReasons = {
   unknown_auth: 'Сесію не підтверджено. Перевірте вхід у соцмережу вручну.',
 } as const;
 export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
+export type SocialActorFieldKind =
+  'missing' | 'null' | 'digit_string' | 'object' | 'other';
+export type SocialActorFields = Record<
+  'directThread' | 'viewer' | 'viewerId' | 'mailboxId' | 'threadViewerId',
+  SocialActorFieldKind
+>;
 export type SocialSessionCheckDiagnostic = {
   version: 1;
   stage:
@@ -176,6 +182,7 @@ export type SocialSessionCheckDiagnostic = {
       | 'mailbox_missing'
       | 'initial_actors_empty'
       | 'mailbox_changed'
+      | 'actor_shape_unsupported'
       | 'viewer_mismatch'
       | 'actor_mailbox_mismatch';
     hasPreviousMailbox: boolean;
@@ -187,6 +194,7 @@ export type SocialSessionCheckDiagnostic = {
     anyActorMailboxMatchesExpected: boolean;
     responseMailboxMatchesExpected: boolean;
     allActorMailboxesMatchResponse: boolean;
+    fields?: SocialActorFields;
   };
 };
 /** Rebuild from fixed keys; never persist arbitrary browser/callback properties. */
@@ -347,6 +355,7 @@ export function safeSocialSessionDiagnostic(
         'mailbox_missing',
         'initial_actors_empty',
         'mailbox_changed',
+        'actor_shape_unsupported',
         'viewer_mismatch',
         'actor_mailbox_mismatch',
       ].includes(d.actor.reason)
@@ -371,6 +380,26 @@ export function safeSocialSessionDiagnostic(
       facts[key] = d.actor[key];
     }
     actor = { reason: d.actor.reason, ...facts };
+    if (d.actor.fields !== undefined) {
+      const fields = {} as SocialActorFields;
+      for (const key of [
+        'directThread',
+        'viewer',
+        'viewerId',
+        'mailboxId',
+        'threadViewerId',
+      ] as const) {
+        const kind = d.actor.fields?.[key];
+        if (
+          !['missing', 'null', 'digit_string', 'object', 'other'].includes(
+            kind ?? '',
+          )
+        )
+          return;
+        fields[key] = kind!;
+      }
+      actor.fields = fields;
+    }
   }
   return {
     version: 1,

@@ -503,6 +503,31 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it.each([
+      ['detachExisting', 'baseline_detached'],
+      ['hideExisting', 'baseline_hidden'],
+      ['mutateExisting', 'baseline_semantics'],
+    ])(
+      'identifies changed baseline menus (%s) without weakening provenance',
+      async (option, cause) => {
+        const f = await fixture({
+          overflow: true,
+          existingMenu: true,
+          [option!]: true,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            stage: 'messagebutton',
+            reasonUk: expect.stringContaining(`[change=${cause}]`),
+          });
+          expect(f.events).toEqual(['options']);
+          expect(f.inputs).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each(['pointerenter', 'focus', 'pointerdown'])(
       'allows cosmetic React interaction changes on %s',
       async (interactionStyle) => {

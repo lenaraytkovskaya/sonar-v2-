@@ -2,6 +2,10 @@ import {
   canonicalSocialPeer,
   type SocialInboxMessage,
 } from '@sonar/core/social-inbox';
+import type {
+  SocialActorFieldKind,
+  SocialActorFields,
+} from '@sonar/core/social-session';
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -9,6 +13,16 @@ const object = (value: unknown): Record<string, unknown> =>
     : {};
 const digits = (value: unknown): value is string =>
   typeof value === 'string' && /^\d{1,1000}$/.test(value);
+const fieldKind = (value: unknown): SocialActorFieldKind =>
+  value === undefined
+    ? 'missing'
+    : value === null
+      ? 'null'
+      : digits(value)
+        ? 'digit_string'
+        : typeof value === 'object' && !Array.isArray(value)
+          ? 'object'
+          : 'other';
 function pagination(value: unknown) {
   const page = object(value);
   return typeof page.has_next_page === 'boolean' &&
@@ -20,7 +34,11 @@ function pagination(value: unknown) {
 export type InstagramInboxPage = {
   mailboxId: string | null;
   emptyEdges: boolean;
-  actors: { viewerId: unknown; mailboxId: unknown }[];
+  actors: {
+    viewerId: unknown;
+    mailboxId: unknown;
+    fields: SocialActorFields;
+  }[];
   messages: SocialInboxMessage[];
   inbox: ReturnType<typeof pagination>;
   threads: { id: string; url: string; page: ReturnType<typeof pagination> }[];
@@ -56,11 +74,19 @@ export function parseInstagramInbox(
     return result;
   }
   for (const edge of connection.edges) {
-    const thread = object(object(object(edge).node).as_ig_direct_thread);
+    const rawThread = object(object(edge).node).as_ig_direct_thread;
+    const thread = object(rawThread);
     const viewer = object(thread.viewer);
     result.actors.push({
       viewerId: viewer.id,
       mailboxId: viewer.interop_messaging_user_fbid,
+      fields: {
+        directThread: fieldKind(rawThread),
+        viewer: fieldKind(thread.viewer),
+        viewerId: fieldKind(viewer.id),
+        mailboxId: fieldKind(viewer.interop_messaging_user_fbid),
+        threadViewerId: fieldKind(thread.viewer_id),
+      },
     });
     if (thread.folder !== 'PRIMARY') {
       result.skipped.push('unsupported_folder');
