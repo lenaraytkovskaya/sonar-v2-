@@ -166,7 +166,7 @@ beforeAll(async () => {
   cookie = `sonar-session=${await sealData({ user: { id: user, name: 'HTTP identity test' } }, { password: secret, ttl: 604800 })}`;
 }, 30000);
 
-async function http(id: string, body?: object) {
+async function http(id: string, body?: object, expectedStatus?: number) {
   const response = await fetch(`${origin}/api/conversations/${id}`, {
     method: body ? 'POST' : 'GET',
     headers: {
@@ -178,7 +178,7 @@ async function http(id: string, body?: object) {
   });
   const data = await response.json();
   expect(response.status, JSON.stringify(data)).toBe(
-    body && 'dryRun' in body ? 202 : 200,
+    expectedStatus ?? (body && 'dryRun' in body ? 202 : 200),
   );
   return data;
 }
@@ -223,6 +223,7 @@ async function fixture() {
     old,
     later,
     phone,
+    lid,
     messageId: rows.find((row) => row.direction === 'out').id as string,
   };
 }
@@ -387,6 +388,129 @@ it.skipIf(!enabled)(
         )
       ).rows,
     ).toEqual(history);
+  },
+  30000,
+);
+
+async function replyCounts(conversationId: string) {
+  const {
+    rows: [counts],
+  } = await db.sonarPool.query(
+    `select
+    (select count(*)::int from messages where conversation_id=$1 and source='reply') as messages,
+    (select count(*)::int from tasks t join messages m on m.id::text=t.payload->>'messageId' where t.type='message.send' and m.conversation_id=$1 and m.source='reply') as tasks,
+    (select count(*)::int from pgboss.job j join tasks t on t.id::text=j.data->>'taskId' join messages m on m.id::text=t.payload->>'messageId' where j.name='message.send' and m.conversation_id=$1 and m.source='reply') as jobs`,
+    [conversationId],
+  );
+  return counts as { messages: number; tasks: number; jobs: number };
+}
+it.skipIf(!enabled)(
+  'HTTP old and canonical URLs share one reply intent across sequential and concurrent retries',
+  async () => {
+    const f = await fixture(),
+      { conversationId } = await repair(f.old, false);
+    const body = {
+      action: 'reply',
+      subject: '',
+      body: 'One intended reply',
+      requestId: randomUUID(),
+    };
+    const first = await http(f.later, body);
+    const retries = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        http(index % 2 ? f.later : conversationId, body),
+      ),
+    );
+    const counts = await replyCounts(conversationId);
+    console.log(
+      'P1_REPLY_HTTP',
+      JSON.stringify({
+        same: retries.every((reply) => reply.id === first.id),
+        ...counts,
+      }),
+    );
+    expect(retries.every((reply) => reply.id === first.id)).toBe(true);
+    expect(counts).toEqual({ messages: 1, tasks: 1, jobs: 1 });
+    await http(
+      conversationId,
+      { ...body, body: 'Different intent using the same key' },
+      400,
+    );
+    expect(await replyCounts(conversationId)).toEqual(counts);
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'HTTP retries after a merge retain a reply created under a formerly canonical URL',
+  async () => {
+    const f = await fixture();
+    const body = {
+      action: 'reply',
+      subject: '',
+      body: 'Intent created before repair',
+      requestId: randomUUID(),
+    };
+    const first = await http(f.later, body);
+    const { conversationId } = await repair(f.old, false);
+    const replies = await Promise.all([
+      http(f.later, body),
+      http(conversationId, body),
+    ]);
+    const counts = await replyCounts(conversationId);
+    console.log(
+      'P1_REPLY_PREMERGE_HTTP',
+      JSON.stringify({
+        same: replies.every((reply) => reply.id === first.id),
+        ...counts,
+      }),
+    );
+    expect(replies.every((reply) => reply.id === first.id)).toBe(true);
+    expect(counts).toEqual({ messages: 1, tasks: 1, jobs: 1 });
+  },
+  30000,
+);
+
+it.skipIf(!enabled)(
+  'HTTP requests waiting on an in-progress repair derive one key after the merge commits',
+  async () => {
+    const f = await fixture(),
+      client = await db.sonarPool.connect();
+    const { whatsappConversation } = await import('./whatsapp-identity.js');
+    let pending: Promise<{ id: string }>[] = [];
+    try {
+      await client.query('begin');
+      await whatsappConversation(client, account, f.lid, f.phone);
+      const body = {
+        action: 'reply',
+        subject: '',
+        body: 'Intent waiting on repair',
+        requestId: randomUUID(),
+      };
+      pending = [http(f.later, body), http(f.old, body)];
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_locks where locktype='advisory' and not granted",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(2);
+      await client.query('commit');
+      const [first, second] = await Promise.all(pending);
+      expect(first!.id).toBe(second!.id);
+      expect(await replyCounts(f.old)).toEqual({
+        messages: 1,
+        tasks: 1,
+        jobs: 1,
+      });
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.allSettled(pending);
+    }
   },
   30000,
 );

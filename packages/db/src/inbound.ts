@@ -503,7 +503,7 @@ async function reply(
     body: string;
     socialDelivery?: 'browser' | 'manual';
   },
-  key: string,
+  key: string | { requestId: string },
   userId: string | null,
   queued: boolean,
 ) {
@@ -538,6 +538,23 @@ async function reply(
       }
       await lockWhatsAppIdentity(c, accountId);
       conversationId = await canonicalConversation(c, conversationId);
+    }
+    // Resolve identity under the receiving-account lock before deriving a new intent key.
+    const requestKey =
+      typeof key === 'string'
+        ? key
+        : `reply:${conversationId}:${key.requestId}`;
+    let priorKeys = [requestKey];
+    if (typeof key !== 'string' && identity?.channel === 'whatsapp') {
+      // Replies committed before a merge retain their original durable keys.
+      const { rows: aliases } = await c.query(
+        `with recursive aliases as (
+        select id from conversations where id=$1
+        union all select v.id from conversations v join aliases a on v.merged_into_id=a.id
+      ) select id from aliases`,
+        [conversationId],
+      );
+      priorKeys = aliases.map((alias) => `reply:${alias.id}:${key.requestId}`);
     }
     const {
       rows: [v],
@@ -597,17 +614,20 @@ async function reply(
     }
     if (!last || (await isContactBlocked(c, v.company_id, last.to_value)))
       invalid('Контакт у списку «Не контактувати».');
-    const {
-      rows: [prior],
-    } = await c.query(
-      'select id,status,conversation_id,body,source from messages where idempotency_key=$1',
-      [key],
+    const { rows: priorMessages } = await c.query(
+      'select id,status,conversation_id,body,source from messages where idempotency_key=any($1::text[]) order by created_at,id',
+      [priorKeys],
     );
+    const prior = priorMessages[0];
     if (prior) {
       if (
-        prior.conversation_id !== conversationId ||
-        prior.body !== draft.body.trim() ||
-        (v.channel === 'social' && (prior.source === 'reply') !== socialBrowser)
+        priorMessages.some(
+          (message) =>
+            message.conversation_id !== conversationId ||
+            message.body !== draft.body.trim() ||
+            (v.channel === 'social' &&
+              (message.source === 'reply') !== socialBrowser),
+        )
       )
         invalid('Ключ повідомлення вже використано для іншого запиту.');
       return { id: String(prior.id), status: String(prior.status) };
@@ -646,7 +666,7 @@ async function reply(
         draft.body.trim(),
         // Forms and social networks are sent by a person; the message records that.
         queued ? (manual ? 'sent' : 'queued') : 'draft',
-        key,
+        requestKey,
         userId,
         queued,
         manual ? 'manual' : 'reply',
@@ -692,7 +712,7 @@ export async function queueConversationReply(
   return reply(
     input.conversationId,
     input,
-    `reply:${input.conversationId}:${input.requestId}`,
+    { requestId: input.requestId },
     userId,
     true,
   );
