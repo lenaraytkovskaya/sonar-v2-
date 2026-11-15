@@ -15,7 +15,8 @@ const enabled = process.env.RUN_DB_TESTS === '1';
 const user = randomUUID(),
   account = randomUUID();
 const companies: string[] = [],
-  campaigns: string[] = [];
+  campaigns: string[] = [],
+  extraAccounts: string[] = [];
 const secret = 'isolated-http-test-secret-with-at-least-32-characters';
 let db: typeof import('@sonar/db');
 let email: typeof import('@sonar/db/email');
@@ -1110,6 +1111,178 @@ it.skipIf(!enabled).each(
   30000,
 );
 
+it.skipIf(!enabled)(
+  'social inbox metadata and HTTP draft editing do not invert message/conversation locks',
+  async () => {
+    const f = await generatedLockFixture('social'),
+      socialAccount = randomUUID(),
+      external = randomUUID(),
+      thread = randomUUID();
+    extraAccounts.push(socialAccount);
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,owner_id,daily_limit) values($1,'instagram','Round3 inbox metadata','round3_owner',$2,100)",
+      [socialAccount, user],
+    );
+    await db.sonarPool.query(
+      'update messages set account_id=$2,external_message_id=$3,social_meta=\'{"network":"instagram"}\' where id=$1',
+      [f.outgoing, socialAccount, external],
+    );
+    const inbox = await import('@sonar/db/social-inbox'),
+      rawConnect = db.sonarPool.connect.bind(db.sonarPool),
+      client = await rawConnect();
+    const rawQuery = client.query.bind(client),
+      rawRelease = client.release.bind(client);
+    client.release = (error?: Error | boolean) => {
+      client.query = rawQuery;
+      client.release = rawRelease;
+      rawRelease(error);
+    };
+    let ready!: () => void, resume!: () => void;
+    const messageHeld = new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+      gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+    let held = false;
+    client.query = (async (sql: string, values?: unknown[]) => {
+      const result = await rawQuery(sql, values);
+      if (!held && sql.startsWith('update messages set social_meta')) {
+        held = true;
+        await rawQuery("set local deadlock_timeout='100ms'");
+        ready();
+        await gate;
+      }
+      return result;
+    }) as typeof client.query;
+    db.sonarPool.connect = (async () => client) as typeof db.sonarPool.connect;
+    const persisted = inbox
+      .persistSocialInboxBatch(socialAccount, 'instagram', {
+        resumeAnchor: null,
+        messages: [
+          {
+            externalMessageId: external,
+            threadId: thread,
+            direction: 'out',
+            senderProfile: 'https://www.instagram.com/round3_owner/',
+            peerProfile: 'https://www.instagram.com/round3_test/',
+            body: 'Original',
+            occurredAt: '2026-11-15T10:00:00Z',
+            observedAt: '2026-11-15T10:01:00Z',
+          },
+        ],
+      })
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({
+          ok: false as const,
+          code: (error as { code?: string }).code,
+        }),
+      );
+    db.sonarPool.connect = rawConnect;
+    let mutation: Promise<{ status: number }> | undefined;
+    try {
+      await Promise.race([
+        messageHeld,
+        persisted.then((result) => {
+          if (!held) throw new Error(JSON.stringify(result));
+        }),
+      ]);
+      mutation = fetch(`${origin}/api/conversations/${f.conversation}`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          Origin: origin,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'save',
+          messageId: f.outgoing,
+          subject: 'Edited',
+          body: 'Edited',
+        }),
+      }).then((response) => ({ status: response.status }));
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and pid<>pg_backend_pid()",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      resume();
+      const [result, response] = await Promise.all([persisted, mutation]);
+      console.log(
+        'ROUND3_SOCIAL_METADATA',
+        JSON.stringify({
+          persisted: result.ok,
+          ...(!result.ok ? { code: result.code } : {}),
+          http: response.status,
+        }),
+      );
+      expect(result).toMatchObject({ ok: true });
+      expect(response.status).toBe(200);
+      expect(
+        (
+          await db.sonarPool.query(
+            'select provider_thread_id from conversations where id=$1',
+            [f.conversation],
+          )
+        ).rows[0].provider_thread_id,
+      ).toBe(thread);
+      expect(
+        (
+          await db.sonarPool.query('select body from messages where id=$1', [
+            f.outgoing,
+          ])
+        ).rows[0].body,
+      ).toBe('Edited');
+    } finally {
+      resume();
+      await Promise.allSettled([persisted, ...(mutation ? [mutation] : [])]);
+      client.query = rawQuery;
+      db.sonarPool.connect = rawConnect;
+    }
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'concurrent unknown email replies still serialize one request without a company ID',
+  async () => {
+    const f = await generatedLockFixture('email');
+    await db.sonarPool.query(
+      'update conversations set company_id=null where id=$1',
+      [f.conversation],
+    );
+    try {
+      const body = {
+        action: 'reply',
+        requestId: randomUUID(),
+        subject: 'Reply',
+        body: 'One unknown reply',
+      };
+      const replies = await Promise.all(
+        Array.from({ length: 6 }, () => http(f.conversation, body)),
+      );
+      expect(new Set(replies.map((reply) => reply.id)).size).toBe(1);
+      expect(await replyCounts(f.conversation)).toEqual({
+        messages: 1,
+        tasks: 1,
+        jobs: 1,
+      });
+    } finally {
+      await db.sonarPool.query(
+        'update conversations set company_id=$2 where id=$1',
+        [f.conversation, f.company],
+      );
+    }
+  },
+  30000,
+);
+
 afterAll(async () => {
   if (!enabled) return;
   if (server && server.exitCode === null) {
@@ -1165,9 +1338,10 @@ afterAll(async () => {
   await db.sonarPool.query('delete from companies where id=any($1::uuid[])', [
     companies,
   ]);
-  await db.sonarPool.query('delete from channel_accounts where id=$1', [
-    account,
-  ]);
+  await db.sonarPool.query(
+    'delete from channel_accounts where id=any($1::uuid[])',
+    [[account, ...extraAccounts]],
+  );
   await db.sonarPool.query(
     'delete from activity_log where user_id=$1 or entity_id=any($2::text[])',
     [user, [...ids, ...companies]],

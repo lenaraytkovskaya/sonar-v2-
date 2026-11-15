@@ -75,10 +75,6 @@ export async function persistSocialInboxBatch(
             c,
           );
         } else {
-          await c.query(
-            "update messages set social_meta=coalesce(social_meta,'{}'::jsonb)||$2::jsonb where id=$1",
-            [prior.id, JSON.stringify({ ...message, network })],
-          );
           // Attach a pre-sync sender row to the provider thread when unambiguous.
           await c.query(
             `update conversations v set provider_thread_id=$2,account_id=$3,peer_value=$4
@@ -90,6 +86,11 @@ export async function persistSocialInboxBatch(
               accountId,
               message.peerProfile,
             ],
+          );
+          // Keep conversation-before-message order even when only metadata is refreshed.
+          await c.query(
+            "update messages set social_meta=coalesce(social_meta,'{}'::jsonb)||$2::jsonb where id=$1",
+            [prior.id, JSON.stringify({ ...message, network })],
           );
         }
         continue;
