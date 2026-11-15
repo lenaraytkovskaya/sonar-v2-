@@ -779,8 +779,106 @@ export function parseSocialProfile(
           `${match[3]}-${String(months.indexOf(match[2]!.toLowerCase()) + 1).padStart(2, '0')}-${match[1]!.padStart(2, '0')}`,
         );
       };
+      const publicationPath =
+        /\/(?:photo(?:\.php)?(?:\/|$)|posts\/|videos\/|reel\/|permalink\.php|story\.php)/;
+      const nestedContext =
+        'li,[role="listitem"],article,[role="article"],[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav';
+      const hasForeignAuthor = (branch: typeof area) =>
+        branch
+          .find('a[href]')
+          .addBack('a[href]')
+          .toArray()
+          .some((anchor) => {
+            const href = webUrl($(anchor).attr('href'), target.canonicalUrl);
+            const profile = href && socialTarget(href);
+            return (
+              profile &&
+              profile.network === 'facebook' &&
+              profile.kind === 'page' &&
+              !publicationPath.test(new URL(href).pathname) &&
+              !sameTarget(href, target)
+            );
+          });
+      const childBranch = (root: typeof area, node: typeof area) => {
+        let branch = node;
+        while (branch.parent().length && branch.parent().get(0) !== root.get(0))
+          branch = branch.parent();
+        return branch;
+      };
+      const headerDates = (
+        scope: typeof area,
+        author: typeof area,
+        publication: typeof area,
+      ) => {
+        // Use the author/primary-content common ancestor, not the whole feed card.
+        // Follow the author's ancestor edge to its first adjacent metadata branch.
+        // Never scan the remaining header/card descendants for a replacement date.
+        let root = publication.parent();
+        while (
+          root.length &&
+          !root.has(author.get(0)!).length &&
+          root.get(0) !== scope.get(0)
+        )
+          root = root.parent();
+        const media = root
+          .find('a[href]')
+          .toArray()
+          .find((anchor) => {
+            const href = webUrl($(anchor).attr('href'), target.canonicalUrl);
+            return (
+              href &&
+              new URL(href).hostname ===
+                new URL(target.canonicalUrl).hostname &&
+              !isCommentOrReply(new URL(href)) &&
+              /\/(?:photo(?:\.php)?(?:\/|$)|videos\/|reel\/)/.test(
+                new URL(href).pathname,
+              ) &&
+              !$(anchor).parentsUntil(root, nestedContext).length &&
+              !hasForeignAuthor(childBranch(root, $(anchor)))
+            );
+          });
+        const bodyBranch = childBranch(root, media ? $(media) : publication);
+        let authorEdge = author;
+        while (authorEdge.get(0) !== root.get(0) && !authorEdge.next().length)
+          authorEdge = authorEdge.parent();
+        const metadataBranch =
+          authorEdge.get(0) === root.get(0)
+            ? authorEdge.slice(0, 0)
+            : authorEdge.next();
+        const anchors: (typeof area)[] = [];
+        if (
+          metadataBranch.length &&
+          (!media || metadataBranch.get(0) !== bodyBranch.get(0)) &&
+          !metadataBranch.is(nestedContext) &&
+          !metadataBranch.parentsUntil(root, nestedContext).length &&
+          !metadataBranch.find(nestedContext).length &&
+          !hasForeignAuthor(metadataBranch)
+        ) {
+          const links = metadataBranch.find('a[href]').addBack('a[href]');
+          if (links.length === 1)
+            links.each((_, anchor) => {
+              if (anchor.type === 'tag') anchors.push($(anchor));
+            });
+        }
+        // A machine timestamp inside the primary post/video/reel link is also
+        // structurally bound to that publication, independently of header layout.
+        const primary = media && media === publication.get(0);
+        if (
+          primary &&
+          publication.find('time[datetime]').length &&
+          !publication.find(nestedContext).length
+        )
+          anchors.push(publication);
+        if (
+          !primary &&
+          !anchors.some((anchor) => anchor.get(0) === publication.get(0))
+        )
+          return null;
+        return anchors;
+      };
       const visited = new Set<unknown>();
       const postScopes: (typeof area)[] = [];
+      const detailScopes: (typeof area)[] = [];
       const candidates: {
         scope: typeof area;
         date: string | null;
@@ -789,17 +887,13 @@ export function parseSocialProfile(
       area.find('a[href]').each((_, element) => {
         const link = $(element);
         const url = webUrl(link.attr('href'), target.canonicalUrl);
-        if (
-          !url ||
-          !/\/(?:photo(?:\.php)?(?:\/|$)|posts\/|videos\/|reel\/|permalink\.php|story\.php)/.test(
-            new URL(url).pathname,
-          )
-        )
-          return;
+        if (!url || !publicationPath.test(new URL(url).pathname)) return;
         const source = new URL(url);
         if (
           source.hostname !== new URL(target.canonicalUrl).hostname ||
           isCommentOrReply(source) ||
+          (/^\/(?:permalink|story)\.php$/.test(source.pathname) &&
+            source.searchParams.get('id') !== target.handle) ||
           (source.searchParams.has('id') &&
             source.searchParams.get('id') !== target.handle) ||
           (/\/(?:posts|videos)\//.test(source.pathname) &&
@@ -825,7 +919,8 @@ export function parseSocialProfile(
                   .toArray()
               : [];
           if (headings.length || authors.length) {
-            if (headings.length <= 1 && authors.length) postScopes.push(scope);
+            if (headings.length <= 1 && authors.length)
+              detailScopes.push(scope);
             if (
               headings.length > 1 ||
               !authors.length ||
@@ -837,11 +932,19 @@ export function parseSocialProfile(
               )
             )
               break;
+            if (
+              link.parentsUntil(scope, nestedContext).length ||
+              hasForeignAuthor(childBranch(scope, link))
+            )
+              return;
             if (visited.has(scope.get(0))) return;
+            const author = headings.length ? headings.first() : $(authors[0]!);
+            const header = headerDates(scope, author, link);
+            if (!header) return;
+            postScopes.push(scope);
             visited.add(scope.get(0));
             const dates = new Set<string>();
-            scope.find('a[href]').each((_, anchor) => {
-              const a = $(anchor);
+            header.forEach((a) => {
               if (a.closest('h2,[role="heading"]').length) return;
               if (
                 a.closest('[role="dialog"],[role="log"],[data-comment]').length
@@ -863,10 +966,11 @@ export function parseSocialProfile(
                   timestamp.href === source.href
                 ) &&
                 !(
-                  /^\/(?:profile|permalink|story)\.php$/.test(
+                  (/^\/profile\.php$/.test(timestamp.pathname) &&
+                    !timestamp.searchParams.has('id')) ||
+                  (/^\/(?:profile|permalink|story)\.php$/.test(
                     timestamp.pathname,
                   ) &&
-                  (!timestamp.searchParams.has('id') ||
                     timestamp.searchParams.get('id') === target.handle)
                 )
               )
@@ -909,7 +1013,7 @@ export function parseSocialProfile(
         )
           addPost(candidate.date, candidate.url);
       }
-      postScopes.forEach((scope) => scope.remove());
+      detailScopes.forEach((scope) => scope.remove());
     }
     const details = area.clone();
     details

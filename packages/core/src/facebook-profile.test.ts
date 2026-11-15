@@ -328,3 +328,111 @@ it.each(['Comment', 'Reply'])(
     expect(profile.lastPostAt).toBeNull();
   },
 );
+
+const nestedDateLinks = [
+  `<a href="/${target.handle}/posts/OWN" aria-label="1 January 2027">date</a>`,
+  `<a href="/${target.handle}/posts/OWN"><span aria-labelledby="nested-date">obfuscated</span></a>`,
+  `<a href="/${target.handle}/posts/OWN"><time datetime="2027-01-01">date</time></a>`,
+];
+const nestedContexts = [
+  (date: string) => `<ul><li><a href="${foreign}">Other</a>${date}</li></ul>`,
+  (date: string) =>
+    `<div role="listitem"><a href="${own}">Own comment</a>${date}</div>`,
+  (date: string) =>
+    `<div data-recommendations><a href="${foreign}">Other</a>${date.replaceAll(`/${target.handle}/posts/OWN`, '/permalink.php?story_fbid=FOREIGN')}</div>`,
+  (date: string) =>
+    `<div><a href="${foreign}">Other</a>${date.replaceAll(`/${target.handle}/posts/OWN`, '/permalink.php?story_fbid=FOREIGN')}</div>`,
+];
+it.each(nestedContexts)(
+  'binds dates to the own publication header, excluding a nested discussion/card (%#)',
+  (wrap) => {
+    for (const date of nestedDateLinks) {
+      for (const beforeMedia of [false, true]) {
+        const extra = wrap(date);
+        const body = beforeMedia
+          ? post(own, 'OWN', 'missing').replace(
+              '<a href="/photo/',
+              `${extra}<a href="/photo/`,
+            )
+          : post(own, 'OWN', 'missing').replace(
+              /<\/div>\s*$/,
+              `${extra}</div>`,
+            );
+        const profile = parseSocialProfile(
+          page(body, '<span id="nested-date">1 January 2027</span>'),
+          target,
+          'GB',
+        );
+        expect(profile.posts).toEqual([
+          {
+            date: null,
+            url: 'https://www.facebook.com/photo/?fbid=OWN&set=synthetic',
+          },
+        ]);
+        expect(profile.lastPostAt).toBeNull();
+      }
+    }
+  },
+);
+
+it('does not treat an unmarked body date as publication metadata', () => {
+  const body = post(own, 'OWN', 'missing').replace(
+    /<\/div>\s*$/,
+    `<div>${nestedDateLinks[0]}</div></div>`,
+  );
+  expect(parseSocialProfile(page(body), target, 'GB').lastPostAt).toBeNull();
+});
+
+it('preserves an external own-header date in a transparent wrapper and outer feed list item', () => {
+  const body = `<ul><li><article><div><div role="heading" aria-level="2"><a href="${own}">Demo</a></div>
+    <div><span><a href="/profile.php"><span aria-labelledby="own-date">obfuscated</span></a></span></div></div>
+    <a href="/photo/?fbid=OWN">Photo</a>${nestedContexts[0]!(nestedDateLinks[0]!)}</article></li></ul>`;
+  const profile = parseSocialProfile(
+    page(body, '<span id="own-date">12 July 2019</span>'),
+    target,
+    'GB',
+  );
+  expect(profile.posts).toEqual([
+    {
+      date: '2019-07-12T00:00:00.000Z',
+      url: 'https://www.facebook.com/photo/?fbid=OWN',
+    },
+  ]);
+  expect(profile.lastPostAt).toBe('2019-07-12T00:00:00.000Z');
+});
+
+it('does not let a body permalink with machine time replace the primary photo source', () => {
+  const body = post(own, 'OWN', 'missing').replace(
+    '<a href="/photo/',
+    `<div>${nestedDateLinks[2]}</div><a href="/photo/`,
+  );
+  const profile = parseSocialProfile(page(body), target, 'GB');
+  expect(profile.posts).toEqual([
+    {
+      date: null,
+      url: 'https://www.facebook.com/photo/?fbid=OWN&set=synthetic',
+    },
+  ]);
+  expect(profile.lastPostAt).toBeNull();
+});
+
+it.each(['missing', 'own-date'])(
+  'reads only the author-adjacent metadata inside a shared header wrapper (%s)',
+  (label) => {
+    const body = `<div><header><h2><a href="${own}">Demo</a></h2>
+    <a href="/profile.php"><span aria-labelledby="${label}">obfuscated</span></a>
+    <div><a href="/permalink.php?story_fbid=FOREIGN" aria-label="1 January 2027">date</a></div></header>
+    <a href="/photo/?fbid=OWN">Photo</a></div>`;
+    const profile = parseSocialProfile(
+      page(body, '<span id="own-date">12 July 2019</span>'),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: label === 'missing' ? null : '2019-07-12T00:00:00.000Z',
+        url: 'https://www.facebook.com/photo/?fbid=OWN',
+      },
+    ]);
+  },
+);
