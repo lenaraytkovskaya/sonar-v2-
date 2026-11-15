@@ -74,16 +74,22 @@ async function dispatch(
     producerStarted = undefined;
     throw error;
   }));
-  const { rows: identity } =
-    type === 'prozorro.company'
-      ? await client.query('select payload from tasks where id=$1', [id])
-      : { rows: [] };
+  const { rows: identity } = ['prozorro.company', 'google.company'].includes(
+    type,
+  )
+    ? await client.query('select payload from tasks where id=$1', [id])
+    : { rows: [] };
   await producer.send(
     type,
     {
       taskId: id,
-      ...(type === 'prozorro.company'
-        ? { version: identity[0]?.payload.version ?? null }
+      ...(['prozorro.company', 'google.company'].includes(type)
+        ? {
+            version:
+              type === 'google.company'
+                ? String(identity[0]?.payload.resolveVersion ?? 0)
+                : (identity[0]?.payload.version ?? null),
+          }
         : {}),
     },
     {
@@ -246,6 +252,15 @@ export async function retryTask(
           { taskId: id, retry: true },
         )
       ).created;
+    if (identity?.type === 'google.company') {
+      const {
+        rows: [lease],
+      } = await client.query(
+        'select pg_try_advisory_xact_lock(hashtextextended($1,0)) as locked',
+        [`google.company:${id}`],
+      );
+      if (!lease.locked) return false;
+    }
     // Match reconciler lock ordering: orchestration lock before task row locks.
     if (identity?.type === 'social.inbox.sync')
       await client.query(
@@ -258,6 +273,7 @@ export async function retryTask(
       !original ||
       original.result?.billingPending ||
       original.type === 'social.request' ||
+      original.type === 'google.resolve' ||
       original.type.startsWith('whatsapp.account.')
     )
       return false;
@@ -383,6 +399,11 @@ export async function retryTask(
         id,
       ]);
       if (receipt && !receipt.meta?.response) return false;
+      if (!receipt && !original.payload.placeId)
+        await client.query(
+          "update tasks set payload=jsonb_set(payload,'{resolveVersion}',to_jsonb($2::int)) where id=$1",
+          [id, (original.payload.resolveVersion ?? 0) + 1],
+        );
       // No receipt, or a cached success after a persistence error: safely reuse
       // this attempt without another charge for an already successful response.
     }
@@ -463,6 +484,30 @@ export async function executeTask(
     throw error;
   }
 }
+async function acquireGoogleCompanyLease(taskId: string) {
+  const client = await sonarPool.connect();
+  const key = `google.company:${taskId}`;
+  try {
+    await client.query('select pg_advisory_lock(hashtextextended($1,0))', [
+      key,
+    ]);
+  } catch (error) {
+    client.release(true);
+    throw error;
+  }
+  return async () => {
+    let destroy = false;
+    try {
+      await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [
+        key,
+      ]);
+    } catch {
+      destroy = true;
+    } finally {
+      client.release(destroy);
+    }
+  };
+}
 export async function runTask(
   type: string,
   handler: (payload: object, taskId: string) => Promise<TaskOutcome>,
@@ -481,12 +526,25 @@ export async function runTask(
     const task = rows[0];
     if (!task) return;
     const release =
-      type === 'prozorro.company'
-        ? await (
-            await import('./prozorro.js')
-          ).acquireProzorroCompanyLease(task.payload.companyId)
-        : undefined;
+      type === 'google.company'
+        ? await acquireGoogleCompanyLease(task.id)
+        : type === 'prozorro.company'
+          ? await (
+              await import('./prozorro.js')
+            ).acquireProzorroCompanyLease(task.payload.companyId)
+          : undefined;
     try {
+      if (type === 'google.company') {
+        const { rows: current } = await sonarPool.query(
+          "select 1 from tasks where id=$1 and status in ('queued','running') and coalesce(payload->>'resolveVersion','0')=$2",
+          [task.id, job.data.version ?? '0'],
+        );
+        if (
+          !current.length ||
+          String(task.payload.resolveVersion ?? 0) !== (job.data.version ?? '0')
+        )
+          return;
+      }
       if (type === 'prozorro.company') {
         const { rows: current } = await sonarPool.query(
           "select 1 from tasks where id=$1 and status in ('queued','running') and coalesce(payload->>'version','')=$2",

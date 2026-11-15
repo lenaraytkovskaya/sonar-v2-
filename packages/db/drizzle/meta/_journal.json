@@ -260,6 +260,13 @@
       "when": 1794700800000,
       "tag": "0036_manual_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794700800001,
+      "tag": "0037_google_maps_resolution",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,7 @@ export const uk = {
       website:
         'Вставте URL або домен, наприклад example.com. Аналіз почнеться після збереження.',
       googleMaps:
-        'Потрібне повне HTTPS-посилання google.com/maps із query_place_id або q=place_id:… . Короткі посилання maps.app.goo.gl, CID і координати поки не підтримуються. Дані Google не змінюють назву чи ідентичність цієї компанії.',
+        'Вставте HTTPS-посилання на одну компанію: google.com/maps/place/… або «Поділитися» — maps.app.goo.gl/… . Також підтримується посилання з Place ID. Дані Google не змінюють назву чи ідентичність цієї компанії.',
       social:
         'Facebook, Instagram або сторінка організації LinkedIn. Для @назви оберіть мережу; LinkedIn @назва означає /company/назва. Додається нове джерело, попередні зберігаються.',
       registry:
@@ -32,7 +32,7 @@ export const uk = {
       invalidWebsite:
         'Вкажіть публічний сайт: https://example.com або example.com. Локальні адреси й нестандартні порти не підтримуються.',
       invalidGoogleMaps:
-        'Потрібне повне посилання https://www.google.com/maps/search/?api=1&query=назва&query_place_id=PLACE_ID або https://maps.google.com/?q=place_id:PLACE_ID. Короткі посилання, CID та координати не є Place ID.',
+        'Вкажіть HTTPS-посилання на одну компанію: https://www.google.com/maps/place/… або https://maps.app.goo.gl/… . Маршрути, списки місць, загальний пошук і самі координати не підтримуються.',
       invalidSocial:
         'Вкажіть посилання на сторінку Facebook, профіль Instagram або організацію LinkedIn, чи @назву з обраною мережею. Посилання на дописи не підтримуються.',
       networkRequired: 'Для @назви оберіть Facebook, Instagram або LinkedIn.',

@@ -184,7 +184,7 @@ export function ManualSource({
           className="min-h-11"
           value={value}
           onChange={(event) => edit(event.target.value)}
-          maxLength={2000}
+          maxLength={2048}
           autoComplete="off"
           inputMode={source === 'registry' ? 'numeric' : 'text'}
           disabled={pending}

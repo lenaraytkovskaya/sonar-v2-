@@ -50,6 +50,7 @@ beforeEach(() => {
           { key: 'google.details.price_usd', value: 0.02 },
           { key: 'scanner.timeout_ms', value: 1000 },
           { key: 'retention.google_days', value: 365 },
+          { key: 'google.resolve.max_bytes', value: 65536 },
         ],
   }));
   tx.mockImplementation(async (sql: string) => ({

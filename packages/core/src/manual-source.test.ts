@@ -51,10 +51,28 @@ describe('manual sources', () => {
     expect(manualGoogleMaps(value)).toMatchObject({ placeId }),
   );
   it.each([
-    'https://maps.app.goo.gl/abc',
-    'https://goo.gl/maps/abc',
-    'https://www.google.com/maps/place/Company/@1,2',
+    'https://www.google.com/maps/place/Company/@1,2/data=!1s0x123:0x456!8m2!3d1!4d2',
+    'https://maps.app.goo.gl/AbCd1234?g_st=ic',
     'https://maps.google.com/?cid=123',
+  ])(
+    'preserves a single-place source without inventing its Place ID: %s',
+    (value) =>
+      expect(manualGoogleMaps(value)).toEqual({ url: value, placeId: null }),
+  );
+  it.each([
+    `https://www.google.com/maps?cid=123&query_place_id=${placeId}`,
+    'https://goo.gl/maps/abc',
+    'https://maps.app.goo.gl/',
+    'https://@maps.app.goo.gl/abc',
+    `https://www.google.com/maps/unsupported?query_place_id=${placeId}`,
+    'https://maps.app.goo.gl/one/two',
+    'https://maps.app.goo.gl.evil.com/abc',
+    'https://user:pass@maps.app.goo.gl/abc',
+    'https://maps.app.goo.gl:444/abc',
+    'https://www.google.com/maps/@1,2,10z',
+    'https://www.google.com/maps/dir/One/Two',
+    'https://www.google.com/maps/place/Company?place_ids=One,Two',
+    'https://www.google.com/maps/search/?query=restaurants',
     `https://google.com.evil.com/maps/?query_place_id=${placeId}`,
     `http://google.com/maps/?query_place_id=${placeId}`,
     `https://google.com/url?query_place_id=${placeId}`,

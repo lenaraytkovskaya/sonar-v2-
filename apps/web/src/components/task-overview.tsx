@@ -130,6 +130,7 @@ export function TaskOverview() {
       'google.batch': uk.google.title,
       'google.request': uk.google.title,
       'google.company': uk.google.title,
+      'google.resolve': uk.google.title,
       'site.scan': uk.scanner.title,
       'social.fetch': uk.social.title,
       'social.request': uk.social.title,

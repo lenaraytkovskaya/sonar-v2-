@@ -7,9 +7,9 @@ export const manualSourceSchema = z
   .object({
     requestId: z.string().uuid(),
     source: z.enum(['website', 'googleMaps', 'social', 'registry']),
-    value: z.string().trim().min(1).max(2000),
+    value: z.string().trim().min(1).max(2048),
     network: z.enum(['facebook', 'instagram', 'linkedin']).optional(),
-    expected: z.string().max(2000).nullable().optional(),
+    expected: z.string().max(2048).nullable().optional(),
   })
   .strict();
 export type ManualSourceInput = z.infer<typeof manualSourceSchema>;
@@ -49,21 +49,51 @@ function web(raw: string) {
     return null;
   return site;
 }
-// Only explicit Place IDs are accepted. A CID, coordinates or a business name is not a Place ID.
-export function manualGoogleMaps(raw: string) {
-  const site = web(raw);
-  if (!site) return null;
-  const url = new URL(site.website);
+// URL shape is validated locally. Opaque Google URLs are resolved only by Google's API.
+export function manualGoogleMaps(
+  raw: string,
+): { url: string; placeId: string | null } | null {
   if (
-    url.protocol !== 'https:' ||
-    !['www.google.com', 'google.com', 'maps.google.com'].includes(url.hostname)
+    !/^https:\/\//i.test(raw) ||
+    /^https:\/\/[^/?#]*@/i.test(raw) ||
+    /[\s\p{Cc}\\]/u.test(raw) ||
+    raw.length > 2048
   )
     return null;
-  if (!(
-    url.pathname === '/maps' ||
-    url.pathname.startsWith('/maps/') ||
-    (url.hostname === 'maps.google.com' && url.pathname === '/')
-  ))
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.searchParams.has('place_ids')
+  )
+    return null;
+  const short = url.hostname === 'maps.app.goo.gl';
+  const full = ['www.google.com', 'google.com', 'maps.google.com'].includes(
+    url.hostname,
+  );
+  if (!short && !full) return null;
+  if (short)
+    return /^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
+      ? { url: url.href, placeId: null }
+      : null;
+  const mapPath =
+    ['/maps', '/maps/', '/maps/search', '/maps/search/'].includes(
+      url.pathname,
+    ) ||
+    url.pathname.startsWith('/maps/place/') ||
+    (url.hostname === 'maps.google.com' && url.pathname === '/');
+  if (
+    !mapPath ||
+    url.pathname.startsWith('/maps/dir') ||
+    url.pathname.startsWith('/maps/@')
+  )
     return null;
   const ids = [
     ...url.searchParams.getAll('query_place_id'),
@@ -72,12 +102,21 @@ export function manualGoogleMaps(raw: string) {
       .filter((v) => v.startsWith('place_id:'))
       .map((v) => v.slice(9)),
   ];
-  if (ids.length !== 1 || !/^[A-Za-z0-9_-]{10,255}$/.test(ids[0]!)) return null;
-  const placeId = ids[0]!;
-  return {
-    placeId,
-    url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(placeId)}&query_place_id=${encodeURIComponent(placeId)}`,
-  };
+  if (
+    ids.length &&
+    (url.searchParams.has('cid') || url.pathname.includes('/data='))
+  )
+    return null;
+  if (ids.length)
+    return ids.length === 1 && /^[A-Za-z0-9_-]+$/.test(ids[0]!)
+      ? { url: url.href, placeId: ids[0]! }
+      : null;
+  const place = /^\/maps\/place\/[^/]+/.test(url.pathname);
+  const cid =
+    ['/maps', '/maps/', '/'].includes(url.pathname) &&
+    /^\d+$/.test(url.searchParams.get('cid') ?? '') &&
+    url.searchParams.getAll('cid').length === 1;
+  return place || cid ? { url: url.href, placeId: null } : null;
 }
 export function normalizeManualSource(input: ManualSourceInput) {
   const data = manualSourceSchema.parse(input);
