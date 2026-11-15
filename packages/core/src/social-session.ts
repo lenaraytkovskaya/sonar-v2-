@@ -116,6 +116,39 @@ export type SocialSessionCheckDiagnostic = {
     | 'thread';
   navigationHttpStatus: number | null;
   errorKind: 'timeout' | 'unconfirmed';
+  /** FB has no semantic auth implementation; its zero counter is not negative evidence. */
+  semanticAuthImplemented?: false;
+  page?: {
+    lang: 'en' | 'uk' | 'ru' | 'other' | 'missing';
+    readyState: 'loading' | 'interactive' | 'complete';
+    bodyRendered: boolean;
+    bodyTextLength: 'empty' | '1_99' | '100_999' | '1000_plus';
+    scanTruncated: boolean;
+    visible: Record<
+      | 'busy'
+      | 'progress'
+      | 'dialog'
+      | 'form'
+      | 'password'
+      | 'navigation'
+      | 'banner'
+      | 'main',
+      number
+    >;
+    names: Record<
+      | 'home'
+      | 'menu'
+      | 'account'
+      | 'your_profile'
+      | 'allow_all_cookies'
+      | 'decline_optional_cookies',
+      number
+    >;
+    hrefs: Record<
+      'home' | 'profile' | 'messages' | 'me' | 'login' | 'other',
+      number
+    >;
+  };
   visible: {
     legacyAuth: number;
     semanticAuth: number;
@@ -206,6 +239,70 @@ export function safeSocialSessionDiagnostic(
     visible[key] = Math.min(count, 2);
   }
   let capture: SocialSessionCheckDiagnostic['capture'];
+  if (
+    d.semanticAuthImplemented !== undefined &&
+    d.semanticAuthImplemented !== false
+  )
+    return;
+  let page: SocialSessionCheckDiagnostic['page'];
+  if (d.page !== undefined) {
+    const p = d.page;
+    if (
+      !p ||
+      !['en', 'uk', 'ru', 'other', 'missing'].includes(p.lang) ||
+      !['loading', 'interactive', 'complete'].includes(p.readyState) ||
+      !['empty', '1_99', '100_999', '1000_plus'].includes(p.bodyTextLength) ||
+      typeof p.bodyRendered !== 'boolean' ||
+      typeof p.scanTruncated !== 'boolean'
+    )
+      return;
+    const counts = <K extends string>(source: Record<K, number>, keys: K[]) => {
+      if (!source || typeof source !== 'object') return;
+      const result = {} as Record<K, number>;
+      for (const key of keys) {
+        if (!Number.isSafeInteger(source[key]) || source[key] < 0) return;
+        result[key] = Math.min(source[key], 2);
+      }
+      return result;
+    };
+    const visible = counts(p.visible, [
+      'busy',
+      'progress',
+      'dialog',
+      'form',
+      'password',
+      'navigation',
+      'banner',
+      'main',
+    ]);
+    const names = counts(p.names, [
+      'home',
+      'menu',
+      'account',
+      'your_profile',
+      'allow_all_cookies',
+      'decline_optional_cookies',
+    ]);
+    const hrefs = counts(p.hrefs, [
+      'home',
+      'profile',
+      'messages',
+      'me',
+      'login',
+      'other',
+    ]);
+    if (!visible || !names || !hrefs) return;
+    page = {
+      lang: p.lang,
+      readyState: p.readyState,
+      bodyRendered: p.bodyRendered,
+      bodyTextLength: p.bodyTextLength,
+      scanTruncated: p.scanTruncated,
+      visible,
+      names,
+      hrefs,
+    };
+  }
   let history: SocialSessionCheckDiagnostic['history'];
   if (d.history !== undefined) {
     if (!d.history || typeof d.history !== 'object') return;
@@ -281,6 +378,10 @@ export function safeSocialSessionDiagnostic(
     urlKind: d.urlKind,
     navigationHttpStatus: d.navigationHttpStatus,
     errorKind: d.errorKind,
+    ...(d.semanticAuthImplemented === false
+      ? { semanticAuthImplemented: false }
+      : {}),
+    ...(page ? { page } : {}),
     visible,
     ...(history ? { history } : {}),
     ...(capture ? { capture } : {}),

@@ -336,3 +336,80 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
     }),
   ).toBeUndefined();
 });
+
+it('rebuilds the FB page observation from fixed enums and bounded counts only', async () => {
+  const { safeSocialSessionDiagnostic } = await import('./social-session.js');
+  const page = {
+    lang: 'uk',
+    readyState: 'complete',
+    bodyRendered: true,
+    bodyTextLength: '100_999',
+    scanTruncated: false,
+    visible: {
+      busy: 0,
+      progress: 0,
+      dialog: 1,
+      form: 1,
+      password: 0,
+      navigation: 1,
+      banner: 1,
+      main: 1,
+    },
+    names: {
+      home: 2,
+      menu: 1,
+      account: 0,
+      your_profile: 0,
+      allow_all_cookies: 1,
+      decline_optional_cookies: 1,
+    },
+    hrefs: { home: 2, profile: 0, messages: 1, me: 0, login: 0, other: 2 },
+  };
+  const raw = {
+    version: 1,
+    stage: 'auth',
+    urlKind: 'home',
+    navigationHttpStatus: 200,
+    errorKind: 'timeout',
+    semanticAuthImplemented: false,
+    visible: {
+      legacyAuth: 0,
+      semanticAuth: 0,
+      captcha: 0,
+      checkpoint: 0,
+      login: 0,
+    },
+    page,
+  };
+  expect(
+    safeSocialSessionDiagnostic({
+      ...raw,
+      page: {
+        ...page,
+        text: 'private',
+        title: 'secret',
+        url: 'https://private',
+        lang: 'uk',
+        visible: { ...page.visible, rawText: 'secret' },
+        names: { ...page.names, home: 999, private: 1 },
+        hrefs: { ...page.hrefs, other: 999, url: 'private' },
+      },
+    }),
+  ).toEqual(raw);
+  for (const bad of [
+    { ...page, lang: 'private' },
+    { ...page, readyState: 'secret' },
+    { ...page, bodyTextLength: 123 },
+    { ...page, bodyRendered: 'true' },
+    { ...page, scanTruncated: null },
+    { ...page, names: null },
+    ...[-1, 0.5, NaN, Infinity, '1'].map((n) => ({
+      ...page,
+      hrefs: { ...page.hrefs, home: n },
+    })),
+  ])
+    expect(safeSocialSessionDiagnostic({ ...raw, page: bad })).toBeUndefined();
+  expect(
+    safeSocialSessionDiagnostic({ ...raw, semanticAuthImplemented: true }),
+  ).toBeUndefined();
+});
