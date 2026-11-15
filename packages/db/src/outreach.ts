@@ -1,5 +1,7 @@
 import {
   lockWhatsAppIdentity,
+  lockConversation,
+  canonicalConversation,
   whatsappConversation,
 } from './whatsapp-identity.js';
 import type { PoolClient } from 'pg';
@@ -541,15 +543,22 @@ function validateDraft(
   )
     invalid('Вкажіть текст повідомлення та коректну тему для email.');
 }
-async function lockedMessage(c: PoolClient, id: string) {
+async function lockedMessage(
+  c: PoolClient,
+  id: string,
+  expectedConversationId?: string,
+) {
   const {
     rows: [identity],
-  } = await c.query(
-    'select v.company_id from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
-    [id],
-  );
+  } = await c.query('select conversation_id from messages where id=$1', [id]);
   if (!identity) invalid('Повідомлення не знайдено.');
-  await assertAllowed(c, identity.company_id, '');
+  const conversation = await lockConversation(c, identity.conversation_id);
+  if (
+    expectedConversationId &&
+    (await canonicalConversation(c, expectedConversationId)) !== conversation.id
+  )
+    invalid('Повідомлення не належить цьому діалогу.');
+  await assertAllowed(c, conversation.company_id, '');
   const {
     rows: [message],
   } = await c.query(
@@ -563,9 +572,10 @@ export async function editOutreachDraft(
   messageId: string,
   draft: { subject?: string; body: string },
   userId: string,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна редагувати.');
     const subject = draft.subject ?? message.subject;
@@ -585,19 +595,28 @@ export async function editOutreachDraft(
     return { id: messageId, status: String(message.status) };
   });
 }
-export async function sendOutreachDraft(messageId: string, userId: string) {
-  return submitOutreachDraft(messageId, userId, false);
+export async function sendOutreachDraft(
+  messageId: string,
+  userId: string,
+  conversationId?: string,
+) {
+  return submitOutreachDraft(messageId, userId, false, conversationId);
 }
-export async function approveOutreachDraft(messageId: string, userId: string) {
-  return submitOutreachDraft(messageId, userId, true);
+export async function approveOutreachDraft(
+  messageId: string,
+  userId: string,
+  conversationId?: string,
+) {
+  return submitOutreachDraft(messageId, userId, true, conversationId);
 }
 async function submitOutreachDraft(
   messageId: string,
   userId: string,
   approve: boolean,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (
       message.status === 'queued' ||
       ['sent', 'delivered', 'read'].includes(message.status)
@@ -667,9 +686,10 @@ async function submitOutreachDraft(
 export async function markOutreachManualSent(
   messageId: string,
   userId: string,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (!['form', 'social'].includes(message.channel))
       invalid('Ручне підтвердження доступне для форм та соцмереж.');
     if (message.status === 'sent') return { id: messageId, status: 'sent' };
@@ -690,9 +710,13 @@ export async function markOutreachManualSent(
     return { id: messageId, status: 'sent' };
   });
 }
-export async function skipOutreachMessage(messageId: string, userId: string) {
+export async function skipOutreachMessage(
+  messageId: string,
+  userId: string,
+  conversationId?: string,
+) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (message.status === 'skipped')
       return { id: messageId, status: 'skipped' };
     if (!editable.includes(message.status) || message.first_attempt_at)

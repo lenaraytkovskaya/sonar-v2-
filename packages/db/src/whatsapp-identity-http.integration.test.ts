@@ -31,6 +31,7 @@ const settingKeys = [
   'send.time_zones',
   'send.whatsapp.min_gap_seconds',
   'send.whatsapp.max_gap_seconds',
+  'budget.monthly_usd',
 ];
 
 beforeAll(async () => {
@@ -41,7 +42,7 @@ beforeAll(async () => {
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
-  for (const name of ['message.send', 'whatsapp.identity.repair'])
+  for (const name of ['message.send', 'ai.reply', 'whatsapp.identity.repair'])
     await admin.createQueue(name);
   const { repairWhatsAppConversation } =
     await import('../../../apps/worker/src/inbound');
@@ -81,6 +82,7 @@ beforeAll(async () => {
     ['send.time_zones', { US: 'UTC' }],
     ['send.whatsapp.min_gap_seconds', 0],
     ['send.whatsapp.max_gap_seconds', 0],
+    ['budget.monthly_usd', 100],
   ])
     await db.sonarPool.query(
       'insert into settings(key,value) values($1,$2) on conflict(key) do update set value=excluded.value',
@@ -178,7 +180,11 @@ async function http(id: string, body?: object, expectedStatus?: number) {
   });
   const data = await response.json();
   expect(response.status, JSON.stringify(data)).toBe(
-    expectedStatus ?? (body && 'dryRun' in body ? 202 : 200),
+    expectedStatus ??
+      (body &&
+      ('dryRun' in body || ('action' in body && body.action === 'generate'))
+        ? 202
+        : 200),
   );
   return data;
 }
@@ -225,6 +231,7 @@ async function fixture() {
     phone,
     lid,
     messageId: rows.find((row) => row.direction === 'out').id as string,
+    incomingId: rows.find((row) => row.direction === 'in').id as string,
   };
 }
 async function repair(id: string, dryRun: boolean, expectedStatus = 'done') {
@@ -515,6 +522,373 @@ it.skipIf(!enabled)(
   30000,
 );
 
+async function aiCounts(ids: string[]) {
+  const {
+    rows: [counts],
+  } = await db.sonarPool.query(
+    `select
+    (select count(*)::int from tasks where type='ai.reply' and payload->>'conversationId'=any($1::text[])) as tasks,
+    (select count(*)::int from pgboss.job j join tasks t on t.id::text=j.data->>'taskId' where j.name='ai.reply' and t.payload->>'conversationId'=any($1::text[])) as jobs`,
+    [ids],
+  );
+  return counts as { tasks: number; jobs: number };
+}
+it.skipIf(!enabled)(
+  'HTTP read on an old URL waits for merge and marks the moved displayed boundary only',
+  async () => {
+    const f = await fixture(),
+      client = await db.sonarPool.connect();
+    const { whatsappConversation } = await import('./whatsapp-identity.js');
+    await db.sonarPool.query(
+      "update conversations set created_at='2025-12-01' where id=$1",
+      [f.later],
+    );
+    const {
+      rows: [laterMessage],
+    } = await db.sonarPool.query(
+      "insert into messages(conversation_id,account_id,channel,direction,source,to_value,subject,body,status,idempotency_key,created_at) values($1,$2,'whatsapp','in','inbound',$3,'','Later unread message','delivered',$4,now()+interval '1 day') returning id",
+      [f.old, account, f.lid, randomUUID()],
+    );
+    let pending: Promise<unknown> | undefined;
+    try {
+      await client.query('begin');
+      const merged = await whatsappConversation(
+        client,
+        account,
+        f.lid,
+        f.phone,
+      );
+      expect(merged.conversation!.id).toBe(f.later);
+      pending = http(f.old, { action: 'read', messageId: f.incomingId });
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and pid<>pg_backend_pid()",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      await client.query('commit');
+      await pending;
+      const {
+        rows: [state],
+      } = await db.sonarPool.query(
+        'select conversation_id,read_at from messages where id=$1',
+        [f.incomingId],
+      );
+      console.log(
+        'ROUND2_READ_HTTP',
+        JSON.stringify({
+          canonical: state.conversation_id === f.later,
+          read: state.read_at !== null,
+        }),
+      );
+      expect(state).toMatchObject({
+        conversation_id: f.later,
+        read_at: expect.any(Date),
+      });
+      expect(
+        (
+          await db.sonarPool.query('select read_at from messages where id=$1', [
+            laterMessage.id,
+          ])
+        ).rows[0].read_at,
+      ).toBeNull();
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.allSettled(pending ? [pending] : []);
+    }
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'HTTP generate uses one canonical intent for sequential and concurrent alias retries',
+  async () => {
+    const f = await fixture(),
+      { conversationId } = await repair(f.old, false);
+    const body = { action: 'generate', requestId: randomUUID() };
+    const first = await http(f.later, body);
+    const retries = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        http(i % 2 ? f.later : conversationId, body),
+      ),
+    );
+    const counts = await aiCounts([f.old, f.later]);
+    console.log(
+      'ROUND2_GENERATE_HTTP',
+      JSON.stringify({
+        same: retries.every((result) => result.id === first.id),
+        ...counts,
+      }),
+    );
+    expect(
+      retries.every(
+        (result) => result.id === first.id && result.created === false,
+      ),
+    ).toBe(true);
+    expect(counts).toEqual({ tasks: 1, jobs: 1 });
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'HTTP generate preserves legacy task keys and polls the same task through either URL after merge',
+  async () => {
+    const f = await fixture(),
+      body = { action: 'generate', requestId: randomUUID() };
+    const first = await http(f.later, body);
+    const { conversationId } = await repair(f.old, false);
+    const retries = await Promise.all([
+      http(f.later, body),
+      http(conversationId, body),
+    ]);
+    expect(retries.every((result) => result.id === first.id)).toBe(true);
+    expect(await aiCounts([f.old, f.later])).toEqual({ tasks: 1, jobs: 1 });
+    for (const id of [f.later, conversationId])
+      expect((await http(`${id}?taskId=${first.id}`)).id).toBe(first.id);
+    const foreign = await fixture();
+    await http(`${foreign.old}?taskId=${first.id}`, undefined, 404);
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'HTTP generate canonicalizes only after an in-progress merge commits',
+  async () => {
+    const f = await fixture(),
+      client = await db.sonarPool.connect();
+    const { whatsappConversation } = await import('./whatsapp-identity.js');
+    let pending: Promise<{ id: string }>[] = [];
+    try {
+      await client.query('begin');
+      await whatsappConversation(client, account, f.lid, f.phone);
+      const body = { action: 'generate', requestId: randomUUID() };
+      pending = [http(f.later, body), http(f.old, body)];
+      let finished = false;
+      const completed = Promise.allSettled(pending).then(() => {
+        finished = true;
+      });
+      const waiting = async () =>
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from pg_locks where locktype='advisory' and not granted",
+          )
+        ).rows[0].n as number;
+      await expect
+        .poll(async () => (await waiting()) >= 2 || finished, {
+          timeout: 10000,
+          interval: 50,
+        })
+        .toBe(true);
+      const blocked = (await waiting()) >= 2;
+      await client.query('commit');
+      const [first, second] = await Promise.all(pending);
+      await completed;
+      const counts = await aiCounts([f.old, f.later]);
+      console.log(
+        'ROUND2_GENERATE_MERGE_HTTP',
+        JSON.stringify({ blocked, same: first!.id === second!.id, ...counts }),
+      );
+      expect(blocked).toBe(true);
+      expect(first!.id).toBe(second!.id);
+      expect(counts).toEqual({ tasks: 1, jobs: 1 });
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.allSettled(pending);
+    }
+  },
+  30000,
+);
+
+it
+  .skipIf(!enabled)
+  .each(['save', 'send', 'approve', 'skip', 'manual'] as const)(
+  'HTTP %s waits for merge, then applies canonical message scope and campaign/channel guards',
+  async (action) => {
+    const f = await fixture(),
+      client = await db.sonarPool.connect();
+    const { whatsappConversation } = await import('./whatsapp-identity.js');
+    await db.sonarPool.query('update messages set status=$2 where id=$1', [
+      f.messageId,
+      action === 'approve' ? 'awaiting_approval' : 'draft',
+    ]);
+    let pending: Promise<unknown> | undefined;
+    try {
+      await client.query('begin');
+      await whatsappConversation(client, account, f.lid, f.phone);
+      pending = http(
+        f.later,
+        {
+          action,
+          messageId: f.messageId,
+          subject: '',
+          body: 'Edited after repair',
+        },
+        ['save', 'skip'].includes(action) ? 200 : 400,
+      );
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like '%channel-account:%'",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      await client.query('commit');
+      await pending;
+      const {
+        rows: [message],
+      } = await db.sonarPool.query(
+        'select m.body,m.status,m.conversation_id,v.campaign_id from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
+        [f.messageId],
+      );
+      expect(message).toMatchObject({
+        conversation_id: f.old,
+        campaign_id: f.campaign,
+      });
+      if (action === 'save')
+        expect(message).toMatchObject({
+          body: 'Edited after repair',
+          status: 'draft',
+        });
+      if (action === 'skip') expect(message.status).toBe('skipped');
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from tasks where type='message.send' and payload->>'messageId'=$1",
+            [f.messageId],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.allSettled(pending ? [pending] : []);
+    }
+  },
+  30000,
+);
+it.skipIf(!enabled)(
+  'HTTP alias mutations preserve DNC and reject foreign conversation task/message scope',
+  async () => {
+    const f = await fixture(),
+      other = await fixture();
+    await repair(f.old, false);
+    const outreach = await import('@sonar/db/outreach');
+    const before = (
+      await db.sonarPool.query('select body from messages where id=$1', [
+        f.messageId,
+      ])
+    ).rows[0].body;
+    await expect(
+      outreach.editOutreachDraft(
+        f.messageId,
+        { body: 'Foreign edit' },
+        user,
+        other.old,
+      ),
+    ).rejects.toThrow('не належить');
+    expect(
+      (
+        await db.sonarPool.query('select body from messages where id=$1', [
+          f.messageId,
+        ])
+      ).rows[0].body,
+    ).toBe(before);
+    await http(`${randomUUID()}?taskId=${randomUUID()}`, undefined, 404);
+    await email.blockCompany(f.company, user);
+    await http(f.later, { action: 'generate', requestId: randomUUID() }, 400);
+    await http(
+      f.later,
+      {
+        action: 'reply',
+        requestId: randomUUID(),
+        subject: '',
+        body: 'Blocked reply',
+      },
+      400,
+    );
+    for (const action of ['save', 'send', 'approve', 'skip', 'manual'])
+      await http(
+        f.later,
+        { action, messageId: f.messageId, subject: '', body: 'Blocked edit' },
+        400,
+      );
+    expect(await aiCounts([f.old, f.later])).toEqual({ tasks: 0, jobs: 0 });
+    await http(f.later, { action: 'read', messageId: f.incomingId });
+    expect(
+      (
+        await db.sonarPool.query('select read_at from messages where id=$1', [
+          f.incomingId,
+        ])
+      ).rows[0].read_at,
+    ).toEqual(expect.any(Date));
+  },
+  30000,
+);
+
+it.skipIf(!enabled)(
+  'HTTP legacy generate intent keeps its campaign cap after its URL becomes an alias',
+  async () => {
+    const f = await fixture(),
+      body = { action: 'generate', requestId: randomUUID() };
+    await db.sonarPool.query(
+      "update conversations set created_at='2025-12-01' where id=$1",
+      [f.later],
+    );
+    await db.sonarPool.query(
+      'update campaigns set budget_usd=0.0001 where id=$1',
+      [f.campaign],
+    );
+    const first = await http(f.old, body);
+    const before = (
+      await db.sonarPool.query(
+        'select id,idempotency_key,payload from tasks where id=$1',
+        [first.id],
+      )
+    ).rows[0];
+    const { conversationId } = await repair(f.old, false);
+    expect((await http(conversationId, body)).id).toBe(first.id);
+    expect(
+      (
+        await db.sonarPool.query(
+          'select id,idempotency_key,payload from tasks where id=$1',
+          [first.id],
+        )
+      ).rows[0],
+    ).toEqual(before);
+    const { runBudgetedRequest } = await import('@sonar/db/budget');
+    const stub = vi.fn(async () => ({
+      id: 'stub-only',
+      model: 'stub',
+      text: 'draft',
+      costUsd: 0.0006,
+      units: 1,
+    }));
+    let blocked = false;
+    try {
+      await runBudgetedRequest('openrouter', 0.0006, first.id, stub);
+    } catch (error) {
+      expect(error).toMatchObject({ scope: 'campaign' });
+      blocked = true;
+    }
+    console.log(
+      'ROUND2_LEGACY_CAMPAIGN',
+      JSON.stringify({ blocked, stubCalls: stub.mock.calls.length }),
+    );
+    expect(blocked).toBe(true);
+    expect(stub).not.toHaveBeenCalled();
+    expect(await aiCounts([f.old, f.later])).toEqual({ tasks: 1, jobs: 1 });
+  },
+  30000,
+);
+
 afterAll(async () => {
   if (!enabled) return;
   if (server && server.exitCode === null) {
@@ -532,6 +906,10 @@ afterAll(async () => {
       [companies],
     )
   ).rows.map((row) => row.id);
+  await db.sonarPool.query(
+    "delete from spend_events where task_id in(select id from tasks where payload->>'conversationId'=any($1::text[]))",
+    [ids],
+  );
   await db.sonarPool.query(
     "delete from tasks where payload->>'conversationId'=any($1::text[]) or payload->>'messageId' in(select id::text from messages where conversation_id=any($2::uuid[]))",
     [ids, ids],
@@ -555,6 +933,10 @@ afterAll(async () => {
   await db.sonarPool.query('delete from campaigns where id=any($1::uuid[])', [
     campaigns,
   ]);
+  await db.sonarPool.query(
+    'delete from do_not_contact where company_id=any($1::uuid[])',
+    [companies],
+  );
   await db.sonarPool.query('delete from companies where id=any($1::uuid[])', [
     companies,
   ]);

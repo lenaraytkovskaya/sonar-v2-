@@ -12,13 +12,10 @@ export async function GET(request: Request, context: Context) {
     const taskId = new URL(request.url).searchParams.get('taskId');
     if (taskId) {
       if (!validId(taskId)) return invalid();
-      const { sonarPool } = await import('@sonar/db');
-      const { rows } = await sonarPool.query(
-        "select id,status,reason_uk from tasks where id=$1 and type='ai.reply' and payload->>'conversationId'=$2",
-        [taskId, id],
-      );
+      const { getConversationReplyTask } = await import('@sonar/db/inbound');
       return (
-        rows[0] ?? Response.json({ error: uk.tasks.missing }, { status: 404 })
+        (await getConversationReplyTask(id, taskId)) ??
+        Response.json({ error: uk.tasks.missing }, { status: 404 })
       );
     }
     const { getConversationChat } = await import('@sonar/db/inbound');
@@ -114,16 +111,17 @@ export async function POST(request: Request, context: Context) {
         data.messageId,
         { subject: data.subject, body: data.body },
         user.id,
+        id,
       );
     }
     if (data.action === 'send')
-      return outreach.sendOutreachDraft(data.messageId, user.id);
+      return outreach.sendOutreachDraft(data.messageId, user.id, id);
     if (data.action === 'approve')
-      return outreach.approveOutreachDraft(data.messageId, user.id);
+      return outreach.approveOutreachDraft(data.messageId, user.id, id);
     if (data.action === 'skip')
-      return outreach.skipOutreachMessage(data.messageId, user.id);
+      return outreach.skipOutreachMessage(data.messageId, user.id, id);
     if (data.action === 'manual')
-      return outreach.markOutreachManualSent(data.messageId, user.id);
+      return outreach.markOutreachManualSent(data.messageId, user.id, id);
     return invalid();
   });
 }

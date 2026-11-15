@@ -6,7 +6,7 @@ const {
   read,
   generate,
   reply,
-  query,
+  replyTask,
   edit,
   send,
   approve,
@@ -19,7 +19,7 @@ const {
   read: vi.fn(),
   generate: vi.fn(),
   reply: vi.fn(),
-  query: vi.fn(),
+  replyTask: vi.fn(),
   edit: vi.fn(),
   send: vi.fn(),
   approve: vi.fn(),
@@ -31,9 +31,9 @@ vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
-vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 vi.mock('@sonar/db/inbound', () => ({
   getConversationChat: chat,
+  getConversationReplyTask: replyTask,
   markConversationRead: read,
   enqueueReply: generate,
   queueConversationReply: reply,
@@ -147,13 +147,10 @@ describe('conversation API boundaries', () => {
   it('reads history without marking messages read and scopes task polling to the conversation', async () => {
     expect((await GET(get(), context)).status).toBe(200);
     expect(read).not.toHaveBeenCalled();
-    query.mockResolvedValue({ rows: [] });
+    replyTask.mockResolvedValue(null);
     expect((await GET(get(`?taskId=${foreign}`), context)).status).toBe(404);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("type='ai.reply'"),
-      [foreign, id],
-    );
-    query.mockResolvedValue({ rows: [{ id: foreign, status: 'done' }] });
+    expect(replyTask).toHaveBeenCalledWith(id, foreign);
+    replyTask.mockResolvedValue({ id: foreign, status: 'done' });
     expect(
       await (await GET(get(`?taskId=${foreign}`), context)).json(),
     ).toEqual({ id: foreign, status: 'done' });
@@ -207,7 +204,7 @@ describe('conversation API boundaries', () => {
       (await POST(request({ action: 'send', messageId: outgoing }), context))
         .status,
     ).toBe(200);
-    expect(send).toHaveBeenCalledWith(outgoing, 'actor');
+    expect(send).toHaveBeenCalledWith(outgoing, 'actor', id);
   });
   it('requires an existing conversation and valid reply fields', async () => {
     for (const patch of [

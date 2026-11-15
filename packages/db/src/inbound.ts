@@ -5,6 +5,8 @@ import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
 import { sonarPool } from './index.js';
 import {
   canonicalConversation,
+  lockConversation,
+  conversationAliases,
   lockWhatsAppIdentity,
   whatsappConversation,
 } from './whatsapp-identity.js';
@@ -387,11 +389,20 @@ export async function markConversationRead(
   throughMessageId?: string,
 ) {
   if (!throughMessageId) return;
-  conversationId = await canonicalConversation(sonarPool, conversationId);
-  await sonarPool.query(
-    "update messages set read_at=now() where conversation_id=$1 and direction='in' and read_at is null and (created_at,id)<=(select created_at,id from messages where id=$2 and conversation_id=$1 and direction='in')",
-    [conversationId, throughMessageId],
-  );
+  await transaction(async (c) => {
+    const conversation = await lockConversation(c, conversationId);
+    const {
+      rows: [boundary],
+    } = await c.query(
+      "select id from messages where id=$2 and conversation_id=$1 and direction='in'",
+      [conversation.id, throughMessageId],
+    );
+    if (!boundary) invalid('Вхідне повідомлення не належить цьому діалогу.');
+    await c.query(
+      "update messages set read_at=now() where conversation_id=$1 and direction='in' and read_at is null and (created_at,id)<=(select created_at,id from messages where id=$2 and conversation_id=$1 and direction='in')",
+      [conversation.id, throughMessageId],
+    );
+  });
 }
 export async function enqueueReply(
   conversationId: string,
@@ -400,22 +411,82 @@ export async function enqueueReply(
 ) {
   if (!requestId || requestId.length > 100)
     invalid('Вкажіть ключ запиту відповіді.');
-  const chat = await getConversationChat(conversationId);
-  if (!chat.conversation || chat.blocked)
-    invalid('Діалог недоступний або контакт у стоп-списку.');
-  const id = await enqueueTask(
-    'ai.reply',
-    `ai.reply:${conversationId}:${requestId}`,
-    { conversationId, userId },
-  );
-  const {
-    rows: [task],
-  } = await sonarPool.query(
-    'select id,status from tasks where idempotency_key=$1',
-    [`ai.reply:${conversationId}:${requestId}`],
-  );
-  return { ...task, created: !!id };
+  return transaction(async (c) => {
+    const conversation = await lockConversation(c, conversationId);
+    const {
+      rows: [peer],
+    } = await c.query(
+      `select coalesce(
+      (select to_value from messages where conversation_id=v.id and direction='in' order by created_at desc,id desc limit 1),
+      (select to_value from messages where conversation_id=v.id order by created_at,id limit 1),
+      ct.value,v.peer_value,'') as recipient from conversations v left join contacts ct on ct.id=v.contact_id where v.id=$1`,
+      [conversation.id],
+    );
+    if (conversation.company_id)
+      await c.query(
+        "select pg_advisory_xact_lock(hashtextextended('company-contact:'||$1::text,0))",
+        [conversation.company_id],
+      );
+    if (await isContactBlocked(c, conversation.company_id, peer.recipient))
+      invalid('Діалог недоступний або контакт у стоп-списку.');
+    const aliases = await conversationAliases(c, conversation);
+    const keys = aliases.map((id) => `ai.reply:${id}:${requestId}`);
+    const { rows: prior } = await c.query(
+      'select id,status,type,payload from tasks where idempotency_key=any($1::text[]) order by created_at,id',
+      [keys],
+    );
+    if (prior.length) {
+      if (
+        prior.some(
+          (task) =>
+            task.type !== 'ai.reply' ||
+            !aliases.includes(task.payload.conversationId),
+        )
+      )
+        invalid('Ключ запиту відповіді вже використано для іншого діалогу.');
+      return { id: prior[0].id, status: prior[0].status, created: false };
+    }
+    const key = `ai.reply:${conversation.id}:${requestId}`;
+    const created = await enqueueTask(
+      'ai.reply',
+      key,
+      { conversationId: conversation.id, userId },
+      c,
+    );
+    const {
+      rows: [task],
+    } = await c.query(
+      'select id,status,type,payload from tasks where idempotency_key=$1',
+      [key],
+    );
+    if (
+      !task ||
+      task.type !== 'ai.reply' ||
+      !aliases.includes(task.payload.conversationId)
+    )
+      invalid('Ключ запиту відповіді вже використано для іншого діалогу.');
+    return { id: task.id, status: task.status, created: !!created };
+  });
 }
+export async function getConversationReplyTask(
+  conversationId: string,
+  taskId: string,
+) {
+  // One read snapshot scopes legacy task payloads without blocking status polling on a send.
+  const { rows } = await sonarPool.query(
+    `with recursive chain as (
+    select id,merged_into_id from conversations where id=$2
+    union all select v.id,v.merged_into_id from conversations v join chain p on v.id=p.merged_into_id
+  ), aliases as (
+    select id from chain where merged_into_id is null
+    union all select v.id from conversations v join aliases a on v.merged_into_id=a.id
+  ) select id,status,reason_uk from tasks where id=$1 and type='ai.reply'
+    and payload->>'conversationId' in(select id::text from aliases)`,
+    [taskId, conversationId],
+  );
+  return rows[0] ?? null;
+}
+
 const manualChannels = ['form', 'social', 'call'];
 /**
  * Finds or opens the dialog for a contact so a person can write by hand from the inbox.
@@ -515,52 +586,18 @@ async function reply(
   )
     invalid('Вкажіть коректний текст відповіді.');
   return transaction(async (c) => {
-    conversationId = await canonicalConversation(c, conversationId);
-    const {
-      rows: [identity],
-    } = await c.query(
-      `select v.channel,v.account_id,
-      array_remove(array_agg(distinct m.account_id),null) as accounts
-      from conversations v left join messages m on m.conversation_id=v.id where v.id=$1 group by v.id`,
-      [conversationId],
-    );
-    if (identity?.channel === 'whatsapp') {
-      if (identity.accounts.length > 1)
-        invalid('Діалог WhatsApp містить різні акаунти. Потрібна перевірка.');
-      let accountId = identity.account_id ?? identity.accounts[0];
-      if (!accountId) {
-        const { rows: active } = await c.query(
-          "select id from channel_accounts where channel='whatsapp' and status='active'",
-        );
-        if (active.length !== 1)
-          invalid('Оберіть однозначний активний акаунт WhatsApp.');
-        accountId = active[0].id;
-      }
-      await lockWhatsAppIdentity(c, accountId);
-      conversationId = await canonicalConversation(c, conversationId);
-    }
-    // Resolve identity under the receiving-account lock before deriving a new intent key.
+    const v = await lockConversation(c, conversationId);
+    conversationId = v.id;
     const requestKey =
       typeof key === 'string'
         ? key
         : `reply:${conversationId}:${key.requestId}`;
-    let priorKeys = [requestKey];
-    if (typeof key !== 'string' && identity?.channel === 'whatsapp') {
-      // Replies committed before a merge retain their original durable keys.
-      const { rows: aliases } = await c.query(
-        `with recursive aliases as (
-        select id from conversations where id=$1
-        union all select v.id from conversations v join aliases a on v.merged_into_id=a.id
-      ) select id from aliases`,
-        [conversationId],
-      );
-      priorKeys = aliases.map((alias) => `reply:${alias.id}:${key.requestId}`);
-    }
-    const {
-      rows: [v],
-    } = await c.query('select * from conversations where id=$1 for update', [
-      conversationId,
-    ]);
+    const priorKeys =
+      typeof key === 'string'
+        ? [key]
+        : (await conversationAliases(c, v)).map(
+            (id) => `reply:${id}:${key.requestId}`,
+          );
     if (
       !v ||
       !['email', 'telegram', 'whatsapp', ...manualChannels].includes(v.channel)

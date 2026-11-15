@@ -38,6 +38,77 @@ export async function canonicalConversation(
   );
   return rows[0]?.id ?? id;
 }
+/** Lock order for mutations: receiving account, canonical conversation, company, messages/tasks. */
+export async function lockConversation(c: PoolClient, id: string) {
+  // Resolve the account and current root in one snapshot; a merge may commit before the lock arrives.
+  const {
+    rows: [identity],
+  } = await c.query(
+    `with recursive chain as (
+    select id,merged_into_id from conversations where id=$1
+    union all select v.id,v.merged_into_id from conversations v join chain p on v.id=p.merged_into_id
+  ) select v.id,v.channel,v.account_id,array_remove(array_agg(distinct m.account_id),null) as accounts
+    from chain p join conversations v on v.id=p.id and p.merged_into_id is null
+    left join messages m on m.conversation_id=v.id group by v.id`,
+    [id],
+  );
+  if (!identity) throw new EmailValidationError('Діалог не знайдено.');
+  let accountId: string | undefined;
+  if (identity.channel === 'whatsapp') {
+    const accounts = [
+      ...new Set<string>(
+        [identity.account_id, ...identity.accounts].filter(Boolean),
+      ),
+    ];
+    if (accounts.length > 1)
+      throw new EmailValidationError(
+        'Діалог WhatsApp містить різні акаунти. Потрібна перевірка.',
+      );
+    accountId = accounts[0];
+    if (!accountId) {
+      const { rows: active } = await c.query(
+        "select id from channel_accounts where channel='whatsapp' and status='active'",
+      );
+      if (active.length !== 1)
+        throw new EmailValidationError(
+          'Оберіть однозначний активний акаунт WhatsApp.',
+        );
+      accountId = active[0].id;
+    }
+    await lockWhatsAppIdentity(c, accountId!);
+  }
+  const canonicalId = await canonicalConversation(c, id);
+  const {
+    rows: [conversation],
+  } = await c.query('select * from conversations where id=$1 for update', [
+    canonicalId,
+  ]);
+  if (!conversation) throw new EmailValidationError('Діалог не знайдено.');
+  if (
+    accountId &&
+    conversation.account_id &&
+    conversation.account_id !== accountId
+  )
+    throw new EmailValidationError(
+      'Діалог WhatsApp містить різні акаунти. Потрібна перевірка.',
+    );
+  return conversation;
+}
+/** Call after lockConversation so redirects cannot change while deriving durable intent keys. */
+export async function conversationAliases(
+  c: PoolClient,
+  conversation: { id: string; channel: string },
+): Promise<string[]> {
+  if (conversation.channel !== 'whatsapp') return [conversation.id];
+  const { rows } = await c.query(
+    `with recursive aliases as (
+    select id from conversations where id=$1
+    union all select v.id from conversations v join aliases a on v.merged_into_id=a.id
+  ) select id from aliases`,
+    [conversation.id],
+  );
+  return rows.map((row) => row.id);
+}
 /** Exact normalized identities only. A phone argument must come from WAHA's LID mapping. */
 export async function whatsappConversation(
   c: PoolClient,
@@ -210,6 +281,18 @@ export async function whatsappConversation(
       context.contactId ?? null,
     ],
   );
+  // Legacy AI task payloads keep old conversation IDs; their budget lookup must keep the same cap.
+  const campaignId = conversation.campaign_id ?? context.campaignId ?? null;
+  if (campaignId) {
+    const linked = await conversationAliases(c, {
+      id: conversation.id,
+      channel: 'whatsapp',
+    });
+    await c.query(
+      'update conversations set campaign_id=$2 where id=any($1::uuid[]) and campaign_id is null',
+      [linked, campaignId],
+    );
+  }
   // A refusal under any spelling still blocks every proven spelling and the linked company.
   const { rows: blocks } = await c.query(
     'select value_normalized,company_id from do_not_contact',
