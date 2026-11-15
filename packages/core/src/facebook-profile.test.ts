@@ -436,3 +436,208 @@ it.each(['missing', 'own-date'])(
     ]);
   },
 );
+
+const boundaryMedia = [
+  '/photo/?fbid=PRIMARY',
+  `/${target.handle}/videos/VIDEO`,
+  '/reel/REEL',
+];
+const dateCarriers = [
+  'aria-label',
+  'title',
+  'aria-labelledby',
+  'time',
+] as const;
+const datedLink = (
+  href: string,
+  carrier: (typeof dateCarriers)[number],
+  id: string,
+  date: string,
+) => {
+  const attribute =
+    carrier === 'time'
+      ? ''
+      : `${carrier}="${carrier === 'aria-labelledby' ? id : date}"`;
+  const content =
+    carrier === 'time'
+      ? `<time datetime="${date === '12 July 2019' ? '2019-07-12' : '2027-01-01'}">date</time>`
+      : 'date';
+  return `<a href="${href}" ${attribute}>${content}</a>`;
+};
+const boundaryLabels =
+  '<span id="primary-date">12 July 2019</span><span id="nested-date">1 January 2027</span>';
+const authorHeading = (href: string, semantic: boolean) =>
+  semantic
+    ? `<div role="heading" aria-level="2"><a href="${href}">Demo</a></div>`
+    : `<h2><a href="${href}">Demo</a></h2>`;
+const discussionFrames = [
+  ['li', '<ul><li>', '</li></ul>'],
+  ['listitem', '<div role="listitem">', '</div>'],
+  ['recommendation', '<div data-recommendations>', '</div>'],
+  ['article', '<article>', '</article>'],
+  ['role-article', '<div role="article">', '</div>'],
+] as const;
+const nestedParentCases = discussionFrames
+  .slice(0, 2)
+  .flatMap(([frame, open, close]) =>
+    [false, true].flatMap((semantic) =>
+      ['aria-label', 'aria-labelledby', 'time'].flatMap((carrier) =>
+        [false, true].flatMap((wrapped) =>
+          [own, foreign].map((author) => ({
+            frame,
+            open,
+            close,
+            semantic,
+            carrier: carrier as (typeof dateCarriers)[number],
+            wrapped,
+            author,
+          })),
+        ),
+      ),
+    ),
+  );
+it.each(nestedParentCases)(
+  'never promotes a headed comment scope: $frame/$semantic/$carrier/wrapped=$wrapped/author=$author',
+  ({ open, close, semantic, carrier, wrapped, author }) => {
+    const comment =
+      authorHeading(author, semantic) +
+      datedLink(
+        `/${target.handle}/posts/OWN`,
+        carrier,
+        'nested-date',
+        '1 January 2027',
+      );
+    const body = post(own, 'OWN', 'missing').replace(
+      /<\/div>\s*$/,
+      `${open}${wrapped ? `<div>${comment}</div>` : comment}${close}</div>`,
+    );
+    const profile = parseSocialProfile(
+      page(body, boundaryLabels),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: null,
+        url: 'https://www.facebook.com/photo/?fbid=OWN&set=synthetic',
+      },
+    ]);
+    expect(profile.lastPostAt).toBeNull();
+  },
+);
+
+const primaryCases = boundaryMedia.flatMap((href) =>
+  dateCarriers.flatMap((carrier) =>
+    [
+      'article',
+      'role-article',
+      'heading',
+      'semantic-heading',
+      'feed-li',
+      'feed-listitem',
+    ].map((layout) => ({ href, carrier, layout })),
+  ),
+);
+it.each(primaryCases)(
+  'binds the primary media date: $layout/$href/$carrier',
+  ({ href, carrier, layout }) => {
+    const author =
+      layout.includes('heading') || layout === 'feed-listitem'
+        ? authorHeading(own, layout === 'semantic-heading')
+        : `<a rel="author" href="${own}">Demo</a>`;
+    const body =
+      author + datedLink(href, carrier, 'primary-date', '12 July 2019');
+    const publication =
+      layout === 'role-article'
+        ? `<div role="article">${body}</div>`
+        : layout.includes('heading') || layout === 'feed-listitem'
+          ? `<div>${body}</div>`
+          : `<article>${body}</article>`;
+    const framed =
+      layout === 'feed-li'
+        ? `<ul><li>${publication}</li></ul>`
+        : layout === 'feed-listitem'
+          ? `<div role="listitem">${publication}</div>`
+          : publication;
+    const profile = parseSocialProfile(
+      page(framed, boundaryLabels),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: '2019-07-12T00:00:00.000Z',
+        url: `https://www.facebook.com${href}`,
+      },
+    ]);
+    expect(profile.lastPostAt).toBe('2019-07-12T00:00:00.000Z');
+  },
+);
+
+const destructiveMediaCases = boundaryMedia.flatMap((href) =>
+  dateCarriers.flatMap((carrier) =>
+    discussionFrames.flatMap(([frame, open, close]) =>
+      [own, foreign].map((author) => ({
+        href,
+        carrier,
+        frame,
+        open,
+        close,
+        author,
+      })),
+    ),
+  ),
+);
+it.each(destructiveMediaCases)(
+  'keeps nested media separate from its owner card: $frame/$href/$carrier/author=$author',
+  ({ href, carrier, open, close, author }) => {
+    const nested = `${open}<div>${authorHeading(author, false)}${datedLink(href, carrier, 'nested-date', '1 January 2027')}</div>${close}`;
+    const body = post(own, 'OWN', 'missing').replace(
+      /<\/div>\s*$/,
+      `${nested}</div>`,
+    );
+    const profile = parseSocialProfile(
+      page(body, boundaryLabels),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: null,
+        url: 'https://www.facebook.com/photo/?fbid=OWN&set=synthetic',
+      },
+    ]);
+    expect(profile.lastPostAt).toBeNull();
+  },
+);
+
+it.each(
+  boundaryMedia.flatMap((href) =>
+    dateCarriers.map((carrier) => ({ href, carrier })),
+  ),
+)('requires an unambiguous own author: $href/$carrier', ({ href, carrier }) => {
+  for (const author of [
+    '',
+    `<a rel="author" href="${foreign}">Other</a>`,
+    `<a rel="author" href="${own}">Demo</a><a rel="author" href="${foreign}">Other</a>`,
+  ]) {
+    const profile = parseSocialProfile(
+      page(
+        `<article>${author}${datedLink(href, carrier, 'primary-date', '12 July 2019')}</article>`,
+        boundaryLabels,
+      ),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([]);
+    expect(profile.lastPostAt).toBeNull();
+  }
+});
+
+it.each(boundaryMedia)(
+  'does not interpret the primary media caption as a timestamp: %s',
+  (href) => {
+    const body = `<article><a rel="author" href="${own}">Demo</a><a href="${href}">12 July 2019</a></article>`;
+    expect(parseSocialProfile(page(body), target, 'GB').lastPostAt).toBeNull();
+  },
+);

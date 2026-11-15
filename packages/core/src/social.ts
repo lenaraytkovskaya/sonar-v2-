@@ -781,8 +781,45 @@ export function parseSocialProfile(
       };
       const publicationPath =
         /\/(?:photo(?:\.php)?(?:\/|$)|posts\/|videos\/|reel\/|permalink\.php|story\.php)/;
-      const nestedContext =
-        'li,[role="listitem"],article,[role="article"],[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav';
+      const discussionContext =
+        'li,[role="listitem"],[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav';
+      const nestedContext = `${discussionContext},article,[role="article"]`;
+      // The owner-to-content interval includes both endpoints. A publication may
+      // itself be an article, but cannot itself be a discussion/recommendation.
+      // Outer feed list items remain outside this interval.
+      const withinPublication = (node: typeof area, scope: typeof area) =>
+        !scope.is(discussionContext) &&
+        (node.get(0) === scope.get(0) ||
+          (!node.is(nestedContext) &&
+            !node.parentsUntil(scope, nestedContext).length));
+      const localHeadings = (scope: typeof area) =>
+        scope
+          .find('h2,[role="heading"][aria-level="2"]')
+          .filter((_, heading) => withinPublication($(heading), scope));
+      const localAuthors = (scope: typeof area) =>
+        scope
+          .find('[rel="author"],a[data-post-author],a[data-profile-author]')
+          .filter((_, author) => withinPublication($(author), scope));
+      const nestedUnderPublication = (scope: typeof area) =>
+        scope
+          .parentsUntil('main,[role="main"],body,html')
+          .toArray()
+          .some((ancestor) => {
+            const outer = $(ancestor);
+            const headings = localHeadings(outer).filter(
+              (_, heading) => $(heading).find('a[href]').length > 0,
+            );
+            if (headings.length === 1)
+              return !scope.has(headings.get(0)!).length;
+            if (!headings.length && outer.is('article,[role="article"]')) {
+              const authors = localAuthors(outer).toArray();
+              return (
+                authors.length > 0 &&
+                authors.every((author) => !scope.has(author).length)
+              );
+            }
+            return false;
+          });
       const hasForeignAuthor = (branch: typeof area) =>
         branch
           .find('a[href]')
@@ -833,7 +870,7 @@ export function parseSocialProfile(
               /\/(?:photo(?:\.php)?(?:\/|$)|videos\/|reel\/)/.test(
                 new URL(href).pathname,
               ) &&
-              !$(anchor).parentsUntil(root, nestedContext).length &&
+              withinPublication($(anchor), root) &&
               !hasForeignAuthor(childBranch(root, $(anchor)))
             );
           });
@@ -849,8 +886,7 @@ export function parseSocialProfile(
         if (
           metadataBranch.length &&
           (!media || metadataBranch.get(0) !== bodyBranch.get(0)) &&
-          !metadataBranch.is(nestedContext) &&
-          !metadataBranch.parentsUntil(root, nestedContext).length &&
+          withinPublication(metadataBranch, root) &&
           !metadataBranch.find(nestedContext).length &&
           !hasForeignAuthor(metadataBranch)
         ) {
@@ -860,14 +896,10 @@ export function parseSocialProfile(
               if (anchor.type === 'tag') anchors.push($(anchor));
             });
         }
-        // A machine timestamp inside the primary post/video/reel link is also
-        // structurally bound to that publication, independently of header layout.
+        // Once owner, scope and primary media are bound, explicit date metadata
+        // on that media is valid regardless of its encoding (including ARIA).
         const primary = media && media === publication.get(0);
-        if (
-          primary &&
-          publication.find('time[datetime]').length &&
-          !publication.find(nestedContext).length
-        )
+        if (primary && !publication.find(nestedContext).length)
           anchors.push(publication);
         if (
           !primary &&
@@ -908,15 +940,12 @@ export function parseSocialProfile(
           return;
         let scope = link.parent();
         while (scope.length && !scope.is('main,[role="main"],body,html')) {
-          const headings = scope.find('h2,[role="heading"][aria-level="2"]');
+          if (scope.is(discussionContext)) return;
+          const headings = localHeadings(scope);
           const authors = headings.length
             ? headings.find('a[href]').toArray()
             : scope.is('article,[role="article"]')
-              ? scope
-                  .find(
-                    '[rel="author"],a[data-post-author],a[data-profile-author]',
-                  )
-                  .toArray()
+              ? localAuthors(scope).toArray()
               : [];
           if (headings.length || authors.length) {
             if (headings.length <= 1 && authors.length)
@@ -933,7 +962,8 @@ export function parseSocialProfile(
             )
               break;
             if (
-              link.parentsUntil(scope, nestedContext).length ||
+              !withinPublication(link, scope) ||
+              nestedUnderPublication(scope) ||
               hasForeignAuthor(childBranch(scope, link))
             )
               return;
@@ -961,10 +991,7 @@ export function parseSocialProfile(
                 return;
               if (
                 !sameTarget(href, target) &&
-                !(
-                  timestamp.pathname.startsWith('/reel/') &&
-                  timestamp.href === source.href
-                ) &&
+                timestamp.href !== source.href &&
                 !(
                   (/^\/profile\.php$/.test(timestamp.pathname) &&
                     !timestamp.searchParams.has('id')) ||
@@ -975,7 +1002,18 @@ export function parseSocialProfile(
                 )
               )
                 return;
-              const values = [a.attr('aria-label'), a.attr('title'), a.text()];
+              const primaryContent =
+                a.get(0) === link.get(0) &&
+                /\/(?:photo(?:\.php)?(?:\/|$)|videos\/|reel\/)/.test(
+                  source.pathname,
+                );
+              // A media caption is body text, not a timestamp. Primary media
+              // dates require explicit accessibility metadata or a machine time.
+              const values = [
+                a.attr('aria-label'),
+                a.attr('title'),
+                ...(primaryContent ? [] : [a.text()]),
+              ];
               a.find('[aria-labelledby]')
                 .addBack('[aria-labelledby]')
                 .each((_, labelled) => {
