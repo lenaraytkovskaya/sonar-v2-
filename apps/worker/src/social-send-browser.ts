@@ -1101,6 +1101,86 @@ async function sessionMarkers(
     login: Math.min(counts[4]!, 2),
   };
 }
+/** Shared FB session snapshot: fixed enums and capped counts, collected before page closure. */
+export async function facebookSessionDiagnostic(
+  page: Page,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+  errorKind: SocialSessionCheckDiagnostic['errorKind'],
+): Promise<SocialSessionCheckDiagnostic> {
+  const logSelector = '[aria-label^="Messages in conversation with "]';
+  const url = new URL(page.url());
+  const path = url.pathname;
+  const urlKind =
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    !/^(?:www\.)?(?:facebook|messenger)\.com$/.test(url.hostname)
+      ? 'other'
+      : /captcha/i.test(path)
+        ? 'captcha'
+        : /checkpoint|challenge|security\/verification/i.test(path)
+          ? 'checkpoint'
+          : /login|signin|authwall/i.test(path)
+            ? 'login'
+            : /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(path)
+              ? 'thread'
+              : /^\/messages\/?$/.test(path)
+                ? 'inbox'
+                : path === '/'
+                  ? 'home'
+                  : 'other';
+  const count = async (locator: ReturnType<Page['locator']>) =>
+    Math.min(await locator.filter({ visible: true }).count(), 2);
+  const [
+    visible,
+    threadList,
+    messageRegions,
+    messageNodes,
+    pinRestore,
+    restoreConfirmation,
+    historyMissing,
+  ] = await Promise.all([
+    facebookSessionMarkers(page),
+    count(page.getByRole('region', { name: 'Thread list', exact: true })),
+    count(page.locator(logSelector)),
+    count(page.locator(`${logSelector} [aria-roledescription="message"]`)),
+    count(
+      page.getByRole('heading', {
+        name: 'Enter your PIN to restore your chats',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('heading', {
+        name: 'Continue without restoring?',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('button', {
+        name: 'Dismiss Chat history is missing card',
+        exact: true,
+      }),
+    ),
+  ]);
+  return {
+    version: 1,
+    stage,
+    urlKind,
+    navigationHttpStatus,
+    errorKind,
+    visible,
+    history: {
+      threadList,
+      messageRegions,
+      messageNodes,
+      pinRestore,
+      restoreConfirmation,
+      historyMissing,
+    },
+  };
+}
 async function sessionDiagnostic(
   page: Page,
   stage: SocialSessionCheckDiagnostic['stage'],
@@ -1296,9 +1376,16 @@ export function createSocialSendBrowser(
                   );
             if (caught instanceof Error && caught.name === 'TimeoutError')
               error.errorKind = 'timeout';
-            if (account.channel === 'linkedin') {
+            if (
+              account.channel === 'linkedin' ||
+              account.channel === 'facebook'
+            ) {
               // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
-              error.diagnostic = await sessionDiagnostic(
+              const diagnostic =
+                account.channel === 'facebook'
+                  ? facebookSessionDiagnostic
+                  : sessionDiagnostic;
+              error.diagnostic = await diagnostic(
                 page,
                 stage,
                 status,

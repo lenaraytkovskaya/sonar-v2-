@@ -84,11 +84,11 @@ it.skipIf(!enabled)(
           status: 'done',
         });
         expect(check).toHaveBeenCalledOnce();
-        if (network === 'linkedin') {
+        if (network === 'linkedin' || network === 'facebook') {
           const diagnostic = {
             version: 1,
             stage: 'auth',
-            urlKind: 'feed',
+            urlKind: network === 'facebook' ? 'home' : 'feed',
             navigationHttpStatus: 200,
             errorKind: 'timeout',
             visible: {
@@ -152,6 +152,7 @@ it.skipIf(!enabled)(
             reasonUk: socialSessionCheckReasons.unknown_auth,
             result: { valid: false },
           });
+          expect(unsafe.result).toEqual({ valid: false });
           expect(
             JSON.stringify(
               (await accounts.listSocialAccounts()).find(
@@ -159,7 +160,20 @@ it.skipIf(!enabled)(
               ),
             ),
           ).not.toContain('secret');
-          await checkSession(saved.id, check);
+          expect(await checkSession(saved.id, check)).toEqual({
+            status: 'done',
+            result: { valid: true },
+          });
+          expect(
+            (await accounts.listSocialAccounts()).find(
+              (row) => row.id === saved.id,
+            ),
+          ).toMatchObject({
+            status: 'active',
+            sessionStatus: 'valid',
+            sessionCheckReason: null,
+            reasonUk: null,
+          });
         }
         await accounts.updateSocialAccount(
           saved.id,

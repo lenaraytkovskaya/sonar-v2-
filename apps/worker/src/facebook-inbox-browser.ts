@@ -10,7 +10,7 @@ import {
 import {
   assertSessionNegatives,
   assertSocialSession,
-  facebookSessionMarkers,
+  facebookSessionDiagnostic,
 } from './social-send-browser.js';
 
 const origin = 'https://www.facebook.com';
@@ -25,79 +25,12 @@ async function diagnose(
 ) {
   if (!(error instanceof SocialSessionCheckError) || error.diagnostic)
     return error;
-  error.diagnostic = await (async (): Promise<SocialSessionCheckDiagnostic> => {
-    const url = new URL(page.url());
-    const path = url.pathname;
-    const urlKind =
-      url.protocol !== 'https:' ||
-      url.username ||
-      url.password ||
-      !/^(?:www\.)?(?:facebook|messenger)\.com$/.test(url.hostname)
-        ? 'other'
-        : /captcha/i.test(path)
-          ? 'captcha'
-          : /checkpoint|challenge|security\/verification/i.test(path)
-            ? 'checkpoint'
-            : /login|signin|authwall/i.test(path)
-              ? 'login'
-              : /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(path)
-                ? 'thread'
-                : /^\/messages\/?$/.test(path)
-                  ? 'inbox'
-                  : path === '/'
-                    ? 'home'
-                    : 'other';
-    const count = async (locator: ReturnType<Page['locator']>) =>
-      Math.min(await locator.filter({ visible: true }).count(), 2);
-    const [
-      visible,
-      threadList,
-      messageRegions,
-      messageNodes,
-      pinRestore,
-      restoreConfirmation,
-      historyMissing,
-    ] = await Promise.all([
-      facebookSessionMarkers(page),
-      count(page.getByRole('region', { name: 'Thread list', exact: true })),
-      count(page.locator(logSelector)),
-      count(page.locator(`${logSelector} [aria-roledescription="message"]`)),
-      count(
-        page.getByRole('heading', {
-          name: 'Enter your PIN to restore your chats',
-          exact: true,
-        }),
-      ),
-      count(
-        page.getByRole('heading', {
-          name: 'Continue without restoring?',
-          exact: true,
-        }),
-      ),
-      count(
-        page.getByRole('button', {
-          name: 'Dismiss Chat history is missing card',
-          exact: true,
-        }),
-      ),
-    ]);
-    return {
-      version: 1,
-      stage,
-      urlKind,
-      navigationHttpStatus,
-      errorKind: error.errorKind ?? 'unconfirmed',
-      visible,
-      history: {
-        threadList,
-        messageRegions,
-        messageNodes,
-        pinRestore,
-        restoreConfirmation,
-        historyMissing,
-      },
-    };
-  })().catch(() => undefined);
+  error.diagnostic = await facebookSessionDiagnostic(
+    page,
+    stage,
+    navigationHttpStatus,
+    error.errorKind ?? 'unconfirmed',
+  ).catch(() => undefined);
   return error;
 }
 

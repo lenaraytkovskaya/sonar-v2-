@@ -17,7 +17,7 @@ vi.mock('@sonar/db/social-accounts', () => ({
   withSocialSessionCheck: async (
     _id: string,
     callback: (account: unknown) => unknown,
-  ) => callback({ id: 'synthetic', channel: 'linkedin' }),
+  ) => callback({ id: 'synthetic', channel: 'facebook' }),
 }));
 import { runSocialSessionCheck } from './social-send.js';
 it.each(Object.keys(socialSessionCheckReasons))(
@@ -65,7 +65,7 @@ it('passes only the safe worker diagnostic to the paused account outcome', async
   const diagnostic = {
     version: 1,
     stage: 'auth',
-    urlKind: 'feed',
+    urlKind: 'home',
     navigationHttpStatus: 200,
     errorKind: 'timeout',
     visible: {
@@ -84,5 +84,14 @@ it('passes only the safe worker diagnostic to the paused account outcome', async
     valid: false,
     reason: 'unknown_auth',
     diagnostic,
+  });
+  check.mockResolvedValueOnce(undefined);
+  expect(await runSocialSessionCheck({ accountId: 'synthetic' })).toEqual({
+    valid: true,
+  });
+  check.mockRejectedValueOnce(new SocialSessionCheckError('login_required'));
+  expect(await runSocialSessionCheck({ accountId: 'synthetic' })).toEqual({
+    valid: false,
+    reason: 'login_required',
   });
 });
