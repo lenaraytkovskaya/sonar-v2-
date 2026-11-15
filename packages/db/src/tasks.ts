@@ -228,7 +228,11 @@ export async function enqueueRegistryMatch(
     return { ...task, created: !!created };
   });
 }
-export async function retryTask(id: string, userId: string) {
+export async function retryTask(
+  id: string,
+  userId: string,
+  expectedSocialVersion?: number,
+) {
   return transaction(async (client) => {
     const {
       rows: [identity],
@@ -326,6 +330,11 @@ export async function retryTask(id: string, userId: string) {
     }
     if (original.type === 'social.fetch') {
       if (!['failed', 'paused', 'skipped'].includes(original.status))
+        return false;
+      if (
+        expectedSocialVersion !== undefined &&
+        (original.payload.requestVersion ?? 0) !== expectedSocialVersion
+      )
         return false;
       const { prepareSocialRetry } = await import('./social.js');
       if (!(await prepareSocialRetry(client, original))) return false;

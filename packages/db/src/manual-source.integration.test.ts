@@ -530,6 +530,197 @@ describe.skipIf(!enabled)('manual source transactions', () => {
       ).rowCount,
     ).toBe(2);
   });
+  async function failedSocial(owner: string) {
+    const { socialTarget } = await import('@sonar/core');
+    const { enqueueCompanySocial } = await import('./social.js');
+    const value = `https://www.instagram.com/sonar_${randomUUID().replaceAll('-', '').slice(0, 20)}/`;
+    const target = socialTarget(value)!;
+    const queued = await enqueueCompanySocial(owner, userId, undefined, target),
+      id = queued.tasks[0]!.id;
+    await db.sonarPool.query(
+      "update tasks set status='failed',reason_uk='Синтетична помилка' where id=$1",
+      [id],
+    );
+    await db.sonarPool.query(
+      "update pgboss.job set state='failed' where data->>'taskId'=$1",
+      [id],
+    );
+    return { id, value };
+  }
+  async function socialState(id: string) {
+    return (
+      await db.sonarPool.query(
+        "select status,payload,(select count(*)::int from pgboss.job j where j.data->>'taskId'=t.id::text) as jobs from tasks t where id=$1",
+        [id],
+      )
+    ).rows[0];
+  }
+  it.each([false, true])(
+    'one save retries the failed social profile after commit (different company: %s)',
+    async (different) => {
+      const owner = await company(),
+        destination = different ? await company() : owner;
+      const prior = await failedSocial(owner),
+        data = request('social', prior.value);
+      const results = await Promise.all([
+        save(destination, data, userId),
+        save(destination, data, userId),
+        save(destination, { ...data, requestId: randomUUID() }, userId),
+      ]);
+      expect(
+        results.every((result) => result?.tasks[0].status === 'queued'),
+      ).toBe(true);
+      const state = await socialState(prior.id);
+      expect(state).toMatchObject({
+        status: 'queued',
+        jobs: 2,
+        payload: { requestVersion: 1, manual: true },
+      });
+      expect(state.payload.companyIds).toEqual(
+        expect.arrayContaining([owner, destination]),
+      );
+      // A delayed replay of the same submit must not start another attempt even
+      // when the first retry has already failed again.
+      await db.sonarPool.query("update tasks set status='failed' where id=$1", [
+        prior.id,
+      ]);
+      await save(destination, data, userId);
+      expect(await socialState(prior.id)).toMatchObject({
+        status: 'failed',
+        jobs: 2,
+        payload: { requestVersion: 1 },
+      });
+      await save(destination, request('social', prior.value), userId);
+      expect(await socialState(prior.id)).toMatchObject({
+        status: 'queued',
+        jobs: 3,
+        payload: { requestVersion: 2 },
+      });
+    },
+  );
+  it('replays a committed social retry intent after dispatch failure without a second source or duplicate job', async () => {
+    const owner = await company(),
+      destination = await company(),
+      prior = await failedSocial(owner),
+      data = request('social', prior.value);
+    await db.sonarPool.query(
+      "update settings set key='test.tasks.social.fetch' where key='tasks.social.fetch'",
+    );
+    try {
+      await expect(save(destination, data, userId)).rejects.toThrow(
+        'Missing task settings',
+      );
+    } finally {
+      await db.sonarPool.query(
+        "update settings set key='tasks.social.fetch' where key='test.tasks.social.fetch'",
+      );
+    }
+    expect(await socialState(prior.id)).toMatchObject({
+      status: 'failed',
+      jobs: 1,
+    });
+    expect(
+      (
+        await db.sonarPool.query(
+          "select id from company_facts where company_id=$1 and kind='manual_source'",
+          [destination],
+        )
+      ).rowCount,
+    ).toBe(1);
+    expect((await save(destination, data, userId))?.tasks[0].status).toBe(
+      'queued',
+    );
+    await save(destination, data, userId);
+    expect(await socialState(prior.id)).toMatchObject({
+      status: 'queued',
+      jobs: 2,
+      payload: { requestVersion: 1 },
+    });
+    expect(
+      (
+        await db.sonarPool.query(
+          "select id from company_facts where company_id=$1 and kind='manual_source'",
+          [destination],
+        )
+      ).rowCount,
+    ).toBe(1);
+  });
+  it('manual social save retains the uncertain child spend protection', async () => {
+    const owner = await company(),
+      destination = await company(),
+      prior = await failedSocial(owner);
+    await db.sonarPool.query(
+      `insert into tasks(type,idempotency_key,payload,subject_type,subject_id,status,result) values('social.request',$1,$2,'company',$3,'paused',$4)`,
+      [
+        randomUUID(),
+        { parentId: prior.id },
+        owner,
+        {
+          billingPending: true,
+          billingService: 'iproyal',
+          billingEstimate: 0.001,
+          billingAt: new Date().toISOString(),
+        },
+      ],
+    );
+    const saved = await save(
+      destination,
+      request('social', prior.value),
+      userId,
+    );
+    expect(saved?.tasks[0].status).toBe('failed');
+    expect(await socialState(prior.id)).toMatchObject({
+      status: 'failed',
+      jobs: 1,
+    });
+    expect(
+      (
+        await db.sonarPool.query(
+          "select result from tasks where payload->>'parentId'=$1",
+          [prior.id],
+        )
+      ).rows[0].result.billingPending,
+    ).toBe(true);
+  });
+  it('failed source commit never enqueues a social retry or adds an orphan company binding', async () => {
+    const owner = await company(),
+      destination = await company(),
+      prior = await failedSocial(owner);
+    const name = `test_source_commit_${randomUUID().replaceAll('-', '')}`;
+    await db.sonarPool.query(
+      `create function ${name}() returns trigger language plpgsql as $$ begin raise exception 'synthetic commit failure'; end $$`,
+    );
+    await db.sonarPool.query(
+      `create constraint trigger ${name} after insert on company_facts deferrable initially deferred for each row when(new.company_id='${destination}'::uuid and new.kind='manual_source') execute function ${name}()`,
+    );
+    try {
+      await expect(
+        save(destination, request('social', prior.value), userId),
+      ).rejects.toThrow('synthetic commit failure');
+    } finally {
+      await db.sonarPool.query(`drop trigger ${name} on company_facts`);
+      await db.sonarPool.query(`drop function ${name}()`);
+    }
+    const state = await socialState(prior.id);
+    expect(state).toMatchObject({ status: 'failed', jobs: 1 });
+    expect(state.payload.companyIds).not.toContain(destination);
+    expect(
+      (
+        await db.sonarPool.query(
+          'select id from company_facts where company_id=$1',
+          [destination],
+        )
+      ).rowCount,
+    ).toBe(0);
+    expect(
+      (
+        await db.sonarPool.query(
+          'select id from contacts where company_id=$1',
+          [destination],
+        )
+      ).rowCount,
+    ).toBe(0);
+  });
   afterAll(async () => {
     if (!db) return;
     await db.sonarPool.query(

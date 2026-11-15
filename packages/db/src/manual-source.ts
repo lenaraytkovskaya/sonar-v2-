@@ -10,8 +10,9 @@ import {
   enqueueTask,
   logActivity,
   recordManualCompanyCode,
+  retryTask,
 } from './tasks.js';
-import { enqueueCompanySocial } from './social.js';
+import { enqueueCompanySocial, type SocialRetryIntent } from './social.js';
 
 export type ManualSourceResult = {
   source: ManualSourceInput['source'];
@@ -55,7 +56,7 @@ export async function saveManualSource(
   userId: string,
 ) {
   const data = normalizeManualSource(input);
-  await transaction(async (client) => {
+  const retries = await transaction<SocialRetryIntent[]>(async (client) => {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
       `manual.source:${companyId}`,
     ]);
@@ -92,9 +93,10 @@ export async function saveManualSource(
         prior.value.target !== data.value
       )
         throw new ManualSourceError('staleSource');
-      return;
+      return prior.value.socialRetries ?? [];
     }
     let taskIds: string[] = [];
+    let socialRetries: SocialRetryIntent[] = [];
     let previous: string | null = null;
     const key = `manual.source:${companyId}:${data.requestId}`;
     if (data.source === 'website' || data.source === 'googleMaps') {
@@ -182,6 +184,7 @@ export async function saveManualSource(
         data.target,
       );
       taskIds = queued.tasks.map((t) => t.id);
+      socialRetries = queued.retryTasks ?? [];
     }
     if (!taskIds.length)
       throw new Error('Manual source did not produce a task');
@@ -196,6 +199,7 @@ export async function saveManualSource(
       previous,
       requestId: data.requestId,
       taskIds,
+      ...(socialRetries.length ? { socialRetries } : {}),
     };
     await client.query(
       "insert into company_facts(company_id,kind,value,source,source_url) values($1,'manual_source',$2,'manual',$3)",
@@ -213,6 +217,11 @@ export async function saveManualSource(
       value,
       client,
     );
+    return socialRetries;
   });
+  // The persisted intent also survives a crash/dispatch failure after commit.
+  // A version fence makes replays and concurrent companies share one retry.
+  for (const retry of retries)
+    await retryTask(retry.id, userId, retry.requestVersion);
   return getManualSource(companyId, data.source, data.requestId);
 }
