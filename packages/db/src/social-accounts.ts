@@ -35,6 +35,9 @@ export interface SocialAccount {
   proxyIndex: number;
   ownerName: string | null;
   canSyncInbox: boolean;
+  inboxPollingEnabled: boolean;
+  inboxSyncComplete: boolean | null;
+  inboxSyncCreated: number | null;
 }
 export interface SocialSessionAccount {
   id: string;
@@ -229,7 +232,10 @@ export async function listSocialAccounts(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
     coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
     a.next_send_at as "nextSendAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
-    coalesce(a.owner_id=$1::uuid and a.channel='instagram' and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
+    coalesce(a.owner_id=$1::uuid and a.channel in ('instagram','facebook') and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
+    coalesce(a.settings->>'inboxPollingEnabled'='true',false) as "inboxPollingEnabled",
+    (a.settings->'inboxSync'->>'complete')::boolean as "inboxSyncComplete",
+    (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
@@ -457,13 +463,13 @@ export async function syncSocialInbox(id: string, userId: string) {
     );
     const account = await lock(c, id, userId);
     if (
-      account.channel !== 'instagram' ||
+      !['instagram', 'facebook'].includes(account.channel) ||
       account.status !== 'active' ||
       account.settings.enabled === false ||
       account.settings.sessionStatus !== 'valid'
     )
       invalid(
-        'Ручна синхронізація доступна лише власнику активного Instagram із підтвердженою сесією.',
+        'Ручна синхронізація доступна лише власнику активного Instagram або Facebook із підтвердженою сесією.',
       );
     try {
       resolveSocialSession(account);
@@ -511,6 +517,37 @@ export async function syncSocialInbox(id: string, userId: string) {
       c,
     );
     return { id: taskId as string, created: true };
+  });
+}
+export async function setSocialInboxPolling(
+  id: string,
+  enabled: boolean,
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const account = await lock(c, id, userId);
+    if (
+      account.channel !== 'facebook' ||
+      (enabled &&
+        (account.status !== 'active' ||
+          account.settings.enabled === false ||
+          account.settings.sessionStatus !== 'valid'))
+    )
+      invalid(
+        'Опитування доступне власнику активного Facebook із підтвердженою сесією.',
+      );
+    await c.query(
+      "update channel_accounts set settings=settings||jsonb_build_object('inboxPollingEnabled',$2::boolean) where id=$1",
+      [id, enabled],
+    );
+    await logActivity(
+      'social.inbox.polling.updated',
+      'channel_account',
+      id,
+      userId,
+      { enabled },
+      c,
+    );
   });
 }
 export async function withSocialSessionCheck(

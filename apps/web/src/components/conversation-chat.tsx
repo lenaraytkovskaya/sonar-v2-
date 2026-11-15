@@ -7,6 +7,7 @@ import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
 import { channelLabel, contactLabel } from '@/lib/outreach-labels';
 import { useInboxPolling } from './use-inbox-polling';
+import { inboxReadSnapshot } from '@/lib/inbox-read';
 import { isNearBottom, newMessageCount } from '@/lib/inbox-scroll';
 import { Card } from './shared';
 import { Draft } from './company-email';
@@ -47,6 +48,7 @@ export function ConversationChat({
     return () => observer.disconnect();
   }, []);
   const atBottom = useRef(true);
+  const [followingLatest, setFollowingLatest] = useState(true);
   const previous = useRef<string[]>([]);
   const [newMessages, setNewMessages] = useState(0);
   const revision = useRef(0);
@@ -96,6 +98,7 @@ export function ConversationChat({
     if (history.current)
       history.current.scrollTop = history.current.scrollHeight;
     atBottom.current = true;
+    setFollowingLatest(true);
     setNewMessages(0);
   };
   useLayoutEffect(() => {
@@ -122,6 +125,11 @@ export function ConversationChat({
   const lastInbound = [...data.messages]
     .reverse()
     .find((m) => m.direction === 'in');
+  const readSnapshot = JSON.stringify(
+    data.messages
+      .filter((m) => m.direction === 'in')
+      .map((m) => ({ id: m.id, unread: !m.readAt })),
+  );
   const { error: refreshError } = useInboxPolling(
     active && path,
     async (signal) => {
@@ -147,31 +155,49 @@ export function ConversationChat({
     },
   );
   useEffect(() => {
-    if (!lastInbound || !active || lastInbound.readAt || newMessages > 0)
-      return;
-    const controller = new AbortController();
+    const incoming = JSON.parse(readSnapshot) as {
+      id: string;
+      unread: boolean;
+    }[];
+    const snapshot = inboxReadSnapshot(incoming, {
+      active,
+      followingLatest,
+      newMessages,
+      conversationId: data.conversation?.id,
+      selectedId: initial.conversation?.id,
+    });
+    if (!snapshot) return;
+    let controller = new AbortController();
     const markRead = () => {
       if (document.visibilityState !== 'visible' || !atBottom.current) return;
       void fetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'read', messageId: lastInbound.id }),
+        body: JSON.stringify(snapshot),
         signal: controller.signal,
       }).catch(() => {});
     };
+    const changed = () => {
+      if (document.visibilityState !== 'visible') {
+        controller.abort();
+        controller = new AbortController();
+      } else markRead();
+    };
     markRead();
-    document.addEventListener('visibilitychange', markRead);
+    document.addEventListener('visibilitychange', changed);
     return () => {
       controller.abort();
-      document.removeEventListener('visibilitychange', markRead);
+      document.removeEventListener('visibilitychange', changed);
     };
   }, [
     path,
-    lastInbound?.id,
-    lastInbound?.readAt,
-    active,
-    newMessages,
+    readSnapshot,
     data.messages,
+    active,
+    followingLatest,
+    newMessages,
+    data.conversation?.id,
+    initial.conversation?.id,
   ]);
   const act = async (action: string, fields: Record<string, unknown> = {}) => {
     if (action === 'copied' || action === 'copyError') {
@@ -325,6 +351,7 @@ export function ConversationChat({
           onScroll={() => {
             if (history.current) {
               atBottom.current = isNearBottom(history.current);
+              setFollowingLatest(atBottom.current);
               if (atBottom.current) setNewMessages(0);
             }
           }}

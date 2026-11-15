@@ -45,14 +45,23 @@ export async function POST(request: Request, context: Context) {
     const chat = await db.getConversationChat(id);
     if (!chat.conversation) return invalid();
     if (data.action === 'read') {
+      const incomingIds = new Set(
+        chat.messages.filter((m) => m.direction === 'in').map((m) => m.id),
+      );
       if (
         !validId(data.messageId) ||
-        !chat.messages.some(
-          (m) => m.id === data.messageId && m.direction === 'in',
-        )
+        !Array.isArray(data.visibleMessageIds) ||
+        !data.visibleMessageIds.includes(data.messageId) ||
+        data.visibleMessageIds.length > incomingIds.size ||
+        new Set(data.visibleMessageIds).size !==
+          data.visibleMessageIds.length ||
+        !data.visibleMessageIds.every(
+          (id: unknown) => validId(id) && incomingIds.has(id),
+        ) ||
+        !incomingIds.has(data.messageId)
       )
         return invalid();
-      await db.markConversationRead(id, data.messageId);
+      await db.markConversationRead(id, data.messageId, data.visibleMessageIds);
       return { ok: true };
     }
     if (data.action === 'generate') {

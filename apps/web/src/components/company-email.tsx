@@ -129,7 +129,11 @@ export function Draft({
             ] ?? message.source}
           </span>
         )}
-        <LocalTime value={message.sentAt ?? message.createdAt} />
+        {message.providerTimestampUnknown ? (
+          <span>{uk.socialAccounts.timestampUnknown}</span>
+        ) : (
+          <LocalTime value={message.sentAt ?? message.createdAt} />
+        )}
       </p>
       {message.classification && (
         <p className="text-xs text-muted-foreground">
@@ -422,12 +426,9 @@ export function CompanyChat({
       (row) => row.contactId === contactId && row.campaignId === campaignId,
     )
     .map((row) => row.id);
-  const messages = data.messages
-    .filter((row) => conversationIds.includes(row.conversationId))
-    .sort(
-      (a, b) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
+  const messages = data.messages.filter((row) =>
+    conversationIds.includes(row.conversationId),
+  );
   const generating = !!task && ['queued', 'running'].includes(task.status);
   const request = (action: 'generate' | 'call') => {
     const fields = {

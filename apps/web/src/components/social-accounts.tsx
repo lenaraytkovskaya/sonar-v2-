@@ -75,9 +75,13 @@ export function SocialAccounts({
           ? result.inboxSync?.created
             ? uk.socialAccounts.syncInboxQueued
             : uk.socialAccounts.syncInboxExisting
-          : method === 'POST' && 'action' in fields
-            ? uk.socialAccounts.checkQueued
-            : uk.outreach.saved,
+          : method === 'POST' &&
+              'action' in fields &&
+              fields.action === 'inboxPolling'
+            ? uk.outreach.saved
+            : method === 'POST' && 'action' in fields
+              ? uk.socialAccounts.checkQueued
+              : uk.outreach.saved,
       );
       return true;
     } catch (error) {
@@ -139,6 +143,35 @@ export function SocialAccounts({
                   account.status as keyof typeof uk.socialAccounts.statuses
                 ] ?? uk.tasks.status.paused)}
           </p>
+          {account.network === 'facebook' && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                pending ||
+                (!account.inboxPollingEnabled && !account.canSyncInbox)
+              }
+              onClick={() =>
+                void mutate('POST', {
+                  action: 'inboxPolling',
+                  id: account.id,
+                  enabled: !account.inboxPollingEnabled,
+                })
+              }
+            >
+              {account.inboxPollingEnabled
+                ? uk.socialAccounts.pollDisable
+                : uk.socialAccounts.pollEnable}
+            </Button>
+          )}
+          {account.inboxSyncCreated !== null && (
+            <p>
+              {uk.socialAccounts.syncImported} {account.inboxSyncCreated}
+            </p>
+          )}
+          {account.inboxSyncComplete === false && (
+            <p className="text-wait">{uk.socialAccounts.syncPartial}</p>
+          )}
           {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
           {account.checkedAt && (
             <p>
@@ -151,7 +184,7 @@ export function SocialAccounts({
             </p>
           )}
           <div className="flex flex-wrap gap-2">
-            {account.network === 'instagram' && (
+            {['instagram', 'facebook'].includes(account.network) && (
               <Button
                 type="button"
                 variant="outline"
@@ -207,9 +240,11 @@ export function SocialAccounts({
               {account.enabled ? uk.email.disable : uk.email.enable}
             </Button>
           </div>
-          {account.network === 'instagram' && (
+          {['instagram', 'facebook'].includes(account.network) && (
             <p className="text-muted-foreground">
-              {uk.socialAccounts.syncInboxHint}
+              {account.network === 'facebook'
+                ? uk.socialAccounts.syncFacebookInboxHint
+                : uk.socialAccounts.syncInboxHint}
             </p>
           )}
         </section>

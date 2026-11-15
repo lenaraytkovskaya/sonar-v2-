@@ -1,4 +1,8 @@
+import { messageHistoryOrder } from './message-history.js';
+export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
+import { assertFacebookBinding } from './social-inbox.js';
+import { canonicalSocialPeer } from '@sonar/core/social-inbox';
 import { selectOutreachContacts } from '@sonar/core';
 import { sonarPool } from './index.js';
 import {
@@ -33,6 +37,7 @@ export interface OutreachMessage {
   readAt: Date | null;
   createdAt: Date;
   sentAt: Date | null;
+  providerTimestampUnknown?: boolean;
 }
 export interface OutreachConversation {
   id: string;
@@ -68,8 +73,8 @@ const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('desc')} limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
   filters: {
@@ -131,7 +136,7 @@ export async function getCompanyChat(companyId: string) {
         [companyId],
       ),
       sonarPool.query<OutreachMessage>(
-        `${messageSelect} where v.company_id=$1 order by m.created_at,m.id`,
+        `${messageSelect} where v.company_id=$1 order by ${messageHistoryOrder('asc', true)}`,
         [companyId],
       ),
       sonarPool.query<{
@@ -522,11 +527,27 @@ async function lockedMessage(c: PoolClient, id: string) {
   const {
     rows: [identity],
   } = await c.query(
-    'select v.company_id from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
+    `select v.company_id,v.id as conversation_id,v.account_id,v.peer_value,v.provider_thread_id,m.to_value,a.channel as receiving_channel
+    from messages m join conversations v on v.id=m.conversation_id left join channel_accounts a on a.id=v.account_id where m.id=$1`,
     [id],
   );
   if (!identity) invalid('Повідомлення не знайдено.');
+  const boundFacebook =
+    identity.receiving_channel === 'facebook' && identity.provider_thread_id;
+  // Match reply() lock order: conversation, company, then message history.
+  if (boundFacebook)
+    await c.query('select id from conversations where id=$1 for update', [
+      identity.conversation_id,
+    ]);
   await assertAllowed(c, identity.company_id, '');
+  if (boundFacebook)
+    await assertFacebookBinding(
+      c,
+      identity.conversation_id,
+      identity.account_id,
+      canonicalSocialPeer('facebook', identity.peer_value ?? identity.to_value),
+      identity.provider_thread_id,
+    );
   const {
     rows: [message],
   } = await c.query(
