@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
   assertSocialSession,
   createSocialSendBrowser,
+  facebookSessionDiagnostic,
 } from './social-send-browser.js';
+import { safeSocialSessionDiagnostic } from '@sonar/core/social-session';
 
 describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
   'local LinkedIn session documents',
@@ -29,7 +31,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     );
     const authenticated =
       '<a hidden href="/messaging/hidden">Hidden</a><button class="global-nav__primary-link-me-menu-trigger">Me</button>';
-    async function fixture(body: string, status = 200, path = '/') {
+    async function fixture(
+      body: string,
+      status = 200,
+      path = '/',
+      network: 'linkedin' | 'facebook' = 'linkedin',
+    ) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
@@ -39,7 +46,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         return route.fulfill({
           status,
           contentType: 'text/html; charset=utf-8',
-          body: `<script>history.replaceState(null, '', ${JSON.stringify(path)})</script>${body}`,
+          body: `<!doctype html><script>history.replaceState(null, '', ${JSON.stringify(path)})</script>${body}`,
         });
       });
       const adapter = createSocialSendBrowser(
@@ -51,12 +58,394 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       );
       const check = () =>
         adapter.check(
-          { id: 'synthetic', channel: 'linkedin', settings: {} },
+          { id: 'synthetic', channel: network, settings: {} },
           { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
           200,
         );
-      return { context, adapter, check };
+      return {
+        context,
+        adapter,
+        check,
+        setDocument: (nextBody: string, nextPath = '/', nextStatus = 200) => {
+          body = nextBody;
+          path = nextPath;
+          status = nextStatus;
+        },
+      };
     }
+    it.each([
+      {
+        name: 'blank',
+        html: '',
+        expected: {
+          lang: 'missing',
+          bodyRendered: false,
+          bodyTextLength: 'empty',
+          visible: { busy: 0, progress: 0, dialog: 0 },
+        },
+      },
+      {
+        name: 'loading shell',
+        html: '<main style="height:300px"><div role="progressbar" aria-busy="true">Loading…</div></main>',
+        expected: {
+          lang: 'missing',
+          bodyRendered: true,
+          bodyTextLength: '1_99',
+          visible: { busy: 1, progress: 1, main: 1, dialog: 0 },
+        },
+      },
+      {
+        name: 'consent',
+        html: '<dialog open><form><h2>Cookies on Facebook</h2><button onclick="window.clicked()">Allow all cookies</button><button onclick="window.clicked()">Decline optional cookies</button></form></dialog>',
+        expected: {
+          visible: { dialog: 1, form: 1, progress: 0 },
+          names: { allow_all_cookies: 1, decline_optional_cookies: 1 },
+        },
+      },
+      {
+        name: 'Russian profile label',
+        html: '<script>document.documentElement.lang="ru-RU"</script><header><nav><button aria-label="Ваш профиль">Private name</button><a href="/profile.php?id=123456789">Profile</a><a href="/messages/e2ee/t/123456789/">Messages</a></nav></header><main>Лента</main>',
+        expected: {
+          lang: 'ru',
+          visible: { navigation: 1, banner: 1, main: 1 },
+          names: { your_profile: 1 },
+          hrefs: { profile: 1, messages: 1 },
+        },
+      },
+      {
+        name: 'Ukrainian account label',
+        html: '<script>document.documentElement.lang="uk_UA"</script><header role="banner"><nav><a href="/">Головна</a><button aria-label="Обліковий запис">Private name</button></nav></header>',
+        expected: { lang: 'uk', names: { home: 1, account: 1 } },
+      },
+      {
+        name: 'English menu navigation',
+        html: '<script>document.documentElement.lang="en-GB"</script><header><nav><button aria-label="Menu">Menu</button><a href="/private-username/">Private name</a></nav></header><main>Feed</main>',
+        expected: {
+          lang: 'en',
+          visible: { banner: 1, navigation: 1, main: 1 },
+          names: { menu: 1, account: 0 },
+          hrefs: { other: 1 },
+        },
+      },
+      {
+        name: 'other locale',
+        html: '<script>document.documentElement.lang="de-DE"</script><main>Startseite</main>',
+        expected: { lang: 'other', bodyRendered: true },
+      },
+    ])(
+      'observes FB $name without promoting it to valid auth or clicking',
+      async (c) => {
+        const f = await fixture(c.html, 200, '/', 'facebook');
+        const clicked = vi.fn();
+        await f.context.exposeBinding('clicked', clicked);
+        try {
+          const error = await f.check().catch((e: unknown) => e);
+          expect(error).toMatchObject({
+            reason: 'unknown_auth',
+            diagnostic: {
+              semanticAuthImplemented: false,
+              visible: { legacyAuth: 0, semanticAuth: 0 },
+              page: {
+                readyState: 'complete',
+                scanTruncated: false,
+                ...c.expected,
+              },
+            },
+          });
+          const diagnostic = (error as { diagnostic: unknown }).diagnostic;
+          expect(safeSocialSessionDiagnostic(diagnostic)).toEqual(diagnostic);
+          expect(JSON.stringify(diagnostic)).not.toMatch(
+            /Private|private|123456789|https|Cookies on|Startseite|Лента/,
+          );
+          expect(clicked).not.toHaveBeenCalled();
+        } finally {
+          await f.adapter.close();
+        }
+      },
+    );
+    it('caps generic names and href shapes, discards private labels, and excludes hidden evidence', async () => {
+      const f = await fixture('', 200, '/', 'facebook');
+      const page = await f.context.newPage();
+      try {
+        await page.goto('https://www.facebook.com/');
+        await page.setContent(
+          '<nav><button aria-labelledby="generic">Private name</button><span id="generic">Your profile</span><button aria-label="Home">Private</button><button>Home</button><button>Home</button><a href="/">Home</a><a href="/me/">Private</a><a href="/messages/t/123456789?secret">Private</a><a href="/123456789/">Private</a><a href="/people/private/123456789/">Private</a><a href="/login/?secret">Private</a><a href="https://private.example/123456789">Private</a><a href="javascript:void(0)">Private</a><a href="https://user:secret@www.facebook.com/">Private</a><button aria-label="private arbitrary label">Private</button></nav><div hidden><main><form><input type="password" value="secret"><progress></progress><a href="/">Account</a></form></main></div><div aria-hidden="true"><button>Menu</button></div>',
+        );
+        const d = await facebookSessionDiagnostic(page, 'auth', 200, 'timeout');
+        expect(d.page).toMatchObject({
+          names: { home: 2, your_profile: 1, account: 0, menu: 0 },
+          hrefs: {
+            home: 1,
+            me: 1,
+            messages: 1,
+            profile: 2,
+            login: 1,
+            other: 2,
+          },
+          visible: {
+            password: 0,
+            progress: 0,
+            form: 0,
+            main: 0,
+            navigation: 1,
+          },
+        });
+        expect(JSON.stringify(d)).not.toMatch(
+          /Private|private|secret|123456789|https|arbitrary/,
+        );
+        await page.setContent(
+          '<main><header>Private section header</header><nav role="presentation">Private</nav></main>',
+        );
+        expect(
+          (await facebookSessionDiagnostic(page, 'auth', 200, 'timeout')).page
+            ?.visible,
+        ).toMatchObject({ banner: 0, navigation: 0, main: 1 });
+        await page.setContent(
+          '<main>' +
+            'x'.repeat(1000) +
+            '<a href="/">Home</a>'.repeat(1001) +
+            '</main>',
+        );
+        expect(
+          (await facebookSessionDiagnostic(page, 'auth', 200, 'timeout')).page,
+        ).toMatchObject({
+          scanTruncated: true,
+          bodyTextLength: '1000_plus',
+          names: { home: 2 },
+          hrefs: { home: 2 },
+        });
+      } finally {
+        await f.adapter.close();
+      }
+    });
+    it.each(['reject', 'timeout'] as const)(
+      'preserves the primary error when page observation fails: %s',
+      async (kind) => {
+        const f = await fixture('', 200, '/', 'facebook');
+        f.context.on('page', (page) => {
+          if (kind === 'reject')
+            vi.spyOn(page, 'evaluate').mockRejectedValueOnce(
+              Error('private secret'),
+            );
+          else
+            vi.spyOn(page, 'evaluate').mockImplementationOnce(
+              () => new Promise(() => {}),
+            );
+        });
+        const start = Date.now();
+        try {
+          const error = await f.check().catch((e: unknown) => e);
+          expect(error).toMatchObject({
+            reason: 'unknown_auth',
+            diagnostic: {
+              semanticAuthImplemented: false,
+              visible: { legacyAuth: 0 },
+            },
+          });
+          expect(
+            (error as { diagnostic: { page?: unknown } }).diagnostic.page,
+          ).toBeUndefined();
+          expect(JSON.stringify(error)).not.toMatch(/private|secret/);
+          expect(Date.now() - start).toBeLessThan(2000);
+        } finally {
+          await f.adapter.close();
+        }
+      },
+    );
+    it('does not observe successful FB checks', async () => {
+      const f = await fixture(
+        '<button aria-label="Account">Account</button>',
+        200,
+        '/',
+        'facebook',
+      );
+      const evaluate = vi.fn();
+      f.context.on('page', (page) => {
+        const original = page.evaluate.bind(page);
+        vi.spyOn(page, 'evaluate').mockImplementation((...args) => {
+          evaluate();
+          return original(...args);
+        });
+      });
+      try {
+        await expect(f.check()).resolves.toBeUndefined();
+        expect(evaluate).not.toHaveBeenCalled();
+      } finally {
+        await f.adapter.close();
+      }
+    });
+    it.each([
+      {
+        body: '',
+        reason: 'unknown_auth',
+        kind: 'home',
+        errorKind: 'timeout',
+        auth: 0,
+        login: 0,
+        checkpoint: 0,
+      },
+      {
+        body: '<a aria-label="Account">private</a>',
+        status: 403,
+        reason: 'unknown_auth',
+        kind: 'home',
+        errorKind: 'unconfirmed',
+        auth: 1,
+        login: 0,
+        checkpoint: 0,
+      },
+      {
+        body: '<input type="password" value="secret">',
+        reason: 'login_required',
+        kind: 'home',
+        errorKind: 'unconfirmed',
+        auth: 0,
+        login: 1,
+        checkpoint: 0,
+      },
+      {
+        body: '',
+        path: '/login/?private=secret',
+        reason: 'login_required',
+        kind: 'login',
+        errorKind: 'unconfirmed',
+        auth: 0,
+        login: 0,
+        checkpoint: 0,
+      },
+      {
+        body: '<form action="/checkpoint/private"><button>private</button></form><input type="password">',
+        reason: 'checkpoint',
+        kind: 'home',
+        errorKind: 'unconfirmed',
+        auth: 0,
+        login: 1,
+        checkpoint: 1,
+      },
+      {
+        body: '<script>setTimeout(() => history.replaceState(null, "", "/checkpoint/private?secret"), 30)</script>',
+        reason: 'checkpoint',
+        kind: 'checkpoint',
+        errorKind: 'timeout',
+        auth: 0,
+        login: 0,
+        checkpoint: 0,
+      },
+      {
+        body: '<div data-testid="captcha">private</div>',
+        reason: 'captcha',
+        kind: 'home',
+        errorKind: 'unconfirmed',
+        auth: 0,
+        login: 0,
+        checkpoint: 0,
+        captcha: 1,
+      },
+    ])(
+      'attaches safe FB session diagnostic before page closure: $reason $kind',
+      async (c) => {
+        const f = await fixture(
+          c.body,
+          c.status ?? 200,
+          c.path ?? '/',
+          'facebook',
+        );
+        try {
+          const error = await f.check().catch((e: unknown) => e);
+          expect(error).toMatchObject({
+            reason: c.reason,
+            diagnostic: {
+              version: 1,
+              stage: 'auth',
+              urlKind: c.kind,
+              navigationHttpStatus: c.status ?? 200,
+              errorKind: c.errorKind,
+              visible: {
+                legacyAuth: c.auth,
+                semanticAuth: 0,
+                login: c.login,
+                checkpoint: c.checkpoint,
+                captcha: c.captcha ?? 0,
+              },
+            },
+          });
+          expect(JSON.stringify(error)).not.toMatch(
+            /private|secret|https|input type|rawUrl/,
+          );
+          expect(f.context.pages()).toHaveLength(0);
+        } finally {
+          await f.adapter.close();
+        }
+      },
+    );
+    it('uses fresh FB evidence on every attempt in the cached context and never promotes unconfirmed auth', async () => {
+      const f = await fixture('', 200, '/', 'facebook');
+      try {
+        const first = await f.check().catch((e: unknown) => e);
+        expect(first).toMatchObject({
+          reason: 'unknown_auth',
+          diagnostic: { urlKind: 'home', visible: { login: 0 } },
+        });
+        f.setDocument('<input type="password">', '/messages/');
+        await expect(f.check()).rejects.toMatchObject({
+          reason: 'login_required',
+          diagnostic: { urlKind: 'inbox', visible: { login: 1 } },
+        });
+        f.setDocument(
+          '<a aria-label="Account">Account</a><input hidden type="password">',
+        );
+        await expect(f.check()).resolves.toBeUndefined();
+        expect(first).toMatchObject({
+          diagnostic: { urlKind: 'home', visible: { login: 0 } },
+        });
+        expect(f.context.pages()).toHaveLength(0);
+      } finally {
+        await f.adapter.close();
+      }
+    });
+    it('preserves FB navigation timeout classification and null HTTP status', async () => {
+      const f = await fixture('', 200, '/', 'facebook');
+      f.context.on('page', (page) =>
+        vi.spyOn(page, 'goto').mockRejectedValueOnce(
+          Object.assign(Error('private URL secret'), {
+            name: 'TimeoutError',
+          }),
+        ),
+      );
+      try {
+        const error = await f.check().catch((e: unknown) => e);
+        expect(error).toMatchObject({
+          reason: 'timeout',
+          diagnostic: {
+            stage: 'navigation',
+            urlKind: 'other',
+            navigationHttpStatus: null,
+            errorKind: 'timeout',
+          },
+        });
+        expect(JSON.stringify(error)).not.toMatch(/private|secret|https/);
+        expect(f.context.pages()).toHaveLength(0);
+      } finally {
+        await f.adapter.close();
+      }
+    });
+    it('does not replace an FB auth error when diagnostic collection fails', async () => {
+      const f = await fixture('<input type="password">', 200, '/', 'facebook');
+      f.context.on('page', (page) =>
+        vi.spyOn(page, 'getByRole').mockImplementation(() => {
+          throw Error('private DOM secret');
+        }),
+      );
+      try {
+        const error = await f.check().catch((e: unknown) => e);
+        expect(error).toMatchObject({ reason: 'login_required' });
+        expect((error as { diagnostic?: unknown }).diagnostic).toBeUndefined();
+        expect(JSON.stringify(error)).not.toMatch(/private|secret|https/);
+        expect(f.context.pages()).toHaveLength(0);
+      } finally {
+        await f.adapter.close();
+      }
+    });
     it('accepts the observed semantic header without any legacy marker', async () => {
       const f = await fixture(observed, 200, '/feed/');
       try {

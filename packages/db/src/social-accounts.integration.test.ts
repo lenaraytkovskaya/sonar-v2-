@@ -84,13 +84,51 @@ it.skipIf(!enabled)(
           status: 'done',
         });
         expect(check).toHaveBeenCalledOnce();
-        if (network === 'linkedin') {
+        if (network === 'linkedin' || network === 'facebook') {
           const diagnostic = {
             version: 1,
             stage: 'auth',
-            urlKind: 'feed',
+            urlKind: network === 'facebook' ? 'home' : 'feed',
             navigationHttpStatus: 200,
             errorKind: 'timeout',
+            ...(network === 'facebook'
+              ? {
+                  semanticAuthImplemented: false as const,
+                  page: {
+                    lang: 'ru' as const,
+                    readyState: 'complete' as const,
+                    bodyRendered: true,
+                    bodyTextLength: '100_999' as const,
+                    scanTruncated: false,
+                    visible: {
+                      busy: 0,
+                      progress: 0,
+                      dialog: 1,
+                      form: 1,
+                      password: 0,
+                      navigation: 1,
+                      banner: 1,
+                      main: 1,
+                    },
+                    names: {
+                      home: 0,
+                      menu: 1,
+                      account: 0,
+                      your_profile: 1,
+                      allow_all_cookies: 0,
+                      decline_optional_cookies: 0,
+                    },
+                    hrefs: {
+                      home: 1,
+                      profile: 2,
+                      messages: 1,
+                      me: 0,
+                      login: 0,
+                      other: 2,
+                    },
+                  },
+                }
+              : {}),
             visible: {
               legacyAuth: 0,
               semanticAuth: 0,
@@ -108,6 +146,23 @@ it.skipIf(!enabled)(
               diagnostic: {
                 ...diagnostic,
                 rawUrl: 'https://private.test/?token=secret',
+                ...(diagnostic.page
+                  ? {
+                      page: {
+                        ...diagnostic.page,
+                        rawText: 'private secret',
+                        names: {
+                          ...diagnostic.page.names,
+                          rawAria: 'private',
+                        },
+                        hrefs: {
+                          ...diagnostic.page.hrefs,
+                          other: 999,
+                          rawUrl: 'secret',
+                        },
+                      },
+                    }
+                  : {}),
               },
             }));
             expect(outcome).toMatchObject({
@@ -152,6 +207,7 @@ it.skipIf(!enabled)(
             reasonUk: socialSessionCheckReasons.unknown_auth,
             result: { valid: false },
           });
+          expect(unsafe.result).toEqual({ valid: false });
           expect(
             JSON.stringify(
               (await accounts.listSocialAccounts()).find(
@@ -159,7 +215,20 @@ it.skipIf(!enabled)(
               ),
             ),
           ).not.toContain('secret');
-          await checkSession(saved.id, check);
+          expect(await checkSession(saved.id, check)).toEqual({
+            status: 'done',
+            result: { valid: true },
+          });
+          expect(
+            (await accounts.listSocialAccounts()).find(
+              (row) => row.id === saved.id,
+            ),
+          ).toMatchObject({
+            status: 'active',
+            sessionStatus: 'valid',
+            sessionCheckReason: null,
+            reasonUk: null,
+          });
         }
         await accounts.updateSocialAccount(
           saved.id,

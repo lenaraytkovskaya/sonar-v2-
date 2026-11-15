@@ -267,6 +267,20 @@
       "when": 1794700800001,
       "tag": "0037_google_maps_resolution",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794700800002,
+      "tag": "0038_social_inbox_gates",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794700800003,
+      "tag": "0039_whatsapp_identity",
+      "breakpoints": true
     }
   ]
 }

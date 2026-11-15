@@ -69,11 +69,11 @@ beforeAll(async () => {
     await admin.createQueue(name);
   originalSettings = (
     await db.sonarPool.query(
-      "select key,value from settings where key in ('social.inbox.enabled','send.hours','send.time_zones')",
+      "select key,value from settings where key in ('social.inbox.facebook.enabled','social.inbox.instagram.enabled','social.inbox.enabled','send.hours','send.time_zones')",
     )
   ).rows;
   await db.sonarPool.query(
-    "update settings set value='true' where key='social.inbox.enabled'",
+    "update settings set value='true' where key in ('social.inbox.enabled','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
   );
   await db.sonarPool.query(
     "update settings set value=$1 where key='send.hours'",
@@ -106,6 +106,7 @@ beforeAll(async () => {
         id,
         {
           sessionStatus: 'valid',
+          inboxPollingEnabled: true,
           cookiesEncrypted: cookies,
           proxyIndex: 0,
           proxyFingerprint: socialProxyFingerprint({
@@ -213,7 +214,6 @@ it.skipIf(!enabled)(
         { status: 'disabled' },
         { status: 'paused' },
         { sessionStatus: 'unconfirmed' },
-        { channel: 'facebook' },
         { channel: 'linkedin' },
       ]) {
         await db.sonarPool.query(
@@ -455,6 +455,7 @@ it.skipIf(!enabled)(
         id,
         {
           sessionStatus: 'valid',
+          inboxPollingEnabled: true,
           cookiesEncrypted: cookies,
           proxyIndex: 0,
           proxyFingerprint: socialProxyFingerprint({
@@ -624,6 +625,189 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
+  'manually imports Facebook unknown-time replies into the existing account dialog while all polling gates are closed',
+  async () => {
+    const accounts = await import('./social-accounts.js');
+    const profile = 'https://www.facebook.com/100000000000009/';
+    const threadId = '900000000000009';
+    const contact = (
+      await db.sonarPool.query(
+        "insert into contacts(company_id,kind,value,normalized,source) values($1,'social',$2,$2,'manual') returning id",
+        [secondCompany, profile],
+      )
+    ).rows[0];
+    const dialog = (
+      await db.sonarPool.query(
+        "insert into conversations(channel,account_id,peer_value,contact_id,company_id) values('social',$1,$2,$3,$4) returning id",
+        [account, profile, contact.id, secondCompany],
+      )
+    ).rows[0];
+    const before = await checkpoint();
+    await db.sonarPool.query(
+      'update channel_accounts set owner_id=$2 where id=$1',
+      [account, user],
+    );
+    await db.sonarPool.query(
+      "update settings set value='false' where key in ('social.inbox.enabled','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
+    );
+    try {
+      expect(await inbox.reconcileSocialInbox(now)).toBe(0);
+      const receipt = await accounts.syncSocialInbox(account, user);
+      const observed = {
+        ...message('100000000000009@msgr.1', 'in', profile),
+        threadId,
+        occurredAt: null,
+        providerTimestamp: '01:08',
+        providerOrder: 0,
+      };
+      const batch = {
+        messages: [
+          observed,
+          {
+            ...observed,
+            externalMessageId: '100000000000008@msgr.2',
+            providerOrder: 1,
+            direction: 'out' as const,
+            senderProfile: 'https://www.facebook.com/100000000000008/',
+          },
+        ],
+        resumeAnchor: {
+          threadUrl:
+            'https://www.facebook.com/messages/e2ee/t/' + threadId + '/',
+        },
+      };
+      const adapter = {
+        sync: vi.fn<
+          import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter['sync']
+        >(async (_a, _cp, persist) => {
+          await persist(batch);
+          await persist(batch);
+          return {
+            complete: false,
+            reason: 'unsupported_dom',
+            skipped: ['pagination_unverified'],
+          };
+        }),
+      };
+      expect(
+        await worker.runSocialInboxSync(
+          { accountId: account },
+          adapter,
+          now,
+          receipt.id,
+        ),
+      ).toMatchObject({
+        status: 'done',
+        result: { mode: 'manual', created: 2, complete: false },
+      });
+      const rows = (
+        await db.sonarPool.query(
+          'select conversation_id,sent_at,social_meta from messages where account_id=$1 and external_message_id=any($2::text[])',
+          [account, batch.messages.map((m) => m.externalMessageId)],
+        )
+      ).rows;
+      expect(rows).toHaveLength(2);
+      rows.forEach((row) => {
+        expect(row.conversation_id).toBe(dialog.id);
+        expect(row.sent_at).toBeNull();
+        expect(row.social_meta.occurredAt).toBeNull();
+        expect(row.social_meta.observedAt).toBe(now.toISOString());
+      });
+      const chat = await inbound.getConversationChat(dialog.id);
+      expect(chat.messages.every((m) => m.providerTimestampUnknown)).toBe(true);
+      expect(chat.messages.map((m) => m.direction)).toEqual(['in', 'out']);
+      expect(chat.conversation?.companyId).toBe(secondCompany);
+      const cp = await checkpoint();
+      expect(cp.watermark).toBe(before?.watermark ?? null);
+      expect(cp.nextPollAt).toBe(before?.nextPollAt);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from tasks where type='ai.inbound' and payload->>'messageId' in(select id::text from messages where conversation_id=$1)",
+            [dialog.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from tasks where type='message.send' and payload->>'messageId' in(select id::text from messages where conversation_id=$1)",
+            [dialog.id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+      await db.sonarPool.query("update tasks set status='done' where id=$1", [
+        receipt.id,
+      ]);
+      await db.sonarPool.query(
+        "update settings set value='true' where key='social.inbox.enabled'",
+      );
+      await resetGate();
+      expect(
+        await worker.runSocialInboxSync({ accountId: account }, adapter, now),
+      ).toMatchObject({
+        status: 'skipped',
+        reasonCode: 'social_inbox_disabled',
+      });
+      expect(await inbox.reconcileSocialInbox(now)).toBe(0);
+      expect(adapter.sync).toHaveBeenCalledOnce();
+      const stranger = 'https://www.facebook.com/100000000000099/';
+      await inbox.persistSocialInboxBatch(account, 'facebook', {
+        messages: [
+          {
+            ...observed,
+            externalMessageId: '100000000000099@msgr.3',
+            threadId: '900000000000099',
+            senderProfile: stranger,
+            peerProfile: stranger,
+          },
+        ],
+        resumeAnchor: null,
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select company_id from conversations where account_id=$1 and provider_thread_id=$2',
+            [account, '900000000000099'],
+          )
+        ).rows[0].company_id,
+      ).toBeNull();
+      await expect(
+        accounts.setSocialInboxPolling(account, true, randomUUID()),
+      ).rejects.toThrow();
+      await accounts.setSocialInboxPolling(account, false, user);
+    } finally {
+      const threads = [threadId, '900000000000099'];
+      await db.sonarPool.query(
+        "delete from tasks where payload->>'messageId' in(select id::text from messages where conversation_id in(select id from conversations where account_id=$1 and provider_thread_id=any($2::text[])))",
+        [account, threads],
+      );
+      await db.sonarPool.query(
+        'delete from messages where conversation_id in(select id from conversations where account_id=$1 and provider_thread_id=any($2::text[]))',
+        [account, threads],
+      );
+      await db.sonarPool.query(
+        'delete from conversations where account_id=$1 and provider_thread_id=any($2::text[])',
+        [account, threads],
+      );
+      await db.sonarPool.query('delete from contacts where id=$1', [
+        contact.id,
+      ]);
+      await db.sonarPool.query(
+        "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',$2::jsonb) where id=$1",
+        [account, JSON.stringify(before ?? {})],
+      );
+      await db.sonarPool.query(
+        'update channel_accounts set owner_id=null,settings=settings||\'{"inboxPollingEnabled":true}\'::jsonb where id=$1',
+        [account],
+      );
+      await db.sonarPool.query(
+        "update settings set value='true' where key in ('social.inbox.enabled','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
+      );
+    }
+  },
+);
+it.skipIf(!enabled)(
   'imports both directions once, scopes threads to accounts, matches unambiguously and queues only inbound AI',
   async () => {
     const batch = {
@@ -647,7 +831,7 @@ it.skipIf(!enabled)(
     expect(rows[0].company_id).toBe(company);
     expect(rows[0].source).toBe('inbound');
     expect(rows[1].source).toBe('manual');
-    expect(rows[1].sent_at).toEqual(new Date(batch.messages[1]!.occurredAt));
+    expect(rows[1].sent_at).toEqual(new Date(batch.messages[1]!.occurredAt!));
     expect(rows[0].social_meta).toMatchObject({
       network: 'facebook',
       senderProfile: peer,

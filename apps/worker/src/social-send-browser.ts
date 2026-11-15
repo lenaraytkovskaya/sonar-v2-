@@ -955,6 +955,8 @@ async function sendInstagram(
 const legacyLinkedInAuth =
   'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger';
 const instagramAuth = 'a[href^="/direct/"], a[href="/accounts/edit/"]';
+const facebookAuth =
+  '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]';
 const captchaSelector = 'iframe[src*="captcha"], [data-testid="captcha"]';
 const checkpointSelector =
   'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]';
@@ -1012,7 +1014,10 @@ async function uniqueLinkedInNavigation(page: Page) {
       .count()) === 1
   );
 }
-async function assertSessionNegatives(page: Page, network: SocialNetwork) {
+export async function assertSessionNegatives(
+  page: Page,
+  network: SocialNetwork,
+) {
   const url = new URL(page.url());
   if (
     url.protocol !== 'https:' ||
@@ -1056,8 +1061,7 @@ export async function assertSocialSession(
   await assertSessionNegatives(page, network);
   const authenticated = {
     instagram: instagramAuth,
-    facebook:
-      '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]',
+    facebook: facebookAuth,
     linkedin: legacyLinkedInAuth,
   }[network];
   const legacy = page.locator(authenticated).filter({ visible: true });
@@ -1105,11 +1109,16 @@ export async function assertSocialSession(
     throw new SocialSessionCheckError('unknown_auth');
 }
 /** Counts only the markers used by the session guard; never collect DOM text. */
-export async function instagramSessionMarkers(
+export const instagramSessionMarkers = (page: Page) =>
+  sessionMarkers(page, instagramAuth);
+export const facebookSessionMarkers = (page: Page) =>
+  sessionMarkers(page, facebookAuth);
+async function sessionMarkers(
   page: Page,
+  authenticated: string,
 ): Promise<SocialSessionCheckDiagnostic['visible']> {
   const counts = await Promise.all([
-    page.locator(instagramAuth).filter({ visible: true }).count(),
+    page.locator(authenticated).filter({ visible: true }).count(),
     page.locator(captchaSelector).filter({ visible: true }).count(),
     page.locator(checkpointSelector).filter({ visible: true }).count(),
     page.getByText(checkpointText).filter({ visible: true }).count(),
@@ -1121,6 +1130,267 @@ export async function instagramSessionMarkers(
     captcha: Math.min(counts[1]!, 2),
     checkpoint: Math.min(counts[2]! + counts[3]!, 2),
     login: Math.min(counts[4]!, 2),
+  };
+}
+/** Diagnostic-only observation. No inferred auth state and no raw strings leave the page. */
+async function facebookPageObservation(page: Page) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      page.evaluate((): NonNullable<SocialSessionCheckDiagnostic['page']> => {
+        const visible = (node: Element) => {
+          const box = node.getBoundingClientRect();
+          return (
+            box.width > 0 &&
+            box.height > 0 &&
+            getComputedStyle(node).visibility === 'visible' &&
+            !node.closest('[hidden],[aria-hidden="true"],[inert]')
+          );
+        };
+        const lang = document.documentElement.lang
+          .trim()
+          .toLowerCase()
+          .split(/[-_]/)[0];
+        const length = document.body?.innerText.trim().length ?? 0;
+        const result: NonNullable<SocialSessionCheckDiagnostic['page']> = {
+          lang: !lang
+            ? 'missing'
+            : lang === 'en' || lang === 'uk' || lang === 'ru'
+              ? lang
+              : 'other',
+          readyState: document.readyState,
+          bodyRendered: Boolean(document.body && visible(document.body)),
+          bodyTextLength: !length
+            ? 'empty'
+            : length < 100
+              ? '1_99'
+              : length < 1000
+                ? '100_999'
+                : '1000_plus',
+          scanTruncated: false,
+          visible: {
+            busy: 0,
+            progress: 0,
+            dialog: 0,
+            form: 0,
+            password: 0,
+            navigation: 0,
+            banner: 0,
+            main: 0,
+          },
+          names: {
+            home: 0,
+            menu: 0,
+            account: 0,
+            your_profile: 0,
+            allow_all_cookies: 0,
+            decline_optional_cookies: 0,
+          },
+          hrefs: {
+            home: 0,
+            profile: 0,
+            messages: 0,
+            me: 0,
+            login: 0,
+            other: 0,
+          },
+        };
+        const selectors = {
+          busy: '[aria-busy="true"]',
+          progress: 'progress,[role="progressbar"]',
+          dialog: 'dialog[open],[role="dialog"],[role="alertdialog"]',
+          form: 'form,[role="form"]',
+          password: 'input[type="password"]',
+          navigation: 'nav:not([role]),[role="navigation"]',
+          banner: 'header:not([role]),[role="banner"]',
+          main: 'main:not([role]),[role="main"]',
+        };
+        const interactive = 'a[href],button,[role="button"],[role="link"]';
+        const nodes = document.querySelectorAll(
+          `${Object.values(selectors).join(',')},${interactive}`,
+        );
+        result.scanTruncated = nodes.length > 1000;
+        const names = {
+          home: ['home', 'головна', 'главная'],
+          menu: ['menu', 'меню'],
+          account: ['account', 'обліковий запис', 'акаунт', 'аккаунт'],
+          your_profile: ['your profile', 'ваш профіль', 'ваш профиль'],
+          allow_all_cookies: [
+            'allow all cookies',
+            'дозволити всі файли cookie',
+            'разрешить все файлы cookie',
+          ],
+          decline_optional_cookies: [
+            'decline optional cookies',
+            'відхилити необов’язкові файли cookie',
+            "відхилити необов'язкові файли cookie",
+            'отклонить необязательные файлы cookie',
+          ],
+        };
+        for (let index = 0; index < Math.min(nodes.length, 1000); index++) {
+          const node = nodes[index]!;
+          if (!visible(node)) continue;
+          for (const key of Object.keys(
+            selectors,
+          ) as (keyof typeof selectors)[])
+            if (
+              node.matches(selectors[key]) &&
+              !(
+                key === 'banner' &&
+                node.tagName === 'HEADER' &&
+                !node.hasAttribute('role') &&
+                node.parentElement?.closest('article,aside,main,nav,section')
+              )
+            )
+              result.visible[key] = Math.min(result.visible[key] + 1, 2);
+          if (node.matches(interactive)) {
+            // Restricted label sources for exact allowlist comparison, not a full AX name algorithm.
+            const label = (
+              node.getAttribute('aria-label') ??
+              (node
+                .getAttribute('aria-labelledby')
+                ?.split(/\s+/)
+                .map((id) => document.getElementById(id)?.textContent ?? '')
+                .join(' ') ||
+                (node as HTMLElement).innerText ||
+                '')
+            )
+              .trim()
+              .replace(/\s+/g, ' ')
+              .toLowerCase();
+            for (const key of Object.keys(names) as (keyof typeof names)[])
+              if (names[key].includes(label))
+                result.names[key] = Math.min(result.names[key] + 1, 2);
+          }
+          if (!node.matches('a[href]')) continue;
+          let kind: keyof typeof result.hrefs = 'other';
+          try {
+            const url = new URL(node.getAttribute('href')!, location.href);
+            if (
+              url.protocol === 'https:' &&
+              !url.username &&
+              !url.password &&
+              /^(?:(?:www|m|mbasic)\.)?facebook\.com$/.test(url.hostname)
+            ) {
+              const path = url.pathname;
+              kind =
+                path === '/'
+                  ? 'home'
+                  : /^\/me\/?$/.test(path)
+                    ? 'me'
+                    : /^\/messages(?:\/|$)/.test(path)
+                      ? 'messages'
+                      : /^\/(?:login|signin|authwall)(?:\/|$)/.test(path)
+                        ? 'login'
+                        : /^\/(?:profile\.php|\d+|people\/[^/]+\/\d+)\/?$/.test(
+                              path,
+                            )
+                          ? 'profile'
+                          : 'other';
+            }
+          } catch {
+            /* Invalid links are an enum only. */
+          }
+          result.hrefs[kind] = Math.min(result.hrefs[kind] + 1, 2);
+        }
+        return result;
+      }),
+      // A diagnostic must not hold the primary failure/page open indefinitely.
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Diagnostic observation timed out')),
+          1000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Shared FB session snapshot: fixed enums and capped counts, collected before page closure. */
+export async function facebookSessionDiagnostic(
+  page: Page,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+  errorKind: SocialSessionCheckDiagnostic['errorKind'],
+): Promise<SocialSessionCheckDiagnostic> {
+  const logSelector = '[aria-label^="Messages in conversation with "]';
+  const url = new URL(page.url());
+  const path = url.pathname;
+  const urlKind =
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    !/^(?:www\.)?(?:facebook|messenger)\.com$/.test(url.hostname)
+      ? 'other'
+      : /captcha/i.test(path)
+        ? 'captcha'
+        : /checkpoint|challenge|security\/verification/i.test(path)
+          ? 'checkpoint'
+          : /login|signin|authwall/i.test(path)
+            ? 'login'
+            : /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(path)
+              ? 'thread'
+              : /^\/messages\/?$/.test(path)
+                ? 'inbox'
+                : path === '/'
+                  ? 'home'
+                  : 'other';
+  const count = async (locator: ReturnType<Page['locator']>) =>
+    Math.min(await locator.filter({ visible: true }).count(), 2);
+  const [
+    visible,
+    threadList,
+    messageRegions,
+    messageNodes,
+    pinRestore,
+    restoreConfirmation,
+    historyMissing,
+  ] = await Promise.all([
+    facebookSessionMarkers(page),
+    count(page.getByRole('region', { name: 'Thread list', exact: true })),
+    count(page.locator(logSelector)),
+    count(page.locator(`${logSelector} [aria-roledescription="message"]`)),
+    count(
+      page.getByRole('heading', {
+        name: 'Enter your PIN to restore your chats',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('heading', {
+        name: 'Continue without restoring?',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('button', {
+        name: 'Dismiss Chat history is missing card',
+        exact: true,
+      }),
+    ),
+  ]);
+  const observation = await facebookPageObservation(page).catch(
+    () => undefined,
+  );
+  return {
+    version: 1,
+    stage,
+    urlKind,
+    navigationHttpStatus,
+    errorKind,
+    semanticAuthImplemented: false,
+    ...(observation ? { page: observation } : {}),
+    visible,
+    history: {
+      threadList,
+      messageRegions,
+      messageNodes,
+      pinRestore,
+      restoreConfirmation,
+      historyMissing,
+    },
   };
 }
 async function sessionDiagnostic(
@@ -1318,9 +1588,16 @@ export function createSocialSendBrowser(
                   );
             if (caught instanceof Error && caught.name === 'TimeoutError')
               error.errorKind = 'timeout';
-            if (account.channel === 'linkedin') {
+            if (
+              account.channel === 'linkedin' ||
+              account.channel === 'facebook'
+            ) {
               // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
-              error.diagnostic = await sessionDiagnostic(
+              const diagnostic =
+                account.channel === 'facebook'
+                  ? facebookSessionDiagnostic
+                  : sessionDiagnostic;
+              error.diagnostic = await diagnostic(
                 page,
                 stage,
                 status,

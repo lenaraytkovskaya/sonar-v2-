@@ -2,41 +2,49 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   session,
+  inbox,
   chat,
   read,
   generate,
   reply,
-  query,
+  replyTask,
   edit,
   send,
   approve,
   skip,
   manual,
+  repairIdentity,
 } = vi.hoisted(() => ({
   session: vi.fn(),
+  inbox: vi.fn(),
   chat: vi.fn(),
   read: vi.fn(),
   generate: vi.fn(),
   reply: vi.fn(),
-  query: vi.fn(),
+  replyTask: vi.fn(),
   edit: vi.fn(),
   send: vi.fn(),
   approve: vi.fn(),
   skip: vi.fn(),
   manual: vi.fn(),
+  repairIdentity: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
+vi.mock('@/lib/draft-state', () => import('./draft-state'));
 vi.mock('@/lib/api-access', () => import('./api-access'));
+vi.mock('@/lib/inbox-filters', () => import('./inbox-filters'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
-vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 vi.mock('@sonar/db/inbound', () => ({
   getConversationChat: chat,
+  getConversationReplyTask: replyTask,
   markConversationRead: read,
   enqueueReply: generate,
   queueConversationReply: reply,
+  enqueueWhatsAppIdentityRepair: repairIdentity,
 }));
 vi.mock('@sonar/db/outreach', () => ({
+  getInbox: inbox,
   editOutreachDraft: edit,
   sendOutreachDraft: send,
   approveOutreachDraft: approve,
@@ -48,6 +56,7 @@ vi.mock('@sonar/db/email', () => ({
     reasonUk = 'Некоректні дані.';
   },
 }));
+import { GET as LIST } from '../app/api/conversations/route';
 import { GET, POST } from '../app/api/conversations/[id]/route';
 
 const id = '00000000-0000-0000-0000-000000000001';
@@ -144,13 +153,10 @@ describe('conversation API boundaries', () => {
   it('reads history without marking messages read and scopes task polling to the conversation', async () => {
     expect((await GET(get(), context)).status).toBe(200);
     expect(read).not.toHaveBeenCalled();
-    query.mockResolvedValue({ rows: [] });
+    replyTask.mockResolvedValue(null);
     expect((await GET(get(`?taskId=${foreign}`), context)).status).toBe(404);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("type='ai.reply'"),
-      [foreign, id],
-    );
-    query.mockResolvedValue({ rows: [{ id: foreign, status: 'done' }] });
+    expect(replyTask).toHaveBeenCalledWith(id, foreign);
+    replyTask.mockResolvedValue({ id: foreign, status: 'done' });
     expect(
       await (await GET(get(`?taskId=${foreign}`), context)).json(),
     ).toEqual({ id: foreign, status: 'done' });
@@ -162,11 +168,94 @@ describe('conversation API boundaries', () => {
       ).toBe(400);
     expect(read).not.toHaveBeenCalled();
     expect(
-      (await POST(request({ action: 'read', messageId: incoming }), context))
-        .status,
+      (
+        await POST(
+          request({
+            action: 'read',
+            messageId: incoming,
+            visibleMessageIds: [incoming],
+          }),
+          context,
+        )
+      ).status,
     ).toBe(200);
-    expect(read).toHaveBeenCalledWith(id, incoming);
+    expect(read).toHaveBeenCalledWith(id, incoming, [incoming]);
   });
+  it('requires an explicit member-ID snapshot for read requests and never expands it with fresh messages', async () => {
+    for (const visibleMessageIds of [
+      undefined,
+      [],
+      [foreign],
+      [incoming, outgoing],
+      [incoming, incoming],
+      ['invalid'],
+    ]) {
+      expect(
+        (
+          await POST(
+            request({ action: 'read', messageId: incoming, visibleMessageIds }),
+            context,
+          )
+        ).status,
+      ).toBe(400);
+    }
+    expect(read).not.toHaveBeenCalled();
+    chat.mockResolvedValue({
+      conversation: { id },
+      messages: [
+        { id: foreign, direction: 'in' },
+        { id: incoming, direction: 'in' },
+      ],
+      blocked: false,
+    });
+    expect(
+      (
+        await POST(
+          request({
+            action: 'read',
+            messageId: incoming,
+            visibleMessageIds: [incoming],
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(200);
+    expect(read).toHaveBeenCalledWith(id, incoming, [incoming]);
+  });
+  it.each(['email', 'telegram', 'whatsapp', 'social', 'form', 'call'])(
+    'keeps explicit read boundaries for %s',
+    async (channel) => {
+      chat.mockResolvedValue({
+        conversation: { id, channel },
+        messages: [
+          { id: foreign, direction: 'in' },
+          { id: incoming, direction: 'in' },
+          { id: outgoing, direction: 'out' },
+        ],
+        blocked: false,
+      });
+      expect(
+        (await POST(request({ action: 'read', messageId: incoming }), context))
+          .status,
+      ).toBe(400);
+      expect(read).not.toHaveBeenCalled();
+      expect(
+        (
+          await POST(
+            request({
+              action: 'read',
+              messageId: incoming,
+              visibleMessageIds: [incoming],
+            }),
+            context,
+          )
+        ).status,
+      ).toBe(200);
+      expect(read).toHaveBeenCalledWith(id, incoming, [incoming]);
+      expect(send).not.toHaveBeenCalled();
+      expect(reply).not.toHaveBeenCalled();
+    },
+  );
   it('generates a draft with the authenticated actor and request id without dispatching send', async () => {
     expect(
       (await POST(request({ action: 'generate', requestId: foreign }), context))
@@ -204,7 +293,7 @@ describe('conversation API boundaries', () => {
       (await POST(request({ action: 'send', messageId: outgoing }), context))
         .status,
     ).toBe(200);
-    expect(send).toHaveBeenCalledWith(outgoing, 'actor');
+    expect(send).toHaveBeenCalledWith(outgoing, 'actor', undefined, id);
   });
   it('requires an existing conversation and valid reply fields', async () => {
     for (const patch of [
@@ -254,4 +343,111 @@ describe('conversation API boundaries', () => {
     expect(generate).not.toHaveBeenCalled();
     expect((await GET(get(), context)).status).toBe(404);
   });
+});
+
+it('queues owner-checked WhatsApp repair only with explicit dry-run and request identity', async () => {
+  repairIdentity.mockResolvedValue({ taskId: foreign });
+  const data = {
+    action: 'repair-whatsapp-identity',
+    requestId: foreign,
+    dryRun: true,
+  };
+  expect((await POST(request(data), context)).status).toBe(202);
+  expect(repairIdentity).toHaveBeenCalledWith(id, 'actor', foreign, true);
+  expect(
+    (await POST(request({ ...data, dryRun: undefined }), context)).status,
+  ).toBe(400);
+  expect(
+    (await POST(request(data, 'https://untrusted.invalid'), context)).status,
+  ).toBe(401);
+  expect(repairIdentity).toHaveBeenCalledTimes(1);
+});
+
+describe('inbox snapshots', () => {
+  it('authenticates, validates filters, disables caching and never queues work', async () => {
+    session.mockResolvedValue({});
+    expect(
+      (await LIST(new Request('http://localhost/api/conversations'))).status,
+    ).toBe(401);
+    expect(inbox).not.toHaveBeenCalled();
+    session.mockResolvedValue({ user: { id: 'actor' } });
+    inbox.mockResolvedValue({
+      conversations: [],
+      campaigns: [],
+      unreadCount: 0,
+    });
+    const response = await LIST(
+      new Request(
+        `http://localhost/api/conversations?campaignId=${id}&channel=email&status=sent&unread=1&needsHuman=1`,
+      ),
+    );
+    expect(inbox).toHaveBeenLastCalledWith({
+      campaignId: id,
+      channel: 'email',
+      status: 'sent',
+      unread: true,
+      needsHuman: true,
+    });
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await LIST(
+      new Request(
+        'http://localhost/api/conversations?campaignId=bad&channel=bad&status=bad&unread=0',
+      ),
+    );
+    expect(inbox).toHaveBeenLastCalledWith({
+      campaignId: undefined,
+      channel: undefined,
+      status: undefined,
+      unread: undefined,
+      needsHuman: undefined,
+    });
+    const history = await GET(get(), context);
+    expect(history.headers.get('Cache-Control')).toBe('private, no-store');
+    for (const action of [reply, send, generate, read])
+      expect(action).not.toHaveBeenCalled();
+  });
+});
+
+it('validates and forwards the reviewed draft snapshot', async () => {
+  const expected = { subject: 'Reviewed', body: 'Reviewed body' };
+  expect(
+    (
+      await POST(
+        request({ action: 'send', messageId: outgoing, expected }),
+        context,
+      )
+    ).status,
+  ).toBe(200);
+  expect(send).toHaveBeenLastCalledWith(outgoing, 'actor', expected, id);
+  expect(
+    (
+      await POST(
+        request({
+          action: 'save',
+          messageId: outgoing,
+          subject: 'Mine',
+          body: 'My text',
+          expected,
+        }),
+        context,
+      )
+    ).status,
+  ).toBe(200);
+  expect(edit).toHaveBeenLastCalledWith(
+    outgoing,
+    { subject: 'Mine', body: 'My text' },
+    'actor',
+    expected,
+    id,
+  );
+  send.mockClear();
+  expect(
+    (
+      await POST(
+        request({ action: 'send', messageId: outgoing, expected: null }),
+        context,
+      )
+    ).status,
+  ).toBe(400);
+  expect(send).not.toHaveBeenCalled();
 });

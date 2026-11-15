@@ -1,3 +1,8 @@
+import { messageHistoryOrder } from './message-history.js';
+import {
+  lockWhatsAppIdentity,
+  whatsappConversation,
+} from './whatsapp-identity.js';
 import {
   SocialSendError,
   facebookDispatchReason,
@@ -292,7 +297,7 @@ export async function getCompanyMessaging(companyId: string) {
   ] = await Promise.all([
     listEmailAccounts(),
     sonarPool.query(
-      `select m.id,m.channel,(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by m.created_at desc,m.id`,
+      `select m.id,m.channel,(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by ${messageHistoryOrder('desc', true)}`,
       [companyId],
     ),
     sonarPool.query(
@@ -444,6 +449,7 @@ export async function createCompanyMessage(
             : 'Вкажіть коректний email, тему та текст повідомлення.',
     );
   return transaction(async (c) => {
+    if (channel === 'whatsapp') await lockWhatsAppIdentity(c, input.accountId);
     const {
       rows: [prior],
     } = await c.query(
@@ -510,12 +516,21 @@ export async function createCompanyMessage(
       if (!company?.website || !sameFormDomain(to, company.website))
         invalid('Форма повинна належати домену сайту компанії.');
     }
-    const {
-      rows: [conversation],
-    } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
-      [input.companyId, input.campaignId, contact.id, channel],
-    );
+    const conversation =
+      channel === 'whatsapp'
+        ? (
+            await whatsappConversation(c, input.accountId, to, undefined, {
+              companyId: input.companyId,
+              campaignId: input.campaignId,
+              contactId: contact.id,
+            })
+          ).conversation!
+        : (
+            await c.query(
+              `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null and channel <> 'whatsapp' do update set channel=excluded.channel returning id`,
+              [input.companyId, input.campaignId, contact.id, channel],
+            )
+          ).rows[0];
     const status = messageStatusForMode(
       campaign.send_mode,
       input.submit ?? false,

@@ -547,3 +547,38 @@ describe('WAHA sendText response', () => {
     expect(whatsappMessageId({})).toBeNull();
   });
 });
+
+it.each([
+  '+12025550123',
+  '12025550123',
+  'https://wa.me/12025550123',
+  'wa.me/12025550123?text=Hi',
+  '12025550123@c.us',
+  '12025550123@s.whatsapp.net',
+])('canonicalizes proven phone spelling %s', (value) =>
+  expect(normalizeWhatsAppRecipient(value)).toBe('+12025550123'),
+);
+it.each(['123456789012345@lid', 'whatsapp:lid:123456789012345'])(
+  'keeps opaque LID %s opaque',
+  (value) =>
+    expect(normalizeWhatsAppRecipient(value)).toBe(
+      'whatsapp:lid:123456789012345',
+    ),
+);
+it.each([
+  { lid: '99999999@lid', pn: '12025550123@c.us' },
+  { pn: '12025550123@c.us' },
+  { lid: '12345678@lid', pn: '12345678@lid' },
+  { lid: '12345678@lid', pn: ['12025550123@c.us'] },
+  { lid: '12345678@lid', pn: null },
+])(
+  'rejects missing/mismatched/ambiguous provider mapping %j',
+  async (response) => {
+    expect(await adapter(fake(response)).phoneByLid('12345678@lid')).toBeNull();
+  },
+);
+
+it('does not interpret a phone-looking LID as a phone', () =>
+  expect(normalizeWhatsAppRecipient('12025550123@lid')).toBe(
+    'whatsapp:lid:12025550123',
+  ));

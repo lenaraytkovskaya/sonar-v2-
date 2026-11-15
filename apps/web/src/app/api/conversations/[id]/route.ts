@@ -1,6 +1,8 @@
+import { expectedDraft } from '@/lib/draft-state';
 import { apiUser, validId } from '@/lib/api-access';
 import { emailResponse } from '@/lib/email-api';
 import { uk } from '@/i18n/uk';
+export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ id: string }> };
 const invalid = () => Response.json({ error: uk.ai.invalid }, { status: 400 });
 export async function GET(request: Request, context: Context) {
@@ -8,17 +10,14 @@ export async function GET(request: Request, context: Context) {
     return Response.json({ error: uk.unauthorized }, { status: 401 });
   const { id } = await context.params;
   if (!validId(id)) return invalid();
-  return emailResponse(async () => {
+  const response = await emailResponse(async () => {
     const taskId = new URL(request.url).searchParams.get('taskId');
     if (taskId) {
       if (!validId(taskId)) return invalid();
-      const { sonarPool } = await import('@sonar/db');
-      const { rows } = await sonarPool.query(
-        "select id,status,reason_uk from tasks where id=$1 and type='ai.reply' and payload->>'conversationId'=$2",
-        [taskId, id],
-      );
+      const { getConversationReplyTask } = await import('@sonar/db/inbound');
       return (
-        rows[0] ?? Response.json({ error: uk.tasks.missing }, { status: 404 })
+        (await getConversationReplyTask(id, taskId)) ??
+        Response.json({ error: uk.tasks.missing }, { status: 404 })
       );
     }
     const { getConversationChat } = await import('@sonar/db/inbound');
@@ -27,6 +26,8 @@ export async function GET(request: Request, context: Context) {
       ? chat
       : Response.json({ error: uk.tasks.missing }, { status: 404 });
   });
+  response.headers.set('Cache-Control', 'private, no-store');
+  return response;
 }
 export async function POST(request: Request, context: Context) {
   const user = await apiUser(request, true);
@@ -34,19 +35,43 @@ export async function POST(request: Request, context: Context) {
   const { id } = await context.params;
   const data = await request.json().catch(() => null);
   if (!validId(id) || !data) return invalid();
+  const expected = expectedDraft(data.expected);
+  if (expected === false) return invalid();
   return emailResponse(async () => {
     const db = await import('@sonar/db/inbound');
     const chat = await db.getConversationChat(id);
     if (!chat.conversation) return invalid();
+    if (data.action === 'repair-whatsapp-identity') {
+      if (!validId(data.requestId) || typeof data.dryRun !== 'boolean')
+        return invalid();
+      return Response.json(
+        await db.enqueueWhatsAppIdentityRepair(
+          id,
+          user.id,
+          data.requestId,
+          data.dryRun,
+        ),
+        { status: 202 },
+      );
+    }
     if (data.action === 'read') {
+      const incomingIds = new Set(
+        chat.messages.filter((m) => m.direction === 'in').map((m) => m.id),
+      );
       if (
         !validId(data.messageId) ||
-        !chat.messages.some(
-          (m) => m.id === data.messageId && m.direction === 'in',
-        )
+        !Array.isArray(data.visibleMessageIds) ||
+        !data.visibleMessageIds.includes(data.messageId) ||
+        data.visibleMessageIds.length > incomingIds.size ||
+        new Set(data.visibleMessageIds).size !==
+          data.visibleMessageIds.length ||
+        !data.visibleMessageIds.every(
+          (id: unknown) => validId(id) && incomingIds.has(id),
+        ) ||
+        !incomingIds.has(data.messageId)
       )
         return invalid();
-      await db.markConversationRead(id, data.messageId);
+      await db.markConversationRead(id, data.messageId, data.visibleMessageIds);
       return { ok: true };
     }
     if (data.action === 'generate') {
@@ -101,16 +126,28 @@ export async function POST(request: Request, context: Context) {
         data.messageId,
         { subject: data.subject, body: data.body },
         user.id,
+        expected,
+        id,
       );
     }
     if (data.action === 'send')
-      return outreach.sendOutreachDraft(data.messageId, user.id);
+      return outreach.sendOutreachDraft(data.messageId, user.id, expected, id);
     if (data.action === 'approve')
-      return outreach.approveOutreachDraft(data.messageId, user.id);
+      return outreach.approveOutreachDraft(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     if (data.action === 'skip')
-      return outreach.skipOutreachMessage(data.messageId, user.id);
+      return outreach.skipOutreachMessage(data.messageId, user.id, id);
     if (data.action === 'manual')
-      return outreach.markOutreachManualSent(data.messageId, user.id);
+      return outreach.markOutreachManualSent(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     return invalid();
   });
 }
