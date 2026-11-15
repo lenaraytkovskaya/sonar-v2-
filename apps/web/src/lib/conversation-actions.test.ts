@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   session,
+  inbox,
   chat,
   read,
   generate,
@@ -14,6 +15,7 @@ const {
   manual,
 } = vi.hoisted(() => ({
   session: vi.fn(),
+  inbox: vi.fn(),
   chat: vi.fn(),
   read: vi.fn(),
   generate: vi.fn(),
@@ -27,6 +29,7 @@ const {
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
+vi.mock('@/lib/inbox-filters', () => import('./inbox-filters'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
 vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
@@ -37,6 +40,7 @@ vi.mock('@sonar/db/inbound', () => ({
   queueConversationReply: reply,
 }));
 vi.mock('@sonar/db/outreach', () => ({
+  getInbox: inbox,
   editOutreachDraft: edit,
   sendOutreachDraft: send,
   approveOutreachDraft: approve,
@@ -48,6 +52,7 @@ vi.mock('@sonar/db/email', () => ({
     reasonUk = 'Некоректні дані.';
   },
 }));
+import { GET as LIST } from '../app/api/conversations/route';
 import { GET, POST } from '../app/api/conversations/[id]/route';
 
 const id = '00000000-0000-0000-0000-000000000001';
@@ -253,5 +258,50 @@ describe('conversation API boundaries', () => {
     ).toBe(400);
     expect(generate).not.toHaveBeenCalled();
     expect((await GET(get(), context)).status).toBe(404);
+  });
+});
+
+describe('inbox snapshots', () => {
+  it('authenticates, validates filters, disables caching and never queues work', async () => {
+    session.mockResolvedValue({});
+    expect(
+      (await LIST(new Request('http://localhost/api/conversations'))).status,
+    ).toBe(401);
+    expect(inbox).not.toHaveBeenCalled();
+    session.mockResolvedValue({ user: { id: 'actor' } });
+    inbox.mockResolvedValue({
+      conversations: [],
+      campaigns: [],
+      unreadCount: 0,
+    });
+    const response = await LIST(
+      new Request(
+        `http://localhost/api/conversations?campaignId=${id}&channel=email&status=sent&unread=1&needsHuman=1`,
+      ),
+    );
+    expect(inbox).toHaveBeenLastCalledWith({
+      campaignId: id,
+      channel: 'email',
+      status: 'sent',
+      unread: true,
+      needsHuman: true,
+    });
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await LIST(
+      new Request(
+        'http://localhost/api/conversations?campaignId=bad&channel=bad&status=bad&unread=0',
+      ),
+    );
+    expect(inbox).toHaveBeenLastCalledWith({
+      campaignId: undefined,
+      channel: undefined,
+      status: undefined,
+      unread: undefined,
+      needsHuman: undefined,
+    });
+    const history = await GET(get(), context);
+    expect(history.headers.get('Cache-Control')).toBe('private, no-store');
+    for (const action of [reply, send, generate, read])
+      expect(action).not.toHaveBeenCalled();
   });
 });

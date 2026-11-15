@@ -33,6 +33,7 @@ export function Draft({
   approval,
   act,
   onUseText,
+  bubble = false,
 }: {
   message: Message;
   blocked: boolean;
@@ -40,6 +41,7 @@ export function Draft({
   approval: boolean;
   act: Action;
   onUseText?: (body: string) => void;
+  bubble?: boolean;
 }) {
   const [subject, setSubject] = useState(message.subject),
     [body, setBody] = useState(message.body);
@@ -59,7 +61,13 @@ export function Draft({
     <section
       className={cn(
         'min-w-0 space-y-2 rounded-lg border border-border p-3',
-        message.direction === 'in' ? 'mr-6 bg-surface' : 'ml-6 bg-raised',
+        bubble
+          ? message.direction === 'in'
+            ? 'mr-auto max-w-[92%] rounded-bl-sm bg-surface lg:max-w-[80%]'
+            : 'ml-auto max-w-[92%] rounded-br-sm bg-chip lg:max-w-[80%]'
+          : message.direction === 'in'
+            ? 'mr-6 bg-surface'
+            : 'ml-6 bg-raised',
       )}
     >
       <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -202,7 +210,7 @@ export function Draft({
         </a>
       )}
       {message.reasonUk && !dispatched && (
-        <p className="text-err">{message.reasonUk}</p>
+        <p className="text-sm text-err">{message.reasonUk}</p>
       )}
     </section>
   );

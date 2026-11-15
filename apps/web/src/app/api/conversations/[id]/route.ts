@@ -1,6 +1,7 @@
 import { apiUser, validId } from '@/lib/api-access';
 import { emailResponse } from '@/lib/email-api';
 import { uk } from '@/i18n/uk';
+export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ id: string }> };
 const invalid = () => Response.json({ error: uk.ai.invalid }, { status: 400 });
 export async function GET(request: Request, context: Context) {
@@ -8,7 +9,7 @@ export async function GET(request: Request, context: Context) {
     return Response.json({ error: uk.unauthorized }, { status: 401 });
   const { id } = await context.params;
   if (!validId(id)) return invalid();
-  return emailResponse(async () => {
+  const response = await emailResponse(async () => {
     const taskId = new URL(request.url).searchParams.get('taskId');
     if (taskId) {
       if (!validId(taskId)) return invalid();
@@ -27,6 +28,8 @@ export async function GET(request: Request, context: Context) {
       ? chat
       : Response.json({ error: uk.tasks.missing }, { status: 404 });
   });
+  response.headers.set('Cache-Control', 'private, no-store');
+  return response;
 }
 export async function POST(request: Request, context: Context) {
   const user = await apiUser(request, true);

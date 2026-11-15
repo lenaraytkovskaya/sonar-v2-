@@ -190,6 +190,13 @@ export const uk = {
     },
   },
   inbound: {
+    filters: 'Фільтри',
+    dialogs: 'Діалоги',
+    backToDialogs: '← До діалогів',
+    newMessages: 'Нові повідомлення',
+    replyOptions: 'Тема та варіанти відповіді',
+    refreshError:
+      'Не вдалося оновити повідомлення. Спробуємо ще раз автоматично.',
     unknownCompany: 'Без компанії',
     needsHuman: 'Потрібна людина',
     unread: 'Непрочитані',
