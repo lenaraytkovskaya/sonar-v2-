@@ -336,7 +336,7 @@ export async function aiSiteFallback(
   }
 }
 export async function runSiteScan(
-  payload: { companyId: string },
+  payload: { companyId: string; website?: string },
   taskId: string,
 ): Promise<TaskOutcome> {
   const started = Date.now();
@@ -370,6 +370,13 @@ export async function runSiteScan(
         status: 'skipped',
         reasonCode: 'website_missing',
         reasonUk: 'У компанії немає сайту.',
+      };
+    if (payload.website && company.website !== payload.website)
+      return {
+        status: 'skipped',
+        reasonCode: 'source_changed',
+        reasonUk:
+          'Сайт змінено після запуску. Збережіть актуальне джерело й запустіть аналіз.',
       };
     const { rows } = await client.query(
       "select key,value from settings where key like 'scanner.%' or key like 'ai.%' or key='retention.website_days' or key='platforms.kinds'",
@@ -649,7 +656,10 @@ export async function registerSiteTasks() {
   await runTask('site.scan', async (payload, id) => {
     const { companyId } = payload as { companyId: string };
     try {
-      return await runSiteScan({ companyId }, id);
+      return await runSiteScan(
+        payload as { companyId: string; website?: string },
+        id,
+      );
     } finally {
       await enqueueCompanySocial(companyId, null).catch(() =>
         console.warn('Не вдалося поставити збір соцмереж у чергу.'),

@@ -135,6 +135,7 @@ export async function enqueueSiteScan(
   companyId: string,
   userId: string | null,
   existingClient?: PoolClient,
+  requestKey?: string,
 ) {
   const save = async (client: PoolClient) => {
     const {
@@ -148,7 +149,7 @@ export async function enqueueSiteScan(
     let key = `site.scan:${companyId}:${day}`;
     // Automatic runs scan once a day; a person pressing the button again after the
     // previous scan finished gets a fresh scan instead of the old result.
-    if (userId) {
+    if (userId && !requestKey) {
       const {
         rows: [latest],
       } = await client.query(
@@ -159,7 +160,13 @@ export async function enqueueSiteScan(
         key = `${key}:${Date.now()}`;
       else if (latest) key = latest.idempotency_key;
     }
-    const created = await enqueueTask('site.scan', key, { companyId }, client);
+    key = requestKey ?? key;
+    const created = await enqueueTask(
+      'site.scan',
+      key,
+      { companyId, website: company.website },
+      client,
+    );
     if (created) {
       await client.query(
         "update tasks set subject_type='company',subject_id=$2 where id=$1",
@@ -546,6 +553,34 @@ export class ProzorroCodeError extends Error {
     super(reason);
   }
 }
+// Caller holds the prozorro.company advisory lock and the company row lock.
+export async function recordManualCompanyCode(
+  client: PoolClient,
+  companyId: string,
+  manualCode: string,
+  userId: string | null,
+) {
+  const { prozorroCompanyCodes } = await import('./prozorro.js');
+  const existing = (await prozorroCompanyCodes(companyId, client, true)).filter(
+    (fact) => fact.code,
+  );
+  if (existing.some((fact) => fact.code !== manualCode))
+    throw new ProzorroCodeError('conflictingCode');
+  if (!existing.length) {
+    await client.query(
+      "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'edrpou',$2,'manual',$3,now())",
+      [companyId, JSON.stringify(manualCode), `/companies/${companyId}`],
+    );
+    await logActivity(
+      'company.edrpou.manual',
+      'company',
+      companyId,
+      userId,
+      { code: manualCode },
+      client,
+    );
+  }
+}
 type ProzorroEnqueueOptions = {
   manualCode?: string;
   taskId?: string;
@@ -600,29 +635,9 @@ export async function enqueueProzorroCompany(
       };
     }
     await recoverProzorroCompany(client, companyId);
-    const { prozorroCompanyCode, prozorroCompanyCodes } =
-      await import('./prozorro.js');
-    if (manualCode) {
-      const existing = (
-        await prozorroCompanyCodes(companyId, client, true)
-      ).filter((fact) => fact.code);
-      if (existing.some((fact) => fact.code !== manualCode))
-        throw new ProzorroCodeError('conflictingCode');
-      if (!existing.length) {
-        await client.query(
-          "insert into company_facts(company_id,kind,value,source,source_url,found_at) values($1,'edrpou',$2,'manual',$3,now())",
-          [companyId, JSON.stringify(manualCode), `/companies/${companyId}`],
-        );
-        await logActivity(
-          'company.edrpou.manual',
-          'company',
-          companyId,
-          userId,
-          { code: manualCode },
-          client,
-        );
-      }
-    }
+    const { prozorroCompanyCode } = await import('./prozorro.js');
+    if (manualCode)
+      await recordManualCompanyCode(client, companyId, manualCode, userId);
     const code = await prozorroCompanyCode(companyId, client, true);
     if (manualCode && code !== manualCode)
       throw new ProzorroCodeError('conflictingCode');

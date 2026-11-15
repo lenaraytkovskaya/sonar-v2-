@@ -64,6 +64,7 @@ export async function enqueueCompanySocial(
   companyId: string,
   userId: string | null,
   existing?: PoolClient,
+  onlyTarget?: SocialTarget,
 ) {
   const client = existing ?? (await sonarPool.connect());
   try {
@@ -79,7 +80,9 @@ export async function enqueueCompanySocial(
     }
     const tasks: { id: string; status: string; created: boolean }[] = [];
     const retryIds: string[] = [];
-    for (const target of await targets(client, companyId)) {
+    for (const target of onlyTarget
+      ? [onlyTarget]
+      : await targets(client, companyId)) {
       const key = `social.fetch:${target.network}:${target.handle}:${new Date().toISOString().slice(0, 10)}`;
       await client.query(
         'select pg_advisory_xact_lock(hashtextextended($1,0))',
