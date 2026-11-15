@@ -18,6 +18,31 @@ const outlook = [
   '',
   'Previous answer',
 ].join('\n');
+// Exact sanitized body from review-outlook-inline.json for head 306d5d1.
+const outlookInlineRepro = [
+  'Відповіді нижче:',
+  '',
+  '-----Original Message-----',
+  'From: Test <sender@example.com>',
+  'Sent: Sunday, November 15, 2026 02:14',
+  'To: Receiver <receiver@example.com>',
+  'Subject: Співпраця',
+  '',
+  'Чи погоджуєтесь на співпрацю?',
+  '',
+  'Ні, прошу більше не писати.',
+  '',
+  'Який бюджет?',
+  '',
+  'Бюджет не погоджено.',
+].join('\n');
+const outlookHeaders = outlook.slice(0, outlook.indexOf('Previous answer'));
+const localizedHeaders = outlookHeaders
+  .replace('Original Message', 'Початкове повідомлення')
+  .replace('From:', 'Від:')
+  .replace('Sent:', 'Надіслано:')
+  .replace('To:', 'Кому:')
+  .replace('Subject:', 'Тема:');
 
 describe('email display history', () => {
   it('splits the supplied Gmail pattern without losing any original text', () => {
@@ -38,8 +63,12 @@ describe('email display history', () => {
     expect(parsed.current + parsed.history).toBe(body);
   });
 
-  it.each([outlook, outlook.replace('-----Original Message-----\n', '')])(
-    'recognizes complete Outlook headers',
+  it.each([
+    `${outlookHeaders}> Previous answer\n>> Older answer`,
+    `${outlookHeaders.replace('-----Original Message-----\n', '')}> Previous answer`,
+    `${localizedHeaders}> Попередня відповідь`,
+  ])(
+    'collapses Outlook history only when the entire body after its headers is quoted',
     (history) => {
       expect(splitEmailHistory(reply + history, 'email')).toEqual({
         current: reply,
@@ -48,11 +77,86 @@ describe('email display history', () => {
     },
   );
 
+  it('keeps the exact review repro and refusal in the full body and Inbox preview input', () => {
+    const parsed = splitEmailHistory(outlookInlineRepro, 'email');
+    expect(parsed).toEqual({ current: outlookInlineRepro, history: '' });
+    // Inbox renders this same current value as its compact, line-clamped preview.
+    expect(parsed.current).toContain('Ні, прошу більше не писати.');
+    expect(parsed.current).toContain('Бюджет не погоджено.');
+    vi.stubGlobal('React', React);
+    try {
+      const html = renderToStaticMarkup(
+        React.createElement(MessageBody, {
+          body: outlookInlineRepro,
+          channel: 'email',
+        }),
+      );
+      expect(html).toContain('Ні, прошу більше не писати.');
+      expect(html).toContain('Бюджет не погоджено.');
+      expect(html).not.toContain('<details');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  const inlineHeaders = [
+    outlookHeaders,
+    localizedHeaders,
+    localizedHeaders
+      .replace('Початкове повідомлення', 'Исходное сообщение')
+      .replace('Від:', 'От:')
+      .replace('Надіслано:', 'Отправлено:'),
+    `${gmail}\n\n`,
+    'On Sun, Nov 15, 2026 Test <sender@example.com> wrote:\n\n',
+  ];
+  it.each(
+    inlineHeaders.flatMap((headers) =>
+      [
+        'Previous question\n\nНі, прошу більше не писати.',
+        '> Previous question\n\nНі, прошу більше не писати.',
+        '> First question\nНі, прошу більше не писати.\n> Second question\nБюджет не погоджено.',
+        '> Previous answer\n\n--\nЗ повагою, Тест',
+        '> Previous answer\n\nSent from my phone',
+        'Non, merci. Ne me contactez plus.\n\n--\nTest',
+      ].map((tail) => `${reply}${headers}${tail}`),
+    ),
+  )(
+    'keeps every byte of inline answers, refusals and signatures visible: %s',
+    (body) => {
+      expect(splitEmailHistory(body, 'email')).toEqual({
+        current: body,
+        history: '',
+      });
+    },
+  );
+
+  it.each([history, `${outlookHeaders}> Old answer\n>> Older answer`])(
+    'retains exact original access for safely collapsed history',
+    (quotedHistory) => {
+      const body = reply + quotedHistory;
+      vi.stubGlobal('React', React);
+      try {
+        const html = renderToStaticMarkup(
+          React.createElement(MessageBody, { body, channel: 'email' }),
+        );
+        const original = renderToStaticMarkup(
+          React.createElement('p', { className: 'whitespace-pre-wrap' }, body),
+        );
+        expect(html).toContain('<details');
+        expect(html).toContain(original);
+        expect(splitEmailHistory(body, 'email').current).toBe(reply);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it.each([
     `${gmail}\n\n> Question 1\nNew inline answer\n> Question 2`,
     `${gmail}\n\n> Question\n\nNew answer below`,
     `${gmail}\n\nUnquoted ambiguous text`,
     `${outlook}\n> Quoted question\nInline answer`,
+    reply + outlook,
     'From: sender@example.com\nSubject: Incomplete\nOld body',
     'On occasion I wrote:\n\n> A Markdown quotation',
     `${gmail}\n\n> No current answer`,

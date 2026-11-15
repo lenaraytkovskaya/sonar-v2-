@@ -30,8 +30,9 @@ export function splitEmailHistory(body: string, channel: string) {
           history: lines.slice(i).join(''),
         };
     }
-    // Outlook's explicit four-field header is a strong boundary, even when its
-    // old body is unquoted. Mixed quote/plain bodies stay visible conservatively.
+    // Outlook headers identify a possible boundary, not the provenance of its
+    // body. Require every nonblank body line to be quoted: unquoted text may be
+    // a new inline answer, refusal or signature and must remain visible.
     const marker =
       /^-+\s*(?:Original Message|Исходное сообщение|Початкове повідомлення)\s*-+$/iu;
     let start = marker.test(text[i]!) ? i + 1 : i;
@@ -53,8 +54,8 @@ export function splitEmailHistory(body: string, channel: string) {
     const tail = text.slice(end);
     if (
       headers.length === fields.length &&
-      tail.some(Boolean) &&
-      (!tail.some((line) => line.startsWith('>')) || tail.every(quoted))
+      tail.some((line) => line.startsWith('>')) &&
+      tail.every(quoted)
     )
       return {
         current: lines.slice(0, i).join(''),
