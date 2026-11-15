@@ -162,10 +162,59 @@ describe('conversation API boundaries', () => {
       ).toBe(400);
     expect(read).not.toHaveBeenCalled();
     expect(
-      (await POST(request({ action: 'read', messageId: incoming }), context))
-        .status,
+      (
+        await POST(
+          request({
+            action: 'read',
+            messageId: incoming,
+            visibleMessageIds: [incoming],
+          }),
+          context,
+        )
+      ).status,
     ).toBe(200);
-    expect(read).toHaveBeenCalledWith(id, incoming);
+    expect(read).toHaveBeenCalledWith(id, incoming, [incoming]);
+  });
+  it('requires an explicit member-ID snapshot for read requests and never expands it with fresh messages', async () => {
+    for (const visibleMessageIds of [
+      undefined,
+      [],
+      [foreign],
+      [incoming, outgoing],
+      [incoming, incoming],
+      ['invalid'],
+    ]) {
+      expect(
+        (
+          await POST(
+            request({ action: 'read', messageId: incoming, visibleMessageIds }),
+            context,
+          )
+        ).status,
+      ).toBe(400);
+    }
+    expect(read).not.toHaveBeenCalled();
+    chat.mockResolvedValue({
+      conversation: { id },
+      messages: [
+        { id: foreign, direction: 'in' },
+        { id: incoming, direction: 'in' },
+      ],
+      blocked: false,
+    });
+    expect(
+      (
+        await POST(
+          request({
+            action: 'read',
+            messageId: incoming,
+            visibleMessageIds: [incoming],
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(200);
+    expect(read).toHaveBeenCalledWith(id, incoming, [incoming]);
   });
   it('generates a draft with the authenticated actor and request id without dispatching send', async () => {
     expect(

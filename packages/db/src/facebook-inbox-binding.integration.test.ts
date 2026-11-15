@@ -255,6 +255,11 @@ it.skipIf(!enabled)(
       (await outreach.getCompanyChat(co)).messages.map((row) => row.body),
     ).toEqual(expected);
     expect(
+      (await (await import('./email.js')).getCompanyMessaging(co)).messages.map(
+        (row) => row.body,
+      ),
+    ).toEqual([...expected].reverse());
+    expect(
       (await inbound.getConversationChat(v, 1)).messages.map((row) => row.body),
     ).toEqual(['B']);
     expect(

@@ -19,7 +19,7 @@ export const emptySocialCheckpoint = (): SocialInboxCheckpoint => ({
 
 /** Current contacts are routing hints, never proof that an old dialog belongs
  * to this account/peer. Every historical message must agree before any reuse. */
-async function assertFacebookBinding(
+export async function assertFacebookBinding(
   c: PoolClient,
   conversationId: string,
   accountId: string,
@@ -44,7 +44,7 @@ async function assertFacebookBinding(
   const {
     rows: [v],
   } = await c.query(
-    'select channel,account_id,peer_value,provider_thread_id from conversations where id=$1 for update',
+    'select channel,account_id,peer_value,provider_thread_id,company_id from conversations where id=$1 for update',
     [conversationId],
   );
   if (
@@ -57,17 +57,55 @@ async function assertFacebookBinding(
   let accountProven = v.account_id === accountId,
     peerProven = matches(v.peer_value);
   const { rows: history } = await c.query<{
+    id: string;
+    source: string;
+    status: string;
+    idempotency_key: string;
+    external_message_id: string | null;
+    provider_id: string | null;
+    draftReceipt: boolean;
     channel: string;
     account_id: string | null;
     direction: string;
     to_value: string | null;
     social_meta: Record<string, unknown> | null;
   }>(
-    'select channel,account_id,direction,to_value,social_meta from messages where conversation_id=$1 for update',
-    [conversationId],
+    `select m.id,m.source,m.status,m.idempotency_key,m.external_message_id,m.provider_id,m.channel,m.account_id,m.direction,m.to_value,m.social_meta,
+    case when m.account_id is null and m.direction='out' and m.source='manual' and m.status='draft' then exists(select 1 from activity_log l where l.action='message.reply.drafted' and l.user_id is null and l.details->>'messageId'=m.id::text
+      and ((l.entity_type='conversation' and l.entity_id=$1::text) or (l.entity_type='company' and l.entity_id=$2::text))) else false end as "draftReceipt"
+    from messages m where m.conversation_id=$1::uuid for update`,
+    [conversationId, v.company_id],
   );
+  const repairs: string[] = [];
+  const receivingProof =
+    v.account_id === accountId &&
+    v.provider_thread_id === threadId &&
+    matches(v.peer_value) &&
+    history.some(
+      (row) =>
+        row.account_id === accountId &&
+        row.direction === 'in' &&
+        row.external_message_id &&
+        row.social_meta?.network === 'facebook' &&
+        row.social_meta?.threadId === threadId,
+    );
   for (const row of history) {
-    if (row.channel !== 'social' || row.account_id !== accountId) fail();
+    const localDraft =
+      row.account_id === null &&
+      receivingProof &&
+      row.direction === 'out' &&
+      row.source === 'manual' &&
+      row.status === 'draft' &&
+      row.external_message_id === null &&
+      row.provider_id === null &&
+      /^reply\.draft:[0-9a-f-]{36}$/i.test(row.idempotency_key) &&
+      row.draftReceipt;
+    if (
+      row.channel !== 'social' ||
+      (row.account_id !== accountId && !localDraft)
+    )
+      fail();
+    if (localDraft) repairs.push(row.id);
     accountProven = true;
     const meta = row.social_meta;
     if (meta !== null && (typeof meta !== 'object' || Array.isArray(meta)))
@@ -91,6 +129,13 @@ async function assertFacebookBinding(
     peerProven = true;
   }
   if (!accountProven || !peerProven) fail();
+  // Only code-created unsent drafts with a matching audit receipt are repaired,
+  // after every account/peer check passes. Sent or unaudited NULL rows stay blocked.
+  if (repairs.length)
+    await c.query(
+      'update messages set account_id=$2 where id=any($1::uuid[]) and account_id is null',
+      [repairs, accountId],
+    );
 }
 
 /** Persist only observed precedence edges. Ties between disconnected windows

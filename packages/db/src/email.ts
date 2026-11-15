@@ -1,3 +1,4 @@
+import { messageHistoryOrder } from './message-history.js';
 import {
   SocialSendError,
   facebookDispatchReason,
@@ -292,7 +293,7 @@ export async function getCompanyMessaging(companyId: string) {
   ] = await Promise.all([
     listEmailAccounts(),
     sonarPool.query(
-      `select m.id,m.channel,(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by m.created_at desc,m.id`,
+      `select m.id,m.channel,(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",m.account_id as "accountId",m.to_value as "toAddress",m.subject,m.body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.scheduled_at as "scheduledAt",m.reason_uk as "reasonUk" from messages m join conversations c on c.id=m.conversation_id where c.company_id=$1 order by ${messageHistoryOrder('desc', true)}`,
       [companyId],
     ),
     sonarPool.query(

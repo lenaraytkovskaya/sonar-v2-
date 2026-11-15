@@ -1,4 +1,8 @@
+import { messageHistoryOrder } from './message-history.js';
+export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
+import { assertFacebookBinding } from './social-inbox.js';
+import { canonicalSocialPeer } from '@sonar/core/social-inbox';
 import { selectOutreachContacts } from '@sonar/core';
 import { sonarPool } from './index.js';
 import {
@@ -65,15 +69,6 @@ const invalid = (reason: string): never => {
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
 const automatic = ['email', 'telegram', 'whatsapp'];
-/** Shared forward/reverse order for every message-history reader. */
-export function messageHistoryOrder(
-  direction: 'asc' | 'desc',
-  qualified = false,
-) {
-  const p = qualified ? 'm.' : '',
-    nulls = direction === 'asc' ? 'first' : 'last';
-  return `((${p}social_meta->>'facebookInboxOrder') is null) ${direction},(${p}social_meta->>'facebookInboxOrder')::int ${direction},${p}created_at ${direction},(${p}social_meta->>'providerOrder')::int ${direction} nulls ${nulls},${p}id ${direction}`;
-}
 const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
@@ -532,11 +527,27 @@ async function lockedMessage(c: PoolClient, id: string) {
   const {
     rows: [identity],
   } = await c.query(
-    'select v.company_id from messages m join conversations v on v.id=m.conversation_id where m.id=$1',
+    `select v.company_id,v.id as conversation_id,v.account_id,v.peer_value,v.provider_thread_id,m.to_value,a.channel as receiving_channel
+    from messages m join conversations v on v.id=m.conversation_id left join channel_accounts a on a.id=v.account_id where m.id=$1`,
     [id],
   );
   if (!identity) invalid('Повідомлення не знайдено.');
+  const boundFacebook =
+    identity.receiving_channel === 'facebook' && identity.provider_thread_id;
+  // Match reply() lock order: conversation, company, then message history.
+  if (boundFacebook)
+    await c.query('select id from conversations where id=$1 for update', [
+      identity.conversation_id,
+    ]);
   await assertAllowed(c, identity.company_id, '');
+  if (boundFacebook)
+    await assertFacebookBinding(
+      c,
+      identity.conversation_id,
+      identity.account_id,
+      canonicalSocialPeer('facebook', identity.peer_value ?? identity.to_value),
+      identity.provider_thread_id,
+    );
   const {
     rows: [message],
   } = await c.query(

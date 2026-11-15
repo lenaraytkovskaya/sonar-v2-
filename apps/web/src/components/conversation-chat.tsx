@@ -26,6 +26,9 @@ export function ConversationChat({ initial }: { initial: Chat }) {
   const lastInbound = [...data.messages]
     .reverse()
     .find((m) => m.direction === 'in');
+  const readBoundary = JSON.stringify(
+    data.messages.filter((m) => m.direction === 'in').map((m) => m.id),
+  );
   useEffect(() => {
     const controller = new AbortController();
     const refresh = async () => {
@@ -49,19 +52,25 @@ export function ConversationChat({ initial }: { initial: Chat }) {
     };
   }, [path, task]);
   useEffect(() => {
-    if (!lastInbound) return;
+    const visibleMessageIds = JSON.parse(readBoundary) as string[];
+    const throughMessageId = visibleMessageIds.at(-1);
+    if (!throughMessageId) return;
     const markRead = () => {
       if (document.visibilityState !== 'visible') return;
       void fetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'read', messageId: lastInbound.id }),
+        body: JSON.stringify({
+          action: 'read',
+          messageId: throughMessageId,
+          visibleMessageIds,
+        }),
       }).catch(() => {});
     };
     markRead();
     document.addEventListener('visibilitychange', markRead);
     return () => document.removeEventListener('visibilitychange', markRead);
-  }, [path, lastInbound?.id]);
+  }, [path, readBoundary]);
   const act = async (action: string, fields: Record<string, unknown> = {}) => {
     if (action === 'copied' || action === 'copyError') {
       setNotice(action === 'copied' ? uk.outreach.copied : uk.email.error);
