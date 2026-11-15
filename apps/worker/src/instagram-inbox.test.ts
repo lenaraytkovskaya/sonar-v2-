@@ -52,6 +52,21 @@ const mailbox = (value = fixture()) =>
   value.data.get_slide_mailbox_for_iris_subscription;
 const thread = (value: ReturnType<typeof fixture>) =>
   mailbox(value).threads_by_folder.edges[0].node.as_ig_direct_thread;
+// Opaque message-ID format observed in native Chrome Network on 2026-11-15.
+// Values are synthetic; repeat-fixture tests do not establish live reload stability.
+const opaqueIds = JSON.parse(
+  readFileSync(
+    new URL('./instagram-message-ids.fixture.json', import.meta.url),
+    'utf8',
+  ),
+) as { incoming: string; outgoing: string };
+const opaqueFixture = () => {
+  const value = fixture();
+  const edges = thread(value).slide_messages.edges;
+  edges[0].node.id = opaqueIds.incoming;
+  edges[1].node.id = opaqueIds.outgoing;
+  return value;
+};
 const emptyFixture = () => {
   const value = fixture();
   mailbox(value).threads_by_folder.edges = [];
@@ -98,6 +113,94 @@ it('maps observed true identities, exact text, timestamps and provider IDs', () 
     parsed.messages,
   );
 });
+
+it('preserves observed opaque provider message IDs alongside numeric IDs', () => {
+  const parsed = parseInstagramInbox(opaqueFixture(), observedAt)!;
+  expect(parsed.skipped).toEqual([]);
+  expect(parsed.messages.map((message) => message.externalMessageId)).toEqual([
+    opaqueIds.incoming,
+    opaqueIds.outgoing,
+    '900000000000010',
+    '900000000000012',
+    '900000000000014',
+  ]);
+  expect(
+    parsed.messages.slice(0, 2).map((message) => message.direction),
+  ).toEqual(['in', 'out']);
+  parsed.messages.forEach((message) =>
+    expect(() =>
+      validateSocialInboxMessage('instagram', message),
+    ).not.toThrow(),
+  );
+});
+it('rejects malformed, control-containing and oversized message IDs', () => {
+  const invalid: unknown[] = [
+    null,
+    42,
+    '',
+    'mid.$',
+    'MID.$a',
+    'mid.$a.b',
+    'mid.$a/b',
+    'mid.$a b',
+    'mid.$a$',
+    'mid.$a\u2028',
+    'mid.$' + 'a'.repeat(996),
+    '1'.repeat(1001),
+  ];
+  for (const code of [
+    ...Array.from({ length: 33 }, (_, index) => index),
+    127,
+  ]) {
+    invalid.push(
+      'mid.$a' + String.fromCharCode(code),
+      '1' + String.fromCharCode(code),
+    );
+  }
+  for (const id of invalid) {
+    const value = fixture();
+    thread(value).slide_messages.edges[0].node.id = id;
+    const parsed = parseInstagramInbox(value, observedAt)!;
+    expect(parsed.skipped).toContain('invalid_message');
+    expect(parsed.messages).toHaveLength(4);
+  }
+});
+it.each([
+  'thread_id',
+  'viewer_id',
+  'viewer.id',
+  'viewer.interop_messaging_user_fbid',
+  'users.0.id',
+  'users.0.interop_messaging_user_fbid',
+])('does not accept opaque message IDs in the numeric %s namespace', (path) => {
+  const value = opaqueFixture();
+  const keys = path.split('.');
+  const parent = keys
+    .slice(0, -1)
+    .reduce((node, key) => node[key], thread(value));
+  parent[keys.at(-1)!] = opaqueIds.incoming;
+  expect(parseInstagramInbox(value, observedAt)?.messages).toEqual([]);
+});
+it.each(['sender', 'content', 'text', 'timestamp'])(
+  'keeps %s guards on messages with opaque IDs',
+  (kind) => {
+    const value = opaqueFixture();
+    const message = thread(value).slide_messages.edges[0].node;
+    if (kind === 'sender') message.sender_fbid = opaqueIds.incoming;
+    if (kind === 'content') message.content.__typename = 'UnsupportedContent';
+    if (kind === 'text') message.content.text_body = 'Different synthetic body';
+    if (kind === 'timestamp') message.timestamp_ms = 'invalid';
+    const parsed = parseInstagramInbox(value, observedAt)!;
+    expect(parsed.skipped).toContain(
+      kind === 'sender' ? 'unknown_sender' : 'invalid_message',
+    );
+    expect(
+      parsed.messages.some(
+        (message) => message.externalMessageId === opaqueIds.incoming,
+      ),
+    ).toBe(false);
+  },
+);
 
 it.each([
   [
@@ -280,6 +383,13 @@ function browser(
     run,
   };
 }
+
+it('deduplicates repeated opaque-ID captures without changing provider identity', async () => {
+  const f = browser([opaqueFixture(), opaqueFixture()]);
+  expect(await f.run()).toMatchObject({ complete: false });
+  expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0, 0]);
+  expect(f.batches[0]?.messages[0]?.externalMessageId).toBe(opaqueIds.incoming);
+});
 
 it('ignores the observed unread-count envelope before importing a request-correlated full inbox', async () => {
   const unread = unreadFixture();
@@ -1026,7 +1136,7 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             name === 'useIGDSystemFolderUnreadThreadCountQuery'
               ? unreadFixture()
               : name === 'PolarisDirectInboxQuery'
-                ? fixture()
+                ? opaqueFixture()
                 : name === 'PolarisDirectMessageRequestQuery'
                   ? requestsFixture()
                   : null;
@@ -1074,6 +1184,9 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
       });
       expect(batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+      expect(batches[0]?.messages[0]?.externalMessageId).toBe(
+        opaqueIds.incoming,
+      );
       expect(batches.every((batch) => batch.resumeAnchor === null)).toBe(true);
     } finally {
       await instance.close();

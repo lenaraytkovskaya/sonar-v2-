@@ -13,6 +13,10 @@ const object = (value: unknown): Record<string, unknown> =>
     : {};
 const digits = (value: unknown): value is string =>
   typeof value === 'string' && /^\d{1,1000}$/.test(value);
+// Message IDs use their own provider namespace; actor/thread IDs stay numeric.
+const messageId = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^(?:\d{1,1000}|mid\.\$[A-Za-z0-9_-]{1,995})$/.exec(value)?.[0] === value;
 const fieldKind = (value: unknown): SocialActorFieldKind =>
   value === undefined
     ? 'missing'
@@ -161,7 +165,7 @@ export function parseInstagramInbox(
         : NaN;
       if (
         !direction ||
-        !digits(message.id) ||
+        !messageId(message.id) ||
         message.__typename !== 'SlideMessage' ||
         message.content_type !== 'TEXT' ||
         content.__typename !== 'SlideMessageText' ||
