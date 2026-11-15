@@ -889,6 +889,227 @@ it.skipIf(!enabled)(
   30000,
 );
 
+async function generatedLockFixture(
+  channel: 'email' | 'telegram' | 'form' | 'social',
+) {
+  const company = randomUUID(),
+    campaign = randomUUID(),
+    contact = randomUUID(),
+    conversation = randomUUID(),
+    outgoing = randomUUID(),
+    incoming = randomUUID();
+  companies.push(company);
+  campaigns.push(campaign);
+  const address =
+    channel === 'email'
+      ? `${company}@example.invalid`
+      : channel === 'telegram'
+        ? '@round3_test'
+        : channel === 'form'
+          ? 'https://example.invalid/contact'
+          : 'https://www.instagram.com/round3_test/';
+  await db.sonarPool.query(
+    "insert into companies(id,place_id,name,country_code) values($1,$2,'Round3 lock order','US')",
+    [company, `manual:${company}`],
+  );
+  await db.sonarPool.query(
+    "insert into campaigns(id,name,country_code,language_code,cities,queries,offer,budget_usd,channels,scoring_weights,status,send_mode) values($1,'Round3 lock order','US','en','{}','{}','',1,$2,'{}','active','manual')",
+    [
+      campaign,
+      JSON.stringify({ [channel === 'form' ? 'forms' : channel]: true }),
+    ],
+  );
+  await db.sonarPool.query(
+    'insert into campaign_companies(company_id,campaign_id) values($1,$2)',
+    [company, campaign],
+  );
+  await db.sonarPool.query(
+    "insert into contacts(id,company_id,kind,value,normalized,source) values($1,$2,$3,$4,$4,'manual')",
+    [contact, company, channel, address],
+  );
+  await db.sonarPool.query(
+    'insert into conversations(id,company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4,$5)',
+    [conversation, company, campaign, contact, channel],
+  );
+  await db.sonarPool.query(
+    "insert into messages(id,conversation_id,channel,direction,source,to_value,subject,body,status,idempotency_key) values($1,$3,$4,'out','generated',$5,'Original','Original','draft',$6),($2,$3,$4,'in','inbound',$5,'Incoming','Incoming','delivered',$7)",
+    [
+      outgoing,
+      incoming,
+      conversation,
+      channel,
+      address,
+      randomUUID(),
+      randomUUID(),
+    ],
+  );
+  return { company, campaign, contact, conversation, outgoing, incoming };
+}
+it.skipIf(!enabled).each(
+  (['email', 'telegram', 'form', 'social'] as const).flatMap((channel) =>
+    (['edit', 'read', 'generate', 'reply'] as const).map((action) => ({
+      channel,
+      action,
+    })),
+  ),
+)(
+  'company-first generated $channel draft overlaps $action without a lock cycle or API error',
+  async ({ channel, action }) => {
+    const f = await generatedLockFixture(channel),
+      outreach = await import('@sonar/db/outreach');
+    const rawConnect = db.sonarPool.connect.bind(db.sonarPool),
+      client = await rawConnect();
+    const rawQuery = client.query.bind(client),
+      rawRelease = client.release.bind(client);
+    client.release = (error?: Error | boolean) => {
+      client.query = rawQuery;
+      client.release = rawRelease;
+      rawRelease(error);
+    };
+    let ready!: () => void, resume!: () => void;
+    const companyHeld = new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+      gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+    let held = false;
+    client.query = (async (sql: string, values?: unknown[]) => {
+      const result = await rawQuery(sql, values);
+      if (
+        !held &&
+        sql.includes('pg_advisory_xact_lock') &&
+        sql.includes('company-contact:') &&
+        values?.[0] === f.company
+      ) {
+        held = true;
+        // Make the generated writer the deterministic deadlock victim in the RED run.
+        await rawQuery("set local deadlock_timeout='100ms'");
+        ready();
+        await gate;
+      }
+      return result;
+    }) as typeof client.query;
+    db.sonarPool.connect = (async () => client) as typeof db.sonarPool.connect;
+    const generated = outreach
+      .saveOutreachDraft(
+        {
+          companyId: f.company,
+          campaignId: f.campaign,
+          contactId: f.contact,
+          analysisId: randomUUID(),
+          version: 'round3',
+        },
+        { subject: 'Generated', body: 'Generated' },
+        randomUUID(),
+      )
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({
+          ok: false as const,
+          code: (error as { code?: string }).code,
+          message: (error as Error).message,
+        }),
+      );
+    db.sonarPool.connect = rawConnect;
+    let mutation: Promise<{ status: number }> | undefined;
+    try {
+      await Promise.race([
+        companyHeld,
+        generated.then((result) => {
+          if (!held)
+            throw new Error(
+              `Generated writer did not reach the company lock: ${JSON.stringify(result)}`,
+            );
+        }),
+      ]);
+      const body =
+        action === 'edit'
+          ? {
+              action: 'save',
+              messageId: f.outgoing,
+              subject: 'Edited',
+              body: 'Edited',
+            }
+          : action === 'read'
+            ? { action: 'read', messageId: f.incoming }
+            : action === 'generate'
+              ? { action: 'generate', requestId: randomUUID() }
+              : {
+                  action: 'reply',
+                  requestId: randomUUID(),
+                  subject: 'Reply',
+                  body: 'Reply',
+                  socialDelivery: 'manual',
+                };
+      mutation = fetch(`${origin}/api/conversations/${f.conversation}`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          Origin: origin,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      }).then((response) => ({ status: response.status }));
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like '%company-contact:%'",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      resume();
+      const [draft, response] = await Promise.all([generated, mutation]);
+      console.log(
+        'ROUND3_LOCK_ORDER',
+        JSON.stringify({
+          channel,
+          action,
+          generated: draft.ok,
+          ...(!draft.ok ? { code: draft.code } : {}),
+          http: response.status,
+        }),
+      );
+      expect(draft).toMatchObject({ ok: true });
+      expect(response.status).toBe(action === 'generate' ? 202 : 200);
+      const {
+        rows: [counts],
+      } = await db.sonarPool.query(
+        'select count(*)::int n from messages where conversation_id=$1 and body=$2',
+        [f.conversation, 'Generated'],
+      );
+      expect(counts.n).toBe(1);
+      if (action === 'edit')
+        expect(
+          (
+            await db.sonarPool.query('select body from messages where id=$1', [
+              f.outgoing,
+            ])
+          ).rows[0].body,
+        ).toBe('Edited');
+      if (action === 'read')
+        expect(
+          (
+            await db.sonarPool.query(
+              'select read_at from messages where id=$1',
+              [f.incoming],
+            )
+          ).rows[0].read_at,
+        ).toEqual(expect.any(Date));
+    } finally {
+      resume();
+      await Promise.allSettled([generated, ...(mutation ? [mutation] : [])]);
+      client.query = rawQuery;
+      db.sonarPool.connect = rawConnect;
+    }
+  },
+  30000,
+);
+
 afterAll(async () => {
   if (!enabled) return;
   if (server && server.exitCode === null) {
@@ -928,6 +1149,10 @@ afterAll(async () => {
   );
   await db.sonarPool.query(
     'delete from contacts where company_id=any($1::uuid[])',
+    [companies],
+  );
+  await db.sonarPool.query(
+    'delete from campaign_companies where company_id=any($1::uuid[])',
     [companies],
   );
   await db.sonarPool.query('delete from campaigns where id=any($1::uuid[])', [

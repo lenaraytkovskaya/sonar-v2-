@@ -38,7 +38,7 @@ export async function canonicalConversation(
   );
   return rows[0]?.id ?? id;
 }
-/** Lock order for mutations: receiving account, canonical conversation, company, messages/tasks. */
+/** Lock order for mutations: receiving account (WhatsApp), company, conversation, messages/tasks. */
 export async function lockConversation(c: PoolClient, id: string) {
   // Resolve the account and current root in one snapshot; a merge may commit before the lock arrives.
   const {
@@ -79,11 +79,28 @@ export async function lockConversation(c: PoolClient, id: string) {
   }
   const canonicalId = await canonicalConversation(c, id);
   const {
+    rows: [scope],
+  } = await c.query('select company_id from conversations where id=$1', [
+    canonicalId,
+  ]);
+  if (!scope) throw new EmailValidationError('Діалог не знайдено.');
+  // Generated writers take this lock before their conversation upsert. Never reverse that order.
+  if (scope.company_id)
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('company-contact:'||$1::text,0))",
+      [scope.company_id],
+    );
+  const {
     rows: [conversation],
   } = await c.query('select * from conversations where id=$1 for update', [
     canonicalId,
   ]);
   if (!conversation) throw new EmailValidationError('Діалог не знайдено.');
+  // Do not acquire a different company lock after the row if a non-WhatsApp writer changed its scope.
+  if (conversation.company_id !== scope.company_id)
+    throw new EmailValidationError(
+      'Контекст діалогу змінено. Оновіть діалог перед повтором.',
+    );
   if (
     accountId &&
     conversation.account_id &&
