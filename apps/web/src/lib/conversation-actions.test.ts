@@ -7,12 +7,13 @@ const {
   read,
   generate,
   reply,
-  query,
+  replyTask,
   edit,
   send,
   approve,
   skip,
   manual,
+  repairIdentity,
 } = vi.hoisted(() => ({
   session: vi.fn(),
   inbox: vi.fn(),
@@ -20,12 +21,13 @@ const {
   read: vi.fn(),
   generate: vi.fn(),
   reply: vi.fn(),
-  query: vi.fn(),
+  replyTask: vi.fn(),
   edit: vi.fn(),
   send: vi.fn(),
   approve: vi.fn(),
   skip: vi.fn(),
   manual: vi.fn(),
+  repairIdentity: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/draft-state', () => import('./draft-state'));
@@ -33,12 +35,13 @@ vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/inbox-filters', () => import('./inbox-filters'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
-vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 vi.mock('@sonar/db/inbound', () => ({
   getConversationChat: chat,
+  getConversationReplyTask: replyTask,
   markConversationRead: read,
   enqueueReply: generate,
   queueConversationReply: reply,
+  enqueueWhatsAppIdentityRepair: repairIdentity,
 }));
 vi.mock('@sonar/db/outreach', () => ({
   getInbox: inbox,
@@ -150,13 +153,10 @@ describe('conversation API boundaries', () => {
   it('reads history without marking messages read and scopes task polling to the conversation', async () => {
     expect((await GET(get(), context)).status).toBe(200);
     expect(read).not.toHaveBeenCalled();
-    query.mockResolvedValue({ rows: [] });
+    replyTask.mockResolvedValue(null);
     expect((await GET(get(`?taskId=${foreign}`), context)).status).toBe(404);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining("type='ai.reply'"),
-      [foreign, id],
-    );
-    query.mockResolvedValue({ rows: [{ id: foreign, status: 'done' }] });
+    expect(replyTask).toHaveBeenCalledWith(id, foreign);
+    replyTask.mockResolvedValue({ id: foreign, status: 'done' });
     expect(
       await (await GET(get(`?taskId=${foreign}`), context)).json(),
     ).toEqual({ id: foreign, status: 'done' });
@@ -293,7 +293,7 @@ describe('conversation API boundaries', () => {
       (await POST(request({ action: 'send', messageId: outgoing }), context))
         .status,
     ).toBe(200);
-    expect(send).toHaveBeenCalledWith(outgoing, 'actor', undefined);
+    expect(send).toHaveBeenCalledWith(outgoing, 'actor', undefined, id);
   });
   it('requires an existing conversation and valid reply fields', async () => {
     for (const patch of [
@@ -343,6 +343,24 @@ describe('conversation API boundaries', () => {
     expect(generate).not.toHaveBeenCalled();
     expect((await GET(get(), context)).status).toBe(404);
   });
+});
+
+it('queues owner-checked WhatsApp repair only with explicit dry-run and request identity', async () => {
+  repairIdentity.mockResolvedValue({ taskId: foreign });
+  const data = {
+    action: 'repair-whatsapp-identity',
+    requestId: foreign,
+    dryRun: true,
+  };
+  expect((await POST(request(data), context)).status).toBe(202);
+  expect(repairIdentity).toHaveBeenCalledWith(id, 'actor', foreign, true);
+  expect(
+    (await POST(request({ ...data, dryRun: undefined }), context)).status,
+  ).toBe(400);
+  expect(
+    (await POST(request(data, 'https://untrusted.invalid'), context)).status,
+  ).toBe(401);
+  expect(repairIdentity).toHaveBeenCalledTimes(1);
 });
 
 describe('inbox snapshots', () => {
@@ -400,7 +418,7 @@ it('validates and forwards the reviewed draft snapshot', async () => {
       )
     ).status,
   ).toBe(200);
-  expect(send).toHaveBeenLastCalledWith(outgoing, 'actor', expected);
+  expect(send).toHaveBeenLastCalledWith(outgoing, 'actor', expected, id);
   expect(
     (
       await POST(
@@ -420,6 +438,7 @@ it('validates and forwards the reviewed draft snapshot', async () => {
     { subject: 'Mine', body: 'My text' },
     'actor',
     expected,
+    id,
   );
   send.mockClear();
   expect(

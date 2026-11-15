@@ -14,13 +14,10 @@ export async function GET(request: Request, context: Context) {
     const taskId = new URL(request.url).searchParams.get('taskId');
     if (taskId) {
       if (!validId(taskId)) return invalid();
-      const { sonarPool } = await import('@sonar/db');
-      const { rows } = await sonarPool.query(
-        "select id,status,reason_uk from tasks where id=$1 and type='ai.reply' and payload->>'conversationId'=$2",
-        [taskId, id],
-      );
+      const { getConversationReplyTask } = await import('@sonar/db/inbound');
       return (
-        rows[0] ?? Response.json({ error: uk.tasks.missing }, { status: 404 })
+        (await getConversationReplyTask(id, taskId)) ??
+        Response.json({ error: uk.tasks.missing }, { status: 404 })
       );
     }
     const { getConversationChat } = await import('@sonar/db/inbound');
@@ -44,6 +41,19 @@ export async function POST(request: Request, context: Context) {
     const db = await import('@sonar/db/inbound');
     const chat = await db.getConversationChat(id);
     if (!chat.conversation) return invalid();
+    if (data.action === 'repair-whatsapp-identity') {
+      if (!validId(data.requestId) || typeof data.dryRun !== 'boolean')
+        return invalid();
+      return Response.json(
+        await db.enqueueWhatsAppIdentityRepair(
+          id,
+          user.id,
+          data.requestId,
+          data.dryRun,
+        ),
+        { status: 202 },
+      );
+    }
     if (data.action === 'read') {
       const incomingIds = new Set(
         chat.messages.filter((m) => m.direction === 'in').map((m) => m.id),
@@ -117,16 +127,27 @@ export async function POST(request: Request, context: Context) {
         { subject: data.subject, body: data.body },
         user.id,
         expected,
+        id,
       );
     }
     if (data.action === 'send')
-      return outreach.sendOutreachDraft(data.messageId, user.id, expected);
+      return outreach.sendOutreachDraft(data.messageId, user.id, expected, id);
     if (data.action === 'approve')
-      return outreach.approveOutreachDraft(data.messageId, user.id, expected);
+      return outreach.approveOutreachDraft(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     if (data.action === 'skip')
-      return outreach.skipOutreachMessage(data.messageId, user.id);
+      return outreach.skipOutreachMessage(data.messageId, user.id, id);
     if (data.action === 'manual')
-      return outreach.markOutreachManualSent(data.messageId, user.id, expected);
+      return outreach.markOutreachManualSent(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     return invalid();
   });
 }

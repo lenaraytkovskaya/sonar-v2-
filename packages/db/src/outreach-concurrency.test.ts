@@ -35,7 +35,23 @@ beforeEach(() => {
   query.mockImplementation(async (sql: string, values: unknown[]) => {
     if (sql.includes('as blocked')) return { rows: [{ blocked: false }] };
     if (sql.includes('for update of m')) return { rows: [{ ...row }] };
-    if (sql.includes('select v.company_id'))
+    if (sql.startsWith('select conversation_id,to_value'))
+      return { rows: [{ conversation_id: 'conversation' }] };
+    if (
+      sql.startsWith('with recursive chain') ||
+      sql.startsWith('select * from conversations')
+    )
+      return {
+        rows: [
+          {
+            id: 'conversation',
+            channel: row.channel,
+            company_id: 'company',
+            accounts: [],
+          },
+        ],
+      };
+    if (sql.startsWith('select company_id from conversations'))
       return { rows: [{ company_id: 'company' }] };
     if (sql.includes('select id from channel_accounts'))
       return { rows: [{ id: 'account' }] };

@@ -51,6 +51,9 @@ export function normalizeWhatsAppRecipient(
 ): string | null {
   let value = raw.trim();
   if (/^whatsapp:lid:[1-9]\d*$/.test(value)) return value;
+  const jid = /^([1-9]\d*)@(c\.us|s\.whatsapp\.net|lid)$/.exec(value);
+  if (jid?.[2] === 'lid') return `whatsapp:lid:${jid[1]}`;
+  if (jid) value = `+${jid[1]}`;
   if (/^(?:https?:\/\/)?wa\.me\//i.test(value)) {
     try {
       const url = new URL(/^https?:/i.test(value) ? value : `https://${value}`);
@@ -457,7 +460,9 @@ export function createWhatsAppAdapter(
       const data = await request(
         `/api/default/lids/${encodeURIComponent(lid)}`,
       );
-      return typeof data.pn === 'string' && /^[1-9]\d*@c\.us$/.test(data.pn)
+      return data.lid === lid &&
+        typeof data.pn === 'string' &&
+        /^[1-9]\d*@c\.us$/.test(data.pn)
         ? normalizeWhatsAppRecipient(`+${data.pn.split('@')[0]}`)
         : null;
     },
