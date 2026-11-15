@@ -1,4 +1,5 @@
 import type { Page, Response } from 'playwright';
+import { captureFacebookInbox } from './facebook-inbox-browser.js';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
@@ -426,12 +427,36 @@ export function createSocialInboxAdapter(
 ): SocialInboxAdapter {
   return {
     async sync(account, _checkpoint, persistBatch) {
+      if (account.channel === 'facebook') {
+        const actors = account.session.cookies.filter(
+          (cookie) =>
+            cookie.name === 'c_user' &&
+            [
+              '.facebook.com',
+              'facebook.com',
+              'www.facebook.com',
+              '.www.facebook.com',
+            ].includes(cookie.domain) &&
+            cookie.path === '/',
+        );
+        if (
+          actors.length !== 1 ||
+          !/^\d+$/.test(actors[0]!.value) ||
+          account.session.cookies.some(
+            (cookie) =>
+              cookie.name === 'i_user' && cookie.value !== actors[0]!.value,
+          )
+        )
+          throw new SocialSessionCheckError('unknown_auth');
+        const timeoutMs = await timeout();
+        return browser.withPage(account, account.session, timeoutMs, (page) =>
+          captureFacebookInbox(page, actors[0]!.value, timeoutMs, persistBatch),
+        );
+      }
       if (account.channel !== 'instagram')
         throw new SocialInboxAdapterError(
-          account.channel === 'facebook' ? 'history_locked' : 'unsupported_dom',
-          account.channel === 'facebook'
-            ? 'Історію Facebook заблоковано PIN. Синхронізацію не активовано.'
-            : 'Адаптер історії LinkedIn не підтримується; синхронізацію не активовано.',
+          'unsupported_dom',
+          'Адаптер історії LinkedIn не підтримується; синхронізацію не активовано.',
         );
       const timeoutMs = await timeout();
       const actorCookies = account.session.cookies.filter(

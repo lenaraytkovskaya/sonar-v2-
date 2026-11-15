@@ -76,7 +76,11 @@ export function Draft({
             ] ?? message.source}
           </span>
         )}
-        <LocalTime value={message.sentAt ?? message.createdAt} />
+        {message.providerTimestampUnknown ? (
+          <span>{uk.socialAccounts.timestampUnknown}</span>
+        ) : (
+          <LocalTime value={message.sentAt ?? message.createdAt} />
+        )}
       </p>
       {message.classification && (
         <p className="text-xs text-muted-foreground">

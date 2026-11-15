@@ -33,6 +33,7 @@ export interface OutreachMessage {
   readAt: Date | null;
   createdAt: Date;
   sentAt: Date | null;
+  providerTimestampUnknown?: boolean;
 }
 export interface OutreachConversation {
   id: string;
@@ -68,8 +69,8 @@ const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,(social_meta->>'providerOrder')::int desc nulls last,id desc limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
   filters: {
@@ -131,7 +132,7 @@ export async function getCompanyChat(companyId: string) {
         [companyId],
       ),
       sonarPool.query<OutreachMessage>(
-        `${messageSelect} where v.company_id=$1 order by m.created_at,m.id`,
+        `${messageSelect} where v.company_id=$1 order by m.created_at,(m.social_meta->>'providerOrder')::int nulls first,m.id`,
         [companyId],
       ),
       sonarPool.query<{

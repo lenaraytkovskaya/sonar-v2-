@@ -56,12 +56,13 @@ it.each(['unknown_auth', 'login_required'] as const)(
                 id: 'synthetic',
                 channel: 'instagram',
                 status: 'active',
-                settings: { sessionStatus: 'valid' },
+                settings: { sessionStatus: 'valid', inboxPollingEnabled: true },
               },
             ]
           : sql.startsWith('select key,value')
             ? [
                 { key: 'social.inbox.enabled', value: true },
+                { key: 'social.inbox.instagram.enabled', value: true },
                 { key: 'social.inbox.poll_seconds', value: 60 },
                 { key: 'social.inbox.daily_limit', value: 10 },
               ]

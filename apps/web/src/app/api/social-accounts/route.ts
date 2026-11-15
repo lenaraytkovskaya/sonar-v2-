@@ -22,7 +22,17 @@ async function handle(request: Request, method: string) {
   try {
     let queued = false;
     let inboxSync;
-    if (method === 'POST' && data?.action === 'syncInbox') {
+    if (method === 'POST' && data?.action === 'inboxPolling') {
+      if (
+        !validId(data.id) ||
+        typeof data.enabled !== 'boolean' ||
+        Object.keys(data).some(
+          (key) => !['action', 'id', 'enabled'].includes(key),
+        )
+      )
+        return invalid();
+      await db.setSocialInboxPolling(data.id, data.enabled, user.id);
+    } else if (method === 'POST' && data?.action === 'syncInbox') {
       if (
         !validId(data.id) ||
         Object.keys(data).some((key) => !['action', 'id'].includes(key))
@@ -85,6 +95,9 @@ async function handle(request: Request, method: string) {
       proxyIndex: account.proxyIndex,
       ownerName: account.ownerName,
       canSyncInbox: account.canSyncInbox,
+      inboxPollingEnabled: account.inboxPollingEnabled,
+      inboxSyncComplete: account.inboxSyncComplete,
+      inboxSyncCreated: account.inboxSyncCreated,
     }));
     return respond(
       { accounts, ...(inboxSync ? { inboxSync } : {}) },

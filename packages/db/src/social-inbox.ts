@@ -75,9 +75,18 @@ export async function persistSocialInboxBatch(
             c,
           );
         } else {
+          const occurredAt =
+            message.occurredAt ?? prior.social_meta?.occurredAt ?? null;
           await c.query(
-            "update messages set social_meta=coalesce(social_meta,'{}'::jsonb)||$2::jsonb where id=$1",
-            [prior.id, JSON.stringify({ ...message, network })],
+            `update messages set
+              created_at=case when social_meta->'occurredAt'='null'::jsonb and $3::timestamptz is not null then $3::timestamptz else created_at end,
+              sent_at=case when direction='out' and social_meta->'occurredAt'='null'::jsonb and $3::timestamptz is not null then $3::timestamptz else sent_at end,
+              social_meta=coalesce(social_meta,'{}'::jsonb)||$2::jsonb where id=$1`,
+            [
+              prior.id,
+              JSON.stringify({ ...message, occurredAt, network }),
+              occurredAt,
+            ],
           );
           // Attach a pre-sync sender row to the provider thread when unambiguous.
           await c.query(
@@ -142,20 +151,40 @@ export async function persistSocialInboxBatch(
               [companyId],
             )
           : { rows: [] };
-        const {
-          rows: [inserted],
-        } = await c.query(
-          "insert into conversations(channel,account_id,provider_thread_id,peer_value,company_id,contact_id,campaign_id) values('social',$1,$2,$3,$4,$5,$6) returning *",
+        const { rows: unbound } = await c.query(
+          `select v.* from conversations v where v.channel='social' and v.provider_thread_id is null
+          and (v.account_id=$1 or (v.account_id is null and exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1)))
+          and (v.peer_value=$2 or v.contact_id=any($3::uuid[]))
+          and not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is not null and m.account_id<>$1) for update`,
           [
             accountId,
-            message.threadId,
             message.peerProfile,
-            companyId ?? null,
-            companyId ? candidates[0]!.id : null,
-            campaign?.campaign_id ?? null,
+            candidates.map((contact) => contact.id),
           ],
         );
-        conversation = inserted;
+        if (unbound.length === 1) {
+          conversation = (
+            await c.query(
+              'update conversations set account_id=$2,provider_thread_id=$3,peer_value=$4 where id=$1 returning *',
+              [unbound[0].id, accountId, message.threadId, message.peerProfile],
+            )
+          ).rows[0];
+        } else {
+          const {
+            rows: [inserted],
+          } = await c.query(
+            "insert into conversations(channel,account_id,provider_thread_id,peer_value,company_id,contact_id,campaign_id) values('social',$1,$2,$3,$4,$5,$6) returning *",
+            [
+              accountId,
+              message.threadId,
+              message.peerProfile,
+              companyId ?? null,
+              companyId ? candidates[0]!.id : null,
+              campaign?.campaign_id ?? null,
+            ],
+          );
+          conversation = inserted;
+        }
       }
       // Old locally sent rows lack external IDs. Preserve both observations and
       // flag the collision for a person; body/time are never deduplication keys.
@@ -177,7 +206,7 @@ export async function persistSocialInboxBatch(
         rows: [inserted],
       } = await c.query(
         `insert into messages(conversation_id,account_id,channel,direction,source,to_value,subject,body,status,idempotency_key,external_message_id,social_meta,created_at,sent_at,needs_human,reason_uk)
-        values($1,$2,'social',$3,$4,$5,'',$6,$7,$8,$9,$10,$11,case when $3='out' then $11::timestamptz end,$12,$13) returning id`,
+        values($1,$2,'social',$3,$4,$5,'',$6,$7,$8,$9,$10,$11,case when $3='out' then $14::timestamptz end,$12,$13) returning id`,
         [
           conversation.id,
           accountId,
@@ -189,11 +218,12 @@ export async function persistSocialInboxBatch(
           key,
           message.externalMessageId,
           meta,
-          message.occurredAt,
+          message.occurredAt ?? message.observedAt,
           legacy.length > 0,
           legacy.length
             ? 'Можливий збіг зі старим повідомленням без ID. Перевірте чат вручну.'
             : null,
+          message.occurredAt,
         ],
       );
       created++;
@@ -252,7 +282,7 @@ export async function reconcileSocialInbox(now = new Date()) {
       and not exists(select 1 from pgboss.job j where j.name='social.inbox.sync' and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))
       and pg_try_advisory_xact_lock(hashtextextended('channel-account:'||(t.payload->>'accountId'),0))`);
     const { rows: accounts } = await c.query(
-      "select id,settings from channel_accounts where channel in ('instagram','facebook','linkedin') and status='active' and settings->>'sessionStatus'='valid'",
+      `select id,settings from channel_accounts a where channel in ('instagram','facebook') and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false' and settings->>'inboxPollingEnabled'='true' and exists(select 1 from settings s where s.key='social.inbox.'||a.channel||'.enabled' and s.value='true'::jsonb)`,
     );
     let count = 0;
     for (const account of accounts) {

@@ -981,7 +981,10 @@ async function uniqueLinkedInNavigation(page: Page) {
       .count()) === 1
   );
 }
-async function assertSessionNegatives(page: Page, network: SocialNetwork) {
+export async function assertSessionNegatives(
+  page: Page,
+  network: SocialNetwork,
+) {
   const url = new URL(page.url());
   if (
     url.protocol !== 'https:' ||
