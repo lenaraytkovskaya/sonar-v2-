@@ -66,6 +66,19 @@ function webUrl(value: unknown, base?: string): string | null {
   }
 }
 
+function isCommentOrReplyRecord(node: RecordValue): boolean {
+  return /comment|repl(?:y|ies)/i.test(
+    String(node.__typename ?? node['@type']),
+  );
+}
+
+function isCommentOrReply(url: URL): boolean {
+  return (
+    /\/(?:comments?|repl(?:y|ies)|c)(?:\/|$)/i.test(url.pathname) ||
+    [...url.searchParams.keys()].some((key) => /comment|reply/i.test(key))
+  );
+}
+
 export function socialTarget(raw: string): SocialTarget | null {
   const safe = webUrl(raw);
   if (!safe) return null;
@@ -364,13 +377,7 @@ export function parseSocialProfile(
     const hostTarget = new URL(url).hostname.replace(/^(?:www|m|mbasic)\./, '');
     if (hostTarget !== `${target.network}.com`) return;
     const path = new URL(url).pathname;
-    if (
-      /\/(?:comments?|c)\//i.test(path) ||
-      [...new URL(url).searchParams.keys()].some((key) =>
-        /comment|reply/i.test(key),
-      )
-    )
-      return;
+    if (isCommentOrReply(new URL(url))) return;
     const photo =
       target.network === 'facebook' &&
       /^\/photo(?:\.php)?\/?$/.test(path) &&
@@ -414,7 +421,7 @@ export function parseSocialProfile(
       object(node.feedback).owning_profile,
     ].filter((value) => Object.keys(object(value)).length);
   for (const node of all) {
-    if (/comment/i.test(String(node.__typename ?? node['@type']))) continue;
+    if (isCommentOrReplyRecord(node)) continue;
     const sections = object(node.comet_sections);
     const contentStory = object(object(sections.content).story);
     const actors = [...owners(node), ...owners(contentStory)];
@@ -455,7 +462,11 @@ export function parseSocialProfile(
     ).metadata;
     for (const item of Array.isArray(metadata) ? metadata : []) {
       const story = object(object(item).story);
-      if (owners(story).some((owner) => !ownerMatches(owner))) continue;
+      if (
+        isCommentOrReplyRecord(story) ||
+        owners(story).some((owner) => !ownerMatches(owner))
+      )
+        continue;
       addPost(story.creation_time, story.url ?? story.permalink_url ?? postUrl);
     }
   }
@@ -639,6 +650,7 @@ export function parseSocialProfile(
         ? (object(feed).edges as unknown[])
         : []) {
         const post = object(object(edge).node);
+        if (isCommentOrReplyRecord(post)) continue;
         const owner = object(post.user ?? post.owner);
         if (
           (typeof owner.username === 'string' &&
@@ -779,7 +791,7 @@ export function parseSocialProfile(
         const url = webUrl(link.attr('href'), target.canonicalUrl);
         if (
           !url ||
-          !/\/(?:photo(?:\.php)?(?:\/|$)|posts\/|permalink\.php|story\.php)/.test(
+          !/\/(?:photo(?:\.php)?(?:\/|$)|posts\/|videos\/|reel\/|permalink\.php|story\.php)/.test(
             new URL(url).pathname,
           )
         )
@@ -787,12 +799,11 @@ export function parseSocialProfile(
         const source = new URL(url);
         if (
           source.hostname !== new URL(target.canonicalUrl).hostname ||
-          [...source.searchParams.keys()].some((key) =>
-            /comment|reply/i.test(key),
-          ) ||
+          isCommentOrReply(source) ||
           (source.searchParams.has('id') &&
             source.searchParams.get('id') !== target.handle) ||
-          (source.pathname.includes('/posts/') && !sameTarget(url, target))
+          (/\/(?:posts|videos)\//.test(source.pathname) &&
+            !sameTarget(url, target))
         )
           return;
         if (
@@ -840,10 +851,17 @@ export function parseSocialProfile(
               const href = webUrl(a.attr('href'), target.canonicalUrl);
               if (!href) return;
               const timestamp = new URL(href);
-              if (timestamp.hostname !== new URL(target.canonicalUrl).hostname)
+              if (
+                timestamp.hostname !== new URL(target.canonicalUrl).hostname ||
+                isCommentOrReply(timestamp)
+              )
                 return;
               if (
                 !sameTarget(href, target) &&
+                !(
+                  timestamp.pathname.startsWith('/reel/') &&
+                  timestamp.href === source.href
+                ) &&
                 !(
                   /^\/(?:profile|permalink|story)\.php$/.test(
                     timestamp.pathname,
@@ -1079,6 +1097,7 @@ export function parseSocialProfile(
     for (const node of all.filter((node) =>
       /SocialMediaPosting|BlogPosting/.test(String(node['@type'])),
     )) {
+      if (isCommentOrReplyRecord(node)) continue;
       const author = object(node.author);
       if (sameTarget(author.url ?? author['@id'], target))
         addPost(node.datePublished, node.url ?? node['@id']);
@@ -1136,6 +1155,7 @@ export function parseSocialProfile(
         const candidate = webUrl(value, target.canonicalUrl);
         return (
           candidate &&
+          !isCommentOrReply(new URL(candidate)) &&
           new URL(candidate).hostname.replace(/^www\./, '') ===
             'instagram.com' &&
           new URL(candidate).pathname.replace(/\/$/, '') ===

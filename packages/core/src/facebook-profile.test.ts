@@ -200,3 +200,131 @@ it.each([false, true])(
     expect(profile.posts[0]?.url).toContain('fbid=OWN');
   },
 );
+
+const commentUrls = [
+  `/permalink.php?story_fbid=OWN&id=${target.handle}&comment_id=COMMENT`,
+  `/${target.handle}/posts/OWN?reply_comment_id=REPLY`,
+  `/${target.handle}/posts/OWN/comments/COMMENT`,
+  `/${target.handle}/posts/OWN/replies/REPLY`,
+];
+it.each(commentUrls)('never borrows a comment/reply date from %s', (href) => {
+  for (const dateLink of [
+    '<a href="COMMENT_URL" aria-label="1 January 2027">Comment</a>',
+    '<a href="COMMENT_URL"><span aria-labelledby="comment-date">obfuscated</span></a>',
+    '<a href="COMMENT_URL"><time datetime="2027-01-01">Comment</time></a>',
+  ]) {
+    const content = post(own, 'OWN', 'missing').replace(
+      /<\/div>\s*$/,
+      `${dateLink.replace('COMMENT_URL', href)}</div>`,
+    );
+    const profile = parseSocialProfile(
+      page(content, '<span id="comment-date">1 January 2027</span>'),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: null,
+        url: 'https://www.facebook.com/photo/?fbid=OWN&set=synthetic',
+      },
+    ]);
+    expect(profile.lastPostAt).toBeNull();
+  }
+});
+
+it.each(commentUrls)(
+  'rejects comment/reply identity in embedded own-author posts: %s',
+  (url) => {
+    const html = `<script type="application/json">${JSON.stringify({
+      profile: { __typename: 'User', id: target.handle },
+      story: {
+        actors: [{ id: target.handle }],
+        url,
+        creation_time: 1798761600,
+      },
+    })}</script>`;
+    const profile = parseSocialProfile(html, target, 'GB');
+    expect(profile.posts).toEqual([]);
+    expect(profile.lastPostAt).toBeNull();
+  },
+);
+
+it.each([`/${target.handle}/videos/VIDEO`, '/reel/REEL'])(
+  'preserves an own machine-dated video/reel at %s and rejects foreign/missing authors',
+  (href) => {
+    const article = (author: string) =>
+      `<article>${author}<a href="${href}"><time datetime="2019-07-12">date</time></a></article>`;
+    const profile = parseSocialProfile(
+      page(article(`<a rel="author" href="${own}">Demo</a>`)),
+      target,
+      'GB',
+    );
+    expect(profile.posts).toEqual([
+      {
+        date: '2019-07-12T00:00:00.000Z',
+        url: `https://www.facebook.com${href}`,
+      },
+    ]);
+    expect(profile.lastPostAt).toBe('2019-07-12T00:00:00.000Z');
+    for (const author of ['', `<a rel="author" href="${foreign}">Other</a>`]) {
+      expect(
+        parseSocialProfile(page(article(author)), target, 'GB').posts,
+      ).toEqual([]);
+    }
+  },
+);
+
+it('does not use a foreign video URL inside an otherwise own-author article', () => {
+  const html = page(
+    `<article><a rel="author" href="${own}">Demo</a><a href="/303030303030303/videos/VIDEO"><time datetime="2027-01-01">date</time></a></article>`,
+  );
+  expect(parseSocialProfile(html, target, 'GB').posts).toEqual([]);
+});
+
+it.each(['Comment', 'Reply'])(
+  'does not promote an embedded %s with a parent post URL',
+  (__typename) => {
+    const html = `<script type="application/json">${JSON.stringify({
+      profile: { __typename: 'User', id: target.handle },
+      response: {
+        __typename,
+        actors: [{ id: target.handle }],
+        url: `/${target.handle}/posts/OWN`,
+        creation_time: 1798761600,
+      },
+    })}</script>`;
+    expect(parseSocialProfile(html, target, 'GB').posts).toEqual([]);
+  },
+);
+
+it.each(['Comment', 'Reply'])(
+  'rejects a nested %s date even when metadata inherits its parent post URL',
+  (__typename) => {
+    const html = `<script type="application/json">${JSON.stringify({
+      profile: { __typename: 'User', id: target.handle },
+      story: {
+        actors: [{ id: target.handle }],
+        url: `/${target.handle}/posts/OWN`,
+        comet_sections: {
+          context_layout: {
+            story: {
+              comet_sections: {
+                metadata: [
+                  { story: { __typename, creation_time: 1798761600 } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    })}</script>`;
+    const profile = parseSocialProfile(html, target, 'GB');
+    expect(profile.posts).toEqual([
+      {
+        date: null,
+        url: `https://www.facebook.com/${target.handle}/posts/OWN`,
+      },
+    ]);
+    expect(profile.lastPostAt).toBeNull();
+  },
+);
