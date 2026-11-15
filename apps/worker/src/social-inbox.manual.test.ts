@@ -44,9 +44,14 @@ it('does not reconcile or schedule a successor after a manual terminal result', 
   expect(reconcile).toHaveBeenCalledTimes(2);
 });
 
-it.each(['unknown_auth', 'login_required'] as const)(
-  'persists only safe paused inbox diagnostics for %s',
-  async (reason) => {
+it.each([
+  ['instagram', 'unknown_auth'],
+  ['instagram', 'login_required'],
+  ['facebook', 'unknown_auth'],
+  ['facebook', 'login_required'],
+] as const)(
+  'persists only safe paused %s inbox diagnostics for %s',
+  async (channel, reason) => {
     query.mockReset().mockImplementation(async (sql: string) => ({
       rows: sql.includes('pg_try_advisory_lock')
         ? [{ locked: true }]
@@ -54,7 +59,7 @@ it.each(['unknown_auth', 'login_required'] as const)(
           ? [
               {
                 id: 'synthetic',
-                channel: 'instagram',
+                channel,
                 status: 'active',
                 settings: { sessionStatus: 'valid', inboxPollingEnabled: true },
               },
@@ -62,7 +67,7 @@ it.each(['unknown_auth', 'login_required'] as const)(
           : sql.startsWith('select key,value')
             ? [
                 { key: 'social.inbox.enabled', value: true },
-                { key: 'social.inbox.instagram.enabled', value: true },
+                { key: `social.inbox.${channel}.enabled`, value: true },
                 { key: 'social.inbox.poll_seconds', value: 60 },
                 { key: 'social.inbox.daily_limit', value: 10 },
               ]
@@ -80,6 +85,14 @@ it.each(['unknown_auth', 'login_required'] as const)(
         captcha: 0,
         checkpoint: 0,
         login: 0,
+      },
+      history: {
+        threadList: 0,
+        messageRegions: 1,
+        messageNodes: 2,
+        pinRestore: 1,
+        restoreConfirmation: 0,
+        historyMissing: 1,
       },
       capture: {
         received: 2,
@@ -107,6 +120,12 @@ it.each(['unknown_auth', 'login_required'] as const)(
       rawUrl: 'https://private.test/?cookie=secret',
       capture: { ...diagnostic.capture, received: 999, viewerId: 'private' },
       actor: { ...diagnostic.actor, viewerId: 'private', cookie: 'secret' },
+      history: {
+        ...diagnostic.history,
+        messageNodes: 999,
+        text: 'private',
+        url: 'secret',
+      },
     };
     error.diagnostic = unsafeDiagnostic;
     const result = await runSocialInboxSync(
