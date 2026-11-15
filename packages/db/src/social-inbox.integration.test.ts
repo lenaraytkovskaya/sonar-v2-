@@ -463,6 +463,20 @@ it.skipIf(!enabled)(
           'utf8',
         ),
       );
+      const opaqueIds = JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../apps/worker/src/instagram-message-ids.fixture.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      );
+      const messageEdges =
+        full.data.get_slide_mailbox_for_iris_subscription.threads_by_folder
+          .edges[0].node.as_ig_direct_thread.slide_messages.edges;
+      messageEdges[0].node.id = opaqueIds.incoming;
+      messageEdges[1].node.id = opaqueIds.outgoing;
       const empty = structuredClone(full);
       let observations = [{ name: 'PolarisDirectInboxQuery', body: empty }];
       const requests = JSON.parse(
@@ -598,12 +612,24 @@ it.skipIf(!enabled)(
           skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
         },
       });
+      const { parseInstagramInbox } =
+        await import('../../../apps/worker/src/instagram-inbox-parser.js');
+      const repeated = parseInstagramInbox(full, now.toISOString())!.messages;
+      expect(
+        await inbox.persistSocialInboxBatch(id, 'instagram', {
+          messages: repeated,
+          resumeAnchor: null,
+        }),
+      ).toMatchObject({ created: 0, conflicts: [] });
       const rows = (
         await db.sonarPool.query('select * from messages where account_id=$1', [
           id,
         ])
       ).rows;
       expect(rows).toHaveLength(5);
+      expect(rows.map((row) => row.external_message_id)).toEqual(
+        expect.arrayContaining([opaqueIds.incoming, opaqueIds.outgoing]),
+      );
       const outgoing = rows.filter((row) => row.direction === 'out');
       expect(outgoing).toHaveLength(4);
       outgoing.forEach((row) => {
@@ -1257,6 +1283,81 @@ it.skipIf(!enabled)(
       runAt: new Date('2026-11-15T00:00:00Z'),
     });
     expect(capped.sync).not.toHaveBeenCalled();
+  },
+);
+it.skipIf(!enabled)(
+  'scopes the same opaque Instagram message ID to each receiving account and queues inbound AI once per account',
+  async () => {
+    const receivingAccounts = [randomUUID(), randomUUID()];
+    const { incoming: providerId } = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../apps/worker/src/instagram-message-ids.fixture.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    const batch = {
+      messages: [
+        {
+          ...message(
+            providerId,
+            'in',
+            'https://www.instagram.com/example_peer/',
+          ),
+          threadId: '900000000000005',
+        },
+      ],
+      resumeAnchor: null,
+    };
+    try {
+      for (const id of receivingAccounts) {
+        await db.sonarPool.query(
+          "insert into channel_accounts(id,channel,name,address,daily_limit) values($1,'instagram','Opaque ID fixture','',20)",
+          [id],
+        );
+        expect(
+          await inbox.persistSocialInboxBatch(id, 'instagram', batch),
+        ).toMatchObject({ created: 1, conflicts: [] });
+        expect(
+          await inbox.persistSocialInboxBatch(id, 'instagram', batch),
+        ).toMatchObject({ created: 0, conflicts: [] });
+        const rows = (
+          await db.sonarPool.query(
+            'select id,external_message_id from messages where account_id=$1',
+            [id],
+          )
+        ).rows;
+        expect(rows).toHaveLength(1);
+        expect(rows[0].external_message_id).toBe(providerId);
+        expect(
+          (
+            await db.sonarPool.query(
+              "select count(*)::int n from tasks where type='ai.inbound' and payload->>'messageId'=$1",
+              [rows[0].id],
+            )
+          ).rows[0].n,
+        ).toBe(1);
+      }
+    } finally {
+      await db.sonarPool.query(
+        "delete from tasks where payload->>'messageId' in(select id::text from messages where account_id=any($1::uuid[]))",
+        [receivingAccounts],
+      );
+      await db.sonarPool.query(
+        'delete from messages where account_id=any($1::uuid[])',
+        [receivingAccounts],
+      );
+      await db.sonarPool.query(
+        'delete from conversations where account_id=any($1::uuid[])',
+        [receivingAccounts],
+      );
+      await db.sonarPool.query(
+        'delete from channel_accounts where id=any($1::uuid[])',
+        [receivingAccounts],
+      );
+    }
   },
 );
 it.skipIf(!enabled).each(['instagram', 'linkedin'] as const)(
