@@ -168,7 +168,10 @@ export const uk = {
       'social.linkedin.pause_minutes':
         'LinkedIn: пауза після обмеження, хвилин',
     },
-    posts: 'Останні публікації',
+    posts: 'Знайдені публікації',
+    unknownPostDate: 'Дата невідома',
+    partialHistory:
+      'Показано лише доступні публікації, а не повну історію. Непідтверджені дати невідомі.',
     post: 'Публікація',
     methods: { session: 'Через робочий акаунт', anonymous: 'Анонімно' },
     networks: {
@@ -188,13 +191,14 @@ export const uk = {
       phones: 'Телефони',
       emails: 'Email',
       followers: 'Підписники',
+      friendsCount: 'Друзі',
       postsCount: 'Публікації',
       followingCount: 'Підписки',
       industry: 'Галузь',
       companySize: 'Розмір компанії',
       headquarters: 'Головний офіс',
       foundedYear: 'Рік заснування',
-      lastPostAt: 'Остання публікація',
+      lastPostAt: 'Найновіша знайдена публікація',
     },
   },
   inbound: {
