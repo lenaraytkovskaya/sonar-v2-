@@ -54,6 +54,11 @@ export async function persistSocialInboxBatch(
         [accountId, message.externalMessageId, network],
       );
       if (prior) {
+        // Binding may already exist or be rejected; never rely on its conditional UPDATE for a lock.
+        // Later inserts in this page may need this conversation's FK after the message refresh.
+        await c.query('select id from conversations where id=$1 for update', [
+          prior.conversation_id,
+        ]);
         if (
           prior.direction !== message.direction ||
           (prior.social_meta?.threadId &&
@@ -101,7 +106,7 @@ export async function persistSocialInboxBatch(
       const {
         rows: [existing],
       } = await c.query(
-        "select * from conversations where channel='social' and account_id=$1 and provider_thread_id=$2",
+        "select * from conversations where channel='social' and account_id=$1 and provider_thread_id=$2 for update",
         [accountId, message.threadId],
       );
       let conversation = existing;
