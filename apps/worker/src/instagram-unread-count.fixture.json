@@ -1,0 +1,29 @@
+{
+  "data": {
+    "get_slide_mailbox_for_iris_subscription": {
+      "id": "900000000000003",
+      "threads_by_folder": {
+        "edges": [
+          {
+            "cursor": "synthetic-unread-cursor",
+            "node": {
+              "__typename": "SlideThread",
+              "id": "900000000000000",
+              "as_ig_direct_thread": {
+                "id": "900000000000000",
+                "is_muted": false,
+                "last_activity_timestamp_ms": "1700008152516",
+                "marked_as_unread": false,
+                "slide_read_receipts": []
+              }
+            }
+          }
+        ],
+        "page_info": {
+          "end_cursor": "synthetic-unread-end",
+          "has_next_page": false
+        }
+      }
+    }
+  }
+}

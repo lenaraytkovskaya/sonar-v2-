@@ -127,6 +127,11 @@ export async function captureInstagramInbox(
   let unprovenChain = false;
   let requestsCovered = false;
   const skipped = new Set<string>();
+  let ignoredQuery = false;
+  const skippedReasons = () => [
+    ...skipped,
+    ...(ignoredQuery ? ['unsupported_query_ignored'] : []),
+  ];
   const seen = new Map<string, string>();
   const threads = new Map<string, InstagramInboxPage['threads'][number]>();
   let scope = 'inbox';
@@ -155,6 +160,15 @@ export async function captureInstagramInbox(
       return;
     }
     const responseScope = scope;
+    const friendlyNames = new URLSearchParams(request.postData() ?? '').getAll(
+      'fb_api_req_friendly_name',
+    );
+    // Unread-count and other ancillary queries share the mailbox envelope but
+    // select no actor/messages. Only captured full query selections are eligible.
+    const expectedQuery =
+      responseScope === `${origin}/direct/requests/`
+        ? 'PolarisDirectMessageRequestQuery'
+        : 'PolarisDirectInboxQuery';
     let stage: SocialSessionCheckDiagnostic['stage'] = 'http';
     let actor: ActorDiagnostic | undefined;
     pending = pending
@@ -167,6 +181,10 @@ export async function captureInstagramInbox(
           invalid = true;
           return;
         }
+        if (friendlyNames.length !== 1 || friendlyNames[0] !== expectedQuery) {
+          ignoredQuery = true;
+          return;
+        }
         let body: unknown;
         try {
           body = await response.json();
@@ -175,10 +193,6 @@ export async function captureInstagramInbox(
           return;
         }
         if (responseScope === `${origin}/direct/requests/`) {
-          const friendlyName = new URLSearchParams(
-            request.postData() ?? '',
-          ).get('fb_api_req_friendly_name');
-          if (friendlyName !== 'PolarisDirectMessageRequestQuery') return;
           if (!mailboxId || !parseInstagramRequests(body, mailboxId)) {
             skipped.add('requests_shape_unsupported');
             return;
@@ -422,7 +436,7 @@ export async function captureInstagramInbox(
     return {
       complete: false,
       reason: 'unsupported_dom' as const,
-      skipped: [...skipped],
+      skipped: skippedReasons(),
     };
   } catch (error) {
     await drain();
@@ -431,7 +445,7 @@ export async function captureInstagramInbox(
     return {
       complete: false,
       reason: 'unsupported_dom' as const,
-      skipped: [...skipped],
+      skipped: skippedReasons(),
     };
   } finally {
     detach();

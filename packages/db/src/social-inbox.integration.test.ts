@@ -417,20 +417,6 @@ it.skipIf(!enabled)(
   async () => {
     const id = randomUUID();
     const watermark = '2026-11-13T10:00:00.000Z';
-    const { parseInstagramInbox } =
-      await import('../../../apps/worker/src/instagram-inbox-parser.js');
-    const parsed = parseInstagramInbox(
-      JSON.parse(
-        readFileSync(
-          new URL(
-            '../../../apps/worker/src/instagram-inbox.fixture.json',
-            import.meta.url,
-          ),
-          'utf8',
-        ),
-      ),
-      now.toISOString(),
-    )!;
     const cookies = encryptSocialCookies(
       JSON.stringify([
         {
@@ -468,10 +454,21 @@ it.skipIf(!enabled)(
     try {
       const { captureInstagramInbox } =
         await import('../../../apps/worker/src/instagram-inbox-browser.js');
-      const empty = JSON.parse(
+      const full = JSON.parse(
         readFileSync(
           new URL(
             '../../../apps/worker/src/instagram-inbox.fixture.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      );
+      const empty = structuredClone(full);
+      let observations = [{ name: 'PolarisDirectInboxQuery', body: empty }];
+      const requests = JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../apps/worker/src/instagram-requests.fixture.json',
             import.meta.url,
           ),
           'utf8',
@@ -493,16 +490,23 @@ it.skipIf(!enabled)(
         mainFrame: () => frame,
         goto: async (target: string) => {
           url = target;
-          listener?.({
-            url: () => 'https://www.instagram.com/api/graphql',
-            status: () => 200,
-            request: () => ({
-              method: () => 'POST',
+          for (const observation of target.endsWith('/requests/')
+            ? [{ name: 'PolarisDirectMessageRequestQuery', body: requests }]
+            : observations)
+            listener?.({
               url: () => 'https://www.instagram.com/api/graphql',
-              frame: () => frame,
-            }),
-            json: async () => empty,
-          });
+              status: () => 200,
+              request: () => ({
+                method: () => 'POST',
+                url: () => 'https://www.instagram.com/api/graphql',
+                frame: () => frame,
+                postData: () =>
+                  new URLSearchParams({
+                    fb_api_req_friendly_name: observation.name,
+                  }).toString(),
+              }),
+              json: async () => observation.body,
+            });
           return { status: () => 200 };
         },
         waitForTimeout: async (ms: number) => {
@@ -555,13 +559,29 @@ it.skipIf(!enabled)(
       const adapter: import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter =
         {
           async sync(_account, _checkpoint, persist) {
-            await persist({ messages: parsed.messages, resumeAnchor: null });
-            await persist({ messages: parsed.messages, resumeAnchor: null });
-            return {
-              complete: false,
-              reason: 'unsupported_dom',
-              skipped: ['general_folder_unsupported'],
-            };
+            observations = [
+              {
+                name: 'useIGDSystemFolderUnreadThreadCountQuery',
+                body: JSON.parse(
+                  readFileSync(
+                    new URL(
+                      '../../../apps/worker/src/instagram-unread-count.fixture.json',
+                      import.meta.url,
+                    ),
+                    'utf8',
+                  ),
+                ),
+              },
+              { name: 'PolarisDirectInboxQuery', body: full },
+              { name: 'PolarisDirectInboxQuery', body: full },
+            ];
+            return captureInstagramInbox(
+              page as unknown as Parameters<typeof captureInstagramInbox>[0],
+              500,
+              persist,
+              async () => {},
+              '900000000000004',
+            );
           },
         };
       expect(
@@ -575,7 +595,7 @@ it.skipIf(!enabled)(
         result: {
           created: 5,
           complete: false,
-          skipped: ['general_folder_unsupported'],
+          skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
         },
       });
       const rows = (
