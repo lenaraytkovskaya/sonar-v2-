@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTheme } from 'next-themes';
@@ -71,6 +71,18 @@ export function Shell({
   children: ReactNode;
 }) {
   const path = usePathname();
+  const inbox = path === '/inbox';
+  const [inboxHeight, setInboxHeight] = useState<number>();
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!inbox || !viewport) return;
+    const update = () => {
+      if (viewport.scale === 1) setInboxHeight(viewport.height);
+    };
+    update();
+    viewport.addEventListener('resize', update);
+    return () => viewport.removeEventListener('resize', update);
+  }, [inbox]);
   const [open, setOpen] = useState(false);
   const navigation = (
     <nav aria-label={uk.navigation} className="flex flex-1 flex-col gap-1">
@@ -104,7 +116,20 @@ export function Shell({
   );
   return (
     <TasksProvider>
-      <div className="min-h-dvh md:grid md:grid-cols-[208px_minmax(0,1fr)]">
+      <div
+        style={
+          inbox && inboxHeight
+            ? ({
+                height: inboxHeight,
+                '--inbox-height': `${inboxHeight}px`,
+              } as CSSProperties)
+            : undefined
+        }
+        className={cn(
+          'min-h-dvh md:grid md:grid-cols-[208px_minmax(0,1fr)]',
+          inbox && 'flex h-dvh min-h-0 flex-col overflow-hidden md:grid',
+        )}
+      >
         <a
           href="#content"
           className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface focus:p-3"
@@ -118,8 +143,8 @@ export function Shell({
           {navigation}
           <ThemeSelect />
         </aside>
-        <div className="min-w-0">
-          <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border bg-surface px-4 md:justify-end md:px-6">
+        <div className={cn('min-w-0', inbox && 'flex min-h-0 flex-1 flex-col')}>
+          <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 md:justify-end md:px-6">
             <div className="flex items-center gap-3 md:hidden">
               <Dialog.Root open={open} onOpenChange={setOpen}>
                 <Dialog.Trigger asChild>
@@ -196,7 +221,10 @@ export function Shell({
           <main
             id="content"
             tabIndex={-1}
-            className="w-full p-4 md:p-6 2xl:px-8"
+            className={cn(
+              'w-full p-4 md:p-6 2xl:px-8',
+              inbox && 'min-h-0 flex-1 overflow-hidden p-2 md:p-3 2xl:px-3',
+            )}
           >
             {children}
           </main>
