@@ -15,6 +15,7 @@ const fields = {
     'category',
     'description',
     'followers',
+    'friendsCount',
     'rating',
     'reviewsCount',
     'postsCount',
@@ -249,6 +250,11 @@ export function CompanySocial({
               ? uk.social.methods[row.profile.method ?? 'anonymous']
               : '—'}
           </p>
+          {row.network === 'facebook' && row.profile && (
+            <p className="text-xs text-muted-foreground">
+              {uk.social.partialHistory}
+            </p>
+          )}
           {!!row.profile?.posts.length && (
             <details>
               <summary className="cursor-pointer text-accent">
@@ -262,7 +268,7 @@ export function CompanySocial({
                       label={
                         post.date
                           ? new Date(post.date).toLocaleDateString('uk-UA')
-                          : uk.social.post
+                          : uk.social.unknownPostDate
                       }
                     />
                   </li>

@@ -24,6 +24,7 @@ export interface SocialProfile {
   phones: string[];
   emails: string[];
   followers: number | null;
+  friendsCount?: number | null;
   postsCount: number | null;
   followingCount: number | null;
   industry: string | null;
@@ -31,7 +32,7 @@ export interface SocialProfile {
   headquarters: string | null;
   foundedYear: number | null;
   lastPostAt: string | null;
-  posts: { date: string; url: string }[];
+  posts: { date: string | null; url: string }[];
 }
 export interface SocialDocument {
   url: string;
@@ -282,12 +283,12 @@ function profiles(all: RecordValue[], target: SocialTarget): RecordValue[] {
     if (target.network === 'facebook')
       return (
         (matches &&
-          (node.__typename === 'Page' ||
+          (['Page', 'User'].includes(String(node.__typename)) ||
             node.is_additional_profile_plus === true ||
             /Organization|LocalBusiness/.test(String(node['@type'])))) ||
         (/^\d+$/.test(target.handle) &&
           String(node.id) === target.handle &&
-          node.__typename === 'Page')
+          ['Page', 'User'].includes(String(node.__typename)))
       );
     return (
       (matches &&
@@ -325,6 +326,7 @@ export function parseSocialProfile(
     phones: [],
     emails: [],
     followers: null,
+    friendsCount: null,
     postsCount: null,
     followingCount: null,
     industry: null,
@@ -354,10 +356,9 @@ export function parseSocialProfile(
     const date = machineDate(dateValue);
     const url = webUrl(urlValue, target.canonicalUrl);
     if (
-      !date ||
+      (!date && target.network !== 'facebook') ||
       !url ||
-      result.posts.length >= 1000 ||
-      result.posts.some((post) => post.url === url)
+      result.posts.length >= 1000
     )
       return;
     const hostTarget = new URL(url).hostname.replace(/^(?:www|m|mbasic)\./, '');
@@ -370,13 +371,20 @@ export function parseSocialProfile(
       )
     )
       return;
+    const photo =
+      target.network === 'facebook' &&
+      /^\/photo(?:\.php)?\/?$/.test(path) &&
+      !!new URL(url).searchParams.get('fbid');
     if (
+      !photo &&
       !/(?:\/posts\/|\/p\/|\/reel\/|\/videos\/|\/feed\/update\/|\/pulse\/|\/activity-|story\.php|permalink\.php)/.test(
         path,
       )
     )
       return;
-    result.posts.push({ date, url });
+    const existing = result.posts.find((post) => post.url === url);
+    if (existing) existing.date ??= date;
+    else result.posts.push({ date, url });
   };
   const externalUrl = (value: unknown) => {
     let safe = webUrl(value);
@@ -710,7 +718,7 @@ export function parseSocialProfile(
       : $('body').clone();
     area
       .find(
-        'script,style,noscript,template,footer,nav,aside,form,[role="dialog"],[role="navigation"],[role="menu"],[hidden],[aria-hidden="true"]',
+        'script,style,noscript,template,footer,nav,aside,form,[role="dialog"],[role="log"],[role="navigation"],[role="menu"],[hidden],[aria-hidden="true"]',
       )
       .remove();
     if (target.network === 'linkedin')
@@ -734,6 +742,157 @@ export function parseSocialProfile(
         )
           result.foundedYear ??= Number(value);
       });
+    if (target.network === 'facebook') {
+      // Facebook can render posts in generic DIVs and put accessible date labels
+      // outside the feed. Never search the whole page for a date or infer authorship
+      // from a photo URL: require a single semantic, target-bound author heading.
+      const labels = new Map<string, string | null>();
+      $('[id]').each((_, el) => {
+        const id = $(el).attr('id');
+        if (id) labels.set(id, labels.has(id) ? null : $(el).text());
+      });
+      const calendarDate = (value: string) => {
+        const match = value
+          .replace(/\s+/g, ' ')
+          .trim()
+          .match(
+            /^(\d{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) (\d{4})$/i,
+          );
+        if (!match) return machineDate(value);
+        const months =
+          'january february march april may june july august september october november december'.split(
+            ' ',
+          );
+        return machineDate(
+          `${match[3]}-${String(months.indexOf(match[2]!.toLowerCase()) + 1).padStart(2, '0')}-${match[1]!.padStart(2, '0')}`,
+        );
+      };
+      const visited = new Set<unknown>();
+      const postScopes: (typeof area)[] = [];
+      const candidates: {
+        scope: typeof area;
+        date: string | null;
+        url: string;
+      }[] = [];
+      area.find('a[href]').each((_, element) => {
+        const link = $(element);
+        const url = webUrl(link.attr('href'), target.canonicalUrl);
+        if (
+          !url ||
+          !/\/(?:photo(?:\.php)?(?:\/|$)|posts\/|permalink\.php|story\.php)/.test(
+            new URL(url).pathname,
+          )
+        )
+          return;
+        const source = new URL(url);
+        if (
+          source.hostname !== new URL(target.canonicalUrl).hostname ||
+          [...source.searchParams.keys()].some((key) =>
+            /comment|reply/i.test(key),
+          ) ||
+          (source.searchParams.has('id') &&
+            source.searchParams.get('id') !== target.handle) ||
+          (source.pathname.includes('/posts/') && !sameTarget(url, target))
+        )
+          return;
+        if (
+          link.closest(
+            '[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav',
+          ).length
+        )
+          return;
+        let scope = link.parent();
+        while (scope.length && !scope.is('main,[role="main"],body,html')) {
+          const headings = scope.find('h2,[role="heading"][aria-level="2"]');
+          const authors = headings.length
+            ? headings.find('a[href]').toArray()
+            : scope.is('article,[role="article"]')
+              ? scope
+                  .find(
+                    '[rel="author"],a[data-post-author],a[data-profile-author]',
+                  )
+                  .toArray()
+              : [];
+          if (headings.length || authors.length) {
+            if (headings.length <= 1 && authors.length) postScopes.push(scope);
+            if (
+              headings.length > 1 ||
+              !authors.length ||
+              !authors.every((author) =>
+                sameTarget(
+                  webUrl($(author).attr('href'), target.canonicalUrl),
+                  target,
+                ),
+              )
+            )
+              break;
+            if (visited.has(scope.get(0))) return;
+            visited.add(scope.get(0));
+            const dates = new Set<string>();
+            scope.find('a[href]').each((_, anchor) => {
+              const a = $(anchor);
+              if (a.closest('h2,[role="heading"]').length) return;
+              if (
+                a.closest('[role="dialog"],[role="log"],[data-comment]').length
+              )
+                return;
+              // Read only timestamp links, never post body text or image labels.
+              const href = webUrl(a.attr('href'), target.canonicalUrl);
+              if (!href) return;
+              const timestamp = new URL(href);
+              if (timestamp.hostname !== new URL(target.canonicalUrl).hostname)
+                return;
+              if (
+                !sameTarget(href, target) &&
+                !(
+                  /^\/(?:profile|permalink|story)\.php$/.test(
+                    timestamp.pathname,
+                  ) &&
+                  (!timestamp.searchParams.has('id') ||
+                    timestamp.searchParams.get('id') === target.handle)
+                )
+              )
+                return;
+              const values = [a.attr('aria-label'), a.attr('title'), a.text()];
+              a.find('[aria-labelledby]')
+                .addBack('[aria-labelledby]')
+                .each((_, labelled) => {
+                  const ids = ($(labelled).attr('aria-labelledby') ?? '').split(
+                    /\s+/,
+                  );
+                  values.push(ids.map((id) => labels.get(id) ?? '').join(' '));
+                });
+              a.find('time[datetime]').each((_, time) => {
+                values.push($(time).attr('datetime'));
+              });
+              for (const value of values) {
+                const date = value && calendarDate(value);
+                if (date) dates.add(date);
+              }
+            });
+            candidates.push({
+              scope,
+              date: dates.size === 1 ? [...dates][0]! : null,
+              url,
+            });
+            break;
+          }
+          scope = scope.parent();
+        }
+      });
+      for (const candidate of candidates) {
+        // A wrapper containing another identified post is not a post boundary.
+        if (
+          !postScopes.some(
+            (scope) =>
+              scope.get(0) !== candidate.scope.get(0) &&
+              candidate.scope.has(scope.get(0)!).length,
+          )
+        )
+          addPost(candidate.date, candidate.url);
+      }
+      postScopes.forEach((scope) => scope.remove());
+    }
     const details = area.clone();
     details
       .find('article,[role="article"],[data-post],[data-recommendations]')
@@ -750,6 +909,20 @@ export function parseSocialProfile(
     };
     const profileLines = lines(details);
     if (target.network === 'facebook') {
+      details.find('a[href]').each((_, element) => {
+        const href = webUrl($(element).attr('href'), target.canonicalUrl);
+        if (
+          !href ||
+          !sameTarget(href, target) ||
+          new URL(href).searchParams.get('sk') !== 'friends_all'
+        )
+          return;
+        const match = $(element)
+          .text()
+          .trim()
+          .match(/^(.+?)\s+(?:friends|друзів|друзі|друзей|друга)$/iu);
+        result.friendsCount ??= count(match?.[1]);
+      });
       result.category ??=
         profileLines
           .map(
@@ -887,6 +1060,7 @@ export function parseSocialProfile(
       addPhone(match.number.number),
     );
     area.find('time[datetime]').each((_, element) => {
+      if (target.network === 'facebook') return;
       const article = $(element).closest('article,[role="article"]');
       const author = article
         .find(
@@ -899,12 +1073,6 @@ export function parseSocialProfile(
       const link =
         $(element).closest('a[href]').attr('href') ??
         $(element).closest('article').find('a[href]').first().attr('href');
-      if (
-        target.network === 'facebook' &&
-        !author &&
-        !sameTarget(webUrl(link, target.canonicalUrl), target)
-      )
-        return;
       if (target.network === 'linkedin' && !author) return;
       addPost($(element).attr('datetime'), link);
     });
@@ -944,6 +1112,7 @@ export function parseSocialProfile(
         'rating',
         'reviewsCount',
         'followers',
+        'friendsCount',
         'postsCount',
         'followingCount',
         'industry',
@@ -1029,12 +1198,16 @@ export function parseSocialProfile(
       });
     }
   }
-  result.posts.sort((a, b) => b.date.localeCompare(a.date));
+  const unknownDates = result.posts.some((post) => post.date === null);
+  result.posts.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
   result.posts = result.posts.slice(0, 12);
-  result.lastPostAt = result.posts.reduce<string | null>(
-    (latest, post) => (!latest || post.date > latest ? post.date : latest),
-    null,
-  );
+  result.lastPostAt = unknownDates
+    ? null
+    : result.posts.reduce<string | null>(
+        (latest, post) =>
+          post.date && (!latest || post.date > latest) ? post.date : latest,
+        null,
+      );
   return result;
 }
 
