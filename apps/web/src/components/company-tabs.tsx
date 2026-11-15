@@ -1,5 +1,6 @@
 'use client';
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, type ReactNode } from 'react';
+import { useUrlTab } from './use-url-tab';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 
@@ -10,14 +11,16 @@ export function CompanyTabs({
   tabs: { key: string; label: string; content: ReactNode }[];
 }) {
   const id = useId();
-  const [active, setActive] = useState(tabs[0]?.key);
-  const [visited, setVisited] = useState([tabs[0]?.key]);
-  const select = (key: string) => {
-    setActive(key);
-    setVisited((previous) =>
-      previous.includes(key) ? previous : [...previous, key],
-    );
-  };
+  const { active, select, visited } = useUrlTab(
+    tabs.map((tab) => tab.key),
+    tabs[0]?.key ?? '',
+  );
+  useEffect(() => {
+    document.getElementById(`${id}-tab-${active}`)?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [id, active]);
   return (
     <div className="min-w-0 space-y-4">
       <div
@@ -76,7 +79,7 @@ export function CompanyTabs({
           tabIndex={0}
         >
           {/* Retain visited forms and drafts until the company key changes. */}
-          {visited.includes(tab.key) && tab.content}
+          {(active === tab.key || visited.includes(tab.key)) && tab.content}
         </div>
       ))}
     </div>

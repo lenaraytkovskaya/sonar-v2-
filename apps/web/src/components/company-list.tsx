@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { startTransition, useEffect, useMemo, useState } from 'react';
+import { useUrlTab } from './use-url-tab';
 import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
@@ -22,13 +23,19 @@ export function CompanyList({
 }: {
   initialCampaignId?: string;
 }) {
+  const { active: status, select: selectStatus } = useUrlTab(
+    ['', ...Object.keys(uk.company.statuses)],
+    '',
+    'status',
+  );
   const [draft, setDraft] = useState<CompanyFilters>({
       campaignId: initialCampaignId,
+      status: (status as CompanyFilters['status']) || undefined,
     }),
-    [filters, setFilters] = useState<CompanyFilters>({
+    [appliedFilters, setFilters] = useState<CompanyFilters>({
       campaignId: initialCampaignId,
     }),
-    [page, setPage] = useState(1),
+    [pagination, setPagination] = useState({ status, page: 1 }),
     [data, setData] = useState<{
       companies: Row[];
       total: number;
@@ -41,6 +48,21 @@ export function CompanyList({
     [pending, setPending] = useState(false),
     [loading, setLoading] = useState(false),
     [showFilters, setShowFilters] = useState(false);
+  const page = pagination.status === status ? pagination.page : 1;
+  const setPage = (page: number) => setPagination({ status, page });
+  const filters = useMemo(
+    () => ({
+      ...appliedFilters,
+      status: (status as CompanyFilters['status']) || undefined,
+    }),
+    [appliedFilters, status],
+  );
+  useEffect(() => {
+    setDraft((previous) => ({
+      ...previous,
+      status: (status as CompanyFilters['status']) || undefined,
+    }));
+  }, [status]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -98,8 +120,20 @@ export function CompanyList({
     }
   };
   const apply = (f: CompanyFilters) => {
-    setFilters(companyFiltersSchema.parse(f));
-    setPage(1);
+    const next = companyFiltersSchema.parse(f);
+    startTransition(() => {
+      selectStatus(next.status ?? '');
+      setFilters((previous) => {
+        // Status belongs to the URL; keep unchanged filters stable for the fetch effect.
+        const applied = { ...next, status: undefined };
+        return (
+          Object.keys({ ...previous, ...applied }) as (keyof CompanyFilters)[]
+        ).every((key) => previous[key] === applied[key])
+          ? previous
+          : applied;
+      });
+      setPagination({ status: next.status ?? '', page: 1 });
+    });
   };
   const link = (id: string) =>
     '/companies/' +
@@ -406,12 +440,15 @@ export function CompanyList({
                 ? 'default'
                 : 'outline'
             }
+            aria-pressed={
+              filters.status === status || (!filters.status && !status)
+            }
             onClick={() => {
               const f = {
                 ...filters,
                 status: (status as CompanyFilters['status']) || undefined,
               };
-              setDraft(f);
+              setDraft((previous) => ({ ...previous, status: f.status }));
               apply(f);
             }}
           >

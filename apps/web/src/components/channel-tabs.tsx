@@ -1,5 +1,6 @@
 'use client';
-import { useId, useState, type ComponentProps } from 'react';
+import { useEffect, useId, type ComponentProps } from 'react';
+import { useUrlTab } from './use-url-tab';
 import { EmailAccounts } from './email-accounts';
 import { SocialAccounts } from './social-accounts';
 import { TelegramAccounts } from './telegram-accounts';
@@ -23,8 +24,22 @@ export function ChannelTabs({
   whatsapp: ComponentProps<typeof WhatsAppAccounts>;
 }) {
   const id = useId();
-  const [active, setActive] = useState('email');
-  const [visited, setVisited] = useState<string[]>(['email']);
+  const { active, select, visited } = useUrlTab(
+    [
+      'email',
+      ...Object.keys(uk.social.networks),
+      'telegram',
+      'forms',
+      'whatsapp',
+    ],
+    'email',
+  );
+  useEffect(() => {
+    document.getElementById(`${id}-tab-${active}`)?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [id, active]);
   const tabs = [
     {
       key: 'email',
@@ -59,12 +74,6 @@ export function ChannelTabs({
       content: <WhatsAppAccounts {...whatsapp} />,
     },
   ];
-  const select = (key: string) => {
-    setActive(key);
-    setVisited((previous) =>
-      previous.includes(key) ? previous : [...previous, key],
-    );
-  };
   return (
     <div className="min-w-0 space-y-4">
       <div
@@ -126,7 +135,7 @@ export function ChannelTabs({
           tabIndex={0}
         >
           {/* Mount on first visit and retain forms without repeating mount effects. */}
-          {visited.includes(tab.key) && tab.content}
+          {(active === tab.key || visited.includes(tab.key)) && tab.content}
         </div>
       ))}
     </div>
