@@ -1,3 +1,4 @@
+import { messageHistoryOrder } from './message-history.js';
 import { createHash } from 'node:crypto';
 import { socialTarget } from '@sonar/core';
 import { normalizeTelegramRecipient } from '@sonar/core/telegram';
@@ -15,6 +16,8 @@ import {
   isContactBlocked,
   transaction,
 } from './email.js';
+import { assertFacebookBinding } from './social-inbox.js';
+import { canonicalSocialPeer } from '@sonar/core/social-inbox';
 import { enqueueTask, logActivity } from './tasks.js';
 import { getInbox, type OutreachMessage } from './outreach.js';
 
@@ -318,7 +321,7 @@ export async function getConversationChat(
   const conversation =
     conversations.find((c) => c.id === conversationId) ?? null;
   const { rows: messages } = await sonarPool.query<OutreachMessage>(
-    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by created_at desc,id desc limit $2`,
+    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt",(social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by ${messageHistoryOrder('desc')} limit $2`,
     [conversationId, historyLimit ?? null],
   );
   messages.reverse();
@@ -384,22 +387,31 @@ export async function getConversationHistory(conversationId: string) {
     historyLimit,
   };
 }
+/** UI calls supply the ordered IDs from the displayed snapshot. The explicit
+ * prefix excludes messages inserted after that view, even before its last ID.
+ * Server-only callers may assert the current ordered prefix with throughId alone. */
 export async function markConversationRead(
   conversationId: string,
   throughMessageId?: string,
+  visibleMessageIds?: readonly string[],
 ) {
   if (!throughMessageId) return;
   await transaction(async (c) => {
     const conversation = await lockConversation(c, conversationId);
-    const {
-      rows: [boundary],
-    } = await c.query(
-      "select id from messages where id=$2 and conversation_id=$1 and direction='in'",
-      [conversation.id, throughMessageId],
-    );
-    if (!boundary) invalid('Вхідне повідомлення не належить цьому діалогу.');
+    if (visibleMessageIds) {
+      const boundary = visibleMessageIds.indexOf(throughMessageId);
+      if (boundary < 0) return;
+      await c.query(
+        "update messages set read_at=now() where conversation_id=$1 and direction='in' and read_at is null and id=any($2::uuid[])",
+        [conversation.id, visibleMessageIds.slice(0, boundary + 1)],
+      );
+      return;
+    }
     await c.query(
-      "update messages set read_at=now() where conversation_id=$1 and direction='in' and read_at is null and (created_at,id)<=(select created_at,id from messages where id=$2 and conversation_id=$1 and direction='in')",
+      `with ordered as (
+    select id,row_number() over(order by ${messageHistoryOrder('asc')}) as position from messages where conversation_id=$1 and direction='in'
+  ) update messages m set read_at=now() from ordered o where m.id=o.id and m.read_at is null
+    and o.position<=(select position from ordered where id=$2)`,
       [conversation.id, throughMessageId],
     );
   });
@@ -417,8 +429,8 @@ export async function enqueueReply(
       rows: [peer],
     } = await c.query(
       `select coalesce(
-      (select to_value from messages where conversation_id=v.id and direction='in' order by created_at desc,id desc limit 1),
-      (select to_value from messages where conversation_id=v.id order by created_at,id limit 1),
+      (select to_value from messages where conversation_id=v.id and direction='in' order by ${messageHistoryOrder('desc')} limit 1),
+      (select to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('asc')} limit 1),
       ct.value,v.peer_value,'') as recipient from conversations v left join contacts ct on ct.id=v.contact_id where v.id=$1`,
       [conversation.id],
     );
@@ -616,7 +628,7 @@ async function reply(
     let {
       rows: [last],
     } = await c.query(
-      "select account_id,to_value,subject from messages where conversation_id=$1 order by (direction='in') desc,created_at desc,id desc limit 1",
+      `select account_id,to_value,subject from messages where conversation_id=$1 order by (direction='in') desc,${messageHistoryOrder('desc')} limit 1`,
       [conversationId],
     );
     // First message written by hand: recipient from the contact, sender = the active account.
@@ -651,6 +663,35 @@ async function reply(
     }
     if (!last || (await isContactBlocked(c, v.company_id, last.to_value)))
       invalid('Контакт у списку «Не контактувати».');
+    let receivingMeta: Record<string, unknown> | null = null;
+    if (v.channel === 'social' && v.provider_thread_id && v.account_id) {
+      const {
+        rows: [receiving],
+      } = await c.query(
+        "select id from channel_accounts where id=$1 and channel='facebook'",
+        [v.account_id],
+      );
+      if (receiving) {
+        const peer = canonicalSocialPeer(
+          'facebook',
+          v.peer_value ?? last.to_value,
+        );
+        await assertFacebookBinding(
+          c,
+          conversationId,
+          receiving.id,
+          peer,
+          v.provider_thread_id,
+        );
+        last.account_id = receiving.id;
+        last.to_value = peer;
+        receivingMeta = {
+          network: 'facebook',
+          peerProfile: peer,
+          threadId: v.provider_thread_id,
+        };
+      }
+    }
     const { rows: priorMessages } = await c.query(
       'select id,status,conversation_id,body,source from messages where idempotency_key=any($1::text[]) order by created_at,id',
       [priorKeys],
@@ -685,7 +726,7 @@ async function reply(
       );
       if (!account) invalid('Підключіть активний акаунт для цієї соцмережі.');
       last.account_id = account.id;
-    } else if (v.channel === 'social') last.account_id = null;
+    } else if (v.channel === 'social' && !receivingMeta) last.account_id = null;
     const subject =
       draft.subject?.trim() ||
       last.subject ||
@@ -693,7 +734,7 @@ async function reply(
     const {
       rows: [m],
     } = await c.query(
-      `insert into messages(conversation_id,account_id,channel,source,to_value,subject,body,status,idempotency_key,created_by,approved_by,approved_at,scheduled_at,sent_at) values($1,$2,$3,$11,$4,$5,$6,$7,$8,$9,$9,case when $10 then now() end,case when $10 then now() end,case when $7='sent' then now() end) returning id,status`,
+      `insert into messages(conversation_id,account_id,channel,source,to_value,subject,body,status,idempotency_key,created_by,approved_by,approved_at,scheduled_at,sent_at,social_meta) values($1,$2,$3,$11,$4,$5,$6,$7,$8,$9,$9,case when $10 then now() end,case when $10 then now() end,case when $7='sent' then now() end,$12) returning id,status`,
       [
         conversationId,
         last.account_id,
@@ -707,6 +748,7 @@ async function reply(
         userId,
         queued,
         manual ? 'manual' : 'reply',
+        receivingMeta,
       ],
     );
     if (queued && !manual)

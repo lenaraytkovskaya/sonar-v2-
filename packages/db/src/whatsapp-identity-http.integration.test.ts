@@ -565,7 +565,11 @@ it.skipIf(!enabled)(
         f.phone,
       );
       expect(merged.conversation!.id).toBe(f.later);
-      pending = http(f.old, { action: 'read', messageId: f.incomingId });
+      pending = http(f.old, {
+        action: 'read',
+        messageId: f.incomingId,
+        visibleMessageIds: [f.incomingId],
+      });
       await expect
         .poll(
           async () =>
@@ -797,6 +801,7 @@ it.skipIf(!enabled)(
         f.messageId,
         { body: 'Foreign edit' },
         user,
+        undefined,
         other.old,
       ),
     ).rejects.toThrow('не належить');
@@ -827,7 +832,11 @@ it.skipIf(!enabled)(
         400,
       );
     expect(await aiCounts([f.old, f.later])).toEqual({ tasks: 0, jobs: 0 });
-    await http(f.later, { action: 'read', messageId: f.incomingId });
+    await http(f.later, {
+      action: 'read',
+      messageId: f.incomingId,
+      visibleMessageIds: [f.incomingId],
+    });
     expect(
       (
         await db.sonarPool.query('select read_at from messages where id=$1', [
@@ -1038,7 +1047,11 @@ it.skipIf(!enabled).each(
               body: 'Edited',
             }
           : action === 'read'
-            ? { action: 'read', messageId: f.incoming }
+            ? {
+                action: 'read',
+                messageId: f.incoming,
+                visibleMessageIds: [f.incoming],
+              }
             : action === 'generate'
               ? { action: 'generate', requestId: randomUUID() }
               : {
@@ -1152,7 +1165,11 @@ it.skipIf(!enabled)(
     let held = false;
     client.query = (async (sql: string, values?: unknown[]) => {
       const result = await rawQuery(sql, values);
-      if (!held && sql.startsWith('update messages set social_meta')) {
+      if (
+        !held &&
+        sql.startsWith('update messages set') &&
+        sql.includes('social_meta=coalesce')
+      ) {
         held = true;
         await rawQuery("set local deadlock_timeout='100ms'");
         ready();
@@ -1399,7 +1416,8 @@ it
       const result = await rawQuery(sql, values);
       if (
         !held &&
-        (sql.startsWith('update messages set social_meta') ||
+        ((sql.startsWith('update messages set') &&
+          sql.includes('social_meta=coalesce')) ||
           sql.startsWith('update messages set needs_human'))
       ) {
         held = true;
@@ -1516,6 +1534,399 @@ it
       await Promise.allSettled([persisted, ...(read ? [read] : [])]);
       client.query = rawQuery;
       db.sonarPool.connect = rawConnect;
+    }
+  },
+  30000,
+);
+
+it.skipIf(!enabled)(
+  'integration HTTP alias scope and ExpectedDraft both survive a concurrent merge and stale saves cannot queue a send',
+  async () => {
+    const f = await fixture(),
+      client = await db.sonarPool.connect();
+    const { whatsappConversation } = await import('./whatsapp-identity.js');
+    const expected = { subject: '', body: 'queued outreach' };
+    await db.sonarPool.query("update messages set status='draft' where id=$1", [
+      f.messageId,
+    ]);
+    let pending: Promise<{ status: number; body: string }>[] = [];
+    try {
+      await client.query('begin');
+      await whatsappConversation(client, account, f.lid, f.phone);
+      pending = [f.old, f.later].map((id, i) =>
+        fetch(`${origin}/api/conversations/${id}`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            Origin: origin,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            action: 'save',
+            messageId: f.messageId,
+            subject: '',
+            body: `Reviewed edit ${i}`,
+            expected,
+          }),
+        }).then(async (r) => ({ status: r.status, body: await r.text() })),
+      );
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like '%channel-account:%'",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      await client.query('commit');
+      const results = await Promise.all(pending);
+      expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
+      const current = (
+        await db.sonarPool.query(
+          'select subject,body from messages where id=$1',
+          [f.messageId],
+        )
+      ).rows[0];
+      await http(f.later, {
+        action: 'save',
+        messageId: f.messageId,
+        ...current,
+        expected,
+      }); // lost response replay
+      await http(
+        f.old,
+        { action: 'send', messageId: f.messageId, expected },
+        400,
+      );
+      await db.sonarPool.query(
+        "update campaigns set status='active' where id=$1",
+        [f.campaign],
+      );
+      const [sent, replayed] = await Promise.all(
+        [f.old, f.later].map((id) =>
+          http(id, {
+            action: 'send',
+            messageId: f.messageId,
+            expected: current,
+          }),
+        ),
+      );
+      expect(sent).toEqual(replayed);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from tasks where type='message.send' and payload->>'messageId'=$1",
+            [f.messageId],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      const foreign = await fixture();
+      const outreach = await import('@sonar/db/outreach');
+      await expect(
+        outreach.editOutreachDraft(
+          f.messageId,
+          current,
+          user,
+          current,
+          foreign.old,
+        ),
+      ).rejects.toThrow('не належить');
+      console.log(
+        'INTEGRATION_EXPECTED_CANONICAL_HTTP',
+        JSON.stringify({
+          statuses: results.map((r) => r.status),
+          sendJobs: 1,
+          foreignScopeRejected: true,
+        }),
+      );
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.allSettled(pending);
+    }
+  },
+  30000,
+);
+
+it.skipIf(!enabled)(
+  'integration Facebook import → legacy AI draft receipt → concurrent import/snapshot HTTP read keeps account, order and unseen messages',
+  async () => {
+    const company = randomUUID(),
+      receiving = randomUUID(),
+      peer = 'https://www.facebook.com/profile.php?id=100000000000091',
+      thread = '900000000000091';
+    companies.push(company);
+    extraAccounts.push(receiving);
+    await db.sonarPool.query(
+      "insert into companies(id,place_id,name,country_code) values($1,$1::uuid::text,'Integration Facebook','US')",
+      [company],
+    );
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,status,daily_limit,settings) values($1,'facebook','Integration Facebook','','active',20,'{\"sessionStatus\":\"valid\"}')",
+      [receiving],
+    );
+    await db.sonarPool.query(
+      "insert into contacts(company_id,kind,value,normalized,source) values($1,'social',$2,$2,'manual')",
+      [company, peer],
+    );
+    const message = (id: string, providerOrder: number) => ({
+      externalMessageId: id,
+      threadId: thread,
+      direction: 'in' as const,
+      senderProfile: peer,
+      peerProfile: peer,
+      body: id,
+      occurredAt: null,
+      providerTimestamp: '01:08',
+      observedAt: '2026-11-15T03:00:00.000Z',
+      providerOrder,
+    });
+    const inbox = await import('@sonar/db/social-inbox'),
+      inbound = await import('@sonar/db/inbound');
+    const save = (messages: ReturnType<typeof message>[]) =>
+      inbox.persistSocialInboxBatch(receiving, 'facebook', {
+        messages,
+        resumeAnchor: null,
+      });
+    await save([message('B', 1)]);
+    const v = (
+      await db.sonarPool.query(
+        'select id from conversations where account_id=$1',
+        [receiving],
+      )
+    ).rows[0].id;
+    const displayed = await http(v),
+      incoming = displayed.messages
+        .filter((m: { direction: string }) => m.direction === 'in')
+        .map((m: { id: string }) => m.id);
+    const draft = await inbound.saveReplyDraft(
+      v,
+      { body: 'AI stub draft' },
+      randomUUID(),
+    );
+    // Simulate the proven pre-integration draft format. Import must require its audit receipt.
+    await db.sonarPool.query(
+      'update messages set account_id=null,social_meta=null where id=$1',
+      [draft.id],
+    );
+    const rawConnect = db.sonarPool.connect.bind(db.sonarPool),
+      client = await rawConnect(),
+      rawQuery = client.query.bind(client),
+      rawRelease = client.release.bind(client);
+    let ready!: () => void,
+      resume!: () => void,
+      held = false;
+    const arrived = new Promise<void>((r) => {
+        ready = r;
+      }),
+      gate = new Promise<void>((r) => {
+        resume = r;
+      });
+    client.release = (error?: Error | boolean) => {
+      client.query = rawQuery;
+      client.release = rawRelease;
+      rawRelease(error);
+    };
+    client.query = (async (sql: string, values?: unknown[]) => {
+      const result = await rawQuery(sql, values);
+      if (
+        !held &&
+        sql.startsWith('update messages set') &&
+        sql.includes('social_meta=coalesce')
+      ) {
+        held = true;
+        ready();
+        await gate;
+      }
+      return result;
+    }) as typeof client.query;
+    db.sonarPool.connect = (async () => client) as typeof db.sonarPool.connect;
+    const imported = save([message('A', 0), message('B', 1), message('C', 2)]);
+    db.sonarPool.connect = rawConnect;
+    let read: Promise<unknown> | undefined;
+    try {
+      await arrived;
+      read = http(v, {
+        action: 'read',
+        messageId: incoming[0],
+        visibleMessageIds: incoming,
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like 'select * from conversations%'",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      resume();
+      expect(await imported).toMatchObject({ created: 2 });
+      await read;
+      const history = await inbound.getConversationHistory(v),
+        chat = await http(v),
+        outreach = await import('@sonar/db/outreach'),
+        companyHistory = await outreach.getCompanyChat(company);
+      const incomingState = (
+        rows: { direction: string; body: string; readAt: unknown }[],
+      ) =>
+        rows
+          .filter((m) => m.direction === 'in')
+          .map((m) => [m.body, !!m.readAt]);
+      const expected = [
+        ['A', false],
+        ['B', true],
+        ['C', false],
+      ];
+      expect(incomingState(chat.messages)).toEqual(expected);
+      expect(incomingState(history.messages)).toEqual(expected);
+      expect(incomingState(companyHistory.messages)).toEqual(expected);
+      const snapshots = (
+        await db.sonarPool.query(
+          'select account_id,to_value,direction,social_meta from messages where conversation_id=$1',
+          [v],
+        )
+      ).rows;
+      expect(
+        snapshots.every(
+          (m) =>
+            m.account_id === receiving &&
+            m.to_value === peer &&
+            (m.direction === 'out' || m.social_meta.network === 'facebook'),
+        ),
+      ).toBe(true);
+      expect(
+        (await save([message('A', 0), message('B', 1), message('C', 2)]))
+          .created,
+      ).toBe(0);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int n from tasks where type='ai.inbound' and payload->>'messageId' in(select id::text from messages where conversation_id=$1 and direction='in')",
+            [v],
+          )
+        ).rows[0].n,
+      ).toBe(3);
+      console.log(
+        'INTEGRATION_FACEBOOK_SNAPSHOT_HTTP',
+        JSON.stringify({
+          http: 200,
+          order: expected,
+          receivingAccount: true,
+          aiInbound: 3,
+        }),
+      );
+    } finally {
+      resume();
+      await Promise.allSettled([imported, ...(read ? [read] : [])]);
+      client.query = rawQuery;
+      db.sonarPool.connect = rawConnect;
+    }
+  },
+  30000,
+);
+
+it.skipIf(!enabled)(
+  'integration merge waits for a stubbed in-flight WhatsApp send and preserves its committed durable request',
+  async () => {
+    const f = await fixture();
+    await db.sonarPool.query(
+      "update campaigns set status='active' where id=$1",
+      [f.campaign],
+    );
+    let ready!: () => void, resume!: () => void;
+    const entered = new Promise<void>((r) => {
+        ready = r;
+      }),
+      gate = new Promise<void>((r) => {
+        resume = r;
+      });
+    const stub = vi.fn(async () => {
+      ready();
+      await gate;
+      return 'synthetic-integration-delivery';
+    });
+    const send = () =>
+      email.sendEmailMessage(
+        f.messageId,
+        randomUUID(),
+        stub,
+        new Date('2026-11-16T12:00:00Z'),
+        () => 0,
+        'whatsapp',
+      );
+    const sending = send();
+    let repairing: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        entered,
+        sending.then((result) => {
+          throw Error(JSON.stringify(result));
+        }),
+      ]);
+      const before = (
+        await db.sonarPool.query('select * from messages where id=$1', [
+          f.messageId,
+        ])
+      ).rows[0];
+      repairing = repair(f.old, false);
+      await expect
+        .poll(
+          async () =>
+            (
+              await db.sonarPool.query(
+                "select count(*)::int n from pg_stat_activity where wait_event_type='Lock' and query like '%channel-account:%'",
+              )
+            ).rows[0].n,
+          { timeout: 10000, interval: 50 },
+        )
+        .toBeGreaterThanOrEqual(1);
+      expect(
+        (
+          await db.sonarPool.query(
+            'select merged_into_id from conversations where id=$1',
+            [f.later],
+          )
+        ).rows[0].merged_into_id,
+      ).toBeNull();
+      resume();
+      expect(await sending).toMatchObject({ status: 'done' });
+      await repairing;
+      const after = (
+        await db.sonarPool.query('select * from messages where id=$1', [
+          f.messageId,
+        ])
+      ).rows[0];
+      expect(after).toMatchObject({
+        id: before.id,
+        conversation_id: f.old,
+        status: 'sent',
+        account_id: before.account_id,
+        first_attempt_at: before.first_attempt_at,
+        request_snapshot: before.request_snapshot,
+        idempotency_key: before.idempotency_key,
+        to_value: before.to_value,
+        body: before.body,
+      });
+      expect(await send()).toMatchObject({ status: 'done' });
+      expect(stub).toHaveBeenCalledTimes(1);
+      console.log(
+        'INTEGRATION_MERGE_SEND',
+        JSON.stringify({
+          send: 'done',
+          repaired: true,
+          stubCalls: 1,
+          durableRequestPreserved: true,
+        }),
+      );
+    } finally {
+      resume();
+      await Promise.allSettled([sending, ...(repairing ? [repairing] : [])]);
     }
   },
   30000,

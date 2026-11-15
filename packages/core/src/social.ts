@@ -24,6 +24,7 @@ export interface SocialProfile {
   phones: string[];
   emails: string[];
   followers: number | null;
+  friendsCount?: number | null;
   postsCount: number | null;
   followingCount: number | null;
   industry: string | null;
@@ -31,7 +32,7 @@ export interface SocialProfile {
   headquarters: string | null;
   foundedYear: number | null;
   lastPostAt: string | null;
-  posts: { date: string; url: string }[];
+  posts: { date: string | null; url: string }[];
 }
 export interface SocialDocument {
   url: string;
@@ -63,6 +64,19 @@ function webUrl(value: unknown, base?: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isCommentOrReplyRecord(node: RecordValue): boolean {
+  return /comment|repl(?:y|ies)/i.test(
+    String(node.__typename ?? node['@type']),
+  );
+}
+
+function isCommentOrReply(url: URL): boolean {
+  return (
+    /\/(?:comments?|repl(?:y|ies)|c)(?:\/|$)/i.test(url.pathname) ||
+    [...url.searchParams.keys()].some((key) => /comment|reply/i.test(key))
+  );
 }
 
 export function socialTarget(raw: string): SocialTarget | null {
@@ -282,12 +296,12 @@ function profiles(all: RecordValue[], target: SocialTarget): RecordValue[] {
     if (target.network === 'facebook')
       return (
         (matches &&
-          (node.__typename === 'Page' ||
+          (['Page', 'User'].includes(String(node.__typename)) ||
             node.is_additional_profile_plus === true ||
             /Organization|LocalBusiness/.test(String(node['@type'])))) ||
         (/^\d+$/.test(target.handle) &&
           String(node.id) === target.handle &&
-          node.__typename === 'Page')
+          ['Page', 'User'].includes(String(node.__typename)))
       );
     return (
       (matches &&
@@ -325,6 +339,7 @@ export function parseSocialProfile(
     phones: [],
     emails: [],
     followers: null,
+    friendsCount: null,
     postsCount: null,
     followingCount: null,
     industry: null,
@@ -354,29 +369,29 @@ export function parseSocialProfile(
     const date = machineDate(dateValue);
     const url = webUrl(urlValue, target.canonicalUrl);
     if (
-      !date ||
+      (!date && target.network !== 'facebook') ||
       !url ||
-      result.posts.length >= 1000 ||
-      result.posts.some((post) => post.url === url)
+      result.posts.length >= 1000
     )
       return;
     const hostTarget = new URL(url).hostname.replace(/^(?:www|m|mbasic)\./, '');
     if (hostTarget !== `${target.network}.com`) return;
     const path = new URL(url).pathname;
+    if (isCommentOrReply(new URL(url))) return;
+    const photo =
+      target.network === 'facebook' &&
+      /^\/photo(?:\.php)?\/?$/.test(path) &&
+      !!new URL(url).searchParams.get('fbid');
     if (
-      /\/(?:comments?|c)\//i.test(path) ||
-      [...new URL(url).searchParams.keys()].some((key) =>
-        /comment|reply/i.test(key),
-      )
-    )
-      return;
-    if (
+      !photo &&
       !/(?:\/posts\/|\/p\/|\/reel\/|\/videos\/|\/feed\/update\/|\/pulse\/|\/activity-|story\.php|permalink\.php)/.test(
         path,
       )
     )
       return;
-    result.posts.push({ date, url });
+    const existing = result.posts.find((post) => post.url === url);
+    if (existing) existing.date ??= date;
+    else result.posts.push({ date, url });
   };
   const externalUrl = (value: unknown) => {
     let safe = webUrl(value);
@@ -406,7 +421,7 @@ export function parseSocialProfile(
       object(node.feedback).owning_profile,
     ].filter((value) => Object.keys(object(value)).length);
   for (const node of all) {
-    if (/comment/i.test(String(node.__typename ?? node['@type']))) continue;
+    if (isCommentOrReplyRecord(node)) continue;
     const sections = object(node.comet_sections);
     const contentStory = object(object(sections.content).story);
     const actors = [...owners(node), ...owners(contentStory)];
@@ -447,7 +462,11 @@ export function parseSocialProfile(
     ).metadata;
     for (const item of Array.isArray(metadata) ? metadata : []) {
       const story = object(object(item).story);
-      if (owners(story).some((owner) => !ownerMatches(owner))) continue;
+      if (
+        isCommentOrReplyRecord(story) ||
+        owners(story).some((owner) => !ownerMatches(owner))
+      )
+        continue;
       addPost(story.creation_time, story.url ?? story.permalink_url ?? postUrl);
     }
   }
@@ -631,6 +650,7 @@ export function parseSocialProfile(
         ? (object(feed).edges as unknown[])
         : []) {
         const post = object(object(edge).node);
+        if (isCommentOrReplyRecord(post)) continue;
         const owner = object(post.user ?? post.owner);
         if (
           (typeof owner.username === 'string' &&
@@ -710,7 +730,7 @@ export function parseSocialProfile(
       : $('body').clone();
     area
       .find(
-        'script,style,noscript,template,footer,nav,aside,form,[role="dialog"],[role="navigation"],[role="menu"],[hidden],[aria-hidden="true"]',
+        'script,style,noscript,template,footer,nav,aside,form,[role="dialog"],[role="log"],[role="navigation"],[role="menu"],[hidden],[aria-hidden="true"]',
       )
       .remove();
     if (target.network === 'linkedin')
@@ -734,6 +754,305 @@ export function parseSocialProfile(
         )
           result.foundedYear ??= Number(value);
       });
+    if (target.network === 'facebook') {
+      // Facebook can render posts in generic DIVs and put accessible date labels
+      // outside the feed. Never search the whole page for a date or infer authorship
+      // from a photo URL: require a single semantic, target-bound author heading.
+      const labels = new Map<string, string | null>();
+      $('[id]').each((_, el) => {
+        const id = $(el).attr('id');
+        if (id) labels.set(id, labels.has(id) ? null : $(el).text());
+      });
+      const calendarDate = (value: string) => {
+        const match = value
+          .replace(/\s+/g, ' ')
+          .trim()
+          .match(
+            /^(\d{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) (\d{4})$/i,
+          );
+        if (!match) return machineDate(value);
+        const months =
+          'january february march april may june july august september october november december'.split(
+            ' ',
+          );
+        return machineDate(
+          `${match[3]}-${String(months.indexOf(match[2]!.toLowerCase()) + 1).padStart(2, '0')}-${match[1]!.padStart(2, '0')}`,
+        );
+      };
+      const publicationPath =
+        /\/(?:photo(?:\.php)?(?:\/|$)|posts\/|videos\/|reel\/|permalink\.php|story\.php)/;
+      const discussionContext =
+        'li,[role="listitem"],[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav';
+      const nestedContext = `${discussionContext},article,[role="article"]`;
+      // The owner-to-content interval includes both endpoints. A publication may
+      // itself be an article, but cannot itself be a discussion/recommendation.
+      // Outer feed list items remain outside this interval.
+      const withinPublication = (node: typeof area, scope: typeof area) =>
+        !scope.is(discussionContext) &&
+        (node.get(0) === scope.get(0) ||
+          (!node.is(nestedContext) &&
+            !node.parentsUntil(scope, nestedContext).length));
+      const localHeadings = (scope: typeof area) =>
+        scope
+          .find('h2,[role="heading"][aria-level="2"]')
+          .filter((_, heading) => withinPublication($(heading), scope));
+      const localAuthors = (scope: typeof area) =>
+        scope
+          .find('[rel="author"],a[data-post-author],a[data-profile-author]')
+          .filter((_, author) => withinPublication($(author), scope));
+      const nestedUnderPublication = (scope: typeof area) =>
+        scope
+          .parentsUntil('main,[role="main"],body,html')
+          .toArray()
+          .some((ancestor) => {
+            const outer = $(ancestor);
+            const headings = localHeadings(outer).filter(
+              (_, heading) => $(heading).find('a[href]').length > 0,
+            );
+            if (headings.length === 1)
+              return !scope.has(headings.get(0)!).length;
+            if (!headings.length && outer.is('article,[role="article"]')) {
+              const authors = localAuthors(outer).toArray();
+              return (
+                authors.length > 0 &&
+                authors.every((author) => !scope.has(author).length)
+              );
+            }
+            return false;
+          });
+      const hasForeignAuthor = (branch: typeof area) =>
+        branch
+          .find('a[href]')
+          .addBack('a[href]')
+          .toArray()
+          .some((anchor) => {
+            const href = webUrl($(anchor).attr('href'), target.canonicalUrl);
+            const profile = href && socialTarget(href);
+            return (
+              profile &&
+              profile.network === 'facebook' &&
+              profile.kind === 'page' &&
+              !publicationPath.test(new URL(href).pathname) &&
+              !sameTarget(href, target)
+            );
+          });
+      const childBranch = (root: typeof area, node: typeof area) => {
+        let branch = node;
+        while (branch.parent().length && branch.parent().get(0) !== root.get(0))
+          branch = branch.parent();
+        return branch;
+      };
+      const headerDates = (
+        scope: typeof area,
+        author: typeof area,
+        publication: typeof area,
+      ) => {
+        // Use the author/primary-content common ancestor, not the whole feed card.
+        // Follow the author's ancestor edge to its first adjacent metadata branch.
+        // Never scan the remaining header/card descendants for a replacement date.
+        let root = publication.parent();
+        while (
+          root.length &&
+          !root.has(author.get(0)!).length &&
+          root.get(0) !== scope.get(0)
+        )
+          root = root.parent();
+        const media = root
+          .find('a[href]')
+          .toArray()
+          .find((anchor) => {
+            const href = webUrl($(anchor).attr('href'), target.canonicalUrl);
+            return (
+              href &&
+              new URL(href).hostname ===
+                new URL(target.canonicalUrl).hostname &&
+              !isCommentOrReply(new URL(href)) &&
+              /\/(?:photo(?:\.php)?(?:\/|$)|videos\/|reel\/)/.test(
+                new URL(href).pathname,
+              ) &&
+              withinPublication($(anchor), root) &&
+              !hasForeignAuthor(childBranch(root, $(anchor)))
+            );
+          });
+        const bodyBranch = childBranch(root, media ? $(media) : publication);
+        let authorEdge = author;
+        while (authorEdge.get(0) !== root.get(0) && !authorEdge.next().length)
+          authorEdge = authorEdge.parent();
+        const metadataBranch =
+          authorEdge.get(0) === root.get(0)
+            ? authorEdge.slice(0, 0)
+            : authorEdge.next();
+        const anchors: (typeof area)[] = [];
+        if (
+          metadataBranch.length &&
+          (!media || metadataBranch.get(0) !== bodyBranch.get(0)) &&
+          withinPublication(metadataBranch, root) &&
+          !metadataBranch.find(nestedContext).length &&
+          !hasForeignAuthor(metadataBranch)
+        ) {
+          const links = metadataBranch.find('a[href]').addBack('a[href]');
+          if (links.length === 1)
+            links.each((_, anchor) => {
+              if (anchor.type === 'tag') anchors.push($(anchor));
+            });
+        }
+        // Once owner, scope and primary media are bound, explicit date metadata
+        // on that media is valid regardless of its encoding (including ARIA).
+        const primary = media && media === publication.get(0);
+        if (primary && !publication.find(nestedContext).length)
+          anchors.push(publication);
+        if (
+          !primary &&
+          !anchors.some((anchor) => anchor.get(0) === publication.get(0))
+        )
+          return null;
+        return anchors;
+      };
+      const visited = new Set<unknown>();
+      const postScopes: (typeof area)[] = [];
+      const detailScopes: (typeof area)[] = [];
+      const candidates: {
+        scope: typeof area;
+        date: string | null;
+        url: string;
+      }[] = [];
+      area.find('a[href]').each((_, element) => {
+        const link = $(element);
+        const url = webUrl(link.attr('href'), target.canonicalUrl);
+        if (!url || !publicationPath.test(new URL(url).pathname)) return;
+        const source = new URL(url);
+        if (
+          source.hostname !== new URL(target.canonicalUrl).hostname ||
+          isCommentOrReply(source) ||
+          (/^\/(?:permalink|story)\.php$/.test(source.pathname) &&
+            source.searchParams.get('id') !== target.handle) ||
+          (source.searchParams.has('id') &&
+            source.searchParams.get('id') !== target.handle) ||
+          (/\/(?:posts|videos)\//.test(source.pathname) &&
+            !sameTarget(url, target))
+        )
+          return;
+        if (
+          link.closest(
+            '[role="dialog"],[role="log"],[data-comment],[data-recommendations],aside,nav',
+          ).length
+        )
+          return;
+        let scope = link.parent();
+        while (scope.length && !scope.is('main,[role="main"],body,html')) {
+          if (scope.is(discussionContext)) return;
+          const headings = localHeadings(scope);
+          const authors = headings.length
+            ? headings.find('a[href]').toArray()
+            : scope.is('article,[role="article"]')
+              ? localAuthors(scope).toArray()
+              : [];
+          if (headings.length || authors.length) {
+            if (headings.length <= 1 && authors.length)
+              detailScopes.push(scope);
+            if (
+              headings.length > 1 ||
+              !authors.length ||
+              !authors.every((author) =>
+                sameTarget(
+                  webUrl($(author).attr('href'), target.canonicalUrl),
+                  target,
+                ),
+              )
+            )
+              break;
+            if (
+              !withinPublication(link, scope) ||
+              nestedUnderPublication(scope) ||
+              hasForeignAuthor(childBranch(scope, link))
+            )
+              return;
+            if (visited.has(scope.get(0))) return;
+            const author = headings.length ? headings.first() : $(authors[0]!);
+            const header = headerDates(scope, author, link);
+            if (!header) return;
+            postScopes.push(scope);
+            visited.add(scope.get(0));
+            const dates = new Set<string>();
+            header.forEach((a) => {
+              if (a.closest('h2,[role="heading"]').length) return;
+              if (
+                a.closest('[role="dialog"],[role="log"],[data-comment]').length
+              )
+                return;
+              // Read only timestamp links, never post body text or image labels.
+              const href = webUrl(a.attr('href'), target.canonicalUrl);
+              if (!href) return;
+              const timestamp = new URL(href);
+              if (
+                timestamp.hostname !== new URL(target.canonicalUrl).hostname ||
+                isCommentOrReply(timestamp)
+              )
+                return;
+              if (
+                !sameTarget(href, target) &&
+                timestamp.href !== source.href &&
+                !(
+                  (/^\/profile\.php$/.test(timestamp.pathname) &&
+                    !timestamp.searchParams.has('id')) ||
+                  (/^\/(?:profile|permalink|story)\.php$/.test(
+                    timestamp.pathname,
+                  ) &&
+                    timestamp.searchParams.get('id') === target.handle)
+                )
+              )
+                return;
+              const primaryContent =
+                a.get(0) === link.get(0) &&
+                /\/(?:photo(?:\.php)?(?:\/|$)|videos\/|reel\/)/.test(
+                  source.pathname,
+                );
+              // A media caption is body text, not a timestamp. Primary media
+              // dates require explicit accessibility metadata or a machine time.
+              const values = [
+                a.attr('aria-label'),
+                a.attr('title'),
+                ...(primaryContent ? [] : [a.text()]),
+              ];
+              a.find('[aria-labelledby]')
+                .addBack('[aria-labelledby]')
+                .each((_, labelled) => {
+                  const ids = ($(labelled).attr('aria-labelledby') ?? '').split(
+                    /\s+/,
+                  );
+                  values.push(ids.map((id) => labels.get(id) ?? '').join(' '));
+                });
+              a.find('time[datetime]').each((_, time) => {
+                values.push($(time).attr('datetime'));
+              });
+              for (const value of values) {
+                const date = value && calendarDate(value);
+                if (date) dates.add(date);
+              }
+            });
+            candidates.push({
+              scope,
+              date: dates.size === 1 ? [...dates][0]! : null,
+              url,
+            });
+            break;
+          }
+          scope = scope.parent();
+        }
+      });
+      for (const candidate of candidates) {
+        // A wrapper containing another identified post is not a post boundary.
+        if (
+          !postScopes.some(
+            (scope) =>
+              scope.get(0) !== candidate.scope.get(0) &&
+              candidate.scope.has(scope.get(0)!).length,
+          )
+        )
+          addPost(candidate.date, candidate.url);
+      }
+      detailScopes.forEach((scope) => scope.remove());
+    }
     const details = area.clone();
     details
       .find('article,[role="article"],[data-post],[data-recommendations]')
@@ -750,6 +1069,20 @@ export function parseSocialProfile(
     };
     const profileLines = lines(details);
     if (target.network === 'facebook') {
+      details.find('a[href]').each((_, element) => {
+        const href = webUrl($(element).attr('href'), target.canonicalUrl);
+        if (
+          !href ||
+          !sameTarget(href, target) ||
+          new URL(href).searchParams.get('sk') !== 'friends_all'
+        )
+          return;
+        const match = $(element)
+          .text()
+          .trim()
+          .match(/^(.+?)\s+(?:friends|друзів|друзі|друзей|друга)$/iu);
+        result.friendsCount ??= count(match?.[1]);
+      });
       result.category ??=
         profileLines
           .map(
@@ -887,6 +1220,7 @@ export function parseSocialProfile(
       addPhone(match.number.number),
     );
     area.find('time[datetime]').each((_, element) => {
+      if (target.network === 'facebook') return;
       const article = $(element).closest('article,[role="article"]');
       const author = article
         .find(
@@ -899,18 +1233,13 @@ export function parseSocialProfile(
       const link =
         $(element).closest('a[href]').attr('href') ??
         $(element).closest('article').find('a[href]').first().attr('href');
-      if (
-        target.network === 'facebook' &&
-        !author &&
-        !sameTarget(webUrl(link, target.canonicalUrl), target)
-      )
-        return;
       if (target.network === 'linkedin' && !author) return;
       addPost($(element).attr('datetime'), link);
     });
     for (const node of all.filter((node) =>
       /SocialMediaPosting|BlogPosting/.test(String(node['@type'])),
     )) {
+      if (isCommentOrReplyRecord(node)) continue;
       const author = object(node.author);
       if (sameTarget(author.url ?? author['@id'], target))
         addPost(node.datePublished, node.url ?? node['@id']);
@@ -944,6 +1273,7 @@ export function parseSocialProfile(
         'rating',
         'reviewsCount',
         'followers',
+        'friendsCount',
         'postsCount',
         'followingCount',
         'industry',
@@ -967,6 +1297,7 @@ export function parseSocialProfile(
         const candidate = webUrl(value, target.canonicalUrl);
         return (
           candidate &&
+          !isCommentOrReply(new URL(candidate)) &&
           new URL(candidate).hostname.replace(/^www\./, '') ===
             'instagram.com' &&
           new URL(candidate).pathname.replace(/\/$/, '') ===
@@ -1029,12 +1360,16 @@ export function parseSocialProfile(
       });
     }
   }
-  result.posts.sort((a, b) => b.date.localeCompare(a.date));
+  const unknownDates = result.posts.some((post) => post.date === null);
+  result.posts.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
   result.posts = result.posts.slice(0, 12);
-  result.lastPostAt = result.posts.reduce<string | null>(
-    (latest, post) => (!latest || post.date > latest ? post.date : latest),
-    null,
-  );
+  result.lastPostAt = unknownDates
+    ? null
+    : result.posts.reduce<string | null>(
+        (latest, post) =>
+          post.date && (!latest || post.date > latest) ? post.date : latest,
+        null,
+      );
   return result;
 }
 

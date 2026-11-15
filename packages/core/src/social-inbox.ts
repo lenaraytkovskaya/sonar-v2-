@@ -13,7 +13,9 @@ export type SocialInboxMessage = {
   senderPlatformId?: string;
   peerProfile: string;
   body: string;
-  occurredAt: string;
+  occurredAt: string | null;
+  providerTimestamp?: string;
+  providerOrder?: number;
   observedAt: string;
   threadUrl?: string;
 };
@@ -79,10 +81,20 @@ export function validateSocialInboxMessage(
         'Потрібен стабільний ID повідомлення та діалогу соцмережі.',
       );
   if (
+    (message.providerOrder !== undefined &&
+      (!Number.isSafeInteger(message.providerOrder) ||
+        message.providerOrder < 0)) ||
     !['in', 'out'].includes(message.direction) ||
     typeof message.body !== 'string' ||
     message.body.length > 100000 ||
-    ![message.occurredAt, message.observedAt].every(
+    (message.occurredAt === null &&
+      !(
+        network === 'facebook' &&
+        typeof message.providerTimestamp === 'string' &&
+        message.providerTimestamp.length > 0 &&
+        message.providerTimestamp.length <= 200
+      )) ||
+    ![message.occurredAt ?? message.observedAt, message.observedAt].every(
       (value) =>
         typeof value === 'string' &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(

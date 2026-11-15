@@ -4,7 +4,11 @@ import {
   canonicalConversation,
   whatsappConversation,
 } from './whatsapp-identity.js';
+import { messageHistoryOrder } from './message-history.js';
+export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
+import { assertFacebookBinding } from './social-inbox.js';
+import { canonicalSocialPeer } from '@sonar/core/social-inbox';
 import { selectOutreachContacts } from '@sonar/core';
 import { sonarPool } from './index.js';
 import {
@@ -39,6 +43,7 @@ export interface OutreachMessage {
   readAt: Date | null;
   createdAt: Date;
   sentAt: Date | null;
+  providerTimestampUnknown?: boolean;
 }
 export interface OutreachConversation {
   id: string;
@@ -74,8 +79,8 @@ const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from (select * from conversations where merged_into_id is null) v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by created_at desc,id desc limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt" from messages m join conversations v on v.id=m.conversation_id`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('desc')} limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
   filters: {
@@ -137,7 +142,7 @@ export async function getCompanyChat(companyId: string) {
         [companyId],
       ),
       sonarPool.query<OutreachMessage>(
-        `${messageSelect} where v.company_id=$1 order by m.created_at,m.id`,
+        `${messageSelect} where v.company_id=$1 order by ${messageHistoryOrder('asc', true)}`,
         [companyId],
       ),
       sonarPool.query<{
@@ -550,7 +555,10 @@ async function lockedMessage(
 ) {
   const {
     rows: [identity],
-  } = await c.query('select conversation_id from messages where id=$1', [id]);
+  } = await c.query(
+    'select conversation_id,to_value from messages where id=$1',
+    [id],
+  );
   if (!identity) invalid('Повідомлення не знайдено.');
   const conversation = await lockConversation(c, identity.conversation_id);
   if (
@@ -559,6 +567,28 @@ async function lockedMessage(
   )
     invalid('Повідомлення не належить цьому діалогу.');
   await assertAllowed(c, conversation.company_id, '');
+  const receivingFacebook =
+    conversation.channel === 'social' &&
+    conversation.provider_thread_id &&
+    conversation.account_id
+      ? (
+          await c.query(
+            "select id from channel_accounts where id=$1 and channel='facebook'",
+            [conversation.account_id],
+          )
+        ).rows[0]
+      : null;
+  if (receivingFacebook)
+    await assertFacebookBinding(
+      c,
+      conversation.id,
+      conversation.account_id,
+      canonicalSocialPeer(
+        'facebook',
+        conversation.peer_value ?? identity.to_value,
+      ),
+      conversation.provider_thread_id,
+    );
   const {
     rows: [message],
   } = await c.query(
@@ -568,10 +598,19 @@ async function lockedMessage(
   await assertAllowed(c, message.company_id, message.to_value);
   return message;
 }
+type ExpectedDraft = { subject: string; body: string };
+function assertDraftSnapshot(message: ExpectedDraft, expected?: ExpectedDraft) {
+  if (
+    expected &&
+    (message.subject !== expected.subject || message.body !== expected.body)
+  )
+    invalid('Чернетку змінено. Оновіть її перед збереженням або надсиланням.');
+}
 export async function editOutreachDraft(
   messageId: string,
   draft: { subject?: string; body: string },
   userId: string,
+  expected?: ExpectedDraft,
   conversationId?: string,
 ) {
   return transaction(async (c) => {
@@ -580,6 +619,14 @@ export async function editOutreachDraft(
       invalid('Це повідомлення вже не можна редагувати.');
     const subject = draft.subject ?? message.subject;
     validateDraft({ ...draft, subject }, message.channel);
+    // A lost save response may be retried with the old snapshot.
+    if (
+      expected &&
+      message.subject === subject.trim() &&
+      message.body === draft.body.trim()
+    )
+      return { id: messageId, status: String(message.status) };
+    assertDraftSnapshot(message, expected);
     await c.query(
       'update messages set subject=$2,body=$3,created_by=coalesce(created_by,$4) where id=$1',
       [messageId, subject.trim(), draft.body.trim(), userId],
@@ -598,21 +645,30 @@ export async function editOutreachDraft(
 export async function sendOutreachDraft(
   messageId: string,
   userId: string,
+  expected?: ExpectedDraft,
   conversationId?: string,
 ) {
-  return submitOutreachDraft(messageId, userId, false, conversationId);
+  return submitOutreachDraft(
+    messageId,
+    userId,
+    false,
+    expected,
+    conversationId,
+  );
 }
 export async function approveOutreachDraft(
   messageId: string,
   userId: string,
+  expected?: ExpectedDraft,
   conversationId?: string,
 ) {
-  return submitOutreachDraft(messageId, userId, true, conversationId);
+  return submitOutreachDraft(messageId, userId, true, expected, conversationId);
 }
 async function submitOutreachDraft(
   messageId: string,
   userId: string,
   approve: boolean,
+  expected?: ExpectedDraft,
   conversationId?: string,
 ) {
   return transaction(async (c) => {
@@ -622,6 +678,7 @@ async function submitOutreachDraft(
       ['sent', 'delivered', 'read'].includes(message.status)
     )
       return { id: messageId, status: String(message.status) };
+    assertDraftSnapshot(message, expected);
     if (approve && message.status !== 'awaiting_approval')
       invalid('Спочатку передайте чернетку на одобрення.');
     if (
@@ -686,6 +743,7 @@ async function submitOutreachDraft(
 export async function markOutreachManualSent(
   messageId: string,
   userId: string,
+  expected?: ExpectedDraft,
   conversationId?: string,
 ) {
   return transaction(async (c) => {
@@ -693,6 +751,7 @@ export async function markOutreachManualSent(
     if (!['form', 'social'].includes(message.channel))
       invalid('Ручне підтвердження доступне для форм та соцмереж.');
     if (message.status === 'sent') return { id: messageId, status: 'sent' };
+    assertDraftSnapshot(message, expected);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна позначити надісланим.');
     await c.query(

@@ -1,4 +1,4 @@
-ALTER TABLE conversations ADD COLUMN merged_into_id uuid REFERENCES conversations(id);
+ALTER TABLE conversations ADD COLUMN merged_into_id uuid CONSTRAINT conversations_merged_into_id_conversations_id_fk REFERENCES conversations(id);
 ALTER TABLE conversations ADD COLUMN peer_aliases text[] NOT NULL DEFAULT '{}';
 ALTER TABLE conversations ADD CONSTRAINT conversation_merge_not_self CHECK (merged_into_id <> id);
 DROP INDEX conversation_inbound_peer;

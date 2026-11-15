@@ -37,9 +37,13 @@ const needsInstruction = (action: Action) =>
 export function AiAssist({
   text,
   onApply,
+  floating = false,
+  disabled = false,
 }: {
   text: string;
   onApply: (text: string) => void;
+  floating?: boolean;
+  disabled?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -54,7 +58,7 @@ export function AiAssist({
     [pending, setPending] = useState(false);
   const empty = !text.trim();
   const run = async (chosen: Action, extra = instruction) => {
-    if (busy.current) return;
+    if (busy.current || disabled) return;
     busy.current = true;
     setAction(chosen);
     setMenu(false);
@@ -103,7 +107,7 @@ export function AiAssist({
           <button
             ref={trigger}
             type="button"
-            disabled={empty || pending}
+            disabled={empty || pending || disabled}
             title={empty ? uk.ai.emptyHint : uk.ai.assist}
             className={cn(
               'inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-accent transition-colors',
@@ -150,96 +154,116 @@ export function AiAssist({
           })}
         </PopoverContent>
       </Popover>
-      {asking && (
+      {(asking || error || preview) && (
         <div
-          data-ai-instruction=""
-          role="group"
-          aria-label={uk.ai.instruction}
-          className="mt-1.5 flex gap-2"
+          className={
+            floating
+              ? 'absolute bottom-full left-2 z-20 mb-2 max-h-[calc(var(--inbox-height,100dvh)*0.35)] w-[min(22rem,calc(100vw-3rem))] overflow-y-auto rounded-lg border border-border bg-surface p-2 shadow-lg'
+              : undefined
+          }
           onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
+            if (floating && event.key === 'Escape') {
               event.stopPropagation();
               close();
             }
           }}
         >
-          <Input
-            ref={instructionInput}
-            autoFocus
-            className="min-w-0 flex-1"
-            aria-label={uk.ai.instruction}
-            placeholder={
-              action === 'translate' ? uk.ai.languageHint : uk.ai.customHint
-            }
-            maxLength={1000}
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter' || event.nativeEvent.isComposing)
-                return;
-              event.preventDefault();
-              event.stopPropagation();
-              if (instruction.trim()) void run(action);
-            }}
-          />
-          <Button
-            type="button"
-            disabled={!instruction.trim()}
-            onClick={() => void run(action)}
-          >
-            {uk.ai.go}
-          </Button>
-          <Button type="button" variant="outline" onClick={close}>
-            <X aria-hidden className="size-4" />
-            <span className="sr-only">{uk.ai.cancel}</span>
-          </Button>
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="mt-1.5 text-sm text-err">
-          {error}
-        </p>
-      )}
-      {preview && (
-        <div className="mt-1.5 rounded-lg border border-accent/40 bg-chip p-3">
-          <p className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-            <Sparkles aria-hidden className="size-3 text-accent" />
-            {action ? uk.ai.actions[action].replace('…', '') : uk.ai.preview}
-          </p>
-          <p className="whitespace-pre-wrap text-sm">{preview}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              ref={applyButton}
-              type="button"
-              className="min-h-8 px-3 text-xs"
-              onClick={() => {
-                onApply(preview);
-                close();
+          {asking && (
+            <div
+              data-ai-instruction=""
+              role="group"
+              aria-label={uk.ai.instruction}
+              className="mt-1.5 flex gap-2"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  close();
+                }
               }}
             >
-              <Check aria-hidden className="size-3.5" />
-              {uk.ai.replace}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-8 px-3 text-xs"
-              disabled={pending || !action}
-              onClick={() => action && void run(action)}
-            >
-              <RefreshCw aria-hidden className="size-3.5" />
-              {uk.ai.again}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-8 px-3 text-xs"
-              onClick={close}
-            >
-              {uk.ai.cancel}
-            </Button>
-          </div>
+              <Input
+                ref={instructionInput}
+                disabled={disabled}
+                autoFocus
+                className="min-w-0 flex-1"
+                aria-label={uk.ai.instruction}
+                placeholder={
+                  action === 'translate' ? uk.ai.languageHint : uk.ai.customHint
+                }
+                maxLength={1000}
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' || event.nativeEvent.isComposing)
+                    return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (instruction.trim()) void run(action);
+                }}
+              />
+              <Button
+                type="button"
+                disabled={disabled || !instruction.trim()}
+                onClick={() => void run(action)}
+              >
+                {uk.ai.go}
+              </Button>
+              <Button type="button" variant="outline" onClick={close}>
+                <X aria-hidden className="size-4" />
+                <span className="sr-only">{uk.ai.cancel}</span>
+              </Button>
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="mt-1.5 text-sm text-err">
+              {error}
+            </p>
+          )}
+          {preview && (
+            <div className="mt-1.5 rounded-lg border border-accent/40 bg-chip p-3">
+              <p className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+                <Sparkles aria-hidden className="size-3 text-accent" />
+                {action
+                  ? uk.ai.actions[action].replace('…', '')
+                  : uk.ai.preview}
+              </p>
+              <p className="whitespace-pre-wrap text-sm">{preview}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  ref={applyButton}
+                  disabled={disabled}
+                  type="button"
+                  className="min-h-8 px-3 text-xs"
+                  onClick={() => {
+                    onApply(preview);
+                    close();
+                  }}
+                >
+                  <Check aria-hidden className="size-3.5" />
+                  {uk.ai.replace}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-8 px-3 text-xs"
+                  disabled={disabled || pending || !action}
+                  onClick={() => action && void run(action)}
+                >
+                  <RefreshCw aria-hidden className="size-3.5" />
+                  {uk.ai.again}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-8 px-3 text-xs"
+                  onClick={close}
+                >
+                  {uk.ai.cancel}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

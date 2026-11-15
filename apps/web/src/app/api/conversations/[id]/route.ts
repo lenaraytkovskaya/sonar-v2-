@@ -1,6 +1,8 @@
+import { expectedDraft } from '@/lib/draft-state';
 import { apiUser, validId } from '@/lib/api-access';
 import { emailResponse } from '@/lib/email-api';
 import { uk } from '@/i18n/uk';
+export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ id: string }> };
 const invalid = () => Response.json({ error: uk.ai.invalid }, { status: 400 });
 export async function GET(request: Request, context: Context) {
@@ -8,7 +10,7 @@ export async function GET(request: Request, context: Context) {
     return Response.json({ error: uk.unauthorized }, { status: 401 });
   const { id } = await context.params;
   if (!validId(id)) return invalid();
-  return emailResponse(async () => {
+  const response = await emailResponse(async () => {
     const taskId = new URL(request.url).searchParams.get('taskId');
     if (taskId) {
       if (!validId(taskId)) return invalid();
@@ -24,6 +26,8 @@ export async function GET(request: Request, context: Context) {
       ? chat
       : Response.json({ error: uk.tasks.missing }, { status: 404 });
   });
+  response.headers.set('Cache-Control', 'private, no-store');
+  return response;
 }
 export async function POST(request: Request, context: Context) {
   const user = await apiUser(request, true);
@@ -31,6 +35,8 @@ export async function POST(request: Request, context: Context) {
   const { id } = await context.params;
   const data = await request.json().catch(() => null);
   if (!validId(id) || !data) return invalid();
+  const expected = expectedDraft(data.expected);
+  if (expected === false) return invalid();
   return emailResponse(async () => {
     const db = await import('@sonar/db/inbound');
     const chat = await db.getConversationChat(id);
@@ -49,14 +55,23 @@ export async function POST(request: Request, context: Context) {
       );
     }
     if (data.action === 'read') {
+      const incomingIds = new Set(
+        chat.messages.filter((m) => m.direction === 'in').map((m) => m.id),
+      );
       if (
         !validId(data.messageId) ||
-        !chat.messages.some(
-          (m) => m.id === data.messageId && m.direction === 'in',
-        )
+        !Array.isArray(data.visibleMessageIds) ||
+        !data.visibleMessageIds.includes(data.messageId) ||
+        data.visibleMessageIds.length > incomingIds.size ||
+        new Set(data.visibleMessageIds).size !==
+          data.visibleMessageIds.length ||
+        !data.visibleMessageIds.every(
+          (id: unknown) => validId(id) && incomingIds.has(id),
+        ) ||
+        !incomingIds.has(data.messageId)
       )
         return invalid();
-      await db.markConversationRead(id, data.messageId);
+      await db.markConversationRead(id, data.messageId, data.visibleMessageIds);
       return { ok: true };
     }
     if (data.action === 'generate') {
@@ -111,17 +126,28 @@ export async function POST(request: Request, context: Context) {
         data.messageId,
         { subject: data.subject, body: data.body },
         user.id,
+        expected,
         id,
       );
     }
     if (data.action === 'send')
-      return outreach.sendOutreachDraft(data.messageId, user.id, id);
+      return outreach.sendOutreachDraft(data.messageId, user.id, expected, id);
     if (data.action === 'approve')
-      return outreach.approveOutreachDraft(data.messageId, user.id, id);
+      return outreach.approveOutreachDraft(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     if (data.action === 'skip')
       return outreach.skipOutreachMessage(data.messageId, user.id, id);
     if (data.action === 'manual')
-      return outreach.markOutreachManualSent(data.messageId, user.id, id);
+      return outreach.markOutreachManualSent(
+        data.messageId,
+        user.id,
+        expected,
+        id,
+      );
     return invalid();
   });
 }
