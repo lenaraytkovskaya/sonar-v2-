@@ -557,10 +557,19 @@ async function lockedMessage(c: PoolClient, id: string) {
   await assertAllowed(c, message.company_id, message.to_value);
   return message;
 }
+type ExpectedDraft = { subject: string; body: string };
+function assertDraftSnapshot(message: ExpectedDraft, expected?: ExpectedDraft) {
+  if (
+    expected &&
+    (message.subject !== expected.subject || message.body !== expected.body)
+  )
+    invalid('Чернетку змінено. Оновіть її перед збереженням або надсиланням.');
+}
 export async function editOutreachDraft(
   messageId: string,
   draft: { subject?: string; body: string },
   userId: string,
+  expected?: ExpectedDraft,
 ) {
   return transaction(async (c) => {
     const message = await lockedMessage(c, messageId);
@@ -568,6 +577,14 @@ export async function editOutreachDraft(
       invalid('Це повідомлення вже не можна редагувати.');
     const subject = draft.subject ?? message.subject;
     validateDraft({ ...draft, subject }, message.channel);
+    // A lost save response may be retried with the old snapshot.
+    if (
+      expected &&
+      message.subject === subject.trim() &&
+      message.body === draft.body.trim()
+    )
+      return { id: messageId, status: String(message.status) };
+    assertDraftSnapshot(message, expected);
     await c.query(
       'update messages set subject=$2,body=$3,created_by=coalesce(created_by,$4) where id=$1',
       [messageId, subject.trim(), draft.body.trim(), userId],
@@ -583,16 +600,25 @@ export async function editOutreachDraft(
     return { id: messageId, status: String(message.status) };
   });
 }
-export async function sendOutreachDraft(messageId: string, userId: string) {
-  return submitOutreachDraft(messageId, userId, false);
+export async function sendOutreachDraft(
+  messageId: string,
+  userId: string,
+  expected?: ExpectedDraft,
+) {
+  return submitOutreachDraft(messageId, userId, false, expected);
 }
-export async function approveOutreachDraft(messageId: string, userId: string) {
-  return submitOutreachDraft(messageId, userId, true);
+export async function approveOutreachDraft(
+  messageId: string,
+  userId: string,
+  expected?: ExpectedDraft,
+) {
+  return submitOutreachDraft(messageId, userId, true, expected);
 }
 async function submitOutreachDraft(
   messageId: string,
   userId: string,
   approve: boolean,
+  expected?: ExpectedDraft,
 ) {
   return transaction(async (c) => {
     const message = await lockedMessage(c, messageId);
@@ -601,6 +627,7 @@ async function submitOutreachDraft(
       ['sent', 'delivered', 'read'].includes(message.status)
     )
       return { id: messageId, status: String(message.status) };
+    assertDraftSnapshot(message, expected);
     if (approve && message.status !== 'awaiting_approval')
       invalid('Спочатку передайте чернетку на одобрення.');
     if (
@@ -661,12 +688,14 @@ async function submitOutreachDraft(
 export async function markOutreachManualSent(
   messageId: string,
   userId: string,
+  expected?: ExpectedDraft,
 ) {
   return transaction(async (c) => {
     const message = await lockedMessage(c, messageId);
     if (!['form', 'social'].includes(message.channel))
       invalid('Ручне підтвердження доступне для форм та соцмереж.');
     if (message.status === 'sent') return { id: messageId, status: 'sent' };
+    assertDraftSnapshot(message, expected);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна позначити надісланим.');
     await c.query(

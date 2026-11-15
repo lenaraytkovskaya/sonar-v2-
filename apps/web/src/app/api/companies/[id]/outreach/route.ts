@@ -1,3 +1,4 @@
+import { expectedDraft } from '@/lib/draft-state';
 import { apiUser, validId } from '@/lib/api-access';
 import { emailResponse } from '@/lib/email-api';
 import { uk } from '@/i18n/uk';
@@ -31,6 +32,8 @@ export async function POST(request: Request, context: Context) {
   const { id } = await context.params;
   const data = await request.json().catch(() => null);
   if (!validId(id) || !data) return invalid();
+  const expected = expectedDraft(data.expected);
+  if (expected === false) return invalid();
   return emailResponse(async () => {
     if (data.action === 'block') {
       const { blockCompany } = await import('@sonar/db/email');
@@ -84,14 +87,15 @@ export async function POST(request: Request, context: Context) {
         data.messageId,
         { subject: data.subject, body: data.body },
         user.id,
+        expected,
       );
     }
     if (data.action === 'send')
-      return db.sendOutreachDraft(data.messageId, user.id);
+      return db.sendOutreachDraft(data.messageId, user.id, expected);
     if (data.action === 'approve')
-      return db.approveOutreachDraft(data.messageId, user.id);
+      return db.approveOutreachDraft(data.messageId, user.id, expected);
     if (data.action === 'manual')
-      return db.markOutreachManualSent(data.messageId, user.id);
+      return db.markOutreachManualSent(data.messageId, user.id, expected);
     return db.skipOutreachMessage(data.messageId, user.id);
   });
 }

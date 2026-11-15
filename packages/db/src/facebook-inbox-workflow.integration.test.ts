@@ -462,6 +462,60 @@ it.skipIf(!enabled)(
     ).toEqual([{ account_id: id }]);
   },
 );
+it.skipIf(!enabled)(
+  'retains PR101 row-locked draft compare-and-set and guarded manual marks after Facebook integration',
+  async () => {
+    const id = await account();
+    await save(id, [m('initial')]);
+    const v = await conv(id),
+      actor = await user();
+    const draft = await inbound.saveReplyDraft(
+      v,
+      { body: 'Original' },
+      randomUUID(),
+    );
+    const outreach = await import('./outreach.js'),
+      base = { subject: '', body: 'Original' };
+    const edits = await Promise.allSettled(
+      ['Left', 'Right'].map((body) =>
+        outreach.editOutreachDraft(draft.id, { body }, actor, base),
+      ),
+    );
+    expect(
+      edits.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(edits.filter((result) => result.status === 'rejected')).toHaveLength(
+      1,
+    );
+    const current = (
+      await db.sonarPool.query(
+        'select subject,body,status,account_id from messages where id=$1',
+        [draft.id],
+      )
+    ).rows[0];
+    expect(current.account_id).toBe(id);
+    expect(current.status).toBe('draft');
+    await expect(
+      outreach.markOutreachManualSent(draft.id, actor, base),
+    ).rejects.toThrow('Чернетку змінено');
+    // A retried save with the accepted body is idempotent even after its response was lost.
+    expect(
+      await outreach.editOutreachDraft(
+        draft.id,
+        { body: current.body },
+        actor,
+        base,
+      ),
+    ).toMatchObject({ id: draft.id });
+    await outreach.markOutreachManualSent(draft.id, actor, {
+      subject: current.subject,
+      body: current.body,
+    });
+    expect(await save(id, [m('initial'), m('next', 1)])).toMatchObject({
+      created: 1,
+    });
+  },
+);
 afterAll(async () => {
   if (!enabled) return;
   await db.sonarPool.query(
