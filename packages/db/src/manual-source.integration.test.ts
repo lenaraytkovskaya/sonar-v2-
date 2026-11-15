@@ -384,6 +384,152 @@ describe.skipIf(!enabled)('manual source transactions', () => {
       ).rowCount,
     ).toBe(1);
   });
+  it.each([403, 429, 503])(
+    'explicit retry after Google HTTP %s makes one new budgeted request and keeps both receipts',
+    async (status) => {
+      const id = await company(),
+        data = request(
+          'googleMaps',
+          'https://maps.google.com/?q=place_id:ChIJj61dQgK6j4AR4GeTYWZsKWw',
+        );
+      const first = await save(id, data, userId),
+        taskId = first!.tasks[0].id;
+      const { runGoogleCompany } =
+        await import('../../../apps/worker/src/google-company.js');
+      const { retryTask } = await import('./tasks.js');
+      const original = (
+        await db.sonarPool.query('select payload from tasks where id=$1', [
+          taskId,
+        ])
+      ).rows[0];
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        return calls === 1
+          ? new Response('', { status })
+          : Response.json({ id: original.payload.placeId });
+      };
+      await expect(
+        runGoogleCompany(original.payload, taskId, fetcher),
+      ).rejects.toMatchObject({ code: 'google_http_error' });
+      await db.sonarPool.query("update tasks set status='failed' where id=$1", [
+        taskId,
+      ]);
+      await db.sonarPool.query(
+        "update pgboss.job set state='failed' where data->>'taskId'=$1",
+        [taskId],
+      );
+      expect(
+        (
+          await Promise.all([
+            retryTask(taskId, userId),
+            retryTask(taskId, userId),
+          ])
+        ).filter(Boolean),
+      ).toHaveLength(1);
+      const next = await save(id, data, userId),
+        nextId = next!.tasks[0].id;
+      const nextTask = (
+        await db.sonarPool.query('select payload from tasks where id=$1', [
+          nextId,
+        ])
+      ).rows[0];
+      let outcome;
+      try {
+        outcome = await runGoogleCompany(nextTask.payload, nextId, fetcher);
+      } catch {
+        /* Assert the actual request count on the broken path. */
+      }
+      expect(calls).toBe(2);
+      expect(outcome).toMatchObject({ status: 'done' });
+      expect(nextId).not.toBe(taskId);
+      await runGoogleCompany(nextTask.payload, nextId, fetcher);
+      expect(calls).toBe(2);
+      const receipts = (
+        await db.sonarPool.query(
+          'select task_id,cost_usd,meta from spend_events where task_id=any($1::uuid[]) order by created_at',
+          [[taskId, nextId]],
+        )
+      ).rows;
+      expect(receipts).toHaveLength(2);
+      expect(receipts[0]).toMatchObject({
+        task_id: taskId,
+        cost_usd: '0.0000000000',
+        meta: { error: { status } },
+      });
+      expect(receipts[1]).toMatchObject({
+        task_id: nextId,
+        cost_usd: '0.0200000000',
+      });
+    },
+  );
+  it('blocks an uncertain Google retry until explicit reconciliation, preserving its reservation and receipt', async () => {
+    const id = await company(),
+      data = request(
+        'googleMaps',
+        'https://maps.google.com/?q=place_id:ChIJj61dQgK6j4AR4GeTYWZsKWw',
+      );
+    const first = await save(id, data, userId),
+      taskId = first!.tasks[0].id;
+    const payload = (
+      await db.sonarPool.query('select payload from tasks where id=$1', [
+        taskId,
+      ])
+    ).rows[0].payload;
+    const { runGoogleCompany } =
+      await import('../../../apps/worker/src/google-company.js');
+    const { retryTask } = await import('./tasks.js');
+    const { reconcileBilling } = await import('./budget.js');
+    let calls = 0;
+    const fetcher = async () => {
+      if (++calls === 1) throw Error('synthetic network loss');
+      return Response.json({ id: payload.placeId });
+    };
+    expect(await runGoogleCompany(payload, taskId, fetcher)).toMatchObject({
+      status: 'paused',
+      reasonCode: 'billing_uncertain',
+    });
+    await db.sonarPool.query("update tasks set status='paused' where id=$1", [
+      taskId,
+    ]);
+    expect(await retryTask(taskId, userId)).toBe(false);
+    expect(calls).toBe(1);
+    expect(
+      (
+        await db.sonarPool.query('select result from tasks where id=$1', [
+          taskId,
+        ])
+      ).rows[0].result.billingPending,
+    ).toBe(true);
+    expect(await reconcileBilling(taskId, false, userId)).toBe(true);
+    expect(await retryTask(taskId, userId)).toBe(true);
+    const next = await save(id, data, userId),
+      nextId = next!.tasks[0].id;
+    let outcome;
+    try {
+      outcome = await runGoogleCompany(payload, nextId, fetcher);
+    } catch {
+      /* Check requests and receipt preservation below. */
+    }
+    expect(calls).toBe(2);
+    expect(outcome).toMatchObject({ status: 'done' });
+    expect(
+      (
+        await db.sonarPool.query(
+          'select meta from spend_events where task_id=$1',
+          [taskId],
+        )
+      ).rows[0].meta,
+    ).toMatchObject({ reconciliation: 'not_charged' });
+    expect(
+      (
+        await db.sonarPool.query(
+          'select id from spend_events where task_id=any($1::uuid[])',
+          [[taskId, nextId]],
+        )
+      ).rowCount,
+    ).toBe(2);
+  });
   afterAll(async () => {
     if (!db) return;
     await db.sonarPool.query(
@@ -418,6 +564,9 @@ describe.skipIf(!enabled)('manual source transactions', () => {
       companies,
     ]);
     await db.sonarPool.query('delete from campaigns where id=$1', [campaignId]);
+    await db.sonarPool.query('delete from activity_log where user_id=$1', [
+      userId,
+    ]);
     await db.sonarPool.query('delete from users where id=$1', [userId]);
     await admin.stop();
     await (await import('./tasks.js')).closeTaskQueue();

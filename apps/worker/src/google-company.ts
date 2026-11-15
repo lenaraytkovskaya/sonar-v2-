@@ -74,6 +74,7 @@ export async function runGoogleCompany(
       reasonUk: 'Додайте ключ Google Places перед аналізом.',
     };
   try {
+    // Explicit retries get a new task ID; re-delivery of this attempt reuses its receipt.
     const billed = await runBudgetedRequest(
       'google_places',
       price,

@@ -334,6 +334,49 @@ export async function retryTask(id: string, userId: string) {
       "select id from spend_events where task_id=$1 and (meta ? 'error' or meta ? 'reconciliation')",
       [id],
     );
+    if (original.type === 'google.company') {
+      if (
+        !['failed', 'paused', 'skipped'].includes(original.status) ||
+        original.result?.retryTaskId
+      )
+        return false;
+      if (settled.length) {
+        // A known failure/reconciliation is immutable accounting evidence. A new
+        // queued task is a new budgeted attempt, linked back to the saved source.
+        const nextId = await enqueueTask(
+          original.type,
+          `${original.idempotency_key}:retry`,
+          original.payload,
+          client,
+        );
+        if (!nextId) return false;
+        await client.query(
+          'update tasks set subject_type=$2,subject_id=$3 where id=$1',
+          [nextId, original.subject_type, original.subject_id],
+        );
+        await client.query(
+          "update tasks set dismissed_at=now(),result=coalesce(result,'{}'::jsonb)||jsonb_build_object('retryTaskId',$2::text) where id=$1",
+          [id, nextId],
+        );
+        await logActivity(
+          'task.retry',
+          'task',
+          id,
+          userId,
+          { retryTaskId: nextId },
+          client,
+        );
+        return true;
+      }
+      const {
+        rows: [receipt],
+      } = await client.query('select meta from spend_events where task_id=$1', [
+        id,
+      ]);
+      if (receipt && !receipt.meta?.response) return false;
+      // No receipt, or a cached success after a persistence error: safely reuse
+      // this attempt without another charge for an already successful response.
+    }
     if (
       original.type === 'ai.assist' &&
       settled.length &&

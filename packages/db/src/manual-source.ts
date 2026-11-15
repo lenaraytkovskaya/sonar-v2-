@@ -40,7 +40,10 @@ export async function getManualSource(
   );
   if (!fact) return null;
   const { rows: tasks } = await sonarPool.query(
-    'select id,status,reason_uk,result from tasks where id=any($1::uuid[]) order by created_at',
+    `with recursive attempts as (
+      select t.*,array[t.id] as path from tasks t where id=any($1::uuid[])
+      union all select t.*,a.path||t.id from attempts a join tasks t on t.id::text=a.result->>'retryTaskId' where not t.id=any(a.path)
+    ) select id,status,reason_uk,result from attempts a where not exists(select 1 from tasks t where t.id::text=a.result->>'retryTaskId') order by created_at`,
     [fact.value.taskIds],
   );
   return { ...fact.value, foundAt: fact.found_at, tasks };
