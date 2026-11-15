@@ -17,6 +17,82 @@ export const emptySocialCheckpoint = (): SocialInboxCheckpoint => ({
   cycleStartedAt: null,
 });
 
+/** Current contacts are routing hints, never proof that an old dialog belongs
+ * to this account/peer. Every historical message must agree before any reuse. */
+async function assertFacebookBinding(
+  c: PoolClient,
+  conversationId: string,
+  accountId: string,
+  peer: string,
+  threadId: string,
+) {
+  const fail = () => {
+    throw new Error(
+      'Не підтверджено акаунт або співрозмовник діалогу Facebook. Перевірте історію вручну.',
+    );
+  };
+  const matches = (value: unknown) => {
+    if (value === null || value === undefined || value === '') return false;
+    if (typeof value !== 'string' || !value.trim()) return fail();
+    try {
+      if (canonicalSocialPeer('facebook', value) !== peer) fail();
+    } catch {
+      fail();
+    }
+    return true;
+  };
+  const {
+    rows: [v],
+  } = await c.query(
+    'select channel,account_id,peer_value,provider_thread_id from conversations where id=$1 for update',
+    [conversationId],
+  );
+  if (
+    !v ||
+    v.channel !== 'social' ||
+    (v.account_id !== null && v.account_id !== accountId) ||
+    (v.provider_thread_id !== null && v.provider_thread_id !== threadId)
+  )
+    fail();
+  let accountProven = v.account_id === accountId,
+    peerProven = matches(v.peer_value);
+  const { rows: history } = await c.query<{
+    channel: string;
+    account_id: string | null;
+    direction: string;
+    to_value: string | null;
+    social_meta: Record<string, unknown> | null;
+  }>(
+    'select channel,account_id,direction,to_value,social_meta from messages where conversation_id=$1 for update',
+    [conversationId],
+  );
+  for (const row of history) {
+    if (row.channel !== 'social' || row.account_id !== accountId) fail();
+    accountProven = true;
+    const meta = row.social_meta;
+    if (meta !== null && (typeof meta !== 'object' || Array.isArray(meta)))
+      fail();
+    if (
+      (meta?.network !== undefined && meta.network !== 'facebook') ||
+      (meta?.threadId !== undefined && meta.threadId !== threadId)
+    )
+      fail();
+    const evidence = [
+      row.to_value,
+      meta?.peerProfile,
+      ...(row.direction === 'in' ? [meta?.senderProfile] : []),
+    ];
+    let messagePeerProven = false;
+    for (const value of evidence) {
+      if (value !== null && value !== undefined && value !== '')
+        messagePeerProven = matches(value) || messagePeerProven;
+    }
+    if (!messagePeerProven) fail();
+    peerProven = true;
+  }
+  if (!accountProven || !peerProven) fail();
+}
+
 /** Persist only observed precedence edges. Ties between disconnected windows
  * use the previous display order; later overlap may resolve them without dates. */
 async function orderFacebookConversation(
@@ -145,6 +221,27 @@ export async function persistSocialInboxBatch(
       await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
         `facebook-inbox-order:${accountId}`,
       ]);
+    const checkedBindings = new Set<string>();
+    const guardBinding = async (
+      conversationId: string,
+      message: (typeof messages)[number],
+    ) => {
+      if (network !== 'facebook') return;
+      const key = JSON.stringify([
+        conversationId,
+        message.peerProfile,
+        message.threadId,
+      ]);
+      if (checkedBindings.has(key)) return;
+      await assertFacebookBinding(
+        c,
+        conversationId,
+        accountId,
+        message.peerProfile,
+        message.threadId,
+      );
+      checkedBindings.add(key);
+    };
     const observations = new Map<string, Map<string, number>>();
     const observe = (
       conversationId: string,
@@ -173,24 +270,7 @@ export async function persistSocialInboxBatch(
         [accountId, message.externalMessageId, network],
       );
       if (prior) {
-        if (network === 'facebook') {
-          const {
-            rows: [binding],
-          } = await c.query(
-            'select account_id,peer_value from conversations where id=$1 for update',
-            [prior.conversation_id],
-          );
-          if (
-            !binding ||
-            (binding.account_id !== null && binding.account_id !== accountId) ||
-            (binding.peer_value !== null &&
-              canonicalSocialPeer(network, binding.peer_value) !==
-                message.peerProfile)
-          )
-            throw new Error(
-              'Змінився співрозмовник діалогу. Перевірте чат вручну.',
-            );
-        }
+        await guardBinding(prior.conversation_id, message);
         if (
           prior.direction !== message.direction ||
           (prior.social_meta?.threadId &&
@@ -252,6 +332,7 @@ export async function persistSocialInboxBatch(
       );
       let conversation = existing;
       if (
+        network !== 'facebook' &&
         conversation &&
         canonicalSocialPeer(network, conversation.peer_value) !==
           message.peerProfile
@@ -293,24 +374,18 @@ export async function persistSocialInboxBatch(
           `select v.* from conversations v where v.channel='social' and v.provider_thread_id is null
           and (v.account_id=$1 or (v.account_id is null and exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1)))
           and (v.peer_value=$2 or v.contact_id=any($3::uuid[]))
-          and not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is not null and m.account_id<>$1) for update`,
+          and ($4::boolean or not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is not null and m.account_id<>$1)) for update`,
           [
             accountId,
             message.peerProfile,
             candidates.map((contact) => contact.id),
+            network === 'facebook',
           ],
         );
-        if (
-          network === 'facebook' &&
-          unbound.some(
-            (row) =>
-              row.peer_value !== null &&
-              canonicalSocialPeer(network, row.peer_value) !==
-                message.peerProfile,
-          )
-        )
+        for (const row of unbound) await guardBinding(row.id, message);
+        if (network === 'facebook' && unbound.length > 1)
           throw new Error(
-            'Змінився співрозмовник діалогу. Перевірте чат вручну.',
+            'Неоднозначна прив’язка діалогу Facebook. Перевірте історію вручну.',
           );
         if (unbound.length === 1) {
           conversation = (
@@ -336,6 +411,7 @@ export async function persistSocialInboxBatch(
           conversation = inserted;
         }
       }
+      await guardBinding(conversation.id, message);
       // Old locally sent rows lack external IDs. Preserve both observations and
       // flag the collision for a person; body/time are never deduplication keys.
       const { rows: legacy } =

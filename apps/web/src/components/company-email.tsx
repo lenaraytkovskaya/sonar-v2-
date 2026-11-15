@@ -342,12 +342,9 @@ export function CompanyChat({
       (row) => row.contactId === contactId && row.campaignId === campaignId,
     )
     .map((row) => row.id);
-  const messages = data.messages
-    .filter((row) => conversationIds.includes(row.conversationId))
-    .sort(
-      (a, b) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
+  const messages = data.messages.filter((row) =>
+    conversationIds.includes(row.conversationId),
+  );
   const generating = !!task && ['queued', 'running'].includes(task.status);
   const request = (action: 'generate' | 'call') => {
     const fields = {

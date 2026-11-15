@@ -65,11 +65,20 @@ const invalid = (reason: string): never => {
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
 const automatic = ['email', 'telegram', 'whatsapp'];
+/** Shared forward/reverse order for every message-history reader. */
+export function messageHistoryOrder(
+  direction: 'asc' | 'desc',
+  qualified = false,
+) {
+  const p = qualified ? 'm.' : '',
+    nulls = direction === 'asc' ? 'first' : 'last';
+  return `((${p}social_meta->>'facebookInboxOrder') is null) ${direction},(${p}social_meta->>'facebookInboxOrder')::int ${direction},${p}created_at ${direction},(${p}social_meta->>'providerOrder')::int ${direction} nulls ${nulls},${p}id ${direction}`;
+}
 const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ((social_meta->>'facebookInboxOrder') is null) desc,(social_meta->>'facebookInboxOrder')::int desc,created_at desc,(social_meta->>'providerOrder')::int desc nulls last,id desc limit 1) m on true`;
+  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('desc')} limit 1) m on true`;
 const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
 export async function getInbox(
@@ -132,7 +141,7 @@ export async function getCompanyChat(companyId: string) {
         [companyId],
       ),
       sonarPool.query<OutreachMessage>(
-        `${messageSelect} where v.company_id=$1 order by m.created_at,(m.social_meta->>'providerOrder')::int nulls first,m.id`,
+        `${messageSelect} where v.company_id=$1 order by ${messageHistoryOrder('asc', true)}`,
         [companyId],
       ),
       sonarPool.query<{

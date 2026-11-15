@@ -9,7 +9,11 @@ import {
   transaction,
 } from './email.js';
 import { enqueueTask, logActivity } from './tasks.js';
-import { getInbox, type OutreachMessage } from './outreach.js';
+import {
+  getInbox,
+  messageHistoryOrder,
+  type OutreachMessage,
+} from './outreach.js';
 
 export type InboundCategory =
   | 'interest'
@@ -289,7 +293,7 @@ export async function getConversationChat(
   const conversation =
     conversations.find((c) => c.id === conversationId) ?? null;
   const { rows: messages } = await sonarPool.query<OutreachMessage>(
-    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt",(social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by ((social_meta->>'facebookInboxOrder') is null) desc,(social_meta->>'facebookInboxOrder')::int desc,created_at desc,(social_meta->>'providerOrder')::int desc nulls last,id desc limit $2`,
+    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt",(social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by ${messageHistoryOrder('desc')} limit $2`,
     [conversationId, historyLimit ?? null],
   );
   messages.reverse();
@@ -483,7 +487,7 @@ async function reply(
     let {
       rows: [last],
     } = await c.query(
-      "select account_id,to_value,subject from messages where conversation_id=$1 order by (direction='in') desc,created_at desc,id desc limit 1",
+      `select account_id,to_value,subject from messages where conversation_id=$1 order by (direction='in') desc,${messageHistoryOrder('desc')} limit 1`,
       [conversationId],
     );
     // First message written by hand: recipient from the contact, sender = the active account.
