@@ -59,6 +59,7 @@ export function ModelPicker({
       >
         <PopoverTrigger asChild>
           <Button
+            type="button"
             variant="outline"
             role="combobox"
             aria-labelledby={`${id}-label ${id}-value`}

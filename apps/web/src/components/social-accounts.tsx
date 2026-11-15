@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
+import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
 const selectClass =
@@ -25,6 +26,7 @@ export function SocialAccounts({
   accountProxyIndex: number | null;
 }) {
   const [current, setCurrent] = useState(accounts);
+  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [dailyLimit, setDailyLimit] = useState('20');
@@ -171,11 +173,13 @@ export function SocialAccounts({
             >
               {uk.socialAccounts.check}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
+            <CrudButton
+              action="edit"
+              aria-label={`${uk.socialAccounts.edit}: ${account.name}`}
               disabled={pending}
               onClick={() => {
+                setNotice('');
+                setOpen(true);
                 setEditing(account.id);
                 setName(account.name);
                 setDailyLimit(String(account.dailyLimit));
@@ -185,7 +189,7 @@ export function SocialAccounts({
               }}
             >
               {uk.socialAccounts.edit}
-            </Button>
+            </CrudButton>
             <Button
               type="button"
               variant="outline"
@@ -210,138 +214,154 @@ export function SocialAccounts({
           )}
         </section>
       ))}
-      <form
-        className="space-y-3 border-t border-border pt-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void mutate('POST', {
-            ...(editing ? { id: editing } : {}),
-            name,
-            network,
-            dailyLimit: Number(dailyLimit),
-            proxyIndex: Number(proxyIndex),
-            ...(cookiesJson.trim() ? { cookiesJson } : {}),
-          }).then((saved) => {
-            if (saved) reset();
-          });
+      <CrudButton
+        disabled={pending}
+        onClick={() => {
+          reset();
+          setNotice('');
+          setOpen(true);
         }}
       >
-        <h3 className="font-semibold">
-          {editing ? uk.socialAccounts.edit : uk.socialAccounts.add} ·{' '}
-          {uk.social.networks[network]}
-        </h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label htmlFor={`social-${network}-name`}>
-              {uk.email.name} · {uk.social.networks[network]}
-            </label>
-            <Input
-              id={`social-${network}-name`}
-              placeholder={uk.socialAccounts.namePlaceholders[network]}
-              value={name}
-              required
-              maxLength={200}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <AiAssist text={name} onApply={setName} />
+        {uk.socialAccounts.add}
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`${editing ? uk.socialAccounts.edit : uk.socialAccounts.add} · ${uk.social.networks[network]}`}
+        pending={pending}
+        draft={{ name, dailyLimit, proxyIndex, cookiesJson }}
+      >
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void mutate('POST', {
+              ...(editing ? { id: editing } : {}),
+              name,
+              network,
+              dailyLimit: Number(dailyLimit),
+              proxyIndex: Number(proxyIndex),
+              ...(cookiesJson.trim() ? { cookiesJson } : {}),
+            }).then((saved) => {
+              if (saved) {
+                reset();
+                setOpen(false);
+              }
+            });
+          }}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor={`social-${network}-name`}>
+                {uk.email.name} · {uk.social.networks[network]}
+              </label>
+              <Input
+                id={`social-${network}-name`}
+                placeholder={uk.socialAccounts.namePlaceholders[network]}
+                value={name}
+                required
+                maxLength={200}
+                onChange={(event) => setName(event.target.value)}
+              />
+              <AiAssist text={name} onApply={setName} />
+            </div>
+            <div>
+              <label htmlFor={`social-${network}-limit`}>
+                {uk.email.limit}
+              </label>
+              <Input
+                id={`social-${network}-limit`}
+                type="number"
+                min={1}
+                step={1}
+                required
+                value={dailyLimit}
+                onChange={(event) => setDailyLimit(event.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor={`social-${network}-proxy`}>
+                {uk.socialAccounts.proxy}
+              </label>
+              <select
+                id={`social-${network}-proxy`}
+                className={selectClass}
+                required
+                value={proxyIndex}
+                onChange={(event) => setProxyIndex(event.target.value)}
+              >
+                {Array.from({ length: proxyCount }, (_, index) => (
+                  <option
+                    key={index}
+                    value={index}
+                    disabled={index !== accountProxyIndex}
+                  >
+                    {uk.socialAccounts.proxy} {index + 1}
+                    {index === accountProxyIndex
+                      ? uk.socialAccounts.reservedProxy
+                      : uk.socialAccounts.anonymousProxy}
+                  </option>
+                ))}
+              </select>
+              <p className="text-sm text-muted">
+                {uk.socialAccounts.proxyHelp}
+              </p>
+              {accountProxyIndex === null && (
+                <p className="text-sm text-wait">{uk.socialAccounts.noProxy}</p>
+              )}
+            </div>
           </div>
           <div>
-            <label htmlFor={`social-${network}-limit`}>{uk.email.limit}</label>
-            <Input
-              id={`social-${network}-limit`}
-              type="number"
-              min={1}
-              step={1}
-              required
-              value={dailyLimit}
-              onChange={(event) => setDailyLimit(event.target.value)}
-            />
-          </div>
-          <div>
-            <label htmlFor={`social-${network}-proxy`}>
-              {uk.socialAccounts.proxy}
+            <label htmlFor={`social-${network}-cookies`}>
+              {uk.socialAccounts.cookies} · {uk.social.networks[network]}
             </label>
-            <select
-              id={`social-${network}-proxy`}
-              className={selectClass}
-              required
-              value={proxyIndex}
-              onChange={(event) => setProxyIndex(event.target.value)}
+            <textarea
+              id={`social-${network}-cookies`}
+              placeholder={uk.socialAccounts.cookiesPlaceholder}
+              aria-describedby={`social-${network}-cookies-help`}
+              className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
+              style={
+                visible || !cookiesJson
+                  ? undefined
+                  : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
+              }
+              rows={4}
+              required={!editing}
+              autoComplete="off"
+              spellCheck={false}
+              value={cookiesJson}
+              onChange={(event) => setCookiesJson(event.target.value)}
+            />
+            <p
+              id={`social-${network}-cookies-help`}
+              className="text-xs text-muted-foreground"
             >
-              {Array.from({ length: proxyCount }, (_, index) => (
-                <option
-                  key={index}
-                  value={index}
-                  disabled={index !== accountProxyIndex}
-                >
-                  {uk.socialAccounts.proxy} {index + 1}
-                  {index === accountProxyIndex
-                    ? uk.socialAccounts.reservedProxy
-                    : uk.socialAccounts.anonymousProxy}
-                </option>
-              ))}
-            </select>
-            <p className="text-sm text-muted">{uk.socialAccounts.proxyHelp}</p>
-            {accountProxyIndex === null && (
-              <p className="text-sm text-wait">{uk.socialAccounts.noProxy}</p>
-            )}
-          </div>
-        </div>
-        <div>
-          <label htmlFor={`social-${network}-cookies`}>
-            {uk.socialAccounts.cookies} · {uk.social.networks[network]}
-          </label>
-          <textarea
-            id={`social-${network}-cookies`}
-            placeholder={uk.socialAccounts.cookiesPlaceholder}
-            aria-describedby={`social-${network}-cookies-help`}
-            className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
-            style={
-              visible || !cookiesJson
-                ? undefined
-                : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
-            }
-            rows={4}
-            required={!editing}
-            autoComplete="off"
-            spellCheck={false}
-            value={cookiesJson}
-            onChange={(event) => setCookiesJson(event.target.value)}
-          />
-          <p
-            id={`social-${network}-cookies-help`}
-            className="text-xs text-muted-foreground"
-          >
-            {uk.socialAccounts.cookiesHint[network]}{' '}
-            {editing
-              ? uk.socialAccounts.replaceCookies
-              : uk.socialAccounts.cookiePrivacy}
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setVisible(!visible)}
-          >
-            {visible ? uk.socialAccounts.hide : uk.socialAccounts.show}
-          </Button>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={pending || accountProxyIndex === null}>
-            {uk.forms.save}
-          </Button>
-          {editing && (
+              {uk.socialAccounts.cookiesHint[network]}{' '}
+              {editing
+                ? uk.socialAccounts.replaceCookies
+                : uk.socialAccounts.cookiePrivacy}
+            </p>
             <Button
               type="button"
               variant="outline"
-              disabled={pending}
-              onClick={reset}
+              onClick={() => setVisible(!visible)}
             >
-              {uk.ai.cancel}
+              {visible ? uk.socialAccounts.hide : uk.socialAccounts.show}
             </Button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={pending || accountProxyIndex === null}>
+              {uk.forms.save}
+            </Button>
+          </div>
+          {notice && (
+            <p role="status" className="text-sm">
+              {notice}
+            </p>
           )}
-        </div>
-      </form>
-      {notice && (
+        </form>
+      </CrudDialog>
+      {!open && notice && (
         <p role="status" className="text-sm">
           {notice}
         </p>

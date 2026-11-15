@@ -13,6 +13,7 @@ import { AiAssist } from './ai-assist';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
+import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Result = Awaited<ReturnType<typeof getManualSource>>;
 function sourceError(error: unknown) {
@@ -44,6 +45,7 @@ export function ManualSource({
   const requestId = useRef<string | null>(null);
   const displayedRequest = useRef<string | undefined>(undefined);
   const revision = useRef(0);
+  const [open, setOpen] = useState(false);
   const [value, setValue] = useState(''),
     [network, setNetwork] = useState<ManualSourceInput['network']>(),
     [reviewed, setReviewed] = useState<string | null | undefined>();
@@ -127,6 +129,7 @@ export function ManualSource({
       if (!response.ok) throw Error(data.error ?? uk.tasks.error);
       displayedRequest.current = data.requestId;
       setResult(data);
+      setOpen(false);
       router.refresh();
     } catch (error) {
       setError(sourceError(error));
@@ -136,6 +139,7 @@ export function ManualSource({
     }
   };
   const replacement = current && ['website', 'googleMaps'].includes(source);
+  const title = `${replacement ? uk.crud.edit : uk.campaign.add}: ${uk.manualSource.labels[source]}`;
   const retry = async (taskId: string) => {
     if (submitting.current) return;
     revision.current++;
@@ -169,83 +173,105 @@ export function ManualSource({
   };
   return (
     <div className="space-y-3 border-t border-border pt-3 text-sm">
-      <form
-        className="space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!replacement || reviewed === current) void submit();
-        }}
+      <CrudButton
+        action={replacement ? 'edit' : 'add'}
+        disabled={pending}
+        onClick={() => setOpen(true)}
       >
-        <label htmlFor={id} className="block font-medium">
-          {uk.manualSource.labels[source]}
-        </label>
-        <Input
-          id={id}
-          className="min-h-11"
-          value={value}
-          onChange={(event) => edit(event.target.value)}
-          maxLength={2048}
-          autoComplete="off"
-          inputMode={source === 'registry' ? 'numeric' : 'text'}
-          disabled={pending}
-          required
-          aria-describedby={`${id}-hint`}
-        />
-        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-          {uk.manualSource.hints[source]}
-        </p>
-        {source === 'social' && (
-          <label className="block space-y-1">
-            <span>{uk.manualSource.network}</span>
-            <select
-              className="min-h-11 w-full rounded-lg border border-border bg-surface px-3"
-              value={network ?? ''}
-              disabled={pending}
-              onChange={(event) => {
-                setNetwork(
-                  (event.target.value as ManualSourceInput['network']) ||
-                    undefined,
-                );
-                requestId.current = null;
-              }}
-            >
-              <option value="">{uk.manualSource.fromUrl}</option>
-              {(['facebook', 'instagram', 'linkedin'] as const).map((n) => (
-                <option key={n} value={n}>
-                  {uk.social.networks[n]}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {replacement && (
-          <label className="flex min-h-11 items-start gap-2 break-all rounded-lg bg-raised p-2">
-            <input
-              className="mt-1 shrink-0"
-              type="checkbox"
-              checked={reviewed === current}
-              onChange={(event) =>
-                setReviewed(event.target.checked ? current : undefined)
-              }
-              disabled={pending}
-            />
-            <span>
-              {uk.manualSource.replace}: {current}
-            </span>
-          </label>
-        )}
-        <Button
-          type="submit"
-          disabled={
-            pending || !value.trim() || (!!replacement && reviewed !== current)
-          }
-          className="min-h-11 w-full whitespace-normal sm:w-auto"
+        {title}
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={title}
+        pending={pending}
+        draft={{ value, network, reviewed }}
+      >
+        <form
+          className="space-y-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!replacement || reviewed === current) void submit();
+          }}
         >
-          {pending ? uk.tasks.status.queued : uk.manualSource.submit}
-        </Button>
-      </form>
-      <AiAssist text={value} onApply={edit} />
-      {error && (
+          <label htmlFor={id} className="block font-medium">
+            {uk.manualSource.labels[source]}
+          </label>
+          <Input
+            id={id}
+            className="min-h-11"
+            value={value}
+            onChange={(event) => edit(event.target.value)}
+            maxLength={2048}
+            autoComplete="off"
+            inputMode={source === 'registry' ? 'numeric' : 'text'}
+            disabled={pending}
+            required
+            aria-describedby={`${id}-hint`}
+          />
+          <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+            {uk.manualSource.hints[source]}
+          </p>
+          {source === 'social' && (
+            <label className="block space-y-1">
+              <span>{uk.manualSource.network}</span>
+              <select
+                className="min-h-11 w-full rounded-lg border border-border bg-surface px-3"
+                value={network ?? ''}
+                disabled={pending}
+                onChange={(event) => {
+                  setNetwork(
+                    (event.target.value as ManualSourceInput['network']) ||
+                      undefined,
+                  );
+                  requestId.current = null;
+                }}
+              >
+                <option value="">{uk.manualSource.fromUrl}</option>
+                {(['facebook', 'instagram', 'linkedin'] as const).map((n) => (
+                  <option key={n} value={n}>
+                    {uk.social.networks[n]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {replacement && (
+            <label className="flex min-h-11 items-start gap-2 break-all rounded-lg bg-raised p-2">
+              <input
+                className="mt-1 shrink-0"
+                type="checkbox"
+                checked={reviewed === current}
+                onChange={(event) =>
+                  setReviewed(event.target.checked ? current : undefined)
+                }
+                disabled={pending}
+              />
+              <span>
+                {uk.manualSource.replace}: {current}
+              </span>
+            </label>
+          )}
+          <Button
+            type="submit"
+            disabled={
+              pending ||
+              !value.trim() ||
+              (!!replacement && reviewed !== current)
+            }
+            className="min-h-11 w-full whitespace-normal sm:w-auto"
+          >
+            {pending ? uk.tasks.status.queued : uk.manualSource.submit}
+          </Button>
+        </form>
+        <AiAssist text={value} onApply={edit} />
+        {error && (
+          <p role="alert" className="text-err">
+            {error}
+          </p>
+        )}
+      </CrudDialog>
+      {!open && error && (
         <p role="alert" className="text-err">
           {error}
         </p>

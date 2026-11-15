@@ -7,6 +7,8 @@ import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
+import { CrudButton, CrudDialog } from './crud-dialog';
+
 export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
   const router = useRouter(),
     busy = useRef(false);
@@ -163,12 +165,24 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
           </table>
         </div>
       )}
-      <Button variant="outline" onClick={() => setOpen(!open)}>
+      <CrudButton
+        disabled={pending}
+        onClick={() => {
+          setError('');
+          setOpen(true);
+        }}
+      >
         {uk.email.add}
-      </Button>
-      {open && (
+      </CrudButton>
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={uk.email.add}
+        pending={pending}
+        draft={form}
+      >
         <form
-          className="grid gap-4 md:grid-cols-3"
+          className="grid gap-4 sm:grid-cols-2"
           onSubmit={(event) => {
             event.preventDefault();
             void save();
@@ -214,9 +228,14 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
           <Button disabled={pending}>
             {pending ? uk.ai.pending : uk.email.add}
           </Button>
+          {error && (
+            <p role="alert" className="text-err sm:col-span-2">
+              {error}
+            </p>
+          )}
         </form>
-      )}
-      {error && (
+      </CrudDialog>
+      {!open && error && (
         <p role="alert" className="text-err">
           {error}
         </p>

@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Heart,
@@ -41,6 +41,11 @@ export function AiAssist({
   text: string;
   onApply: (text: string) => void;
 }) {
+  const container = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const instructionInput = useRef<HTMLInputElement>(null);
+  const applyButton = useRef<HTMLButtonElement>(null);
+  const busy = useRef(false);
   const [menu, setMenu] = useState(false),
     [action, setAction] = useState<Action | null>(null),
     [instruction, setInstruction] = useState(''),
@@ -49,6 +54,8 @@ export function AiAssist({
     [pending, setPending] = useState(false);
   const empty = !text.trim();
   const run = async (chosen: Action, extra = instruction) => {
+    if (busy.current) return;
+    busy.current = true;
     setAction(chosen);
     setMenu(false);
     setPending(true);
@@ -64,6 +71,7 @@ export function AiAssist({
     } catch (error) {
       setError(error instanceof Error ? error.message : uk.ai.error);
     } finally {
+      busy.current = false;
       setPending(false);
     }
   };
@@ -72,13 +80,28 @@ export function AiAssist({
     setError('');
     setAction(null);
     setInstruction('');
+    trigger.current?.focus();
   };
   const asking = action && needsInstruction(action) && !pending && !preview;
+  useEffect(() => {
+    if (asking) instructionInput.current?.focus();
+  }, [asking]);
+  useEffect(() => {
+    if (
+      preview &&
+      (container.current?.contains(document.activeElement) ||
+        document.activeElement === document.body ||
+        document.activeElement ===
+          container.current?.closest('[role="dialog"]'))
+    )
+      applyButton.current?.focus();
+  }, [preview]);
   return (
-    <div className="mt-1.5">
+    <div ref={container} className="mt-1.5" aria-busy={pending}>
       <Popover open={menu} onOpenChange={setMenu}>
         <PopoverTrigger asChild>
           <button
+            ref={trigger}
             type="button"
             disabled={empty || pending}
             title={empty ? uk.ai.emptyHint : uk.ai.assist}
@@ -95,7 +118,12 @@ export function AiAssist({
             {pending ? uk.ai.pending : uk.ai.short}
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-56 p-1">
+        <PopoverContent
+          className="w-56 p-1"
+          onCloseAutoFocus={(event) => {
+            if (asking) event.preventDefault();
+          }}
+        >
           <p className="px-2 pt-1.5 pb-1 text-xs text-muted-foreground">
             {uk.ai.menuTitle}
           </p>
@@ -123,15 +151,23 @@ export function AiAssist({
         </PopoverContent>
       </Popover>
       {asking && (
-        <form
+        <div
+          data-ai-instruction=""
+          role="group"
+          aria-label={uk.ai.instruction}
           className="mt-1.5 flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (instruction.trim()) void run(action);
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              close();
+            }
           }}
         >
           <Input
+            ref={instructionInput}
             autoFocus
+            className="min-w-0 flex-1"
             aria-label={uk.ai.instruction}
             placeholder={
               action === 'translate' ? uk.ai.languageHint : uk.ai.customHint
@@ -139,15 +175,26 @@ export function AiAssist({
             maxLength={1000}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.nativeEvent.isComposing)
+                return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (instruction.trim()) void run(action);
+            }}
           />
-          <Button type="submit" disabled={!instruction.trim()}>
+          <Button
+            type="button"
+            disabled={!instruction.trim()}
+            onClick={() => void run(action)}
+          >
             {uk.ai.go}
           </Button>
           <Button type="button" variant="outline" onClick={close}>
             <X aria-hidden className="size-4" />
             <span className="sr-only">{uk.ai.cancel}</span>
           </Button>
-        </form>
+        </div>
       )}
       {error && (
         <p role="alert" className="mt-1.5 text-sm text-err">
@@ -163,6 +210,7 @@ export function AiAssist({
           <p className="whitespace-pre-wrap text-sm">{preview}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <Button
+              ref={applyButton}
               type="button"
               className="min-h-8 px-3 text-xs"
               onClick={() => {
