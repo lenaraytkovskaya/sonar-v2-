@@ -6,6 +6,10 @@ import {
   readFacebookThread,
 } from './facebook-inbox-browser.js';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
+import {
+  SocialSessionCheckError,
+  safeSocialSessionDiagnostic,
+} from '@sonar/core/social-session';
 
 // Structural capture from the repository; message IDs below use the msgr shape
 // confirmed by root in native DevTools on 2026-11-15. No real identities retained.
@@ -206,6 +210,181 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     );
     const chats = (paths: string[]) =>
       `<section role="region" aria-label="Thread list"><table aria-label="Chats"><tr><td>${paths.map((p) => `<a href="${p}">Chat</a>`).join('')}</td></tr></table></section>`;
+    it.each([
+      {
+        name: 'login final route',
+        finalPath: '/login/?private=secret',
+        html: '',
+        reason: 'login_required',
+        urlKind: 'login',
+        login: 0,
+      },
+      {
+        name: 'password in inbox',
+        html: '<input type="password" value="secret">',
+        reason: 'login_required',
+        urlKind: 'inbox',
+        login: 1,
+      },
+      {
+        name: 'PIN password overlap',
+        html: '<h2>Enter your PIN to restore your chats</h2><input type="password" aria-label="PIN">',
+        reason: 'login_required',
+        urlKind: 'inbox',
+        login: 1,
+        pinRestore: 1,
+      },
+      {
+        name: 'checkpoint final route',
+        finalPath: '/checkpoint/private/',
+        html: '',
+        reason: 'checkpoint',
+        urlKind: 'checkpoint',
+        login: 0,
+      },
+      {
+        name: 'checkpoint marker',
+        html: '<form action="/checkpoint/"><button>Continue</button></form><input type="password">',
+        reason: 'checkpoint',
+        urlKind: 'inbox',
+        login: 1,
+      },
+      {
+        name: 'captcha precedence',
+        html: '<div data-testid="captcha">private</div><input type="password">',
+        reason: 'captcha',
+        urlKind: 'inbox',
+        login: 1,
+      },
+      {
+        name: 'unconfirmed PIN history',
+        html: '<h2>Enter your PIN to restore your chats</h2><input aria-label="PIN"><button>Dismiss Chat history is missing card</button>',
+        reason: 'unknown_auth',
+        urlKind: 'inbox',
+        login: 0,
+        pinRestore: 1,
+        historyMissing: 1,
+      },
+      {
+        name: 'unconfirmed visible messages',
+        html: captured,
+        reason: 'unknown_auth',
+        urlKind: 'inbox',
+        login: 0,
+        messageRegions: 1,
+        messageNodes: 2,
+      },
+      {
+        name: 'http failure',
+        html: '',
+        status: 403,
+        reason: 'unknown_auth',
+        urlKind: 'inbox',
+        login: 0,
+      },
+      {
+        name: 'rate limit',
+        html: '',
+        status: 429,
+        reason: 'rate_limit',
+        urlKind: 'inbox',
+        login: 0,
+      },
+    ])(
+      'captures only safe facts for $name without changing the guard',
+      async (scenario) => {
+        const { page, context } = await fixture();
+        await context.route('**/*', (route) => {
+          const url = new URL(route.request().url());
+          if (
+            route.request().method() !== 'GET' ||
+            url.hostname !== 'www.facebook.com'
+          )
+            return route.abort();
+          return route.fulfill({
+            status: scenario.status ?? 200,
+            contentType: 'text/html',
+            // Model the final route without an HTTP redirect escaping routing.
+            body: `<script>history.replaceState(null, '', ${JSON.stringify(scenario.finalPath ?? '/messages/')})</script>${scenario.html}`,
+          });
+        });
+        const persist = vi.fn();
+        try {
+          const error = await captureFacebookInbox(
+            page,
+            '100000000000002',
+            150,
+            persist,
+          ).catch((e: unknown) => e);
+          expect(error).toBeInstanceOf(SocialSessionCheckError);
+          expect(error).toMatchObject({
+            reason: scenario.reason,
+            diagnostic: {
+              version: 1,
+              stage: scenario.status ? 'http' : 'auth',
+              urlKind: scenario.urlKind,
+              navigationHttpStatus: scenario.status ?? 200,
+              visible: { login: scenario.login },
+              history: {
+                pinRestore: scenario.pinRestore ?? 0,
+                historyMissing: scenario.historyMissing ?? 0,
+                messageRegions: scenario.messageRegions ?? 0,
+                messageNodes: scenario.messageNodes ?? 0,
+              },
+            },
+          });
+          const diagnostic = (error as SocialSessionCheckError).diagnostic;
+          expect(safeSocialSessionDiagnostic(diagnostic)).toEqual(diagnostic);
+          expect(JSON.stringify(diagnostic)).not.toMatch(
+            /private|secret|https|100000|Synthetic|msgr|rawUrl/,
+          );
+          expect(persist).not.toHaveBeenCalled();
+        } finally {
+          await context.close();
+        }
+      },
+    );
+    it('captures a late thread logout before page closure', async () => {
+      const { page, context } = await fixture((p) =>
+        p === '/messages/' ? chats([path]) : '<input type="password">',
+      );
+      try {
+        await expect(
+          captureFacebookInbox(page, '100000000000002', 1000, vi.fn()),
+        ).rejects.toMatchObject({
+          reason: 'login_required',
+          diagnostic: {
+            stage: 'auth',
+            urlKind: 'thread',
+            navigationHttpStatus: 200,
+            visible: { login: 1 },
+          },
+        });
+      } finally {
+        await context.close();
+      }
+    });
+    it('preserves the original auth error when diagnostics cannot read a closed page', async () => {
+      const { page, context } = await fixture();
+      const error = new SocialSessionCheckError('checkpoint');
+      try {
+        await expect(
+          captureFacebookInbox(
+            page,
+            '100000000000002',
+            1000,
+            vi.fn(),
+            async () => {
+              await page.close();
+              throw error;
+            },
+          ),
+        ).rejects.toBe(error);
+        expect(error.diagnostic).toBeUndefined();
+      } finally {
+        await context.close();
+      }
+    });
     it('does not starve a readable second chat when the first stays empty across polls', async () => {
       const bad = '/messages/e2ee/t/900000000000099/';
       const { page, context, navigations } = await fixture((p) =>

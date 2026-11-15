@@ -924,6 +924,8 @@ async function sendInstagram(
 const legacyLinkedInAuth =
   'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger';
 const instagramAuth = 'a[href^="/direct/"], a[href="/accounts/edit/"]';
+const facebookAuth =
+  '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]';
 const captchaSelector = 'iframe[src*="captcha"], [data-testid="captcha"]';
 const checkpointSelector =
   'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]';
@@ -1028,8 +1030,7 @@ export async function assertSocialSession(
   await assertSessionNegatives(page, network);
   const authenticated = {
     instagram: instagramAuth,
-    facebook:
-      '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]',
+    facebook: facebookAuth,
     linkedin: legacyLinkedInAuth,
   }[network];
   const legacy = page.locator(authenticated).filter({ visible: true });
@@ -1077,11 +1078,16 @@ export async function assertSocialSession(
     throw new SocialSessionCheckError('unknown_auth');
 }
 /** Counts only the markers used by the session guard; never collect DOM text. */
-export async function instagramSessionMarkers(
+export const instagramSessionMarkers = (page: Page) =>
+  sessionMarkers(page, instagramAuth);
+export const facebookSessionMarkers = (page: Page) =>
+  sessionMarkers(page, facebookAuth);
+async function sessionMarkers(
   page: Page,
+  authenticated: string,
 ): Promise<SocialSessionCheckDiagnostic['visible']> {
   const counts = await Promise.all([
-    page.locator(instagramAuth).filter({ visible: true }).count(),
+    page.locator(authenticated).filter({ visible: true }).count(),
     page.locator(captchaSelector).filter({ visible: true }).count(),
     page.locator(checkpointSelector).filter({ visible: true }).count(),
     page.getByText(checkpointText).filter({ visible: true }).count(),
