@@ -618,12 +618,17 @@ it.each(['facebook', 'linkedin'] as const)(
     });
     await expect(
       adapter.sync(
-        { id: 'test', channel, settings: {}, session: {} as never },
+        {
+          id: 'test',
+          channel,
+          settings: {},
+          session: { cookies: [] } as never,
+        },
         { watermark: null, cycleStartedAt: null, resumeAnchor: null },
         async () => {},
       ),
     ).rejects.toMatchObject({
-      code: channel === 'facebook' ? 'history_locked' : 'unsupported_dom',
+      code: channel === 'facebook' ? 'session_invalid' : 'unsupported_dom',
     });
   },
 );

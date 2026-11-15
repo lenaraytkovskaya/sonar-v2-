@@ -80,3 +80,28 @@ it('allows an observed Instagram outgoing sender ID when the provider omits its 
   ).toThrow();
   expect(() => validateSocialInboxMessage('facebook', message)).toThrow();
 });
+
+it('preserves an unknown Facebook calendar time only with an explicit provider label and independent observation', () => {
+  const message = {
+    externalMessageId: '1@msgr.2',
+    threadId: '3',
+    direction: 'in' as const,
+    senderProfile: 'https://facebook.com/123/',
+    peerProfile: 'https://facebook.com/123/',
+    body: 'Reply',
+    occurredAt: null,
+    providerTimestamp: 'Saturday 16:45',
+    observedAt: '2026-11-15T02:00:00Z',
+  };
+  expect(validateSocialInboxMessage('facebook', message)).toMatchObject({
+    occurredAt: null,
+    providerTimestamp: 'Saturday 16:45',
+  });
+  expect(() =>
+    validateSocialInboxMessage('facebook', {
+      ...message,
+      providerTimestamp: undefined,
+    }),
+  ).toThrow();
+  expect(() => validateSocialInboxMessage('instagram', message)).toThrow();
+});

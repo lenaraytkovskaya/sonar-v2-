@@ -110,7 +110,12 @@ export async function runSocialInboxSync(
         and exists(select 1 from activity_log l where l.action='social.inbox.manual.queued'
           and l.entity_type='channel_account' and l.entity_id=$2 and l.user_id::text=$3 and l.details->>'taskId'=t.id::text)) as trusted
         from tasks t where t.id=$1 and t.type='social.inbox.sync' and t.status in ('queued','running') and t.payload->>'accountId'=$2`,
-        [taskId, account.id, account.owner_id, account.channel === 'instagram'],
+        [
+          taskId,
+          account.id,
+          account.owner_id,
+          ['instagram', 'facebook'].includes(account.channel),
+        ],
       );
       manual = receipt?.mode === 'manual' && receipt.trusted === true;
       if (receipt?.mode === 'manual' && !manual)
@@ -122,12 +127,17 @@ export async function runSocialInboxSync(
         };
     }
     const { rows: settings } = await c.query(
-      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit')",
+      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
     );
-    if (config['social.inbox.enabled'] !== true && !manual)
+    if (
+      !manual &&
+      (config['social.inbox.enabled'] !== true ||
+        config[`social.inbox.${account.channel}.enabled`] !== true ||
+        account.settings.inboxPollingEnabled !== true)
+    )
       return {
         status: 'skipped',
         reasonCode: 'social_inbox_disabled',
@@ -211,6 +221,7 @@ export async function runSocialInboxSync(
         JSON.stringify({
           ...(!manual ? { nextPollAt } : {}),
           complete,
+          created,
           reason: result.reason ?? null,
           ...(complete
             ? {
