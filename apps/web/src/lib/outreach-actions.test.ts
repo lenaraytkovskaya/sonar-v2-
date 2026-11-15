@@ -23,6 +23,7 @@ const {
   query: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
+vi.mock('@/lib/draft-state', () => import('./draft-state'));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
@@ -92,19 +93,19 @@ describe('shared contact chat actions', () => {
     expect(
       (await POST(request({ action: 'send', messageId: id }), context)).status,
     ).toBe(200);
-    expect(send).toHaveBeenCalledWith(id, 'actor');
+    expect(send).toHaveBeenCalledWith(id, 'actor', undefined);
     expect(
       (await POST(request({ action: 'approve', messageId: id }), context))
         .status,
     ).toBe(200);
-    expect(approve).toHaveBeenCalledWith(id, 'actor');
+    expect(approve).toHaveBeenCalledWith(id, 'actor', undefined);
   });
   it('records manual delivery and call notes without enqueueing a send', async () => {
     expect(
       (await POST(request({ action: 'manual', messageId: id }), context))
         .status,
     ).toBe(200);
-    expect(manual).toHaveBeenCalledWith(id, 'actor');
+    expect(manual).toHaveBeenCalledWith(id, 'actor', undefined);
     const fields = {
       contactId: id,
       campaignId: id,
@@ -165,4 +166,43 @@ describe('shared contact chat actions', () => {
       expect((await POST(request(body), context)).status).toBe(400);
     for (const fn of [generate, edit, call]) expect(fn).not.toHaveBeenCalled();
   });
+});
+
+it('validates and forwards the reviewed draft snapshot', async () => {
+  const expected = { subject: 'Reviewed', body: 'Reviewed body' };
+  expect(
+    (await POST(request({ action: 'send', messageId: id, expected }), context))
+      .status,
+  ).toBe(200);
+  expect(send).toHaveBeenLastCalledWith(id, 'actor', expected);
+  expect(
+    (
+      await POST(
+        request({
+          action: 'save',
+          messageId: id,
+          subject: 'Mine',
+          body: 'My text',
+          expected,
+        }),
+        context,
+      )
+    ).status,
+  ).toBe(200);
+  expect(edit).toHaveBeenLastCalledWith(
+    id,
+    { subject: 'Mine', body: 'My text' },
+    'actor',
+    expected,
+  );
+  send.mockClear();
+  expect(
+    (
+      await POST(
+        request({ action: 'send', messageId: id, expected: null }),
+        context,
+      )
+    ).status,
+  ).toBe(400);
+  expect(send).not.toHaveBeenCalled();
 });

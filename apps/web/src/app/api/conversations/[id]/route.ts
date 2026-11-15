@@ -1,3 +1,4 @@
+import { expectedDraft } from '@/lib/draft-state';
 import { apiUser, validId } from '@/lib/api-access';
 import { emailResponse } from '@/lib/email-api';
 import { uk } from '@/i18n/uk';
@@ -37,6 +38,8 @@ export async function POST(request: Request, context: Context) {
   const { id } = await context.params;
   const data = await request.json().catch(() => null);
   if (!validId(id) || !data) return invalid();
+  const expected = expectedDraft(data.expected);
+  if (expected === false) return invalid();
   return emailResponse(async () => {
     const db = await import('@sonar/db/inbound');
     const chat = await db.getConversationChat(id);
@@ -104,16 +107,17 @@ export async function POST(request: Request, context: Context) {
         data.messageId,
         { subject: data.subject, body: data.body },
         user.id,
+        expected,
       );
     }
     if (data.action === 'send')
-      return outreach.sendOutreachDraft(data.messageId, user.id);
+      return outreach.sendOutreachDraft(data.messageId, user.id, expected);
     if (data.action === 'approve')
-      return outreach.approveOutreachDraft(data.messageId, user.id);
+      return outreach.approveOutreachDraft(data.messageId, user.id, expected);
     if (data.action === 'skip')
       return outreach.skipOutreachMessage(data.messageId, user.id);
     if (data.action === 'manual')
-      return outreach.markOutreachManualSent(data.messageId, user.id);
+      return outreach.markOutreachManualSent(data.messageId, user.id, expected);
     return invalid();
   });
 }

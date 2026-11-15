@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { Copy } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
 import { channelLabel, contactLabel } from '@/lib/outreach-labels';
@@ -33,6 +35,17 @@ export function ConversationChat({
   const busy = useRef(false);
   const requestKey = useRef({ fingerprint: '', key: '' });
   const history = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    const element = frame.current;
+    if (!element) return;
+    const update = () => setCompact(element.clientHeight < 440);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const atBottom = useRef(true);
   const previous = useRef<string[]>([]);
   const [newMessages, setNewMessages] = useState(0);
@@ -244,18 +257,43 @@ export function ConversationChat({
       ? conversation.contactValue
       : null;
   return (
-    <Card className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className="shrink-0 space-y-1 border-b border-border p-3">
-        {backHref && (
-          <Link
-            href={backHref}
-            scroll={false}
-            className="inline-flex min-h-9 items-center text-sm text-accent lg:hidden"
-          >
-            {uk.inbound.backToDialogs}
-          </Link>
+    <Card
+      ref={frame}
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+    >
+      <header
+        tabIndex={0}
+        className={cn(
+          'max-h-[30%] min-h-8 shrink space-y-1 overflow-y-auto overscroll-contain border-b border-border p-3',
+          compact && 'p-2',
         )}
-        <h2 className="line-clamp-2 break-words font-heading text-lg font-bold [overflow-wrap:anywhere]">
+      >
+        <div className="flex items-center justify-between gap-2">
+          {backHref && (
+            <Link
+              href={backHref}
+              scroll={false}
+              className={cn(
+                'inline-flex min-h-9 items-center text-sm text-accent lg:hidden',
+                compact && 'min-h-7 text-xs',
+              )}
+            >
+              {uk.inbound.backToDialogs}
+            </Link>
+          )}
+          {conversation.needsHuman && (
+            <p className="rounded-lg bg-wait-bg px-2 py-1 text-xs text-wait">
+              {uk.inbound.needsHuman}
+            </p>
+          )}
+        </div>
+        <h2
+          title={conversation.companyName ?? undefined}
+          className={cn(
+            'line-clamp-2 break-words font-heading text-lg font-bold [overflow-wrap:anywhere]',
+            compact && 'line-clamp-1 text-base',
+          )}
+        >
           {conversation.companyId ? (
             <Link href={`/companies/${conversation.companyId}`}>
               {conversation.companyName}
@@ -264,77 +302,98 @@ export function ConversationChat({
             uk.inbound.unknownCompany
           )}
         </h2>
-        <p className="break-words text-sm text-muted-foreground">
+        <p
+          title={contactLabel(conversation.contactValue)}
+          className={cn(
+            'break-words text-sm text-muted-foreground',
+            compact && 'truncate text-xs',
+          )}
+        >
           {channelLabel(conversation.channel, conversation.contactValue ?? '')}{' '}
           · {contactLabel(conversation.contactValue)}
         </p>
-        {conversation.needsHuman && (
-          <p className="rounded-lg bg-wait-bg p-3 text-wait">
-            {uk.inbound.needsHuman}
-          </p>
-        )}
         {data.blocked && (
           <p className="rounded-lg bg-err-bg p-3 text-err">
             {uk.email.blocked}
           </p>
         )}
       </header>
-      <div
-        ref={history}
-        tabIndex={0}
-        onScroll={() => {
-          if (history.current) {
-            atBottom.current = isNearBottom(history.current);
-            if (atBottom.current) setNewMessages(0);
-          }
-        }}
-        role="log"
-        aria-label={uk.email.history}
-        aria-live="polite"
-        aria-relevant="additions"
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-raised p-3"
-      >
-        <div className="space-y-3">
-          {data.messages.map((message) => (
-            <Draft
-              key={message.id}
-              bubble
-              message={message}
-              blocked={data.blocked}
-              pending={pending}
-              approval={
-                message.source !== 'reply' &&
-                conversation.campaignSendMode === 'approval'
-              }
-              act={act}
-              onUseText={
-                social && data.socialAvailable
-                  ? (text) => {
-                      setBody(text);
-                      document.getElementById('reply-body')?.focus();
-                    }
-                  : undefined
-              }
-            />
-          ))}
-        </div>
-      </div>
-      {newMessages > 0 && (
-        <Button
-          variant="outline"
-          className="mx-auto my-1 shrink-0"
-          onClick={scrollToLatest}
+      <div className="relative min-h-12 flex-1">
+        <div
+          ref={history}
+          tabIndex={0}
+          onScroll={() => {
+            if (history.current) {
+              atBottom.current = isNearBottom(history.current);
+              if (atBottom.current) setNewMessages(0);
+            }
+          }}
+          role="log"
+          aria-label={uk.email.history}
+          aria-live="polite"
+          aria-relevant="additions"
+          className="h-full min-h-0 overflow-y-auto overscroll-contain bg-raised p-3"
         >
-          {uk.inbound.newMessages} ({newMessages})
-        </Button>
-      )}
-      {refreshError && (
-        <p role="status" className="shrink-0 px-3 text-xs text-err">
-          {uk.inbound.refreshError}
-        </p>
+          <div className="space-y-3">
+            {data.messages.map((message) => (
+              <Draft
+                key={message.id}
+                bubble
+                message={message}
+                blocked={data.blocked}
+                pending={pending}
+                approval={
+                  message.source !== 'reply' &&
+                  conversation.campaignSendMode === 'approval'
+                }
+                act={act}
+                onUseText={
+                  social && data.socialAvailable
+                    ? (text) => {
+                        setBody(text);
+                        document.getElementById('reply-body')?.focus();
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+        </div>
+        {newMessages > 0 && (
+          <Button
+            variant="outline"
+            className="absolute bottom-2 left-1/2 max-w-[90%] -translate-x-1/2 shadow-lg"
+            onClick={scrollToLatest}
+          >
+            {uk.inbound.newMessages} ({newMessages})
+          </Button>
+        )}
+      </div>
+      {(refreshError || task || notice) && (
+        <div
+          role="status"
+          tabIndex={0}
+          className="max-h-8 shrink-0 overflow-y-auto px-2 text-xs"
+        >
+          {refreshError && (
+            <p className="text-err">{uk.inbound.refreshError}</p>
+          )}
+          {task && (
+            <p>
+              {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+              {task.reason_uk && ` · ${task.reason_uk}`}
+            </p>
+          )}
+          {notice && <p>{notice}</p>}
+        </div>
       )}
       {!data.blocked && canReply && (
-        <div className="relative shrink-0 space-y-2 border-t border-border p-3">
+        <div
+          className={cn(
+            'relative shrink-0 space-y-2 border-t border-border p-3',
+            compact && 'space-y-1 p-2',
+          )}
+        >
           <details className="group/reply">
             <summary className="cursor-pointer text-sm text-muted-foreground">
               {uk.inbound.replyOptions}
@@ -396,11 +455,15 @@ export function ConversationChat({
             rows={2}
             maxLength={20000}
             onChange={(event) => setBody(event.target.value)}
-            className="max-h-[calc(var(--inbox-height,100dvh)*0.2)] min-h-16 w-full resize-y rounded-lg border border-border bg-surface p-3"
+            className={cn(
+              'max-h-[calc(var(--inbox-height,100dvh)*0.2)] min-h-16 w-full resize-y rounded-lg border border-border bg-surface p-3',
+              compact &&
+                'max-h-[calc(var(--inbox-height,100dvh)*0.12)] min-h-10 resize-none p-2',
+            )}
           />
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="max-h-[calc(var(--inbox-height,100dvh)*0.25)] min-w-0 flex-1 overflow-y-auto">
-              <AiAssist text={body} onApply={setBody} />
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <AiAssist floating text={body} onApply={setBody} />
             </div>
             <Button
               disabled={
@@ -432,7 +495,8 @@ export function ConversationChat({
               <Button
                 type="button"
                 variant="outline"
-                className="ml-2"
+                className={compact ? 'shrink-0 px-2' : undefined}
+                title={uk.outreach.copy}
                 disabled={!body.trim()}
                 onClick={() =>
                   void navigator.clipboard
@@ -441,28 +505,14 @@ export function ConversationChat({
                     .catch(() => act('copyError'))
                 }
               >
-                {uk.outreach.copy}
+                {compact && <Copy aria-hidden className="size-4" />}
+                <span className={compact ? 'sr-only' : undefined}>
+                  {uk.outreach.copy}
+                </span>
               </Button>
             )}
           </div>
         </div>
-      )}
-      {task && (
-        <p
-          role="status"
-          className="max-h-20 shrink-0 overflow-y-auto px-3 text-sm text-muted-foreground"
-        >
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && ` · ${task.reason_uk}`}
-        </p>
-      )}
-      {notice && (
-        <p
-          role="status"
-          className="max-h-20 shrink-0 overflow-y-auto px-3 text-sm"
-        >
-          {notice}
-        </p>
       )}
     </Card>
   );

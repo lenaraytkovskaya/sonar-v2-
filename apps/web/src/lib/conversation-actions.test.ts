@@ -28,6 +28,7 @@ const {
   manual: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
+vi.mock('@/lib/draft-state', () => import('./draft-state'));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/inbox-filters', () => import('./inbox-filters'));
 vi.mock('@/lib/email-api', () => import('./email-api'));
@@ -209,7 +210,7 @@ describe('conversation API boundaries', () => {
       (await POST(request({ action: 'send', messageId: outgoing }), context))
         .status,
     ).toBe(200);
-    expect(send).toHaveBeenCalledWith(outgoing, 'actor');
+    expect(send).toHaveBeenCalledWith(outgoing, 'actor', undefined);
   });
   it('requires an existing conversation and valid reply fields', async () => {
     for (const patch of [
@@ -304,4 +305,47 @@ describe('inbox snapshots', () => {
     for (const action of [reply, send, generate, read])
       expect(action).not.toHaveBeenCalled();
   });
+});
+
+it('validates and forwards the reviewed draft snapshot', async () => {
+  const expected = { subject: 'Reviewed', body: 'Reviewed body' };
+  expect(
+    (
+      await POST(
+        request({ action: 'send', messageId: outgoing, expected }),
+        context,
+      )
+    ).status,
+  ).toBe(200);
+  expect(send).toHaveBeenLastCalledWith(outgoing, 'actor', expected);
+  expect(
+    (
+      await POST(
+        request({
+          action: 'save',
+          messageId: outgoing,
+          subject: 'Mine',
+          body: 'My text',
+          expected,
+        }),
+        context,
+      )
+    ).status,
+  ).toBe(200);
+  expect(edit).toHaveBeenLastCalledWith(
+    outgoing,
+    { subject: 'Mine', body: 'My text' },
+    'actor',
+    expected,
+  );
+  send.mockClear();
+  expect(
+    (
+      await POST(
+        request({ action: 'send', messageId: outgoing, expected: null }),
+        context,
+      )
+    ).status,
+  ).toBe(400);
+  expect(send).not.toHaveBeenCalled();
 });

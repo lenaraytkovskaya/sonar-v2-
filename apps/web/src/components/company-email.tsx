@@ -16,6 +16,8 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
+import { useMessageDraft } from './use-message-draft';
+import { sameDraft, normalizedDraft } from '@/lib/draft-state';
 import { MessageBody } from './message-body';
 type Chat = Awaited<ReturnType<typeof getCompanyChat>>;
 type Message = Chat['messages'][number];
@@ -43,19 +45,62 @@ export function Draft({
   onUseText?: (body: string) => void;
   bubble?: boolean;
 }) {
-  const [subject, setSubject] = useState(message.subject),
-    [body, setBody] = useState(message.body);
+  const draft = useMessageDraft(message);
+  const { subject, body } = draft.state.value;
+  const busy = useRef(false);
+  const alive = useRef(true);
+  const latest = useRef(draft);
+  latest.current = draft;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, [message.id]);
+  const setSubject = (subject: string) => {
+    if (!busy.current && !pending)
+      draft.setValue({ ...draft.state.value, subject });
+  };
+  const setBody = (body: string) => {
+    if (!busy.current && !pending)
+      draft.setValue({ ...draft.state.value, body });
+  };
   const editable = ['draft', 'awaiting_approval', 'awaiting_manual'].includes(
     message.status,
   );
   const historyLink = facebookHistoryLink(message.status, message);
   const dispatched = facebookDispatched(message.status, message);
   const manual = ['form', 'social'].includes(message.channel);
-  const changed = subject !== message.subject || body !== message.body;
-  const save = () => act('save', { messageId: message.id, subject, body });
+  const changed = !sameDraft(draft.state.value, draft.state.base);
   const proceed = async (action: string) => {
-    if (changed && !(await save())) return;
-    await act(action, { messageId: message.id });
+    if (busy.current || pending || draft.conflict) return;
+    busy.current = true;
+    const submitted = normalizedDraft(draft.state.value);
+    try {
+      if (
+        changed &&
+        !(await act('save', {
+          messageId: message.id,
+          ...submitted,
+          expected: draft.state.base,
+        }))
+      )
+        return;
+      // A navigation or a newer conflicting snapshot must not continue the send.
+      if (
+        !alive.current ||
+        latest.current.conflict ||
+        !sameDraft(normalizedDraft(latest.current.state.value), submitted)
+      )
+        return;
+      if (action !== 'save')
+        await act(action, {
+          messageId: message.id,
+          expected: changed ? submitted : draft.state.base,
+        });
+    } finally {
+      busy.current = false;
+    }
   };
   return (
     <section
@@ -98,6 +143,30 @@ export function Draft({
       )}
       {editable && !blocked ? (
         <>
+          {draft.conflict && (
+            <div
+              role="alert"
+              className="space-y-2 rounded-lg bg-wait-bg p-2 text-sm text-wait"
+            >
+              <p>{uk.outreach.draftConflict}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={pending}
+                  onClick={draft.useServer}
+                >
+                  {uk.outreach.useServerDraft}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={pending}
+                  onClick={draft.keepLocal}
+                >
+                  {uk.outreach.keepLocalDraft}
+                </Button>
+              </div>
+            </div>
+          )}
           {message.channel === 'email' && (
             <div>
               <label htmlFor={`subject-${message.id}`}>
@@ -105,24 +174,30 @@ export function Draft({
               </label>
               <Input
                 id={`subject-${message.id}`}
+                disabled={pending}
                 value={subject}
                 maxLength={998}
                 onChange={(event) => setSubject(event.target.value)}
               />
-              <AiAssist text={subject} onApply={setSubject} />
+              <AiAssist
+                disabled={pending}
+                text={subject}
+                onApply={setSubject}
+              />
             </div>
           )}
           <div>
             <label htmlFor={`body-${message.id}`}>{uk.email.body}</label>
             <textarea
               id={`body-${message.id}`}
+              disabled={pending}
               rows={5}
               maxLength={20000}
               value={body}
               onChange={(event) => setBody(event.target.value)}
               className="w-full rounded-lg border border-border bg-surface p-3"
             />
-            <AiAssist text={body} onApply={setBody} />
+            <AiAssist disabled={pending} text={body} onApply={setBody} />
           </div>
           {manual && !onUseText && (
             <p className="text-xs text-muted-foreground">
@@ -132,8 +207,8 @@ export function Draft({
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
-              disabled={pending || !changed || !body.trim()}
-              onClick={() => void save()}
+              disabled={pending || draft.conflict || !changed || !body.trim()}
+              onClick={() => void proceed('save')}
             >
               {uk.outreach.save}
             </Button>
@@ -152,7 +227,7 @@ export function Draft({
                   {uk.outreach.copy}
                 </Button>
                 <Button
-                  disabled={pending || !body.trim()}
+                  disabled={pending || draft.conflict || !body.trim()}
                   onClick={() =>
                     onUseText ? onUseText(body) : void proceed('manual')
                   }
@@ -166,6 +241,7 @@ export function Draft({
               <Button
                 disabled={
                   pending ||
+                  draft.conflict ||
                   !body.trim() ||
                   (message.channel === 'email' && !subject.trim())
                 }
@@ -463,7 +539,7 @@ export function CompanyChat({
         )}
         {messages.map((message) => (
           <Draft
-            key={`${message.id}:${message.body}:${message.subject}:${message.status}`}
+            key={message.id}
             message={message}
             blocked={blocked}
             pending={pending}
