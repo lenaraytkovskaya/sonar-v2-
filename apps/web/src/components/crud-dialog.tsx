@@ -71,6 +71,14 @@ export function CrudDialog({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
         <Dialog.Content
           aria-describedby={undefined}
+          onEscapeKeyDown={(event) => {
+            // Radix handles Escape in capture phase, before the inline helper.
+            if (
+              event.target instanceof Element &&
+              event.target.closest('[data-ai-instruction]')
+            )
+              event.preventDefault();
+          }}
           className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-xl"
           onOpenAutoFocus={() => {
             returnFocus.current = document.activeElement as HTMLElement;
