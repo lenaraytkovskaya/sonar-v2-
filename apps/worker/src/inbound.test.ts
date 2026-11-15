@@ -1,14 +1,25 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const { query, record, classify, getMessage, history, save, enqueue } =
-  vi.hoisted(() => ({
-    query: vi.fn(),
-    record: vi.fn(),
-    classify: vi.fn(),
-    getMessage: vi.fn(),
-    history: vi.fn(),
-    save: vi.fn(),
-    enqueue: vi.fn(),
-  }));
+const {
+  query,
+  record,
+  classify,
+  getMessage,
+  history,
+  save,
+  enqueue,
+  repairPeer,
+  repairIdentity,
+} = vi.hoisted(() => ({
+  query: vi.fn(),
+  record: vi.fn(),
+  classify: vi.fn(),
+  getMessage: vi.fn(),
+  history: vi.fn(),
+  save: vi.fn(),
+  enqueue: vi.fn(),
+  repairPeer: vi.fn(),
+  repairIdentity: vi.fn(),
+}));
 vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 vi.mock('@sonar/db/inbound', () => ({
   recordInbound: record,
@@ -16,6 +27,8 @@ vi.mock('@sonar/db/inbound', () => ({
   getConversationHistory: history,
   applyInboundClassification: classify,
   saveReplyDraft: save,
+  getWhatsAppRepairPeer: repairPeer,
+  repairWhatsAppIdentity: repairIdentity,
 }));
 vi.mock('@sonar/db/tasks', () => ({
   boss: {},
@@ -36,6 +49,7 @@ import {
   draftReply,
   receiveEmail,
   receiveWhatsApp,
+  repairWhatsAppConversation,
   receiveTelegram,
   syncTelegramListeners,
 } from './inbound.js';
@@ -349,4 +363,62 @@ it('preserves Telegram attachments with configurable descriptive body', async ()
       body: 'Вкладення без тексту.',
     }),
   );
+});
+
+it('fails closed when a receiving session identifies multiple accounts', async () => {
+  query.mockResolvedValue({ rows: [{ id: 'one' }, { id: 'two' }] });
+  const phoneByLid = vi.fn();
+  expect(
+    await receiveWhatsApp(
+      {
+        session: 'default',
+        id: 'id',
+        from: '12345678@lid',
+        body: 'Hi',
+        timestamp: 1,
+      },
+      { phoneByLid },
+    ),
+  ).toMatchObject({ status: 'skipped' });
+  expect(record).not.toHaveBeenCalled();
+  expect(phoneByLid).not.toHaveBeenCalled();
+});
+it('repairs only after an owned LID gets a provider mapping, with explicit dry-run', async () => {
+  repairPeer.mockResolvedValue({
+    account_id: 'account',
+    peer_value: 'whatsapp:lid:12345678',
+  });
+  const phoneByLid = vi.fn(async () => null as string | null);
+  const input = { conversationId: 'source', userId: 'owner', dryRun: true };
+  expect(await repairWhatsAppConversation(input, { phoneByLid })).toMatchObject(
+    { status: 'skipped', reasonCode: 'whatsapp_mapping_missing' },
+  );
+  expect(repairIdentity).not.toHaveBeenCalled();
+  phoneByLid.mockResolvedValue('+12025550123');
+  repairIdentity.mockResolvedValue({
+    dryRun: true,
+    ambiguous: false,
+    mergedIds: ['source'],
+    conversationId: 'target',
+  });
+  expect(await repairWhatsAppConversation(input, { phoneByLid })).toMatchObject(
+    { status: 'done', result: { dryRun: true } },
+  );
+  expect(phoneByLid).toHaveBeenCalledWith('12345678@lid');
+  expect(repairIdentity).toHaveBeenCalledWith(
+    'source',
+    'owner',
+    '+12025550123',
+    true,
+  );
+  repairIdentity.mockResolvedValue({ ambiguous: true });
+  expect(
+    await repairWhatsAppConversation(
+      { ...input, dryRun: false },
+      { phoneByLid },
+    ),
+  ).toMatchObject({
+    status: 'skipped',
+    reasonCode: 'whatsapp_identity_ambiguous',
+  });
 });

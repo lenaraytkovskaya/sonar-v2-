@@ -315,6 +315,11 @@ export async function persistSocialInboxBatch(
         [accountId, message.externalMessageId, network],
       );
       if (prior) {
+        // Binding may already exist or be rejected; never rely on its conditional UPDATE for a lock.
+        // Later inserts in this page may need this conversation's FK after the message refresh.
+        await c.query('select id from conversations where id=$1 for update', [
+          prior.conversation_id,
+        ]);
         await guardBinding(prior.conversation_id, message);
         if (
           prior.direction !== message.direction ||
@@ -337,6 +342,18 @@ export async function persistSocialInboxBatch(
             c,
           );
         } else {
+          // Attach a pre-sync sender row to the provider thread when unambiguous.
+          await c.query(
+            `update conversations v set provider_thread_id=$2,account_id=$3,peer_value=$4
+            where v.id=$1 and v.provider_thread_id is null and not exists(
+              select 1 from conversations where channel='social' and account_id=$3 and provider_thread_id=$2)`,
+            [
+              prior.conversation_id,
+              message.threadId,
+              accountId,
+              message.peerProfile,
+            ],
+          );
           observe(prior.conversation_id, prior.id, message);
           const occurredAt =
             message.occurredAt ?? prior.social_meta?.occurredAt ?? null;
@@ -351,18 +368,6 @@ export async function persistSocialInboxBatch(
               occurredAt,
             ],
           );
-          // Attach a pre-sync sender row to the provider thread when unambiguous.
-          await c.query(
-            `update conversations v set provider_thread_id=$2,account_id=$3,peer_value=$4
-            where v.id=$1 and v.provider_thread_id is null and not exists(
-              select 1 from conversations where channel='social' and account_id=$3 and provider_thread_id=$2)`,
-            [
-              prior.conversation_id,
-              message.threadId,
-              accountId,
-              message.peerProfile,
-            ],
-          );
         }
         continue;
       }
@@ -372,7 +377,7 @@ export async function persistSocialInboxBatch(
       const {
         rows: [existing],
       } = await c.query(
-        "select * from conversations where channel='social' and account_id=$1 and provider_thread_id=$2",
+        "select * from conversations where channel='social' and account_id=$1 and provider_thread_id=$2 for update",
         [accountId, message.threadId],
       );
       let conversation = existing;

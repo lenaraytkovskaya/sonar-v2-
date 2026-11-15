@@ -1,3 +1,9 @@
+import {
+  lockWhatsAppIdentity,
+  lockConversation,
+  canonicalConversation,
+  whatsappConversation,
+} from './whatsapp-identity.js';
 import { messageHistoryOrder } from './message-history.js';
 export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
@@ -72,7 +78,7 @@ const automatic = ['email', 'telegram', 'whatsapp'];
 const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
-  from conversations v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
+  from (select * from conversations where merged_into_id is null) v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
   left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('desc')} limit 1) m on true`;
 const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
 
@@ -435,7 +441,6 @@ export async function saveOutreachDraft(
       [input.companyId, input.campaignId, input.contactId],
     );
     if (!row) invalid('Контакт або кампанію не знайдено.');
-    await assertAllowed(c, input.companyId, row.normalized);
     const [contact] = selectOutreachContacts(
       [
         {
@@ -457,6 +462,9 @@ export async function saveOutreachDraft(
       "select id from channel_accounts where channel=$1 and status='active' order by created_at,id limit 1",
       [channel],
     );
+    if (channel === 'whatsapp' && account)
+      await lockWhatsAppIdentity(c, account.id);
+    await assertAllowed(c, input.companyId, row.normalized);
     const canAuto =
       automatic.includes(channel) &&
       row.send_mode === 'auto' &&
@@ -464,13 +472,30 @@ export async function saveOutreachDraft(
       row.score !== null &&
       row.score >= row.min_score &&
       !!account;
+    if (channel === 'whatsapp' && !account)
+      invalid('Підключіть активний акаунт WhatsApp.');
     const status = canAuto ? 'queued' : 'draft';
-    const {
-      rows: [conversation],
-    } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
-      [input.companyId, input.campaignId, input.contactId, channel],
-    );
+    const conversation =
+      channel === 'whatsapp'
+        ? (
+            await whatsappConversation(
+              c,
+              account.id,
+              row.normalized,
+              undefined,
+              {
+                companyId: input.companyId,
+                campaignId: input.campaignId,
+                contactId: input.contactId,
+              },
+            )
+          ).conversation!
+        : (
+            await c.query(
+              `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null and channel <> 'whatsapp' do update set channel=excluded.channel returning id`,
+              [input.companyId, input.campaignId, input.contactId, channel],
+            )
+          ).rows[0];
     const {
       rows: [message],
     } = await c.query(
@@ -523,30 +548,46 @@ function validateDraft(
   )
     invalid('Вкажіть текст повідомлення та коректну тему для email.');
 }
-async function lockedMessage(c: PoolClient, id: string) {
+async function lockedMessage(
+  c: PoolClient,
+  id: string,
+  expectedConversationId?: string,
+) {
   const {
     rows: [identity],
   } = await c.query(
-    `select v.company_id,v.id as conversation_id,v.account_id,v.peer_value,v.provider_thread_id,m.to_value,a.channel as receiving_channel
-    from messages m join conversations v on v.id=m.conversation_id left join channel_accounts a on a.id=v.account_id where m.id=$1`,
+    'select conversation_id,to_value from messages where id=$1',
     [id],
   );
   if (!identity) invalid('Повідомлення не знайдено.');
-  const boundFacebook =
-    identity.receiving_channel === 'facebook' && identity.provider_thread_id;
-  // Match reply() lock order: conversation, company, then message history.
-  if (boundFacebook)
-    await c.query('select id from conversations where id=$1 for update', [
-      identity.conversation_id,
-    ]);
-  await assertAllowed(c, identity.company_id, '');
-  if (boundFacebook)
+  const conversation = await lockConversation(c, identity.conversation_id);
+  if (
+    expectedConversationId &&
+    (await canonicalConversation(c, expectedConversationId)) !== conversation.id
+  )
+    invalid('Повідомлення не належить цьому діалогу.');
+  await assertAllowed(c, conversation.company_id, '');
+  const receivingFacebook =
+    conversation.channel === 'social' &&
+    conversation.provider_thread_id &&
+    conversation.account_id
+      ? (
+          await c.query(
+            "select id from channel_accounts where id=$1 and channel='facebook'",
+            [conversation.account_id],
+          )
+        ).rows[0]
+      : null;
+  if (receivingFacebook)
     await assertFacebookBinding(
       c,
-      identity.conversation_id,
-      identity.account_id,
-      canonicalSocialPeer('facebook', identity.peer_value ?? identity.to_value),
-      identity.provider_thread_id,
+      conversation.id,
+      conversation.account_id,
+      canonicalSocialPeer(
+        'facebook',
+        conversation.peer_value ?? identity.to_value,
+      ),
+      conversation.provider_thread_id,
     );
   const {
     rows: [message],
@@ -570,9 +611,10 @@ export async function editOutreachDraft(
   draft: { subject?: string; body: string },
   userId: string,
   expected?: ExpectedDraft,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна редагувати.');
     const subject = draft.subject ?? message.subject;
@@ -604,24 +646,33 @@ export async function sendOutreachDraft(
   messageId: string,
   userId: string,
   expected?: ExpectedDraft,
+  conversationId?: string,
 ) {
-  return submitOutreachDraft(messageId, userId, false, expected);
+  return submitOutreachDraft(
+    messageId,
+    userId,
+    false,
+    expected,
+    conversationId,
+  );
 }
 export async function approveOutreachDraft(
   messageId: string,
   userId: string,
   expected?: ExpectedDraft,
+  conversationId?: string,
 ) {
-  return submitOutreachDraft(messageId, userId, true, expected);
+  return submitOutreachDraft(messageId, userId, true, expected, conversationId);
 }
 async function submitOutreachDraft(
   messageId: string,
   userId: string,
   approve: boolean,
   expected?: ExpectedDraft,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (
       message.status === 'queued' ||
       ['sent', 'delivered', 'read'].includes(message.status)
@@ -666,7 +717,11 @@ async function submitOutreachDraft(
       rows: [account],
     } = await c.query(
       "select id from channel_accounts where channel=$1 and status='active' and ($3::boolean=false or id=$2) order by (id=$2) desc,created_at,id limit 1 for share",
-      [message.channel, message.account_id, message.source === 'reply'],
+      [
+        message.channel,
+        message.account_id,
+        message.source === 'reply' || message.channel === 'whatsapp',
+      ],
     );
     if (!account) invalid('Налаштуйте активний акаунт каналу.');
     await c.query(
@@ -689,9 +744,10 @@ export async function markOutreachManualSent(
   messageId: string,
   userId: string,
   expected?: ExpectedDraft,
+  conversationId?: string,
 ) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (!['form', 'social'].includes(message.channel))
       invalid('Ручне підтвердження доступне для форм та соцмереж.');
     if (message.status === 'sent') return { id: messageId, status: 'sent' };
@@ -713,9 +769,13 @@ export async function markOutreachManualSent(
     return { id: messageId, status: 'sent' };
   });
 }
-export async function skipOutreachMessage(messageId: string, userId: string) {
+export async function skipOutreachMessage(
+  messageId: string,
+  userId: string,
+  conversationId?: string,
+) {
   return transaction(async (c) => {
-    const message = await lockedMessage(c, messageId);
+    const message = await lockedMessage(c, messageId, conversationId);
     if (message.status === 'skipped')
       return { id: messageId, status: 'skipped' };
     if (!editable.includes(message.status) || message.first_attempt_at)
@@ -760,7 +820,7 @@ export async function logOutreachCall(
     const {
       rows: [conversation],
     } = await c.query(
-      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,'call') on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning id`,
+      `insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,'call') on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null and channel <> 'whatsapp' do update set channel=excluded.channel returning id`,
       [input.companyId, input.campaignId, input.contactId],
     );
     const {

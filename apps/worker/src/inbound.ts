@@ -16,6 +16,8 @@ import {
   getConversationHistory,
   applyInboundClassification,
   saveReplyDraft,
+  getWhatsAppRepairPeer,
+  repairWhatsAppIdentity,
 } from '@sonar/db/inbound';
 import {
   boss,
@@ -111,17 +113,19 @@ export async function receiveWhatsApp(
       reasonCode: 'whatsapp_non_private',
       reasonUk: 'Подія WhatsApp не є особистим текстовим повідомленням.',
     };
-  const {
-    rows: [account],
-  } = await sonarPool.query(
-    "select id from channel_accounts where channel='whatsapp' and settings->>'session'=$1 order by id limit 1",
+  const { rows: accounts } = await sonarPool.query(
+    "select id from channel_accounts where channel='whatsapp' and settings->>'session'=$1 order by id",
     [input.session],
   );
+  const account = accounts.length === 1 ? accounts[0] : undefined;
   if (!account)
     return {
       status: 'skipped',
-      reasonCode: 'whatsapp_account_missing',
-      reasonUk: 'Акаунт WhatsApp не знайдено.',
+      reasonCode: accounts.length
+        ? 'whatsapp_account_ambiguous'
+        : 'whatsapp_account_missing',
+      reasonUk:
+        'Не вдалося однозначно визначити акаунт WhatsApp для вхідного повідомлення.',
     };
   const lid = input.from.endsWith('@lid');
   let senderPhone: string | undefined;
@@ -148,6 +152,36 @@ export async function receiveWhatsApp(
     status: 'done',
     result: { ...result, ...(phoneLookupFailed ? { phoneLookupFailed } : {}) },
   };
+}
+export async function repairWhatsAppConversation(
+  input: { conversationId: string; userId: string; dryRun: boolean },
+  adapter: Pick<typeof whatsappAdapter, 'phoneByLid'> = whatsappAdapter,
+): Promise<TaskOutcome> {
+  const peer = await getWhatsAppRepairPeer(input.conversationId, input.userId);
+  const phone = await adapter.phoneByLid(
+    `${peer.peer_value.slice('whatsapp:lid:'.length)}@lid`,
+  );
+  if (!phone)
+    return {
+      status: 'skipped',
+      reasonCode: 'whatsapp_mapping_missing',
+      reasonUk:
+        'WAHA не підтвердила відповідність LID і номера. Діалоги не змінено.',
+    };
+  const result = await repairWhatsAppIdentity(
+    input.conversationId,
+    input.userId,
+    phone,
+    input.dryRun,
+  );
+  return result.ambiguous
+    ? {
+        status: 'skipped',
+        reasonCode: 'whatsapp_identity_ambiguous',
+        reasonUk: 'Знайдено суперечливі дані WhatsApp. Діалоги не об’єднано.',
+        result,
+      }
+    : { status: 'done', result };
 }
 export async function receiveTelegram(
   input: TelegramIncoming & { accountId: string },
@@ -325,6 +359,7 @@ export async function registerInboundTasks() {
   for (const name of [
     'email.receive',
     'whatsapp.receive',
+    'whatsapp.identity.repair',
     'telegram.receive',
     'telegram.sync',
     'ai.inbound',
@@ -337,6 +372,11 @@ export async function registerInboundTasks() {
   );
   await runTask('whatsapp.receive', (payload) =>
     receiveWhatsApp(payload as WhatsAppInput),
+  );
+  await runTask('whatsapp.identity.repair', (payload) =>
+    repairWhatsAppConversation(
+      payload as { conversationId: string; userId: string; dryRun: boolean },
+    ),
   );
   await runTask('telegram.receive', (payload) =>
     receiveTelegram(payload as TelegramIncoming & { accountId: string }),

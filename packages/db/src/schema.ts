@@ -16,6 +16,7 @@ import {
   bigint,
   primaryKey,
   index,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 export const users = pgTable('users', {
@@ -453,6 +454,13 @@ export const conversations = pgTable(
     contactId: uuid('contact_id').references(() => contacts.id),
     accountId: uuid('account_id').references(() => channelAccounts.id),
     peerValue: text('peer_value'),
+    mergedIntoId: uuid('merged_into_id').references(
+      (): AnyPgColumn => conversations.id,
+    ),
+    peerAliases: text('peer_aliases')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     providerThreadId: text('provider_thread_id'),
     status: text('status').notNull().default('open'),
     channel: text('channel').notNull().default('email'),
@@ -461,9 +469,12 @@ export const conversations = pgTable(
       .defaultNow(),
   },
   (t) => [
+    check('conversation_merge_not_self', sql`${t.mergedIntoId} <> ${t.id}`),
     uniqueIndex('conversation_inbound_peer')
       .on(t.accountId, t.channel, t.peerValue)
-      .where(sql`${t.peerValue} is not null and ${t.providerThreadId} is null`),
+      .where(
+        sql`${t.peerValue} is not null and ${t.providerThreadId} is null and ${t.mergedIntoId} is null`,
+      ),
     uniqueIndex('conversation_social_thread')
       .on(t.accountId, t.providerThreadId)
       .where(
@@ -471,7 +482,7 @@ export const conversations = pgTable(
       ),
     uniqueIndex('conversation_company_campaign_contact_channel')
       .on(t.companyId, t.campaignId, t.contactId, t.channel)
-      .where(sql`${t.providerThreadId} is null`),
+      .where(sql`${t.providerThreadId} is null and ${t.channel} <> 'whatsapp'`),
   ],
 );
 export const messages = pgTable(
