@@ -99,6 +99,7 @@ export type SocialSessionCheckDiagnostic = {
     | 'navigation'
     | 'http'
     | 'auth'
+    | 'restore'
     | 'identity'
     | 'capture_auth'
     | 'actor'
@@ -121,6 +122,14 @@ export type SocialSessionCheckDiagnostic = {
     captcha: number;
     checkpoint: number;
     login: number;
+  };
+  history?: {
+    threadList: number;
+    messageRegions: number;
+    messageNodes: number;
+    pinRestore: number;
+    restoreConfirmation: number;
+    historyMissing: number;
   };
   capture?: {
     received: number;
@@ -159,6 +168,7 @@ export function safeSocialSessionDiagnostic(
       'navigation',
       'http',
       'auth',
+      'restore',
       'identity',
       'capture_auth',
       'actor',
@@ -196,6 +206,23 @@ export function safeSocialSessionDiagnostic(
     visible[key] = Math.min(count, 2);
   }
   let capture: SocialSessionCheckDiagnostic['capture'];
+  let history: SocialSessionCheckDiagnostic['history'];
+  if (d.history !== undefined) {
+    if (!d.history || typeof d.history !== 'object') return;
+    history = {} as NonNullable<SocialSessionCheckDiagnostic['history']>;
+    for (const key of [
+      'threadList',
+      'messageRegions',
+      'messageNodes',
+      'pinRestore',
+      'restoreConfirmation',
+      'historyMissing',
+    ] as const) {
+      const count = d.history[key];
+      if (!Number.isSafeInteger(count) || count < 0) return;
+      history[key] = Math.min(count, 2);
+    }
+  }
   if (d.capture) {
     const { httpStatus } = d.capture;
     if (
@@ -255,6 +282,7 @@ export function safeSocialSessionDiagnostic(
     navigationHttpStatus: d.navigationHttpStatus,
     errorKind: d.errorKind,
     visible,
+    ...(history ? { history } : {}),
     ...(capture ? { capture } : {}),
     ...(actor ? { actor } : {}),
   };

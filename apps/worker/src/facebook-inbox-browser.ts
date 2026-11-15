@@ -3,14 +3,36 @@ import type {
   SocialInboxBatch,
   SocialInboxMessage,
 } from '@sonar/core/social-inbox';
-import { SocialSessionCheckError } from '@sonar/core/social-session';
+import {
+  SocialSessionCheckError,
+  type SocialSessionCheckDiagnostic,
+} from '@sonar/core/social-session';
 import {
   assertSessionNegatives,
   assertSocialSession,
+  facebookSessionDiagnostic,
 } from './social-send-browser.js';
 
 const origin = 'https://www.facebook.com';
 const logSelector = '[aria-label^="Messages in conversation with "]';
+
+/** Fixed enums and capped marker counts only. Never retain page content or URLs. */
+async function diagnose(
+  error: unknown,
+  page: Page,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+) {
+  if (!(error instanceof SocialSessionCheckError) || error.diagnostic)
+    return error;
+  error.diagnostic = await facebookSessionDiagnostic(
+    page,
+    stage,
+    navigationHttpStatus,
+    error.errorKind ?? 'unconfirmed',
+  ).catch(() => undefined);
+  return error;
+}
 
 /** Only the observed English DOM contract. No transport replay or generated IDs. */
 export async function readFacebookThread(page: Page, ownId: string) {
@@ -279,18 +301,36 @@ export async function captureFacebookInbox(
     'requests_and_archived_unverified',
   ]);
   const deadline = Date.now() + timeoutMs;
+  let navigationHttpStatus: number | null = null;
+  let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
+  const observed = async <T>(fn: () => Promise<T>) => {
+    try {
+      return await fn();
+    } catch (error) {
+      throw await diagnose(error, page, stage, navigationHttpStatus);
+    }
+  };
   const navigate = async (url: string, end: number) => {
-    const response = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: Math.max(1, end - Date.now()),
+    stage = 'navigation';
+    navigationHttpStatus = null;
+    return observed(async () => {
+      const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: Math.max(1, end - Date.now()),
+      });
+      navigationHttpStatus = response?.status() ?? null;
+      stage = 'http';
+      if (response?.status() === 429)
+        throw new SocialSessionCheckError('rate_limit');
+      if (!response || response.status() >= 400)
+        throw new SocialSessionCheckError('unknown_auth');
+      stage = 'auth';
+      await assertSessionNegatives(page, 'facebook');
+      stage = 'restore';
+      await dismissRestore(page, end);
+      stage = 'auth';
+      await assertSession(Math.max(1, end - Date.now()));
     });
-    if (response?.status() === 429)
-      throw new SocialSessionCheckError('rate_limit');
-    if (!response || response.status() >= 400)
-      throw new SocialSessionCheckError('unknown_auth');
-    await assertSessionNegatives(page, 'facebook');
-    await dismissRestore(page, end);
-    await assertSession(Math.max(1, end - Date.now()));
   };
   await navigate(`${origin}/messages/`, deadline);
   const list = page
@@ -351,11 +391,13 @@ export async function captureFacebookInbox(
         .first()
         .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
       read = await readFacebookThread(page, ownId);
-      await assertSession(Math.max(1, end - Date.now()));
+      stage = 'capture_auth';
+      await observed(() => assertSession(Math.max(1, end - Date.now())));
     } catch (error) {
       if (!(error instanceof Error) || error.name !== 'TimeoutError')
         throw error;
-      await assertSessionNegatives(page, 'facebook');
+      stage = 'capture_auth';
+      await observed(() => assertSessionNegatives(page, 'facebook'));
       skipped.add('history_unavailable');
     }
     read.skipped.forEach((reason) => skipped.add(reason));

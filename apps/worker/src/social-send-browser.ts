@@ -924,6 +924,8 @@ async function sendInstagram(
 const legacyLinkedInAuth =
   'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger';
 const instagramAuth = 'a[href^="/direct/"], a[href="/accounts/edit/"]';
+const facebookAuth =
+  '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]';
 const captchaSelector = 'iframe[src*="captcha"], [data-testid="captcha"]';
 const checkpointSelector =
   'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"]';
@@ -1028,8 +1030,7 @@ export async function assertSocialSession(
   await assertSessionNegatives(page, network);
   const authenticated = {
     instagram: instagramAuth,
-    facebook:
-      '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]',
+    facebook: facebookAuth,
     linkedin: legacyLinkedInAuth,
   }[network];
   const legacy = page.locator(authenticated).filter({ visible: true });
@@ -1077,11 +1078,16 @@ export async function assertSocialSession(
     throw new SocialSessionCheckError('unknown_auth');
 }
 /** Counts only the markers used by the session guard; never collect DOM text. */
-export async function instagramSessionMarkers(
+export const instagramSessionMarkers = (page: Page) =>
+  sessionMarkers(page, instagramAuth);
+export const facebookSessionMarkers = (page: Page) =>
+  sessionMarkers(page, facebookAuth);
+async function sessionMarkers(
   page: Page,
+  authenticated: string,
 ): Promise<SocialSessionCheckDiagnostic['visible']> {
   const counts = await Promise.all([
-    page.locator(instagramAuth).filter({ visible: true }).count(),
+    page.locator(authenticated).filter({ visible: true }).count(),
     page.locator(captchaSelector).filter({ visible: true }).count(),
     page.locator(checkpointSelector).filter({ visible: true }).count(),
     page.getByText(checkpointText).filter({ visible: true }).count(),
@@ -1093,6 +1099,86 @@ export async function instagramSessionMarkers(
     captcha: Math.min(counts[1]!, 2),
     checkpoint: Math.min(counts[2]! + counts[3]!, 2),
     login: Math.min(counts[4]!, 2),
+  };
+}
+/** Shared FB session snapshot: fixed enums and capped counts, collected before page closure. */
+export async function facebookSessionDiagnostic(
+  page: Page,
+  stage: SocialSessionCheckDiagnostic['stage'],
+  navigationHttpStatus: number | null,
+  errorKind: SocialSessionCheckDiagnostic['errorKind'],
+): Promise<SocialSessionCheckDiagnostic> {
+  const logSelector = '[aria-label^="Messages in conversation with "]';
+  const url = new URL(page.url());
+  const path = url.pathname;
+  const urlKind =
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    !/^(?:www\.)?(?:facebook|messenger)\.com$/.test(url.hostname)
+      ? 'other'
+      : /captcha/i.test(path)
+        ? 'captcha'
+        : /checkpoint|challenge|security\/verification/i.test(path)
+          ? 'checkpoint'
+          : /login|signin|authwall/i.test(path)
+            ? 'login'
+            : /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(path)
+              ? 'thread'
+              : /^\/messages\/?$/.test(path)
+                ? 'inbox'
+                : path === '/'
+                  ? 'home'
+                  : 'other';
+  const count = async (locator: ReturnType<Page['locator']>) =>
+    Math.min(await locator.filter({ visible: true }).count(), 2);
+  const [
+    visible,
+    threadList,
+    messageRegions,
+    messageNodes,
+    pinRestore,
+    restoreConfirmation,
+    historyMissing,
+  ] = await Promise.all([
+    facebookSessionMarkers(page),
+    count(page.getByRole('region', { name: 'Thread list', exact: true })),
+    count(page.locator(logSelector)),
+    count(page.locator(`${logSelector} [aria-roledescription="message"]`)),
+    count(
+      page.getByRole('heading', {
+        name: 'Enter your PIN to restore your chats',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('heading', {
+        name: 'Continue without restoring?',
+        exact: true,
+      }),
+    ),
+    count(
+      page.getByRole('button', {
+        name: 'Dismiss Chat history is missing card',
+        exact: true,
+      }),
+    ),
+  ]);
+  return {
+    version: 1,
+    stage,
+    urlKind,
+    navigationHttpStatus,
+    errorKind,
+    visible,
+    history: {
+      threadList,
+      messageRegions,
+      messageNodes,
+      pinRestore,
+      restoreConfirmation,
+      historyMissing,
+    },
   };
 }
 async function sessionDiagnostic(
@@ -1290,9 +1376,16 @@ export function createSocialSendBrowser(
                   );
             if (caught instanceof Error && caught.name === 'TimeoutError')
               error.errorKind = 'timeout';
-            if (account.channel === 'linkedin') {
+            if (
+              account.channel === 'linkedin' ||
+              account.channel === 'facebook'
+            ) {
               // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
-              error.diagnostic = await sessionDiagnostic(
+              const diagnostic =
+                account.channel === 'facebook'
+                  ? facebookSessionDiagnostic
+                  : sessionDiagnostic;
+              error.diagnostic = await diagnostic(
                 page,
                 stage,
                 status,

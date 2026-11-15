@@ -228,6 +228,36 @@ it('rebuilds bounded diagnostics without retaining private extra fields', async 
   expect(
     safeSocialSessionDiagnostic({ ...raw, stage: 'secret' }),
   ).toBeUndefined();
+  const history = {
+    threadList: 0,
+    messageRegions: 1,
+    messageNodes: 2,
+    pinRestore: 1,
+    restoreConfirmation: 0,
+    historyMissing: 1,
+  };
+  expect(
+    safeSocialSessionDiagnostic({
+      ...raw,
+      stage: 'restore',
+      history: {
+        ...history,
+        messageNodes: 999,
+        url: 'private',
+        text: 'secret',
+      },
+    }),
+  ).toEqual({ ...safe, stage: 'restore', history });
+  for (const invalid of [-1, 1.5, '1', null, Infinity])
+    expect(
+      safeSocialSessionDiagnostic({
+        ...raw,
+        history: { ...history, pinRestore: invalid },
+      }),
+    ).toBeUndefined();
+  expect(
+    safeSocialSessionDiagnostic({ ...raw, history: null }),
+  ).toBeUndefined();
   expect(
     safeSocialSessionDiagnostic({
       ...raw,
