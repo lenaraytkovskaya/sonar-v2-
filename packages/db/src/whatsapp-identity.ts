@@ -116,6 +116,9 @@ export async function whatsappConversation(
         'Адреса WhatsApp має неоднозначні діалоги. Потрібна перевірка.',
       );
   }
+  // A campaign-less canonical row must inherit the proven campaign, including its send restrictions.
+  if (!ambiguous && campaigns.size === 1)
+    context = { ...context, campaignId: [...campaigns][0] };
   const mappingNew =
     !!mapped &&
     !ambiguous &&
@@ -142,7 +145,8 @@ export async function whatsappConversation(
         'select campaign_id from campaign_companies where company_id=$1',
         [context.companyId],
       );
-      if (campaigns.length === 1) context.campaignId = campaigns[0].campaign_id;
+      if (!context.campaignId && campaigns.length === 1)
+        context.campaignId = campaigns[0].campaign_id;
     }
   }
   if (dryRun)
@@ -261,7 +265,11 @@ export async function whatsappConversation(
       c,
     );
   return {
-    conversation: { ...conversation, company_id: companyId },
+    conversation: {
+      ...conversation,
+      company_id: companyId,
+      campaign_id: conversation.campaign_id ?? context.campaignId ?? null,
+    },
     mergedIds,
     ambiguous,
     aliases: [...aliases],
