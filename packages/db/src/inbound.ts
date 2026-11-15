@@ -4,6 +4,11 @@ import { normalizeTelegramRecipient } from '@sonar/core/telegram';
 import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
 import { sonarPool } from './index.js';
 import {
+  canonicalConversation,
+  lockWhatsAppIdentity,
+  whatsappConversation,
+} from './whatsapp-identity.js';
+import {
   EmailValidationError,
   isContactBlocked,
   transaction,
@@ -88,69 +93,81 @@ export async function recordInbound(input: InboundInput) {
     await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
       `inbound-peer:${input.accountId}:${input.channel}:${sender}`,
     ]);
-    const refs = [input.inReplyTo, ...(input.references ?? [])]
-      .filter((r): r is string => !!r)
-      .map((r) => r.replace(/^<|>$/g, ''));
-    const {
-      rows: [thread],
-    } = await c.query(
-      `select v.* from conversations v join messages m on m.conversation_id=v.id where v.channel=$1 and m.account_id=$2 and ($1='email' and (trim(both '<>' from m.provider_id)=any($3::text[]) or trim(both '<>' from m.rfc_message_id)=any($3::text[])) or lower(m.to_value)=any($4::text[])) order by (coalesce(trim(both '<>' from m.provider_id)=any($3::text[]),false) or coalesce(trim(both '<>' from m.rfc_message_id)=any($3::text[]),false)) desc,m.created_at desc,m.id desc limit 1`,
-      [
-        input.channel,
-        input.accountId,
-        refs,
-        [
-          sender,
-          input.senderPhone && normalize(input.channel, input.senderPhone),
-        ].filter(Boolean),
-      ],
-    );
-    const {
-      rows: [peer],
-    } = await c.query(
-      'select * from conversations where channel=$1 and account_id=$2 and peer_value=$3',
-      [input.channel, input.accountId, sender],
-    );
-    let conversation = thread ?? peer;
-    if (!conversation) {
-      const aliases = [
-        sender,
-        input.senderPhone && normalize(input.channel, input.senderPhone),
-      ].filter(Boolean);
-      const { rows: candidates } = await c.query(
-        `select id,company_id from contacts where kind::text=any($1::text[]) and lower(normalized)=any($2::text[]) order by rank desc,id`,
-        [
-          input.channel === 'email' ? ['email'] : [input.channel, 'phone'],
-          aliases,
-        ],
-      );
-      const companyId =
-        new Set(candidates.map((r) => r.company_id)).size === 1
-          ? candidates[0]?.company_id
-          : null;
-      const contactId = companyId ? candidates[0].id : null;
+    let conversation;
+    if (input.channel === 'whatsapp') {
+      conversation = (
+        await whatsappConversation(
+          c,
+          input.accountId,
+          sender!,
+          input.senderPhone,
+        )
+      ).conversation;
+    } else {
+      const refs = [input.inReplyTo, ...(input.references ?? [])]
+        .filter((r): r is string => !!r)
+        .map((r) => r.replace(/^<|>$/g, ''));
       const {
-        rows: [campaign],
-      } = companyId
-        ? await c.query(
-            'select campaign_id from campaign_companies where company_id=$1 order by added_at desc,campaign_id limit 1',
-            [companyId],
-          )
-        : { rows: [] };
-      const {
-        rows: [created],
+        rows: [thread],
       } = await c.query(
-        `insert into conversations(company_id,campaign_id,contact_id,channel,account_id,peer_value) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null do update set channel=excluded.channel returning *`,
+        `select v.* from conversations v join messages m on m.conversation_id=v.id where v.channel=$1 and m.account_id=$2 and ($1='email' and (trim(both '<>' from m.provider_id)=any($3::text[]) or trim(both '<>' from m.rfc_message_id)=any($3::text[])) or lower(m.to_value)=any($4::text[])) order by (coalesce(trim(both '<>' from m.provider_id)=any($3::text[]),false) or coalesce(trim(both '<>' from m.rfc_message_id)=any($3::text[]),false)) desc,m.created_at desc,m.id desc limit 1`,
         [
-          companyId,
-          campaign?.campaign_id ?? null,
-          contactId,
           input.channel,
           input.accountId,
-          sender,
+          refs,
+          [
+            sender,
+            input.senderPhone && normalize(input.channel, input.senderPhone),
+          ].filter(Boolean),
         ],
       );
-      conversation = created;
+      const {
+        rows: [peer],
+      } = await c.query(
+        'select * from conversations where channel=$1 and account_id=$2 and peer_value=$3',
+        [input.channel, input.accountId, sender],
+      );
+      conversation = thread ?? peer;
+      if (!conversation) {
+        const aliases = [
+          sender,
+          input.senderPhone && normalize(input.channel, input.senderPhone),
+        ].filter(Boolean);
+        const { rows: candidates } = await c.query(
+          `select id,company_id from contacts where kind::text=any($1::text[]) and lower(normalized)=any($2::text[]) order by rank desc,id`,
+          [
+            input.channel === 'email' ? ['email'] : [input.channel, 'phone'],
+            aliases,
+          ],
+        );
+        const companyId =
+          new Set(candidates.map((r) => r.company_id)).size === 1
+            ? candidates[0]?.company_id
+            : null;
+        const contactId = companyId ? candidates[0].id : null;
+        const {
+          rows: [campaign],
+        } = companyId
+          ? await c.query(
+              'select campaign_id from campaign_companies where company_id=$1 order by added_at desc,campaign_id limit 1',
+              [companyId],
+            )
+          : { rows: [] };
+        const {
+          rows: [created],
+        } = await c.query(
+          `insert into conversations(company_id,campaign_id,contact_id,channel,account_id,peer_value) values($1,$2,$3,$4,$5,$6) on conflict(company_id,campaign_id,contact_id,channel) where provider_thread_id is null and channel <> 'whatsapp' do update set channel=excluded.channel returning *`,
+          [
+            companyId,
+            campaign?.campaign_id ?? null,
+            contactId,
+            input.channel,
+            input.accountId,
+            sender,
+          ],
+        );
+        conversation = created;
+      }
     }
     const {
       rows: [message],
@@ -220,6 +237,13 @@ export async function applyInboundClassification(
     invalid('Невідома категорія вхідного повідомлення.');
   return transaction(async (c) => {
     const {
+      rows: [account],
+    } = await c.query(
+      "select account_id from messages where id=$1 and channel='whatsapp'",
+      [messageId],
+    );
+    if (account?.account_id) await lockWhatsAppIdentity(c, account.account_id);
+    const {
       rows: [identity],
     } = await c.query(
       "select v.company_id,m.channel,m.to_value from messages m join conversations v on v.id=m.conversation_id where m.id=$1 and m.direction='in'",
@@ -269,6 +293,8 @@ export async function applyInboundClassification(
         [m.company_id, category],
       );
     }
+    if (category === 'refusal' && m.channel === 'whatsapp')
+      await whatsappConversation(c, m.account_id, m.to_value);
     await logActivity(
       'message.classified',
       m.company_id ? 'company' : 'conversation',
@@ -285,6 +311,7 @@ export async function getConversationChat(
   conversationId: string,
   historyLimit?: number,
 ) {
+  conversationId = await canonicalConversation(sonarPool, conversationId);
   const { conversations } = await getInbox({ conversationId });
   const conversation =
     conversations.find((c) => c.id === conversationId) ?? null;
@@ -326,6 +353,7 @@ export async function getConversationChat(
   };
 }
 export async function getConversationHistory(conversationId: string) {
+  conversationId = await canonicalConversation(sonarPool, conversationId);
   const {
     rows: [setting],
   } = await sonarPool.query(
@@ -359,6 +387,7 @@ export async function markConversationRead(
   throughMessageId?: string,
 ) {
   if (!throughMessageId) return;
+  conversationId = await canonicalConversation(sonarPool, conversationId);
   await sonarPool.query(
     "update messages set read_at=now() where conversation_id=$1 and direction='in' and read_at is null and (created_at,id)<=(select created_at,id from messages where id=$2 and conversation_id=$1 and direction='in')",
     [conversationId, throughMessageId],
@@ -428,6 +457,32 @@ export async function ensureContactConversation(
       channel = active?.channel ?? 'call';
     }
     if (!channel) invalid('Цей контакт не підтримує переписку.');
+    if (channel === 'whatsapp') {
+      const {
+        rows: [account],
+      } = await c.query(
+        "select id from channel_accounts where channel='whatsapp' and status='active' order by created_at,id limit 1",
+      );
+      if (!account) invalid('Підключіть активний акаунт WhatsApp.');
+      const {
+        rows: [address],
+      } = await c.query('select normalized from contacts where id=$1', [
+        contactId,
+      ]);
+      return (
+        await whatsappConversation(
+          c,
+          account.id,
+          address.normalized,
+          undefined,
+          {
+            companyId: contact.company_id,
+            campaignId: campaign.campaign_id,
+            contactId,
+          },
+        )
+      ).conversation!.id;
+    }
     await c.query(
       'insert into conversations(company_id,campaign_id,contact_id,channel) values($1,$2,$3,$4) on conflict do nothing',
       [contact.company_id, campaign.campaign_id, contactId, channel],
@@ -460,6 +515,30 @@ async function reply(
   )
     invalid('Вкажіть коректний текст відповіді.');
   return transaction(async (c) => {
+    conversationId = await canonicalConversation(c, conversationId);
+    const {
+      rows: [identity],
+    } = await c.query(
+      `select v.channel,v.account_id,
+      array_remove(array_agg(distinct m.account_id),null) as accounts
+      from conversations v left join messages m on m.conversation_id=v.id where v.id=$1 group by v.id`,
+      [conversationId],
+    );
+    if (identity?.channel === 'whatsapp') {
+      if (identity.accounts.length > 1)
+        invalid('Діалог WhatsApp містить різні акаунти. Потрібна перевірка.');
+      let accountId = identity.account_id ?? identity.accounts[0];
+      if (!accountId) {
+        const { rows: active } = await c.query(
+          "select id from channel_accounts where channel='whatsapp' and status='active'",
+        );
+        if (active.length !== 1)
+          invalid('Оберіть однозначний активний акаунт WhatsApp.');
+        accountId = active[0].id;
+      }
+      await lockWhatsAppIdentity(c, accountId);
+      conversationId = await canonicalConversation(c, conversationId);
+    }
     const {
       rows: [v],
     } = await c.query('select * from conversations where id=$1 for update', [
@@ -617,4 +696,94 @@ export async function queueConversationReply(
     userId,
     true,
   );
+}
+
+/** Owner-only repair is queued, and the provider lookup happens in the worker. */
+export async function getWhatsAppRepairPeer(
+  conversationId: string,
+  userId: string,
+) {
+  const { rows } = await sonarPool.query(
+    `select distinct a.id as account_id,v.peer_value from conversations v
+    join channel_accounts a on a.id=coalesce(v.account_id,(select m.account_id from messages m where m.conversation_id=v.id limit 1))
+    where v.id=$1 and v.channel='whatsapp' and a.channel='whatsapp' and a.owner_id=$2 and a.settings->>'session'='default'
+      and (select count(*) from channel_accounts where channel='whatsapp' and settings->>'session'='default')=1
+      and not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is distinct from a.id)`,
+    [conversationId, userId],
+  );
+  if (
+    rows.length !== 1 ||
+    !/^whatsapp:lid:[1-9]\d*$/.test(rows[0].peer_value ?? '')
+  )
+    invalid('Для ремонту оберіть LID-діалог власного акаунта WhatsApp.');
+  return rows[0] as { account_id: string; peer_value: string };
+}
+export async function enqueueWhatsAppIdentityRepair(
+  conversationId: string,
+  userId: string,
+  requestId: string,
+  dryRun: boolean,
+) {
+  await getWhatsAppRepairPeer(conversationId, userId);
+  const key = `whatsapp.identity.repair:${conversationId}:${requestId}`;
+  const created = await enqueueTask('whatsapp.identity.repair', key, {
+    conversationId,
+    userId,
+    dryRun,
+  });
+  if (created) return { taskId: created };
+  const {
+    rows: [prior],
+  } = await sonarPool.query(
+    'select id,payload from tasks where idempotency_key=$1',
+    [key],
+  );
+  if (
+    !prior ||
+    prior.payload.userId !== userId ||
+    prior.payload.dryRun !== dryRun
+  )
+    invalid('Ключ ремонту вже використано для іншого запиту.');
+  return { taskId: prior.id as string };
+}
+export async function repairWhatsAppIdentity(
+  conversationId: string,
+  userId: string,
+  phone: string,
+  dryRun: boolean,
+) {
+  const peer = await getWhatsAppRepairPeer(conversationId, userId);
+  return transaction(async (c) => {
+    await lockWhatsAppIdentity(c, peer.account_id);
+    const {
+      rows: [owner],
+    } = await c.query(
+      "select id from channel_accounts where id=$1 and owner_id=$2 and channel='whatsapp' and settings->>'session'='default'",
+      [peer.account_id, userId],
+    );
+    if (!owner) invalid('Акаунт WhatsApp недоступний.');
+    const proposal = await whatsappConversation(
+      c,
+      peer.account_id,
+      peer.peer_value,
+      phone,
+      {},
+      true,
+    );
+    const result =
+      dryRun || proposal.ambiguous
+        ? proposal
+        : await whatsappConversation(
+            c,
+            peer.account_id,
+            peer.peer_value,
+            phone,
+          );
+    return {
+      dryRun,
+      ambiguous: result.ambiguous,
+      conversationId: result.conversation?.id ?? null,
+      mergedIds: result.mergedIds,
+    };
+  });
 }

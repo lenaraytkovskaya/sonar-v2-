@@ -12,6 +12,7 @@ const {
   approve,
   skip,
   manual,
+  repairIdentity,
 } = vi.hoisted(() => ({
   session: vi.fn(),
   chat: vi.fn(),
@@ -24,6 +25,7 @@ const {
   approve: vi.fn(),
   skip: vi.fn(),
   manual: vi.fn(),
+  repairIdentity: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
@@ -35,6 +37,7 @@ vi.mock('@sonar/db/inbound', () => ({
   markConversationRead: read,
   enqueueReply: generate,
   queueConversationReply: reply,
+  enqueueWhatsAppIdentityRepair: repairIdentity,
 }));
 vi.mock('@sonar/db/outreach', () => ({
   editOutreachDraft: edit,
@@ -254,4 +257,22 @@ describe('conversation API boundaries', () => {
     expect(generate).not.toHaveBeenCalled();
     expect((await GET(get(), context)).status).toBe(404);
   });
+});
+
+it('queues owner-checked WhatsApp repair only with explicit dry-run and request identity', async () => {
+  repairIdentity.mockResolvedValue({ taskId: foreign });
+  const data = {
+    action: 'repair-whatsapp-identity',
+    requestId: foreign,
+    dryRun: true,
+  };
+  expect((await POST(request(data), context)).status).toBe(202);
+  expect(repairIdentity).toHaveBeenCalledWith(id, 'actor', foreign, true);
+  expect(
+    (await POST(request({ ...data, dryRun: undefined }), context)).status,
+  ).toBe(400);
+  expect(
+    (await POST(request(data, 'https://untrusted.invalid'), context)).status,
+  ).toBe(401);
+  expect(repairIdentity).toHaveBeenCalledTimes(1);
 });

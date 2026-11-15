@@ -38,6 +38,19 @@ export async function POST(request: Request, context: Context) {
     const db = await import('@sonar/db/inbound');
     const chat = await db.getConversationChat(id);
     if (!chat.conversation) return invalid();
+    if (data.action === 'repair-whatsapp-identity') {
+      if (!validId(data.requestId) || typeof data.dryRun !== 'boolean')
+        return invalid();
+      return Response.json(
+        await db.enqueueWhatsAppIdentityRepair(
+          id,
+          user.id,
+          data.requestId,
+          data.dryRun,
+        ),
+        { status: 202 },
+      );
+    }
     if (data.action === 'read') {
       if (
         !validId(data.messageId) ||
