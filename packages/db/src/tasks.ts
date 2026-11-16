@@ -450,7 +450,13 @@ export type TaskOutcome =
       reasonCode: string;
       reasonUk: string;
     }
-  | { status: 'deferred'; runAt: Date; reasonCode: string; reasonUk: string };
+  | {
+      status: 'deferred';
+      runAt: Date;
+      reasonCode: string;
+      reasonUk: string;
+      result?: object;
+    };
 export async function executeTask(
   handler: () => Promise<TaskOutcome>,
   save: (

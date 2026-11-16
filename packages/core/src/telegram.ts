@@ -40,6 +40,9 @@ export function codeDelivery(type: {
 export class TelegramSendError extends Error {
   public providerMessageId?: string;
   public accountRetryAfterSeconds?: number;
+  public providerCode?: string;
+  public taskStatus?: 'paused' | 'failed' | 'skipped';
+  public taskResult?: object;
   constructor(
     public code: string,
     public reasonUk: string,
@@ -49,6 +52,66 @@ export class TelegramSendError extends Error {
   ) {
     super(reasonUk);
   }
+}
+function phoneResolutionError(code: string, seconds?: number) {
+  const normalized = /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'UNKNOWN';
+  const wait = /^FLOOD_WAIT(?:_(\d+))?$/.exec(normalized);
+  let error: TelegramSendError;
+  if (wait) {
+    const retryAfterSeconds = Math.max(1, seconds ?? (Number(wait[1]) || 60));
+    const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+    error = new TelegramSendError(
+      'resolve_phone_flood_wait',
+      `Telegram обмежив пошук за номером, повторіть через ${minutes} хв.`,
+      false,
+      retryAfterSeconds,
+    );
+    error.taskStatus = 'paused';
+    error.taskResult = {
+      provider: 'telegram',
+      operation: 'contacts.ResolvePhone',
+      providerCode: normalized,
+      retryAfterSeconds,
+      retryAt: new Date(Date.now() + retryAfterSeconds * 1000).toISOString(),
+    };
+  } else if (normalized === 'PHONE_NOT_OCCUPIED') {
+    error = new TelegramSendError(
+      'resolve_phone_not_occupied',
+      'Номер не зареєстровано в Telegram.',
+      false,
+      undefined,
+      true,
+    );
+    error.taskStatus = 'skipped';
+  } else if (normalized === 'PHONE_NUMBER_INVALID') {
+    error = new TelegramSendError(
+      'resolve_phone_invalid',
+      'Telegram не прийняв номер телефону: PHONE_NUMBER_INVALID.',
+    );
+    error.taskStatus = 'failed';
+  } else if (/PRIVACY/.test(normalized) || normalized === 'NO_USERS') {
+    error = new TelegramSendError(
+      'resolve_phone_privacy',
+      'Користувач приховав номер.',
+      false,
+      undefined,
+      true,
+    );
+    error.taskStatus = 'skipped';
+  } else {
+    error = new TelegramSendError(
+      'resolve_phone_error',
+      `Telegram не зміг знайти користувача за номером (${normalized}).`,
+    );
+    error.taskStatus = 'failed';
+  }
+  error.providerCode = normalized;
+  error.taskResult ??= {
+    provider: 'telegram',
+    operation: 'contacts.ResolvePhone',
+    providerCode: normalized,
+  };
+  return error;
 }
 export function telegramError(error: unknown): TelegramSendError {
   if (error instanceof TelegramSendError) return error;
@@ -534,6 +597,7 @@ export function createTelegramAdapter(
           Api.contacts.DeleteContacts | Api.contacts.DeleteByPhones | undefined;
         let providerMessageId: string | undefined;
         let sendError: TelegramSendError | undefined;
+        let phoneResolution: TelegramSendError | undefined;
         try {
           // Like the old Sonar: resolve the phone directly (no contact import, no import limit).
           let resolved: Api.User | undefined;
@@ -543,16 +607,31 @@ export function createTelegramAdapter(
                 new Api.contacts.ResolvePhone({ phone: to.slice(1) }),
               );
               if (!found?.users?.length)
-                console.info('[telegram] resolvePhone: no users');
+                phoneResolution = phoneResolutionError('NO_USERS');
               resolved = found?.users?.find(
                 (user): user is Api.User =>
                   user instanceof Api.User && !!user.accessHash,
               );
             } catch (error) {
-              const code = (error as { errorMessage?: string }).errorMessage;
-              if (code?.startsWith('FLOOD')) throw error;
-              console.info('[telegram] resolvePhone:', code ?? 'unknown error');
-              // PHONE_NOT_OCCUPIED or a hidden number: fall back to importing the contact.
+              const value = error as {
+                errorMessage?: string;
+                message?: string;
+                seconds?: number;
+              };
+              const raw = `${value?.errorMessage ?? ''} ${value?.message ?? ''}`;
+              const code = /(?:^|\s)([A-Z][A-Z0-9_]{0,79})(?:\s|$)/.exec(
+                raw,
+              )?.[1];
+              phoneResolution = phoneResolutionError(
+                code && /FLOOD_WAIT/.test(code)
+                  ? code
+                  : value?.seconds
+                    ? `FLOOD_WAIT_${value.seconds}`
+                    : (code ?? 'UNKNOWN'),
+                value?.seconds,
+              );
+              if (phoneResolution.taskStatus === 'paused')
+                throw phoneResolution;
             }
           }
           if (resolved)
@@ -615,20 +694,26 @@ export function createTelegramAdapter(
                     })
                   : new Api.contacts.DeleteByPhones({ phones: [to] });
             }
-            if (imported.retryContacts.length)
-              throw new TelegramSendError(
+            if (imported.retryContacts.length) {
+              const error = new TelegramSendError(
                 'import_retry',
-                'Telegram тимчасово не імпортував контакт. Повторіть спробу пізніше.',
-                true,
-              );
-            if (!(user instanceof Api.User) || !user.accessHash)
-              throw new TelegramSendError(
-                'unavailable',
-                'Telegram недоступний: номер прихований або не зареєстрований.',
+                'Telegram обмежив повторний імпорт контакту. Повторіть вручну не раніше ніж через добу.',
                 false,
-                undefined,
-                true,
               );
+              error.taskStatus = 'paused';
+              error.providerCode = 'IMPORT_RETRY_CONTACTS';
+              error.taskResult = {
+                provider: 'telegram',
+                operation: 'contacts.ImportContacts',
+                providerCode: 'IMPORT_RETRY_CONTACTS',
+                ...(phoneResolution
+                  ? { resolvePhoneCode: phoneResolution.providerCode }
+                  : {}),
+              };
+              throw error;
+            }
+            if (!(user instanceof Api.User) || !user.accessHash)
+              throw phoneResolution ?? phoneResolutionError('NO_USERS');
             peer = new Api.InputPeerUser({
               userId: user.id,
               accessHash: user.accessHash,
@@ -674,6 +759,10 @@ export function createTelegramAdapter(
           providerMessageId = String(id);
         } catch (error) {
           sendError = telegramError(error);
+          if (phoneResolution && !sendError.taskResult) {
+            sendError.providerCode = phoneResolution.providerCode;
+            sendError.taskResult = phoneResolution.taskResult;
+          }
         }
         if (cleanup) {
           const remove = () => client.invoke(cleanup);
