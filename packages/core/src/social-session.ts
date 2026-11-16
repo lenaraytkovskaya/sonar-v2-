@@ -792,6 +792,7 @@ export function resolveSocialSession(
   account: { channel: SocialNetwork; settings: Record<string, unknown> },
   secret = process.env.AUTH_SECRET ?? '',
   proxyUrls = socialProxyList(),
+  allowLoggedOut = false,
 ): ResolvedSocialSession {
   const settings = account.settings;
   let proxy: SocialSessionProxy | undefined;
@@ -829,6 +830,16 @@ export function resolveSocialSession(
         generateSocialDevice(account.channel),
     };
   } catch {
+    if (allowLoggedOut)
+      return {
+        network: account.channel,
+        cookies: [],
+        storageState: { cookies: [], origins: [] },
+        proxy,
+        device:
+          (settings.device as SocialDevice | undefined) ??
+          generateSocialDevice(account.channel),
+      };
     return invalid();
   }
 }

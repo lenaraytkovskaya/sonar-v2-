@@ -1,4 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { queueAutomaticSocialRelogin } from './social-login.js';
+export {
+  saveSocialCredentials,
+  queueSocialCredentialLogin,
+  submitSocialLoginCode,
+  withSocialCredentialLogin,
+  reconcileSocialCredentialLogins,
+} from './social-login.js';
 import type { PoolClient } from 'pg';
 import {
   encryptSocialStorageState,
@@ -41,6 +49,11 @@ export interface SocialAccount {
   proxyIndex: number;
   ownerName: string | null;
   hasOwnProxy: boolean;
+  hasCredentials: boolean;
+  hasTotpSecret: boolean;
+  loginBlocked: boolean;
+  loginChallengeKind: 'email' | 'sms' | 'captcha' | null;
+  loginChallengeExpiresAt: string | null;
   sessionLostEventId: string | null;
   sessionLossActive: boolean;
   sessionLostAt: string | null;
@@ -286,6 +299,8 @@ export async function pauseSocialFetchSession(
     [
       id,
       {
+        loginRecoveryPending:
+          reason === 'login_required' || reason === 'cookies_invalid',
         sessionStatus: lost ? 'invalid' : 'unconfirmed',
         checkedAt: now.toISOString(),
         sessionCheckReason: reason,
@@ -399,6 +414,7 @@ export async function listSocialAccounts(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
     coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
     a.next_send_at as "nextSendAt",
+    (a.settings->>'credentialsEncrypted' is not null) as "hasCredentials",coalesce(a.settings->>'hasTotpSecret','false')='true' as "hasTotpSecret",coalesce(a.settings->>'loginBlocked','false')='true' as "loginBlocked",case when a.settings->>'loginChallengeKind' in ('email','sms') and (a.settings->>'loginChallengeExpiresAt')::timestamptz>now() then a.settings->>'loginChallengeKind' when a.settings->>'sessionCheckReason'='captcha' then 'captcha' else null end as "loginChallengeKind",case when (a.settings->>'loginChallengeExpiresAt')::timestamptz>now() then a.settings->>'loginChallengeExpiresAt' else null end as "loginChallengeExpiresAt",
     (a.settings->>'ownProxyEncrypted' is not null) as "hasOwnProxy",coalesce(a.settings->>'sessionLossActive','false')='true' as "sessionLossActive", a.settings->>'sessionLostEventId' as "sessionLostEventId",a.settings->>'sessionLostAt' as "sessionLostAt",a.settings->>'sessionLostReasonUk' as "sessionLostReasonUk",
     coalesce(a.settings->>'keepaliveEnabled','true')<>'false' as "keepaliveEnabled",a.settings->>'lastKeepaliveAt' as "lastKeepaliveAt",a.settings->>'nextKeepaliveAt' as "nextKeepaliveAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
     coalesce(a.owner_id=$1::uuid and a.channel in ('instagram','facebook') and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
@@ -498,8 +514,6 @@ export async function saveSocialAccount(
           );
     if (existing && existing.channel !== input.network)
       invalid('Соцмережу підключеного акаунта змінити неможливо.');
-    if (!existing && !stateJson)
-      invalid('Додайте cookies у форматі JSON Cookie-Editor.');
     const proxyChanged =
       !!existing &&
       (existing.settings.proxyFingerprint !== pinned.proxyFingerprint ||
@@ -936,9 +950,15 @@ export async function withSocialSessionCheck(
         },
       };
     }
-    if (!valid)
+    if (!valid) {
+      await c.query('begin');
+      inTransaction = true;
       await pauseSocialFetchSession(c, id, reason ?? 'unknown_auth', now);
-    else
+      if (reason === 'login_required' || reason === 'cookies_invalid')
+        await queueAutomaticSocialRelogin(c, id, now);
+      await c.query('commit');
+      inTransaction = false;
+    } else
       await c.query(
         'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
         [
@@ -947,6 +967,8 @@ export async function withSocialSessionCheck(
           {
             sessionStatus: 'valid',
             sessionLossActive: false,
+            loginAutoAttempted: false,
+            loginRecoveryPending: false,
             checkedAt: now.toISOString(),
             sessionCheckReason: null,
             reasonUk: null,

@@ -1,15 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, list, listNotices, save, update, check, sync } = vi.hoisted(
-  () => ({
-    session: vi.fn(),
-    list: vi.fn(),
-    listNotices: vi.fn(),
-    save: vi.fn(),
-    update: vi.fn(),
-    check: vi.fn(),
-    sync: vi.fn(),
-  }),
-);
+const {
+  session,
+  list,
+  listNotices,
+  save,
+  update,
+  check,
+  sync,
+  credentials,
+  login,
+  code,
+} = vi.hoisted(() => ({
+  session: vi.fn(),
+  list: vi.fn(),
+  listNotices: vi.fn(),
+  save: vi.fn(),
+  update: vi.fn(),
+  check: vi.fn(),
+  sync: vi.fn(),
+  credentials: vi.fn(),
+  login: vi.fn(),
+  code: vi.fn(),
+}));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/social-settings', () => import('./social-settings'));
@@ -21,6 +33,9 @@ vi.mock('@sonar/db/social-accounts', () => ({
   updateSocialAccount: update,
   checkSocialSession: check,
   syncSocialInbox: sync,
+  saveSocialCredentials: credentials,
+  queueSocialCredentialLogin: login,
+  submitSocialLoginCode: code,
   getSocialProxyCount: () => 2,
 }));
 vi.mock('@sonar/db/email', () => ({
@@ -48,6 +63,7 @@ const input = {
 beforeEach(() => {
   vi.clearAllMocks();
   save.mockResolvedValue(undefined);
+  credentials.mockResolvedValue({ id: 'login-task', created: true });
   session.mockResolvedValue({ user: { id: 'actor' } });
   list.mockResolvedValue([
     {
@@ -232,4 +248,143 @@ it('requires authentication and returns lightweight unresolved event metadata fo
   });
   expect(listNotices).toHaveBeenCalledWith('actor');
   expect(list).not.toHaveBeenCalled();
+});
+
+describe('social credential login API', () => {
+  const fields = {
+    action: 'credentials',
+    id,
+    login: 'account',
+    password: 'private-password',
+    totpSecret: 'JBSWY3DPEHPK3PXP',
+  };
+  it('saves and queues credentials, starts saved login, and accepts an email/SMS code with the authenticated actor', async () => {
+    expect((await POST(request(fields))).status).toBe(202);
+    expect(credentials).toHaveBeenCalledWith(
+      id,
+      {
+        login: fields.login,
+        password: fields.password,
+        totpSecret: fields.totpSecret,
+      },
+      'actor',
+    );
+    expect((await POST(request({ action: 'login', id }))).status).toBe(202);
+    expect(login).toHaveBeenCalledWith(id, 'actor');
+    expect(
+      (await POST(request({ action: 'loginCode', id, code: '012345' }))).status,
+    ).toBe(202);
+    expect(code).toHaveBeenCalledWith(id, '012345', 'actor');
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('returns saved-only status without exposing secrets when login was not queued', async () => {
+    credentials.mockResolvedValueOnce({ id: null, created: false });
+    const response = await POST(request(fields));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(JSON.stringify(await response.json())).not.toMatch(
+      /private|password|JBSWY/,
+    );
+    expect(login).not.toHaveBeenCalled();
+  });
+  it('normalizes provider TOTP formatting and supports explicit deletion without returning secrets', async () => {
+    expect(
+      (await POST(request({ ...fields, totpSecret: 'jbsw-y3dp ehpk3pxp====' })))
+        .status,
+    ).toBe(202);
+    expect(credentials).toHaveBeenLastCalledWith(
+      id,
+      {
+        login: fields.login,
+        password: fields.password,
+        totpSecret: fields.totpSecret,
+      },
+      'actor',
+    );
+    expect((await POST(request({ ...fields, totpSecret: null }))).status).toBe(
+      202,
+    );
+    expect(credentials).toHaveBeenLastCalledWith(
+      id,
+      { login: fields.login, password: fields.password, totpSecret: null },
+      'actor',
+    );
+  });
+  it('requires authentication and same-origin for every credential action', async () => {
+    for (const body of [
+      fields,
+      { action: 'login', id },
+      { action: 'loginCode', id, code: '123456' },
+    ]) {
+      session.mockResolvedValueOnce({});
+      expect((await POST(request(body))).status).toBe(401);
+      expect((await POST(request(body, 'https://other.example'))).status).toBe(
+        401,
+      );
+    }
+    expect(credentials).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(code).not.toHaveBeenCalled();
+  });
+  it('rejects malformed secrets, codes, unsupported actions, and privilege fields before DB calls', async () => {
+    for (const body of [
+      { ...fields, id: 'bad' },
+      { ...fields, password: '' },
+      { ...fields, login: 1 },
+      { ...fields, totpSecret: 'not-base32!' },
+      { ...fields, requestedBy: 'other' },
+      { action: 'login', id, password: 'extra' },
+      { action: 'loginCode', id, code: 123456 },
+      { action: 'loginCode', id, code: '123' },
+      { action: 'loginCode', id, code: '123456', challengeKind: 'sms' },
+      { ...input, action: 'unknown' },
+    ])
+      expect((await POST(request(body))).status).toBe(400);
+    expect(credentials).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(code).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('projects only credential booleans and challenge metadata and redacts all credential errors', async () => {
+    list.mockResolvedValue([
+      {
+        id,
+        hasCredentials: true,
+        hasTotpSecret: true,
+        loginBlocked: false,
+        loginChallengeKind: 'sms',
+        loginChallengeExpiresAt: '2030-01-01T00:00:00Z',
+        login: 'private-login',
+        password: 'private-password',
+        totpSecret: fields.totpSecret,
+        code: '123456',
+        loginCodeEncrypted: 'private-code',
+        challenge: { selector: 'private-selector' },
+      },
+    ]);
+    const response = await POST(request(fields));
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    const result = await response.json();
+    expect(result.accounts[0]).toMatchObject({
+      hasCredentials: true,
+      hasTotpSecret: true,
+      loginBlocked: false,
+      loginChallengeKind: 'sms',
+      loginChallengeExpiresAt: '2030-01-01T00:00:00Z',
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private|123456|JBSWY/);
+    const { EmailValidationError } = await import('@sonar/db/email');
+    const failure = new EmailValidationError('private');
+    failure.reasonUk = 'private-password';
+    code.mockRejectedValueOnce(failure);
+    const failed = await POST(
+      request({ action: 'loginCode', id, code: '123456' }),
+    );
+    expect(failed.status).toBe(400);
+    expect(await failed.json()).toEqual({ error: uk.email.error });
+    credentials.mockRejectedValueOnce(new Error('private-password'));
+    expect(await (await POST(request(fields))).json()).toEqual({
+      error: uk.email.error,
+    });
+  });
 });

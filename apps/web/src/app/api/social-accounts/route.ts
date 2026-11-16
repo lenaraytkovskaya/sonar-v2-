@@ -17,12 +17,64 @@ async function handle(request: Request, method: string) {
   if (!user) return respond({ error: uk.unauthorized }, 401);
   const data = method === 'GET' ? null : await request.json().catch(() => null);
   const invalid = () => respond({ error: uk.ai.invalid }, 400);
+  const credentialAction = ['credentials', 'login', 'loginCode'].includes(
+    data?.action,
+  );
   const db = await import('@sonar/db/social-accounts');
   const { EmailValidationError } = await import('@sonar/db/email');
   try {
     let queued = false;
     let inboxSync;
-    if (method === 'POST' && data?.action === 'inboxPolling') {
+    if (method === 'POST' && credentialAction) {
+      const allowed =
+        data.action === 'credentials'
+          ? ['action', 'id', 'login', 'password', 'totpSecret']
+          : data.action === 'loginCode'
+            ? ['action', 'id', 'code']
+            : ['action', 'id'];
+      if (
+        !validId(data.id) ||
+        Object.keys(data).some((key) => !allowed.includes(key))
+      )
+        return invalid();
+      if (data.action === 'credentials') {
+        const totpSecret =
+          typeof data.totpSecret === 'string'
+            ? data.totpSecret
+                .replace(/[\s-]/g, '')
+                .toUpperCase()
+                .replace(/=+$/, '')
+            : data.totpSecret;
+        if (
+          typeof data.login !== 'string' ||
+          !data.login.trim() ||
+          data.login.length > 320 ||
+          typeof data.password !== 'string' ||
+          !data.password ||
+          data.password.length > 1024 ||
+          (totpSecret !== undefined &&
+            totpSecret !== null &&
+            (typeof totpSecret !== 'string' ||
+              !/^[A-Z2-7]{16,256}$/.test(totpSecret)))
+        )
+          return invalid();
+        const result = await db.saveSocialCredentials(
+          data.id,
+          {
+            login: data.login,
+            password: data.password,
+            ...(totpSecret === undefined ? {} : { totpSecret }),
+          },
+          user.id,
+        );
+        queued = !!result.id;
+      } else if (data.action === 'loginCode') {
+        if (typeof data.code !== 'string' || !/^[0-9]{4,10}$/.test(data.code))
+          return invalid();
+        await db.submitSocialLoginCode(data.id, data.code, user.id);
+      } else await db.queueSocialCredentialLogin(data.id, user.id);
+      if (data.action !== 'credentials') queued = true;
+    } else if (method === 'POST' && data?.action === 'inboxPolling') {
       if (
         !validId(data.id) ||
         typeof data.enabled !== 'boolean' ||
@@ -41,12 +93,30 @@ async function handle(request: Request, method: string) {
       inboxSync = await db.syncSocialInbox(data.id, user.id);
       queued = true;
     } else if (method === 'POST' && data?.action === 'check') {
-      if (!validId(data.id)) return invalid();
+      if (
+        !validId(data.id) ||
+        Object.keys(data).some((key) => !['action', 'id'].includes(key))
+      )
+        return invalid();
       await db.checkSocialSession(data.id, user.id);
       queued = true;
     } else if (method === 'POST') {
       if (
         !data ||
+        Object.keys(data).some(
+          (key) =>
+            ![
+              'id',
+              'name',
+              'network',
+              'dailyLimit',
+              'proxyIndex',
+              'ownProxy',
+              'keepaliveEnabled',
+              'storageStateJson',
+              'cookiesJson',
+            ].includes(key),
+        ) ||
         (data.id !== undefined && !validId(data.id)) ||
         !socialNetworks.includes(data.network) ||
         typeof data.name !== 'string' ||
@@ -94,7 +164,11 @@ async function handle(request: Request, method: string) {
         user.id,
       );
     } else if (method === 'PATCH') {
-      if (!validId(data?.id) || typeof data.enabled !== 'boolean')
+      if (
+        !validId(data?.id) ||
+        typeof data.enabled !== 'boolean' ||
+        Object.keys(data).some((key) => !['id', 'enabled'].includes(key))
+      )
         return invalid();
       await db.updateSocialAccount(data.id, { enabled: data.enabled }, user.id);
     } else if (method !== 'GET') return invalid();
@@ -120,6 +194,11 @@ async function handle(request: Request, method: string) {
       inboxPollingEnabled: account.inboxPollingEnabled,
       inboxSyncComplete: account.inboxSyncComplete,
       inboxSyncCreated: account.inboxSyncCreated,
+      hasCredentials: account.hasCredentials,
+      hasTotpSecret: account.hasTotpSecret,
+      loginBlocked: account.loginBlocked,
+      loginChallengeKind: account.loginChallengeKind,
+      loginChallengeExpiresAt: account.loginChallengeExpiresAt,
     }));
     return respond(
       { accounts, ...(inboxSync ? { inboxSync } : {}) },
@@ -129,7 +208,7 @@ async function handle(request: Request, method: string) {
     return respond(
       {
         error:
-          error instanceof EmailValidationError
+          !credentialAction && error instanceof EmailValidationError
             ? error.reasonUk
             : uk.email.error,
       },

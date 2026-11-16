@@ -1,5 +1,7 @@
 export const socialNetworks = ['facebook', 'instagram', 'linkedin'] as const;
 export const socialFields = {
+  'social.login.daily_limit': { min: 1, max: 100, step: 1 },
+  'social.login.relogin_cooldown_hours': { min: 1, max: 8760, step: 1 },
   'social.cost_per_request_usd': { min: 0, max: 100, step: 0.001 },
   'social.page_timeout_ms': { min: 100, max: 120000, step: 1 },
   ...Object.fromEntries(

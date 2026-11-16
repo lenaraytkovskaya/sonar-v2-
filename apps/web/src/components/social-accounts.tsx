@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
+import { SocialLoginDialog } from './social-login-dialog';
 import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
@@ -30,6 +31,7 @@ export function SocialAccounts({
   const [keepaliveEnabled, setKeepaliveEnabled] = useState(true);
   const [current, setCurrent] = useState(accounts);
   const [open, setOpen] = useState(false);
+  const [loginAccountId, setLoginAccountId] = useState<string>();
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [dailyLimit, setDailyLimit] = useState('20');
@@ -76,17 +78,25 @@ export function SocialAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
       setNotice(
-        method === 'POST' && 'action' in fields && fields.action === 'syncInbox'
-          ? result.inboxSync?.created
-            ? uk.socialAccounts.syncInboxQueued
-            : uk.socialAccounts.syncInboxExisting
+        method === 'POST' &&
+          'action' in fields &&
+          ['credentials', 'login', 'loginCode'].includes(String(fields.action))
+          ? fields.action === 'credentials' && response.status === 200
+            ? uk.socialAccounts.credentialsSavedOnly
+            : uk.socialAccounts.loginQueued
           : method === 'POST' &&
               'action' in fields &&
-              fields.action === 'inboxPolling'
-            ? uk.outreach.saved
-            : method === 'POST' && 'action' in fields
-              ? uk.socialAccounts.checkQueued
-              : uk.outreach.saved,
+              fields.action === 'syncInbox'
+            ? result.inboxSync?.created
+              ? uk.socialAccounts.syncInboxQueued
+              : uk.socialAccounts.syncInboxExisting
+            : method === 'POST' &&
+                'action' in fields &&
+                fields.action === 'inboxPolling'
+              ? uk.outreach.saved
+              : method === 'POST' && 'action' in fields
+                ? uk.socialAccounts.checkQueued
+                : uk.outreach.saved,
       );
       return true;
     } catch (error) {
@@ -181,6 +191,18 @@ export function SocialAccounts({
           {account.inboxSyncComplete === false && (
             <p className="text-wait">{uk.socialAccounts.syncPartial}</p>
           )}
+          {account.loginBlocked && (
+            <p className="text-err">{uk.socialAccounts.loginBlocked}</p>
+          )}
+          {account.loginChallengeKind && (
+            <p className="text-wait">
+              {account.loginChallengeKind === 'captcha'
+                ? uk.socialAccounts.captchaHelp
+                : account.loginChallengeKind === 'email'
+                  ? uk.socialAccounts.emailCode
+                  : uk.socialAccounts.smsCode}
+            </p>
+          )}
           {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
           {account.checkedAt && (
             <p>
@@ -193,6 +215,35 @@ export function SocialAccounts({
             </p>
           )}
           <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              className="min-h-11"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                setNotice('');
+                setLoginAccountId(account.id);
+              }}
+            >
+              {uk.socialAccounts.credentialLogin}
+            </Button>
+            {account.hasCredentials && (
+              <Button
+                type="button"
+                className="min-h-11"
+                variant="outline"
+                disabled={
+                  pending ||
+                  account.loginBlocked ||
+                  ['email', 'sms'].includes(account.loginChallengeKind ?? '')
+                }
+                onClick={() =>
+                  void mutate('POST', { action: 'login', id: account.id })
+                }
+              >
+                {uk.socialAccounts.retryLogin}
+              </Button>
+            )}
             {['instagram', 'facebook'].includes(account.network) && (
               <Button
                 type="button"
@@ -429,7 +480,6 @@ export function SocialAccounts({
                   : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
               }
               rows={4}
-              required={!editing}
               autoComplete="off"
               spellCheck={false}
               value={cookiesJson}
@@ -439,6 +489,7 @@ export function SocialAccounts({
               id={`social-${network}-cookies-help`}
               className="text-xs text-muted-foreground"
             >
+              {uk.socialAccounts.passwordSetup}{' '}
               {uk.socialAccounts.cookiesHint[network]}{' '}
               {editing
                 ? uk.socialAccounts.replaceCookies
@@ -462,7 +513,19 @@ export function SocialAccounts({
           )}
         </form>
       </CrudDialog>
-      {!open && notice && (
+      {current
+        .filter((account) => account.id === loginAccountId)
+        .map((account) => (
+          <SocialLoginDialog
+            key={account.id}
+            account={account}
+            pending={pending}
+            notice={notice}
+            mutate={mutate}
+            onClose={() => setLoginAccountId(undefined)}
+          />
+        ))}
+      {!open && !loginAccountId && notice && (
         <p role="status" className="text-sm">
           {notice}
         </p>

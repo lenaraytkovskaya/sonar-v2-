@@ -1,3 +1,7 @@
+import {
+  registerSocialCredentialLoginTasks,
+  closeSocialLoginBrowser,
+} from './social-login.js';
 import { registerInboundTasks } from './inbound.js';
 import { registerSocialInboxTasks } from './social-inbox.js';
 import { createSocialInboxAdapter } from './instagram-inbox-browser.js';
@@ -42,6 +46,7 @@ const started = (async () => {
   await registerProzorroTasks();
   await registerRegistryTasks();
   await registerSocialTasks();
+  await registerSocialCredentialLoginTasks();
   await registerSocialSessionTasks();
   await registerSiteTasks();
   await boss.createQueue('sonar.registry.schedule');
@@ -76,6 +81,7 @@ async function stop() {
   await closeTaskQueue();
   await closeSocialBrowser();
   await closeSocialSendBrowser();
+  await closeSocialLoginBrowser();
   await Promise.all([sonarPool.end(), registryPool.end()]);
 }
 for (const signal of ['SIGTERM', 'SIGINT'])
