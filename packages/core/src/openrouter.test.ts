@@ -4,7 +4,13 @@ const reply = {
   id: 'generation-1',
   model: 'chosen/model',
   choices: [{ message: { content: 'Текст' } }],
-  usage: { cost: 0.0042, total_tokens: 123 },
+  usage: {
+    cost: 0.0042,
+    total_tokens: 123,
+    prompt_tokens: 100,
+    completion_tokens: 23,
+    completion_tokens_details: { reasoning_tokens: 4 },
+  },
 };
 const stub = (body: unknown, status = 200) =>
   vi
@@ -26,6 +32,12 @@ describe('OpenRouter adapter', () => {
       text: 'Текст',
       costUsd: 0.0042,
       units: 123,
+      usage: {
+        promptTokens: 100,
+        completionTokens: 23,
+        reasoningTokens: 4,
+        finishReason: 'stop',
+      },
     });
     const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     expect(body.model).toBe('chosen/model');

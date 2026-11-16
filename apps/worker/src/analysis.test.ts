@@ -70,6 +70,12 @@ const client = () => ({
     text: JSON.stringify(answer),
     costUsd: 0.0001,
     units: 10,
+    usage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      finishReason: 'stop',
+    },
   })),
 });
 beforeEach(() => {
@@ -154,6 +160,12 @@ it('rejects fabricated channels after billing and never saves them', async () =>
     text: JSON.stringify({ ...answer, best_channel: 'phone' }),
     costUsd: 0.0001,
     units: 10,
+    usage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      finishReason: 'stop',
+    },
   });
   await expect(runCompanyAnalysis(input, 'task', api)).rejects.toMatchObject({
     code: 'analysis_schema_invalid',
@@ -180,7 +192,13 @@ it('retries a truncated answer once with more tokens and the configured reasonin
     .mockRejectedValueOnce(
       new OpenRouterError(
         'finish_reason',
-        { units: 20, costUsd: 0.0001 },
+        {
+          units: 20,
+          costUsd: 0.0001,
+          promptTokens: 1200,
+          completionTokens: 900,
+          reasoningTokens: 400,
+        },
         'length',
       ),
     )
@@ -190,9 +208,18 @@ it('retries a truncated answer once with more tokens and the configured reasonin
       text: JSON.stringify(answer),
       costUsd: 0.0002,
       units: 30,
+      usage: {
+        promptTokens: 1200,
+        completionTokens: 300,
+        reasoningTokens: 0,
+        finishReason: 'stop',
+      },
     });
   expect(await runCompanyAnalysis(input, 'task', api)).toMatchObject({
     status: 'done',
+    result: {
+      usage: { promptTokens: 1200, reasoningTokens: 0, finishReason: 'stop' },
+    },
   });
   expect(api.complete).toHaveBeenCalledTimes(2);
   expect(
@@ -216,26 +243,86 @@ it('retries a truncated answer once with more tokens and the configured reasonin
     expect.any(Function),
     1,
   );
+  expect(query).toHaveBeenCalledWith(
+    expect.stringContaining("'analysisUsage'"),
+    [
+      'task',
+      JSON.stringify({
+        promptTokens: 1200,
+        completionTokens: 900,
+        reasoningTokens: 400,
+        finishReason: 'length',
+      }),
+    ],
+  );
 });
 
-it('does not retry when the combined estimate exceeds the analysis price cap', async () => {
+it('compares the retry estimate with the remaining cap after actual first-attempt cost', async () => {
   const inputData = data();
-  inputData.config['ai.models'][0]!.completionUsd = 0.0000013;
+  inputData.config['analysis.max_usd'] = 0.000135;
+  inputData.config['ai.models'][0]!.completionUsd = 0.00000005;
   snapshot.mockResolvedValue(inputData);
   const api = client();
-  api.complete.mockRejectedValueOnce(
-    new OpenRouterError(
-      'finish_reason',
-      { units: 20, costUsd: 0.0001 },
-      'length',
-    ),
-  );
-  await expect(runCompanyAnalysis(input, 'task', api)).rejects.toMatchObject({
-    code: 'analysis_truncated',
-    reasonUk: expect.stringContaining('analysis.max_usd'),
+  api.complete
+    .mockRejectedValueOnce(
+      new OpenRouterError(
+        'finish_reason',
+        { units: 20, costUsd: 0.000001 },
+        'length',
+      ),
+    )
+    .mockResolvedValueOnce({
+      id: 'retry',
+      model: 'stub',
+      text: JSON.stringify(answer),
+      costUsd: 0.00002,
+      units: 30,
+      usage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        reasoningTokens: 0,
+        finishReason: 'stop',
+      },
+    });
+  expect(await runCompanyAnalysis(input, 'task', api)).toMatchObject({
+    status: 'done',
   });
-  expect(api.complete).toHaveBeenCalledTimes(1);
-  expect(budgeted).toHaveBeenCalledTimes(1);
+  const firstEstimate = Number(budgeted.mock.calls[0]![1]);
+  const retryEstimate = Number(budgeted.mock.calls[1]![1]);
+  expect(firstEstimate + retryEstimate).toBeGreaterThan(0.000135);
+  expect(0.000001 + retryEstimate).toBeLessThanOrEqual(0.000135);
+  expect(api.complete).toHaveBeenCalledTimes(2);
+});
+
+it('estimates prompt tokens from UTF-8 bytes instead of charging each byte as a token', async () => {
+  const inputData = data();
+  inputData.config['ai.models'][0]!.promptUsd = 0.000001;
+  snapshot.mockResolvedValue(inputData);
+  const api = client();
+  await runCompanyAnalysis(input, 'task', api);
+  const messages = (
+    api.complete.mock.calls as unknown as [
+      string,
+      { role: string; content: string }[],
+      number,
+    ][]
+  )[0]![1];
+  const expectedPromptTokens = Math.ceil(
+    (Buffer.byteLength(JSON.stringify(messages)) + 100) / 3,
+  );
+  const expected = expectedPromptTokens * 0.000001 + 900 * 0.00000001;
+  expect(budgeted.mock.calls[0]![1]).toBeCloseTo(expected, 12);
+});
+
+it('subtracts prior settled analysis spend before reserving a new attempt', async () => {
+  snapshot.mockResolvedValue({ ...data(), analysisSpentUsd: 0.002995 });
+  const api = client();
+  expect(await runCompanyAnalysis(input, 'task', api)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'analysis_price_limit',
+  });
+  expect(budgeted).not.toHaveBeenCalled();
+  expect(api.complete).not.toHaveBeenCalled();
 });
 
 it('pauses without a retry when the shared budget rejects its reservation', async () => {

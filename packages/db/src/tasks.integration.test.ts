@@ -280,6 +280,104 @@ it.skipIf(!enabled)(
   },
   30000,
 );
+it.skipIf(!enabled)(
+  'retries a billed truncated company analysis as a fresh task while carrying its spent cost',
+  async () => {
+    const { sonarPool } = await import('./index.js');
+    const { enqueueTask, retryTask } = await import('./tasks.js');
+    const { PgBoss } = await import('pg-boss');
+    const admin = new PgBoss(process.env.DATABASE_URL!);
+    const userId = randomUUID();
+    const key = `company.analyze:${randomUUID()}`;
+    let originalId: string | undefined;
+    let retryId: string | undefined;
+    let createdUserId: string | undefined;
+    try {
+      await admin.start();
+      await admin.createQueue('company.analyze');
+      const {
+        rows: [user],
+      } = await sonarPool.query(
+        "insert into users(email,name,password_hash) values($1,'Retry test','unusable') returning id",
+        [`${userId}@example.invalid`],
+      );
+      createdUserId = user.id;
+      originalId = await enqueueTask('company.analyze', key, {
+        companyId: randomUUID(),
+        campaignId: randomUUID(),
+        version: 'retry-test',
+        analysisPrompt: 'Old frozen prompt',
+        analysisSpentUsd: 0.001,
+      });
+      await sonarPool.query(
+        "update tasks set status='failed',reason_code='analysis_truncated',reason_uk='Обрізано' where id=$1",
+        [originalId],
+      );
+      await sonarPool.query(
+        "insert into spend_events(service_code,units,cost_usd,task_id,attempt,meta) values('openrouter',10,0.002,$1,0,$2)",
+        [
+          originalId,
+          { error: { code: 'finish_reason', finishReason: 'length' } },
+        ],
+      );
+      expect(await retryTask(originalId, user.id)).toBe(true);
+      const {
+        rows: [original],
+      } = await sonarPool.query('select result from tasks where id=$1', [
+        originalId,
+      ]);
+      retryId = original.result.retryTaskId;
+      const {
+        rows: [retry],
+      } = await sonarPool.query('select payload from tasks where id=$1', [
+        retryId,
+      ]);
+      expect(retryId).not.toBe(originalId);
+      expect(retry.payload).toMatchObject({ analysisSpentUsd: 0.003 });
+      expect(retry.payload).not.toHaveProperty('analysisPrompt');
+      expect(
+        Number(
+          (
+            await sonarPool.query(
+              'select cost_usd from spend_events where task_id=$1',
+              [originalId],
+            )
+          ).rows[0].cost_usd,
+        ),
+      ).toBe(0.002);
+      expect(
+        (
+          await sonarPool.query(
+            'select count(*)::int as count from spend_events where task_id=$1',
+            [retryId],
+          )
+        ).rows[0].count,
+      ).toBe(0);
+    } finally {
+      const ids = [originalId, retryId].filter(Boolean);
+      await sonarPool.query(
+        "delete from pgboss.job where name='company.analyze' and data->>'taskId'=any($1::text[])",
+        [ids],
+      );
+      await sonarPool.query(
+        'delete from spend_events where task_id=any($1::uuid[])',
+        [ids],
+      );
+      await sonarPool.query('delete from tasks where id=any($1::uuid[])', [
+        ids,
+      ]);
+      if (createdUserId)
+        await sonarPool.query('delete from activity_log where user_id=$1', [
+          createdUserId,
+        ]);
+      await sonarPool.query('delete from users where email=$1', [
+        `${userId}@example.invalid`,
+      ]);
+      await admin.stop();
+    }
+  },
+  30000,
+);
 afterAll(async () => {
   if (enabled) {
     const { closeTaskQueue } = await import('./tasks.js');

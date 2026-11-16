@@ -10,12 +10,12 @@ export const analysisChannels = [
 ] as const;
 export const analysisResultSchema = z
   .object({
-    summary: z.string().trim().min(1).max(4000),
+    summary: z.string().trim().min(1).max(1200),
     language: z.string().regex(/^[a-z]{2,3}(?:-[a-zA-Z]{2,4})?$/),
     best_channel: z.enum(analysisChannels).nullable(),
-    first_message: z.string().max(4000),
+    first_message: z.string().max(1200),
     fit: z.number().min(0).max(100),
-    fit_reason: z.string().trim().min(1).max(2000),
+    fit_reason: z.string().trim().min(1).max(1000),
   })
   .strict();
 export type AnalysisResult = z.infer<typeof analysisResultSchema>;

@@ -295,6 +295,13 @@
       "when": 1794800001000,
       "tag": "0041_analysis_price_cap",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794800002000,
+      "tag": "0042_analysis_output_lengths",
+      "breakpoints": true
     }
   ]
 }

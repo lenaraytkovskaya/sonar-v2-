@@ -163,6 +163,27 @@ export async function runBudgetedRequest(
                   ...(error.finishReason
                     ? { finishReason: error.finishReason }
                     : {}),
+                  ...(error.billing
+                    ? {
+                        usage: {
+                          ...(error.billing.promptTokens !== undefined
+                            ? { promptTokens: error.billing.promptTokens }
+                            : {}),
+                          ...(error.billing.completionTokens !== undefined
+                            ? {
+                                completionTokens:
+                                  error.billing.completionTokens,
+                              }
+                            : {}),
+                          ...(error.billing.reasoningTokens !== undefined
+                            ? { reasoningTokens: error.billing.reasoningTokens }
+                            : {}),
+                          ...(error.finishReason
+                            ? { finishReason: error.finishReason }
+                            : {}),
+                        },
+                      }
+                    : {}),
                 },
                 costBasis:
                   received && received.costUsd !== undefined
