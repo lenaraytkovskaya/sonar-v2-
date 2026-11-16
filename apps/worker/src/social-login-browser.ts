@@ -46,7 +46,7 @@ function codeInputs(page: Page) {
     : codeSelector;
 }
 const captchaSelector =
-  'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="captcha"],input[name="captcha_response"],#captcha';
+  'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="captcha"],iframe[src*="arkoselabs"],input[name="captcha_response"],#captcha';
 const identitySelector =
   'input[type="file"],a[href*="identity/confirm"],a[href*="id-upload"]';
 async function visible(page: Page, selector: string) {
@@ -101,7 +101,11 @@ async function loginState(
       ? ('totp' as const)
       : ('email' as const);
   }
-  if (/captcha|verify you are human|підтверд.{0,20}людина/i.test(body))
+  if (
+    /captcha|verify you are human|підтверд.{0,20}людина|arkose|matchkey/i.test(
+      body,
+    )
+  )
     return 'captcha' as const;
   if (
     /\/checkpoint\/(?!.*(?:challenge|verify))/i.test(page.url()) ||
