@@ -58,7 +58,7 @@ it('accepts a markdown json fence around the object', () => {
 it('rejects overlong output fields so the model can keep each field concise', () => {
   expect(() =>
     parseAnalysis(
-      JSON.stringify({ ...value, summary: 'x'.repeat(1201) }),
+      JSON.stringify({ ...value, summary: 'x'.repeat(2001) }),
       [{ kind: 'email' }],
       'sender',
     ),
