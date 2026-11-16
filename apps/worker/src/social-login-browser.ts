@@ -38,6 +38,12 @@ const codeSelector =
   'input[name="verificationCode"],input[name="security_code"],input[name="approvals_code"],input[name="pin"],input#input__phone_verification_pin,input[autocomplete="one-time-code"],input[inputmode="numeric"],input[type="tel"],input[type="number"],input[maxlength="6"],input[maxlength="8"]';
 const twoStepPath =
   /two_step_verification|two_factor|\/checkpoint\/.*(?:code|two)/i;
+/** Instagram's 2026 two-step page uses a plain, unnamed text input for the code. */
+function codeInputs(page: Page) {
+  return twoStepPath.test(page.url())
+    ? `${codeSelector},input[type="text"],input:not([type])`
+    : codeSelector;
+}
 const captchaSelector =
   'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="captcha"],input[name="captcha_response"],#captcha';
 const identitySelector =
@@ -66,7 +72,7 @@ async function loginState(
     )
   )
     return 'wrong_password' as const;
-  if (await visible(page, codeSelector)) {
+  if (await visible(page, codeInputs(page))) {
     if (
       /authentication app|authenticator|code generator|(?:додатк|програм).{0,25}(?:автентиф|аутентиф)|приложени.{0,20}аутентиф|генератор.{0,10}код/i.test(
         body,
@@ -313,7 +319,7 @@ export function createSocialLoginBrowser(
         else manualSubmitted = true;
         // The same page/context remains live throughout waitForCode (bounded by DB).
         const input = page
-          .locator(codeSelector)
+          .locator(codeInputs(page))
           .filter({ visible: true })
           .first();
         await input.fill(code);
