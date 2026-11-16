@@ -243,6 +243,8 @@ export async function retryTask(
     const {
       rows: [identity],
     } = await client.query('select type,payload from tasks where id=$1', [id]);
+    // A login challenge owns a live browser; only the channel action creates a new attempt.
+    if (identity?.type === 'social.session.login') return false;
     if (identity?.type === 'prozorro.company')
       return (
         await enqueueProzorroCompany(

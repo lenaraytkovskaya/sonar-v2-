@@ -466,6 +466,7 @@ export interface SocialSessionCookie {
   httpOnly: boolean;
   secure: boolean;
   sameSite: 'Strict' | 'Lax' | 'None';
+  partitionKey?: string;
 }
 export interface SocialSessionProxy {
   server: string;
@@ -478,6 +479,7 @@ function invalid(): never {
 export function normalizeSocialCookies(
   raw: string,
   network: SocialNetwork,
+  allowOtherDomains = false,
 ): SocialSessionCookie[] {
   if (typeof raw !== 'string' || raw.length > 1_000_000) invalid();
   let values: unknown;
@@ -516,11 +518,18 @@ export function normalizeSocialCookies(
       /\p{Cc}/u.test(path) ||
       typeof httpOnly !== 'boolean' ||
       typeof secure !== 'boolean' ||
-      (session !== undefined && typeof session !== 'boolean')
+      (session !== undefined && typeof session !== 'boolean') ||
+      (cookie.partitionKey !== undefined &&
+        (typeof cookie.partitionKey !== 'string' ||
+          cookie.partitionKey.length > 2048))
     )
       invalid();
     const host = domain.toLowerCase().replace(/^\./, '');
-    if (host !== `${network}.com` && !host.endsWith(`.${network}.com`))
+    if (
+      !allowOtherDomains &&
+      host !== `${network}.com` &&
+      !host.endsWith(`.${network}.com`)
+    )
       invalid();
     if (
       !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(
@@ -559,6 +568,9 @@ export function normalizeSocialCookies(
       httpOnly,
       secure,
       sameSite: sites[sameSite.toLowerCase()]!,
+      ...(typeof cookie.partitionKey === 'string'
+        ? { partitionKey: cookie.partitionKey }
+        : {}),
     };
   });
 }
@@ -615,15 +627,21 @@ export function socialReservedProxyIndex(
 export function socialAnonymousProxies<T extends SocialSessionProxy>(
   proxies: T[],
   reservedIndex: unknown,
+  accountProxies: SocialSessionProxy[] = [],
 ): T[] {
-  const index = socialReservedProxyIndex(reservedIndex, proxies.length);
+  const reservedProxies = Array.isArray(reservedIndex)
+    ? (reservedIndex as SocialSessionProxy[])
+    : [
+        proxies[socialReservedProxyIndex(reservedIndex, proxies.length)]!,
+        ...accountProxies,
+      ];
   // Credentials and protocol variations must not reintroduce the reserved endpoint.
   const endpoint = (proxy: SocialSessionProxy) => {
     const url = new URL(proxy.server);
     return `${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
   };
-  const reserved = endpoint(proxies[index]!);
-  return proxies.filter((proxy) => endpoint(proxy) !== reserved);
+  const reserved = new Set(reservedProxies.map(endpoint));
+  return proxies.filter((proxy) => !reserved.has(endpoint(proxy)));
 }
 export const socialProxyFingerprint = (proxy: SocialSessionProxy) =>
   createHash('sha256')
@@ -645,29 +663,183 @@ export function encryptSocialCookies(
     secret,
   );
 }
+export interface SocialStorageState {
+  cookies: SocialSessionCookie[];
+  origins: {
+    origin: string;
+    localStorage: { name: string; value: string }[];
+  }[];
+}
+export interface SocialDevice {
+  userAgent: string;
+  viewport: { width: number; height: number };
+  locale: string;
+  timezoneId: string;
+  deviceScaleFactor: number;
+}
+export function generateSocialDevice(
+  _network: SocialNetwork,
+  browserVersion = '',
+): SocialDevice {
+  return {
+    userAgent: browserVersion
+      ? `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion} Safari/537.36`
+      : '',
+    viewport: { width: 1366, height: 768 },
+    locale: 'uk-UA',
+    timezoneId: 'Europe/Kyiv',
+    deviceScaleFactor: 1,
+  };
+}
+export function normalizeSocialStorageState(
+  raw: string,
+  network: SocialNetwork,
+): SocialStorageState {
+  if (typeof raw !== 'string' || raw.length > 5_000_000) invalid();
+  let state: SocialStorageState;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    return invalid();
+  }
+  if (Array.isArray(state))
+    return { cookies: normalizeSocialCookies(raw, network), origins: [] };
+  if (!state || !Array.isArray(state.origins) || state.origins.length > 100)
+    invalid();
+  const cookies = normalizeSocialCookies(
+    JSON.stringify(state.cookies),
+    network,
+    true,
+  );
+  const seen = new Set<string>();
+  const origins = state.origins.map((entry) => {
+    if (
+      !entry ||
+      typeof entry.origin !== 'string' ||
+      !Array.isArray(entry.localStorage) ||
+      entry.localStorage.length > 5000
+    )
+      invalid();
+    let url: URL;
+    try {
+      url = new URL(entry.origin);
+    } catch {
+      return invalid();
+    }
+    if (
+      url.origin !== entry.origin ||
+      url.protocol !== 'https:' ||
+      seen.has(url.origin)
+    )
+      invalid();
+    seen.add(url.origin);
+    const names = new Set<string>();
+    return {
+      origin: url.origin,
+      localStorage: entry.localStorage.map((item) => {
+        if (
+          !item ||
+          typeof item.name !== 'string' ||
+          typeof item.value !== 'string' ||
+          names.has(item.name)
+        )
+          invalid();
+        names.add(item.name);
+        return { name: item.name, value: item.value };
+      }),
+    };
+  });
+  return { cookies, origins };
+}
+export function encryptSocialStorageState(
+  raw: string,
+  network: SocialNetwork,
+  secret: string,
+): string {
+  return encryptTelegramSession(
+    JSON.stringify(normalizeSocialStorageState(raw, network)),
+    secret,
+  );
+}
+export function normalizeSocialProxy(raw: string): SocialSessionProxy {
+  const values = socialSessionProxies(raw);
+  if (values.length !== 1) throw new SocialSessionCheckError('proxy');
+  return values[0]!;
+}
+export function encryptSocialProxy(raw: string, secret: string): string {
+  normalizeSocialProxy(raw);
+  return encryptTelegramSession(raw, secret);
+}
+export function decryptSocialProxy(
+  encrypted: string,
+  secret: string,
+): SocialSessionProxy {
+  return normalizeSocialProxy(decryptTelegramSession(encrypted, secret));
+}
+export type ResolvedSocialSession = {
+  network: SocialNetwork;
+  cookies: SocialSessionCookie[];
+  storageState?: SocialStorageState;
+  proxy: SocialSessionProxy;
+  device?: SocialDevice;
+  persistStorageState?: (
+    state: SocialStorageState,
+    device?: SocialDevice,
+  ) => Promise<void>;
+  persistDevice?: (device: SocialDevice) => Promise<void>;
+};
 export function resolveSocialSession(
   account: { channel: SocialNetwork; settings: Record<string, unknown> },
   secret = process.env.AUTH_SECRET ?? '',
   proxyUrls = socialProxyList(),
-) {
+  allowLoggedOut = false,
+): ResolvedSocialSession {
   const settings = account.settings;
-  const proxies = socialSessionProxies(proxyUrls);
-  const proxy = Number.isInteger(settings.proxyIndex)
-    ? proxies[Number(settings.proxyIndex)]
-    : undefined;
-  if (!proxy || socialProxyFingerprint(proxy) !== settings.proxyFingerprint)
-    throw new SocialSessionCheckError('proxy');
-  if (typeof settings.cookiesEncrypted !== 'string') invalid();
+  let proxy: SocialSessionProxy | undefined;
+  if (typeof settings.ownProxyEncrypted === 'string') {
+    try {
+      proxy = normalizeSocialProxy(
+        decryptTelegramSession(settings.ownProxyEncrypted, secret),
+      );
+    } catch {
+      throw new SocialSessionCheckError('proxy');
+    }
+  } else {
+    const proxies = socialSessionProxies(proxyUrls);
+    proxy = Number.isInteger(settings.proxyIndex)
+      ? proxies[Number(settings.proxyIndex)]
+      : undefined;
+    if (!proxy || socialProxyFingerprint(proxy) !== settings.proxyFingerprint)
+      throw new SocialSessionCheckError('proxy');
+  }
   try {
+    const encrypted =
+      settings.storageStateEncrypted ?? settings.cookiesEncrypted;
+    if (typeof encrypted !== 'string') invalid();
+    const storageState = normalizeSocialStorageState(
+      decryptTelegramSession(encrypted, secret),
+      account.channel,
+    );
     return {
       network: account.channel,
-      cookies: normalizeSocialCookies(
-        decryptTelegramSession(settings.cookiesEncrypted as string, secret),
-        account.channel,
-      ),
+      cookies: storageState.cookies,
+      storageState,
       proxy,
+      device:
+        (settings.device as SocialDevice | undefined) ??
+        generateSocialDevice(account.channel),
     };
   } catch {
+    if (allowLoggedOut)
+      return {
+        network: account.channel,
+        cookies: [],
+        storageState: { cookies: [], origins: [] },
+        proxy,
+        device:
+          (settings.device as SocialDevice | undefined) ??
+          generateSocialDevice(account.channel),
+      };
     return invalid();
   }
 }

@@ -7,6 +7,9 @@ import {
   SocialSendError,
   facebookDispatchReason,
   type FacebookDispatchResult,
+  type SocialStorageState,
+  type SocialDevice,
+  socialSessionCheckReason,
 } from '@sonar/core/social-session';
 import type { PoolClient } from 'pg';
 import {
@@ -31,6 +34,10 @@ import {
 import { listWhatsAppAccounts } from './whatsapp.js';
 import { sonarPool } from './index.js';
 import { reserveSocialAction } from './social-action.js';
+import {
+  prepareSocialSession,
+  pauseSocialFetchSession,
+} from './social-accounts.js';
 import {
   enqueueTask,
   logActivity,
@@ -743,6 +750,11 @@ export type SendAccount = {
   id: string;
   settings: Record<string, unknown>;
   beforeSend?: () => Promise<void>;
+  persistDevice?: (device: SocialDevice) => Promise<void>;
+  persistStorageState?: (
+    state: SocialStorageState,
+    device?: SocialDevice,
+  ) => Promise<void>;
 };
 export type ChannelSender = (
   request: EmailRequest,
@@ -1028,6 +1040,27 @@ export async function sendEmailMessage(
           'Увійдіть знову (оновіть cookies)',
         ),
       );
+    let socialSession:
+      Awaited<ReturnType<typeof prepareSocialSession>> | undefined;
+    if (channel === 'social') {
+      try {
+        socialSession = await prepareSocialSession(c, account);
+      } catch (error) {
+        await pauseSocialFetchSession(
+          c,
+          account.id,
+          socialSessionCheckReason(error),
+          now,
+        );
+        return finish(
+          terminal(
+            'paused',
+            'social_session_invalid',
+            'Сесія недійсна. Перевірте вхід у соцмережу.',
+          ),
+        );
+      }
+    }
     if (account.status !== 'active')
       return finish(
         terminal('paused', 'account_disabled', 'Акаунт каналу вимкнено.'),
@@ -1246,6 +1279,8 @@ export async function sendEmailMessage(
               },
               ...(channel === 'social'
                 ? {
+                    persistStorageState: socialSession!.persistStorageState,
+                    persistDevice: socialSession!.persistDevice,
                     beforeSend: async () => {
                       const result = await c.query(
                         'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',
@@ -1305,9 +1340,11 @@ export async function sendEmailMessage(
           error instanceof SocialSendError ? error.code : 'delivery_uncertain';
         await transaction(async (tx) => {
           if (code === 'session_invalid')
-            await tx.query(
-              "update channel_accounts set status='paused',settings=settings || jsonb_build_object('sessionStatus','invalid','reasonUk',$2::text) where id=$1",
-              [account.id, 'Увійдіть знову (оновіть cookies)'],
+            await pauseSocialFetchSession(
+              tx,
+              account.id,
+              socialSessionCheckReason(error, 'login_required'),
+              now,
             );
           if (code === 'rate_limit')
             await tx.query(

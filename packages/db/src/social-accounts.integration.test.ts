@@ -70,7 +70,7 @@ it.skipIf(!enabled)(
           'select settings from channel_accounts where id=$1',
           [saved.id],
         );
-        expect(stored.settings.cookiesEncrypted).not.toContain(
+        expect(stored.settings.storageStateEncrypted).not.toContain(
           'private-social-cookie',
         );
         await expect(
@@ -180,9 +180,12 @@ it.skipIf(!enabled)(
               ),
             ).toMatchObject({
               status: 'paused',
-              sessionStatus: ['login_required', 'cookies_invalid'].includes(
-                reason,
-              )
+              sessionStatus: [
+                'login_required',
+                'cookies_invalid',
+                'captcha',
+                'checkpoint',
+              ].includes(reason)
                 ? 'invalid'
                 : 'unconfirmed',
               sessionCheckReason: reason,
@@ -194,8 +197,8 @@ it.skipIf(!enabled)(
                   'select settings from channel_accounts where id=$1',
                   [saved.id],
                 )
-              ).rows[0].settings.cookiesEncrypted,
-            ).toBe(stored.settings.cookiesEncrypted);
+              ).rows[0].settings.storageStateEncrypted,
+            ).toBe(stored.settings.storageStateEncrypted);
             await expect(
               accounts.updateSocialAccount(saved.id, { enabled: true }, actor),
             ).rejects.toThrow('Спочатку перевірте сесію');
@@ -268,6 +271,15 @@ it.skipIf(!enabled)(
           .SOCIAL_PROXY_URLS!.split(',')
           .reverse()
           .join(',');
+        await accounts.updateSocialAccount(saved.id, { proxyIndex: 1 }, actor);
+        expect(
+          (await accounts.listSocialAccounts()).find(
+            (row) => row.id === saved.id,
+          ),
+        ).toMatchObject({
+          sessionStatus: 'pending',
+          reasonUk: 'Проксі змінено. Можлива перевірка входу.',
+        });
         await accounts.updateSocialAccount(saved.id, { cookiesJson }, actor);
         expect(
           (await accounts.listSocialAccounts()).find(
@@ -421,7 +433,7 @@ it.skipIf(!enabled)(
         settings: {
           sessionStatus: 'invalid',
           sessionFetch: { day: '2026-11-14', count: 1 },
-          reasonUk: 'Увійдіть знову (оновіть cookies)',
+          reasonUk: socialSessionCheckReasons.login_required,
         },
       });
       expect(

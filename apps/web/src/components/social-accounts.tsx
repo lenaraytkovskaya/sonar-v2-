@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
+import { SocialLoginDialog } from './social-login-dialog';
 import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
@@ -17,20 +18,26 @@ export function SocialAccounts({
   network,
   active,
   proxyCount,
-  accountProxyIndex,
+  accountProxyIndexes,
 }: {
   accounts: Account[];
   network: Account['network'];
   active: boolean;
   proxyCount: number;
-  accountProxyIndex: number | null;
+  accountProxyIndexes: Record<Account['network'], number | null>;
 }) {
+  const accountProxyIndex = accountProxyIndexes[network];
+  const [ownProxy, setOwnProxy] = useState('');
+  const [keepaliveEnabled, setKeepaliveEnabled] = useState(true);
   const [current, setCurrent] = useState(accounts);
   const [open, setOpen] = useState(false);
+  const [loginAccountId, setLoginAccountId] = useState<string>();
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [dailyLimit, setDailyLimit] = useState('20');
-  const [proxyIndex, setProxyIndex] = useState(String(accountProxyIndex ?? ''));
+  const [proxyIndex, setProxyIndex] = useState(
+    String(accountProxyIndex ?? 'own'),
+  );
   const [cookiesJson, setCookiesJson] = useState('');
   const [visible, setVisible] = useState(false);
   const [pending, setPending] = useState(false);
@@ -71,17 +78,25 @@ export function SocialAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
       setNotice(
-        method === 'POST' && 'action' in fields && fields.action === 'syncInbox'
-          ? result.inboxSync?.created
-            ? uk.socialAccounts.syncInboxQueued
-            : uk.socialAccounts.syncInboxExisting
+        method === 'POST' &&
+          'action' in fields &&
+          ['credentials', 'login', 'loginCode'].includes(String(fields.action))
+          ? fields.action === 'credentials' && response.status === 200
+            ? uk.socialAccounts.credentialsSavedOnly
+            : uk.socialAccounts.loginQueued
           : method === 'POST' &&
               'action' in fields &&
-              fields.action === 'inboxPolling'
-            ? uk.outreach.saved
-            : method === 'POST' && 'action' in fields
-              ? uk.socialAccounts.checkQueued
-              : uk.outreach.saved,
+              fields.action === 'syncInbox'
+            ? result.inboxSync?.created
+              ? uk.socialAccounts.syncInboxQueued
+              : uk.socialAccounts.syncInboxExisting
+            : method === 'POST' &&
+                'action' in fields &&
+                fields.action === 'inboxPolling'
+              ? uk.outreach.saved
+              : method === 'POST' && 'action' in fields
+                ? uk.socialAccounts.checkQueued
+                : uk.outreach.saved,
       );
       return true;
     } catch (error) {
@@ -96,9 +111,11 @@ export function SocialAccounts({
     setEditing(undefined);
     setName('');
     setCookiesJson('');
+    setOwnProxy('');
+    setKeepaliveEnabled(true);
     setVisible(false);
     setDailyLimit('20');
-    setProxyIndex(String(accountProxyIndex ?? ''));
+    setProxyIndex(String(accountProxyIndex ?? 'own'));
   };
   const networkAccounts = current.filter(
     (account) => account.network === network,
@@ -134,10 +151,12 @@ export function SocialAccounts({
           </p>
           <p>
             {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
-            {uk.socialAccounts.proxy} {account.proxyIndex + 1}
+            {account.hasOwnProxy
+              ? uk.socialAccounts.ownProxy
+              : `${uk.socialAccounts.proxy} ${account.proxyIndex + 1}`}
           </p>
           <p role="status">
-            {account.status === 'paused' && account.sessionStatus === 'invalid'
+            {account.sessionStatus === 'invalid'
               ? uk.socialAccounts.needsLogin
               : (uk.socialAccounts.statuses[
                   account.status as keyof typeof uk.socialAccounts.statuses
@@ -172,6 +191,18 @@ export function SocialAccounts({
           {account.inboxSyncComplete === false && (
             <p className="text-wait">{uk.socialAccounts.syncPartial}</p>
           )}
+          {account.loginBlocked && (
+            <p className="text-err">{uk.socialAccounts.loginBlocked}</p>
+          )}
+          {account.loginChallengeKind && (
+            <p className="text-wait">
+              {account.loginChallengeKind === 'captcha'
+                ? uk.socialAccounts.captchaHelp
+                : account.loginChallengeKind === 'email'
+                  ? uk.socialAccounts.emailCode
+                  : uk.socialAccounts.smsCode}
+            </p>
+          )}
           {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
           {account.checkedAt && (
             <p>
@@ -184,6 +215,35 @@ export function SocialAccounts({
             </p>
           )}
           <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              className="min-h-11"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                setNotice('');
+                setLoginAccountId(account.id);
+              }}
+            >
+              {uk.socialAccounts.credentialLogin}
+            </Button>
+            {account.hasCredentials && (
+              <Button
+                type="button"
+                className="min-h-11"
+                variant="outline"
+                disabled={
+                  pending ||
+                  account.loginBlocked ||
+                  ['email', 'sms'].includes(account.loginChallengeKind ?? '')
+                }
+                onClick={() =>
+                  void mutate('POST', { action: 'login', id: account.id })
+                }
+              >
+                {uk.socialAccounts.retryLogin}
+              </Button>
+            )}
             {['instagram', 'facebook'].includes(account.network) && (
               <Button
                 type="button"
@@ -216,7 +276,11 @@ export function SocialAccounts({
                 setEditing(account.id);
                 setName(account.name);
                 setDailyLimit(String(account.dailyLimit));
-                setProxyIndex(String(account.proxyIndex));
+                setProxyIndex(
+                  account.hasOwnProxy ? 'own' : String(account.proxyIndex),
+                );
+                setOwnProxy('');
+                setKeepaliveEnabled(account.keepaliveEnabled);
                 setCookiesJson('');
                 setVisible(false);
               }}
@@ -264,7 +328,14 @@ export function SocialAccounts({
         onOpenChange={setOpen}
         title={`${editing ? uk.socialAccounts.edit : uk.socialAccounts.add} · ${uk.social.networks[network]}`}
         pending={pending}
-        draft={{ name, dailyLimit, proxyIndex, cookiesJson }}
+        draft={{
+          name,
+          dailyLimit,
+          proxyIndex,
+          cookiesJson,
+          ownProxy,
+          keepaliveEnabled,
+        }}
       >
         <form
           className="space-y-3"
@@ -275,8 +346,13 @@ export function SocialAccounts({
               name,
               network,
               dailyLimit: Number(dailyLimit),
-              proxyIndex: Number(proxyIndex),
-              ...(cookiesJson.trim() ? { cookiesJson } : {}),
+              ...(proxyIndex === 'own'
+                ? ownProxy.trim()
+                  ? { ownProxy: ownProxy.trim() }
+                  : {}
+                : { proxyIndex: Number(proxyIndex), ownProxy: null }),
+              keepaliveEnabled,
+              ...(cookiesJson.trim() ? { storageStateJson: cookiesJson } : {}),
             }).then((saved) => {
               if (saved) {
                 reset();
@@ -326,26 +402,69 @@ export function SocialAccounts({
                 onChange={(event) => setProxyIndex(event.target.value)}
               >
                 {Array.from({ length: proxyCount }, (_, index) => (
-                  <option
-                    key={index}
-                    value={index}
-                    disabled={index !== accountProxyIndex}
-                  >
+                  <option key={index} value={index}>
                     {uk.socialAccounts.proxy} {index + 1}
-                    {index === accountProxyIndex
-                      ? uk.socialAccounts.reservedProxy
-                      : uk.socialAccounts.anonymousProxy}
+                    {' — '}
+                    {Array.from(
+                      new Set(
+                        current
+                          .filter(
+                            (account) =>
+                              !account.hasOwnProxy &&
+                              account.proxyIndex === index,
+                          )
+                          .map(
+                            (account) => uk.social.networks[account.network],
+                          ),
+                      ),
+                    ).join(', ') || uk.socialAccounts.anonymousProxy}
                   </option>
                 ))}
+                <option value="own">{uk.socialAccounts.ownProxy}</option>
               </select>
               <p className="text-sm text-muted">
                 {uk.socialAccounts.proxyHelp}
+              </p>
+              {proxyIndex === 'own' && (
+                <>
+                  <label htmlFor={`social-${network}-own-proxy`}>
+                    {uk.socialAccounts.ownProxyUrl}
+                  </label>
+                  <Input
+                    id={`social-${network}-own-proxy`}
+                    type="password"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    maxLength={4000}
+                    value={ownProxy}
+                    required={
+                      !editing ||
+                      !current.find((account) => account.id === editing)
+                        ?.hasOwnProxy
+                    }
+                    onChange={(event) => setOwnProxy(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {uk.socialAccounts.ownProxyPrivacy}
+                  </p>
+                </>
+              )}
+              <p className="text-sm text-wait">
+                {uk.socialAccounts.proxyChangeWarning}
               </p>
               {accountProxyIndex === null && (
                 <p className="text-sm text-wait">{uk.socialAccounts.noProxy}</p>
               )}
             </div>
           </div>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={keepaliveEnabled}
+              onChange={(event) => setKeepaliveEnabled(event.target.checked)}
+            />
+            {uk.socialAccounts.keepalive}
+          </label>
           <div>
             <label htmlFor={`social-${network}-cookies`}>
               {uk.socialAccounts.cookies} · {uk.social.networks[network]}
@@ -361,7 +480,6 @@ export function SocialAccounts({
                   : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
               }
               rows={4}
-              required={!editing}
               autoComplete="off"
               spellCheck={false}
               value={cookiesJson}
@@ -371,6 +489,7 @@ export function SocialAccounts({
               id={`social-${network}-cookies-help`}
               className="text-xs text-muted-foreground"
             >
+              {uk.socialAccounts.passwordSetup}{' '}
               {uk.socialAccounts.cookiesHint[network]}{' '}
               {editing
                 ? uk.socialAccounts.replaceCookies
@@ -385,9 +504,7 @@ export function SocialAccounts({
             </Button>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button disabled={pending || accountProxyIndex === null}>
-              {uk.forms.save}
-            </Button>
+            <Button disabled={pending || !proxyIndex}>{uk.forms.save}</Button>
           </div>
           {notice && (
             <p role="status" className="text-sm">
@@ -396,7 +513,19 @@ export function SocialAccounts({
           )}
         </form>
       </CrudDialog>
-      {!open && notice && (
+      {current
+        .filter((account) => account.id === loginAccountId)
+        .map((account) => (
+          <SocialLoginDialog
+            key={account.id}
+            account={account}
+            pending={pending}
+            notice={notice}
+            mutate={mutate}
+            onClose={() => setLoginAccountId(undefined)}
+          />
+        ))}
+      {!open && !loginAccountId && notice && (
         <p role="status" className="text-sm">
           {notice}
         </p>

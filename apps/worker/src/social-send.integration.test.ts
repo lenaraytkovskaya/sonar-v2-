@@ -1,20 +1,52 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, expect, it, vi } from 'vitest';
 import { campaignSchema } from '@sonar/core';
+import {
+  encryptSocialStorageState,
+  socialProxyFingerprint,
+} from '@sonar/core/social-session';
 
 const { send } = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock('./social-send-browser.js', () => ({
   socialSendBrowser: { send, close: vi.fn() },
-}));
-vi.mock('@sonar/core/social-session', async (original) => ({
-  ...(await original<typeof import('@sonar/core/social-session')>()),
-  resolveSocialSession: () => ({ cookies: [], proxy: {} }),
 }));
 
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
   'dispatches a human Instagram reply through pg-boss with UI-supported campaign channels',
   async () => {
+    vi.stubEnv(
+      'AUTH_SECRET',
+      'worker-social-send-isolated-test-secret-over-32',
+    );
+    vi.stubEnv('SOCIAL_PROXY_URLS', 'http://worker-social-send.invalid:8000');
+    const sessionSettings = {
+      sessionStatus: 'valid',
+      proxyIndex: 0,
+      proxyFingerprint: socialProxyFingerprint({
+        server: 'http://worker-social-send.invalid:8000',
+      }),
+      storageStateEncrypted: encryptSocialStorageState(
+        JSON.stringify({
+          cookies: [
+            {
+              name: 'sessionid',
+              value: 'stub',
+              domain: '.instagram.com',
+              session: true,
+            },
+          ],
+          origins: [
+            {
+              origin: 'https://www.instagram.com',
+              localStorage: [{ name: 'synthetic', value: 'stub' }],
+            },
+          ],
+        }),
+        'instagram',
+        process.env.AUTH_SECRET!,
+      ),
+    };
     const { sonarPool } = await import('@sonar/db');
     const { boss } = await import('@sonar/db/tasks');
     const { ensureContactConversation, queueConversationReply } =
@@ -74,8 +106,8 @@ it.skipIf(!enabled)(
       );
       await sonarPool.query(
         `insert into channel_accounts(id,channel,name,address,daily_limit,settings)
-         values($1,'instagram','Synthetic worker test','synthetic',20,'{"sessionStatus":"valid"}')`,
-        [account],
+         values($1,'instagram','Synthetic worker test','synthetic',20,$2)`,
+        [account, sessionSettings],
       );
       // Only this fake transport is reachable; no browser or social credentials.
       send.mockImplementation(async (...args: unknown[]) => {
@@ -174,6 +206,7 @@ it.skipIf(!enabled)(
           setting.key,
           JSON.stringify(setting.value),
         ]);
+      vi.unstubAllEnvs();
     }
   },
   20000,

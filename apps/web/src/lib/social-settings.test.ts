@@ -19,6 +19,10 @@ describe('social settings', () => {
       { ...valid(), 'social.page_timeout_ms': 0 },
       { ...valid(), 'social.cost_per_request_usd': NaN },
       { ...valid(), 'social.facebook.daily_limit': 1.5 },
+      { ...valid(), 'social.login.daily_limit': 0 },
+      { ...valid(), 'social.login.daily_limit': 1.5 },
+      { ...valid(), 'social.login.relogin_cooldown_hours': 0 },
+      { ...valid(), 'social.login.relogin_cooldown_hours': 1.5 },
     ])
       expect(validSocialSettings(value)).toBe(false);
   });

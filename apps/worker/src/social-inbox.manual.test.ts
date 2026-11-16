@@ -21,6 +21,27 @@ vi.mock('@sonar/db/social-action', () => ({
 }));
 vi.mock('@sonar/db/social-accounts', () => ({
   releaseSocialFetchSession: vi.fn(),
+  prepareSocialSession: vi.fn(async () => ({ cookies: [], proxy: {} })),
+  pauseSocialFetchSession: vi.fn(async (_c, id, reason) => {
+    await query("update channel_accounts set status='paused'", [
+      id,
+      JSON.stringify({
+        reasonUk:
+          socialSessionCheckReasons[
+            reason as keyof typeof socialSessionCheckReasons
+          ],
+        sessionCheckReason: reason,
+        ...([
+          'login_required',
+          'cookies_invalid',
+          'checkpoint',
+          'captcha',
+        ].includes(reason)
+          ? { sessionStatus: 'invalid' }
+          : {}),
+      }),
+    ]);
+  }),
 }));
 vi.mock('@sonar/db/tasks', () => ({
   runTask,
@@ -30,7 +51,10 @@ import {
   registerSocialInboxTasks,
   runSocialInboxSync,
 } from './social-inbox.js';
-import { SocialSessionCheckError } from '@sonar/core/social-session';
+import {
+  SocialSessionCheckError,
+  socialSessionCheckReasons,
+} from '@sonar/core/social-session';
 
 it('does not reconcile or schedule a successor after a manual terminal result', async () => {
   await registerSocialInboxTasks({ sync: async () => ({ complete: false }) });

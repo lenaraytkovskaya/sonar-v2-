@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { Browser, BrowserContext, Page } from 'playwright';
+import { normalizeSocialCookies } from '@sonar/core/social-session';
 import {
   createSocialSendBrowser,
   type SocialSessionAccount,
@@ -117,13 +118,27 @@ function fixture(
     getByText: exact,
     setDefaultTimeout: vi.fn(),
     close: vi.fn(async () => {}),
+    waitForTimeout: vi.fn(async () => {}),
   };
   const context = {
+    storageState: vi.fn(async () => ({
+      cookies: normalizeSocialCookies(
+        JSON.stringify(session.cookies),
+        'instagram',
+      ),
+      origins: [
+        {
+          origin: 'https://www.instagram.com',
+          localStorage: [{ name: 'token', value: 'rotated' }],
+        },
+      ],
+    })),
     addCookies: vi.fn(async () => {}),
     newPage: vi.fn(async () => page as unknown as Page),
     close: vi.fn(async () => {}),
   };
   const browser = {
+    version: () => '142.0.1.0',
     newContext: vi.fn(async () => context as unknown as BrowserContext),
     close: vi.fn(async () => {}),
   };
@@ -297,5 +312,101 @@ it('keeps context/browser failures separate from invalid cookies', async () => {
     reason: 'browser',
     code: 'unavailable',
   });
+  await f.adapter.close();
+});
+
+it('restores full state and saves rotations with the same persistent device after a successful check', async () => {
+  const f = fixture();
+  const state = await f.context.storageState();
+  const persistStorageState = vi.fn(async () => {});
+  const persistDevice = vi.fn(async () => {});
+  const durable = {
+    ...session,
+    device: {
+      userAgent: '',
+      viewport: { width: 1366, height: 768 },
+      locale: 'uk-UA',
+      timezoneId: 'Europe/Kyiv',
+      deviceScaleFactor: 1,
+    },
+    storageState: state,
+    persistStorageState,
+    persistDevice,
+  };
+  await f.adapter.check(account, durable, 1000);
+  const options = (
+    f.browser.newContext.mock.calls as unknown as [unknown][]
+  )[0]![0];
+  expect(options).toMatchObject({
+    storageState: state,
+    userAgent: expect.stringContaining('Chrome/142.0.1.0'),
+    locale: 'uk-UA',
+    timezoneId: 'Europe/Kyiv',
+    deviceScaleFactor: 1,
+  });
+  expect(f.context.addCookies).not.toHaveBeenCalled();
+  expect(persistDevice.mock.invocationCallOrder[0]).toBeLessThan(
+    f.page.goto.mock.invocationCallOrder[0]!,
+  );
+  expect(persistStorageState).toHaveBeenCalledWith(
+    state,
+    expect.objectContaining({
+      userAgent: expect.stringContaining('Chrome/142.0.1.0'),
+    }),
+  );
+  await f.adapter.close();
+});
+it('does not overwrite durable state on a checkpoint or an empty browser state', async () => {
+  const persistStorageState = vi.fn(async () => {});
+  const persistDevice = vi.fn(async () => {});
+  const broken = fixture({ checkpoint: true });
+  await expect(
+    broken.adapter.check(
+      account,
+      { ...session, device: undefined, persistDevice, persistStorageState },
+      1000,
+    ),
+  ).rejects.toMatchObject({ reason: 'checkpoint' });
+  expect(persistDevice).toHaveBeenCalledOnce();
+  expect(persistStorageState).not.toHaveBeenCalled();
+  await broken.adapter.close();
+  const empty = fixture();
+  empty.context.storageState.mockResolvedValue({ cookies: [], origins: [] });
+  await empty.adapter.check(account, { ...session, persistStorageState }, 1000);
+  expect(persistStorageState).not.toHaveBeenCalled();
+  await empty.adapter.close();
+});
+it('keepalive opens the authenticated feed, waits and persists the refreshed state', async () => {
+  const f = fixture();
+  const persistStorageState = vi.fn(async () => {});
+  await f.adapter.keepalive(
+    account,
+    { ...session, persistStorageState },
+    1000,
+    1500,
+  );
+  expect(f.page.goto).toHaveBeenCalledWith(
+    'https://www.instagram.com/',
+    expect.anything(),
+  );
+  expect(f.page.waitForTimeout).toHaveBeenCalledWith(1500);
+  expect(persistStorageState).toHaveBeenCalledOnce();
+  await f.adapter.close();
+});
+it('retains the successful operation result if a post-dispatch state save fails', async () => {
+  const f = fixture();
+  const result = await f.adapter.withPage(
+    account,
+    {
+      ...session,
+      persistStorageState: async () => {
+        throw Error('storage failed');
+      },
+    },
+    1000,
+    async () => 'confirmed-provider-id',
+    true,
+  );
+  expect(result).toBe('confirmed-provider-id');
   await f.adapter.close();
 });
