@@ -9,6 +9,7 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RevealValue } from './ui/reveal-value';
+import { RowActions } from './ui/row-actions';
 
 type Account = Awaited<ReturnType<typeof listTelegramAccounts>>[number];
 export function TelegramAccounts({
@@ -202,27 +203,26 @@ export function TelegramAccounts({
             </>
           )}
           {account.status !== 'disconnected' && (
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() =>
-                  void mutate('PATCH', {
-                    id: account.id,
-                    enabled: !account.enabled,
-                  })
-                }
-              >
-                {account.enabled ? uk.email.disable : uk.email.enable}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() => void mutate('DELETE', { id: account.id })}
-              >
-                {uk.telegram.disconnect}
-              </Button>
-            </div>
+            <RowActions
+              disabled={pending}
+              actions={[
+                {
+                  kind: account.enabled ? 'disable' : 'enable',
+                  label: account.enabled ? uk.email.disable : uk.email.enable,
+                  onSelect: () =>
+                    void mutate('PATCH', {
+                      id: account.id,
+                      enabled: !account.enabled,
+                    }),
+                },
+                {
+                  kind: 'disconnect',
+                  label: uk.telegram.disconnect,
+                  danger: true,
+                  onSelect: () => void mutate('DELETE', { id: account.id }),
+                },
+              ]}
+            />
           )}
         </section>
       ))}

@@ -9,6 +9,7 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RevealValue } from './ui/reveal-value';
+import { RowActions } from './ui/row-actions';
 
 type Account = Awaited<ReturnType<typeof listWhatsAppAccounts>>[number];
 export function WhatsAppAccounts({
@@ -230,20 +231,6 @@ export function WhatsAppAccounts({
             >
               {uk.whatsapp.repairWebhook}
             </Button>
-            {account.status === 'active' && (
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() =>
-                  void mutate('PATCH', {
-                    id: account.id,
-                    enabled: !account.desiredEnabled,
-                  })
-                }
-              >
-                {account.desiredEnabled ? uk.email.disable : uk.email.enable}
-              </Button>
-            )}
             {['failed', 'stopped'].includes(account.status) && (
               <Button
                 disabled={pending || !configured}
@@ -254,15 +241,39 @@ export function WhatsAppAccounts({
                 {uk.whatsapp.restart}
               </Button>
             )}
-            {account.status !== 'stopped' && (
-              <Button
-                variant="outline"
-                disabled={pending}
-                onClick={() => void mutate('DELETE', { id: account.id })}
-              >
-                {uk.whatsapp.disconnect}
-              </Button>
-            )}
+            <RowActions
+              disabled={pending}
+              actions={[
+                ...(account.status === 'active'
+                  ? [
+                      {
+                        kind: account.desiredEnabled
+                          ? ('disable' as const)
+                          : ('enable' as const),
+                        label: account.desiredEnabled
+                          ? uk.email.disable
+                          : uk.email.enable,
+                        onSelect: () =>
+                          void mutate('PATCH', {
+                            id: account.id,
+                            enabled: !account.desiredEnabled,
+                          }),
+                      },
+                    ]
+                  : []),
+                ...(account.status !== 'stopped'
+                  ? [
+                      {
+                        kind: 'disconnect' as const,
+                        label: uk.whatsapp.disconnect,
+                        danger: true,
+                        onSelect: () =>
+                          void mutate('DELETE', { id: account.id }),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           </div>
         </section>
       ) : (
