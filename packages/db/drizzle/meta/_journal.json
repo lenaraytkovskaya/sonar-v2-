@@ -292,15 +292,22 @@
     {
       "idx": 41,
       "version": "7",
-      "when": 1794800000001,
-      "tag": "0041_social_durable_sessions",
+      "when": 1794800001000,
+      "tag": "0041_analysis_price_cap",
       "breakpoints": true
     },
     {
       "idx": 42,
       "version": "7",
-      "when": 1794800000002,
-      "tag": "0042_social_credential_login",
+      "when": 1794800002000,
+      "tag": "0042_social_durable_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794800003000,
+      "tag": "0043_social_credential_login",
       "breakpoints": true
     }
   ]
