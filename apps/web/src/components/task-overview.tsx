@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { uk } from '@/i18n/uk';
-import { Card } from '@/components/shared';
+import { Callout, Section } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, type ScanResult } from './shared';
 type Task = {
@@ -167,91 +167,174 @@ export function TaskOverview() {
     }
   };
   return (
-    <>
-      <Card className="mb-4 p-4 text-sm">
-        {uk.email.sentToday}: <strong>{sentToday}</strong>
-      </Card>
-      {(error || retryError) && (
-        <p role="alert" className="mb-4 text-err">
-          {uk.tasks.error}
-        </p>
-      )}
-      {batches.length > 0 && (
-        <div className="mb-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-          {batches.slice(0, 6).map((batch) => (
-            <Card key={batch.id} className="space-y-2 p-4 text-sm">
-              <h2 className="font-heading text-base font-bold">
-                {uk.google.title}: {batch.found_new + batch.found_known} /{' '}
-                {batch.size}
-              </h2>
-              <p>
-                {batch.campaign_name} ·{' '}
-                {uk.tasks.status[batch.status as keyof typeof uk.tasks.status]}{' '}
-                · ${Number(batch.cost_usd).toFixed(3)}
-              </p>
-              <progress
-                className="w-full"
-                aria-label={uk.google.title}
-                value={batch.found_new + batch.found_known}
-                max={batch.size}
-              />
-              <p className="text-sm text-muted-foreground">
-                {batch.fixture ? uk.google.fixture : uk.google.estimated}
-              </p>
-              {batch.reason_uk && <p>{batch.reason_uk}</p>}
-              {batch.companies > 0 && (
-                <>
-                  <p>
-                    {uk.enrich.progress}: {batch.enriched} / {batch.companies}
-                    {batch.enriching > 0 &&
-                      ` · ${uk.enrich.running}: ${batch.enriching}`}
+    <div className="space-y-6">
+      {(error || retryError) && <Callout tone="err">{uk.tasks.error}</Callout>}
+      <Section
+        title={uk.tasks.failures}
+        description={failures.length ? undefined : uk.tasks.noFailures}
+      >
+        {failures.length > 0 && (
+          <ul className="divide-y divide-border">
+            {failures.map((task) => (
+              <li
+                key={task.id}
+                className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0 flex-1 break-words">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    {name(task.type)}
+                    <StatusText status={task.status} />
                   </p>
-                  <progress
-                    className="w-full"
-                    aria-label={uk.enrich.progress}
+                  <p
+                    className={
+                      task.status === 'paused'
+                        ? 'mt-0.5 text-sm text-wait'
+                        : 'mt-0.5 text-sm text-err'
+                    }
+                  >
+                    {task.reason_uk}
+                    <span className="text-muted-foreground">
+                      {' '}
+                      · {uk.tasks.repetitions}: {task.repetitions}
+                    </span>
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button
+                    variant="ghost"
+                    disabled={pending === task.id}
+                    onClick={() => void retry(task.id, 'dismiss')}
+                  >
+                    {uk.tasks.dismiss}
+                  </Button>
+                  {task.result?.billingPending ? (
+                    reconciling === task.id ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          disabled={pending === task.id}
+                          onClick={() => void retry(task.id, 'reconcile', true)}
+                        >
+                          {uk.tasks.charged}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          disabled={pending === task.id}
+                          onClick={() =>
+                            void retry(task.id, 'reconcile', false)
+                          }
+                        >
+                          {uk.tasks.notCharged}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        onClick={() => setReconciling(task.id)}
+                      >
+                        {uk.tasks.reconcile}
+                      </Button>
+                    )
+                  ) : task.type ===
+                    'social.request' ? null : task.type.startsWith(
+                      'whatsapp.account.',
+                    ) ? (
+                    <Button asChild variant="outline">
+                      <Link href="/channels">{uk.pages.channels.title}</Link>
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      disabled={pending === task.id}
+                      onClick={() => void retry(task.id)}
+                    >
+                      {uk.tasks.retry}
+                    </Button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+      {batches.length > 0 && (
+        <Section title={uk.tasks.batches}>
+          <ul className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+            {batches.slice(0, 6).map((batch) => (
+              <li
+                key={batch.id}
+                className="space-y-3 rounded-lg border border-border p-4 text-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {batch.campaign_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {batch.fixture ? uk.google.fixture : uk.google.estimated}{' '}
+                      · ${Number(batch.cost_usd).toFixed(3)}
+                    </p>
+                  </div>
+                  <StatusText status={batch.status} />
+                </div>
+                <ProgressRow
+                  label={uk.google.title}
+                  value={batch.found_new + batch.found_known}
+                  max={batch.size}
+                />
+                {batch.companies > 0 && (
+                  <ProgressRow
+                    label={
+                      batch.enriching > 0
+                        ? `${uk.enrich.progress} · ${uk.enrich.running}: ${batch.enriching}`
+                        : uk.enrich.progress
+                    }
                     value={batch.enriched}
                     max={batch.companies}
                   />
-                </>
-              )}
-            </Card>
-          ))}
-        </div>
+                )}
+                {batch.reason_uk && (
+                  <p className="text-xs text-muted-foreground">
+                    {batch.reason_uk}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
       )}
-      <Card className="mb-4 p-4">
-        <h2 className="mb-4 font-heading text-base font-bold">
-          {uk.tasks.active}
-        </h2>
+      <Section
+        title={uk.tasks.active}
+        description={`${uk.email.sentToday}: ${sentToday}`}
+      >
         {active.length === 0 && (
-          <p className="text-muted-foreground">{uk.tasks.empty}</p>
+          <p className="text-sm text-muted-foreground">{uk.tasks.empty}</p>
         )}
-        {active.map((type) => {
-          const rows = counts.filter((x) => x.type === type);
-          const total = rows.reduce((s, x) => s + x.count, 0);
-          const done = rows
-            .filter((x) => x.status === 'done')
-            .reduce((s, x) => s + x.count, 0);
-          return (
-            <div key={type} className="mb-4">
-              <p>{name(type)}</p>
-              <p className="text-sm text-muted-foreground">
-                {rows
-                  .map(
-                    (x) =>
-                      `${uk.tasks.status[x.status as keyof typeof uk.tasks.status]}: ${x.count}`,
-                  )
-                  .join(' · ')}
-              </p>
-              <progress
-                className="w-full"
-                aria-label={name(type)}
-                value={done}
-                max={total}
-              />
-            </div>
-          );
-        })}
-        <ul className="mt-4 space-y-2 border-t border-border pt-4">
+        {active.length > 0 && (
+          <ul className="grid gap-4 md:grid-cols-2">
+            {active.map((type) => {
+              const rows = counts.filter((x) => x.type === type);
+              const total = rows.reduce((s, x) => s + x.count, 0);
+              const done = rows
+                .filter((x) => x.status === 'done')
+                .reduce((s, x) => s + x.count, 0);
+              return (
+                <li key={type} className="space-y-1.5 text-sm">
+                  <ProgressRow label={name(type)} value={done} max={total} />
+                  <p className="text-xs text-muted-foreground">
+                    {rows
+                      .map(
+                        (x) =>
+                          `${uk.tasks.status[x.status as keyof typeof uk.tasks.status]}: ${x.count}`,
+                      )
+                      .join(' · ')}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <ul className="mt-5 divide-y divide-border border-t border-border">
           {tasks
             // Registry health checks repeat every few minutes; one line is enough.
             .filter(
@@ -263,13 +346,18 @@ export function TaskOverview() {
             .map((task) => (
               <li
                 key={task.id}
-                className="flex min-w-0 flex-wrap justify-between gap-2 break-words text-sm"
+                className="flex min-w-0 flex-wrap items-start justify-between gap-2 py-2.5 text-sm break-words"
               >
-                <span>
+                <span className="min-w-0">
                   {name(task.type)}
-                  {task.company_name && ` · ${task.company_name}`}
+                  {task.company_name && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      · {task.company_name}
+                    </span>
+                  )}
                   {task.reason_uk && (
-                    <span className="block text-muted-foreground">
+                    <span className="block text-xs text-muted-foreground">
                       {task.reason_uk}
                     </span>
                   )}
@@ -278,7 +366,7 @@ export function TaskOverview() {
                   )}
                   {task.type === 'system.registry_ping' &&
                     task.result?.approximate && (
-                      <span className="block text-muted-foreground">
+                      <span className="block text-xs text-muted-foreground">
                         {uk.tasks.approximate}:{' '}
                         {Object.entries(task.result.counts ?? {})
                           .map(
@@ -293,82 +381,42 @@ export function TaskOverview() {
               </li>
             ))}
         </ul>
-      </Card>
-      <Card className="p-4">
-        <h2 className="mb-4 font-heading text-base font-bold">
-          {uk.tasks.failures}
-        </h2>
-        {failures.map((task) => (
-          <div
-            key={task.id}
-            className="flex flex-wrap items-center gap-3 border-b border-border py-3 last:border-0"
-          >
-            <div className="min-w-0 flex-1 break-words">
-              <p className="flex flex-wrap items-center gap-2 font-medium">
-                {name(task.type)}
-                <StatusText status={task.status} />
-              </p>
-              <p
-                className={
-                  task.status === 'paused'
-                    ? 'text-sm text-wait'
-                    : 'text-sm text-err'
-                }
-              >
-                {task.reason_uk} · {uk.tasks.repetitions}: {task.repetitions}
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <Button
-                variant="outline"
-                disabled={pending === task.id}
-                onClick={() => void retry(task.id, 'dismiss')}
-              >
-                {uk.tasks.dismiss}
-              </Button>
-              {task.result?.billingPending ? (
-                reconciling === task.id ? (
-                  <>
-                    <Button
-                      disabled={pending === task.id}
-                      onClick={() => void retry(task.id, 'reconcile', true)}
-                    >
-                      {uk.tasks.charged}
-                    </Button>
-                    <Button
-                      disabled={pending === task.id}
-                      onClick={() => void retry(task.id, 'reconcile', false)}
-                    >
-                      {uk.tasks.notCharged}
-                    </Button>
-                  </>
-                ) : (
-                  <Button onClick={() => setReconciling(task.id)}>
-                    {uk.tasks.reconcile}
-                  </Button>
-                )
-              ) : task.type === 'social.request' ? null : task.type.startsWith(
-                  'whatsapp.account.',
-                ) ? (
-                <Button asChild>
-                  <Link href="/channels">{uk.pages.channels.title}</Link>
-                </Button>
-              ) : (
-                <Button
-                  disabled={pending === task.id}
-                  onClick={() => void retry(task.id)}
-                >
-                  {uk.tasks.retry}
-                </Button>
-              )}
-            </div>
-          </div>
-        ))}
-        {failures.length === 0 && (
-          <p className="text-muted-foreground">{uk.tasks.noFailures}</p>
-        )}
-      </Card>
-    </>
+      </Section>
+    </div>
+  );
+}
+
+function ProgressRow({
+  label,
+  value,
+  max,
+}: {
+  label: string;
+  value: number;
+  max: number;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="min-w-0 truncate">{label}</span>
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          {value} / {max}
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        className="h-1.5 overflow-hidden rounded-full bg-chip"
+      >
+        <div
+          className="h-full rounded-full bg-accent"
+          style={{ width: `${max ? Math.min((value / max) * 100, 100) : 0}%` }}
+        />
+      </div>
+    </div>
   );
 }
 

@@ -1,8 +1,22 @@
 import { TaskOverview } from '@/components/task-overview';
-import { Card, PageHeader } from '@/components/shared';
+import { PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
+import { Callout, InfoTip, Section } from '@/components/ui/layout';
 import { uk } from '@/i18n/uk';
 import { validId } from '@/lib/api-access';
+
+const stages = [
+  'found',
+  'enriched',
+  'ready',
+  'contacted',
+  'replied',
+  'interested',
+  'deal',
+] as const;
+const percent = (part: number, whole: number) =>
+  whole ? `${Math.round((part / whole) * 100)}%` : '—';
+
 export default async function Page({
   searchParams,
 }: {
@@ -19,92 +33,145 @@ export default async function Page({
     ),
   ]);
   const t = uk.overview;
+  const f = data.funnel;
+  const kpis = [
+    { key: 'found', value: f.found, note: t.kpiNotes.found },
+    {
+      key: 'ready',
+      value: f.ready,
+      note: `${percent(f.ready, f.found)} ${t.kpiNotes.ofFound}`,
+    },
+    {
+      key: 'contacted',
+      value: f.contacted,
+      note: `${percent(f.contacted, f.ready)} ${t.kpiNotes.ofReady}`,
+    },
+    {
+      key: 'replied',
+      value: f.replied,
+      note: `${percent(f.replied, f.contacted)} ${t.kpiNotes.ofContacted}`,
+    },
+  ] as const;
   return (
-    <>
-      <PageHeader {...uk.pages.overview} />
-      <form className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="grid max-w-full gap-1 text-sm">
-          {t.campaign}
-          <select
-            name="campaign"
-            defaultValue={selected ?? ''}
-            className="min-h-11 max-w-full rounded-lg border border-border bg-surface px-3"
+    <div className="space-y-6">
+      <PageHeader
+        {...uk.pages.overview}
+        actions={
+          <form className="flex flex-wrap items-center gap-2">
+            <select
+              name="campaign"
+              aria-label={t.campaign}
+              defaultValue={selected ?? ''}
+              className="min-h-9 max-w-64 rounded-lg border border-border bg-surface px-3 text-sm shadow-xs"
+            >
+              <option value="">{t.all}</option>
+              {campaigns.rows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </select>
+            <Button type="submit" variant="outline">
+              {uk.finance.apply}
+            </Button>
+          </form>
+        }
+      />
+      <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {kpis.map((kpi) => (
+          <li
+            key={kpi.key}
+            className="rounded-xl border border-border bg-surface p-5 shadow-xs"
           >
-            <option value="">{t.all}</option>
-            {campaigns.rows.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.name}
-              </option>
+            <p className="text-sm text-muted-foreground">{t.stages[kpi.key]}</p>
+            <p className="mt-1 font-heading text-3xl font-bold tabular-nums">
+              {kpi.value}
+            </p>
+            <p className="mt-3 text-xs text-muted-foreground">{kpi.note}</p>
+          </li>
+        ))}
+      </ul>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <Section
+          title={
+            <span className="inline-flex items-center gap-2">
+              {t.funnel}
+              <InfoTip>{t.funnelHint}</InfoTip>
+            </span>
+          }
+        >
+          <ol className="space-y-3">
+            {stages.map((key) => (
+              <li
+                key={key}
+                className="grid grid-cols-[8rem_minmax(0,1fr)_3.5rem] items-center gap-3 text-sm"
+              >
+                <span className="text-muted-foreground">{t.stages[key]}</span>
+                <span className="h-2 overflow-hidden rounded-full bg-chip">
+                  <span
+                    className="block h-full rounded-full bg-accent"
+                    style={{
+                      width: `${f.found ? Math.max((f[key] / f.found) * 100, f[key] ? 2 : 0) : 0}%`,
+                    }}
+                  />
+                </span>
+                <span className="text-right font-medium tabular-nums">
+                  {f[key]}
+                </span>
+              </li>
             ))}
-          </select>
-        </label>
-        <Button type="submit" className="min-h-11">
-          {uk.finance.apply}
-        </Button>
-      </form>
-      <Card className="mb-4 p-4">
-        <h2 className="mb-2 font-heading font-bold">{t.funnel}</h2>
-        <p className="mb-4 text-sm text-muted-foreground">{t.funnelHint}</p>
-        <ol className="grid gap-3 sm:grid-cols-4 lg:grid-cols-7">
-          {(
-            [
-              'found',
-              'enriched',
-              'ready',
-              'contacted',
-              'replied',
-              'interested',
-              'deal',
-            ] as const
-          ).map((key) => (
-            <li key={key} className="rounded-lg bg-raised p-3">
-              <p className="text-sm text-muted-foreground">{t.stages[key]}</p>
-              <strong className="text-xl tabular-nums">
-                {data.funnel[key]}
-              </strong>
-              <progress
-                className="mt-2 h-2 w-full"
-                aria-label={t.stages[key]}
-                value={data.funnel[key]}
-                max={data.funnel.found || 1}
-              />
-            </li>
-          ))}
-        </ol>
-        <p className="mt-4 text-sm">
-          {t.stages.refused}: <strong>{data.funnel.refused}</strong> ·{' '}
-          {t.stages.doNotContact}: <strong>{data.funnel.doNotContact}</strong>
-        </p>
-      </Card>
-      <Card className="mb-4 p-4">
-        <h2 className="mb-3 font-heading font-bold">{t.sent}</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr>
-              <th className="py-2">{t.channel}</th>
-              <th>{t.today}</th>
-              <th>{t.week}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.channels.map((row) => (
-              <tr key={row.channel} className="border-t border-border">
-                <td className="py-2">{t.channels[row.channel]}</td>
-                <td>{row.today}</td>
-                <td>{row.last7Days}</td>
+          </ol>
+          <p className="mt-4 text-xs text-muted-foreground">
+            {t.stages.refused}:{' '}
+            <span className="font-medium text-foreground tabular-nums">
+              {f.refused}
+            </span>{' '}
+            · {t.stages.doNotContact}:{' '}
+            <span className="font-medium text-foreground tabular-nums">
+              {f.doNotContact}
+            </span>
+          </p>
+        </Section>
+        <Section
+          title={
+            <span className="inline-flex items-center gap-2">
+              {t.sent}
+              <InfoTip>{t.timeHint}</InfoTip>
+            </span>
+          }
+        >
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground">
+                <th className="pb-2 font-medium">{t.channel}</th>
+                <th className="pb-2 text-right font-medium">{t.today}</th>
+                <th className="pb-2 text-right font-medium">{t.week}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-4">
-          {t.errors}:{' '}
-          <strong className={data.failedTasks24h ? 'text-err' : ''}>
-            {data.failedTasks24h}
-          </strong>
-        </p>
-        <p className="mt-2 text-sm text-muted-foreground">{t.timeHint}</p>
-      </Card>
+            </thead>
+            <tbody>
+              {data.channels.map((row) => (
+                <tr key={row.channel} className="border-t border-border">
+                  <td className="py-2.5">{t.channels[row.channel]}</td>
+                  <td className="py-2.5 text-right tabular-nums">
+                    {row.today}
+                  </td>
+                  <td className="py-2.5 text-right tabular-nums">
+                    {row.last7Days}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.failedTasks24h > 0 && (
+            <div className="mt-4">
+              <Callout tone="err">
+                {t.errors}: {data.failedTasks24h}
+              </Callout>
+            </div>
+          )}
+        </Section>
+      </div>
       <TaskOverview />
-    </>
+    </div>
   );
 }

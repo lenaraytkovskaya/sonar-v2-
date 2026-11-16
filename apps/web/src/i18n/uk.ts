@@ -413,6 +413,12 @@ export const uk = {
     today: 'Сьогодні',
     week: 'За 7 днів',
     errors: 'Помилки задач за 24 години',
+    kpiNotes: {
+      found: 'нові компанії за 30 днів',
+      ofFound: 'від знайдених',
+      ofReady: 'від готових',
+      ofContacted: 'від контактованих',
+    },
     timeHint:
       'Сьогодні — за UTC; 7 днів і 24 години — рухомі періоди. Нижче — поточні задачі всіх кампаній.',
     channels: {
@@ -1028,6 +1034,7 @@ export const uk = {
     },
   },
   tasks: {
+    batches: 'Порції пошуку',
     reconcile: 'Звірити',
     charged: 'Списано',
     notCharged: 'Не списано',
