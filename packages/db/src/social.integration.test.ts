@@ -305,6 +305,11 @@ it.skipIf(!enabled)(
       );
       accountId = saved.id;
       await withSocialSessionCheck(accountId, async () => ({ valid: true }));
+      // A session check now also spaces account actions; this test exercises the fetch itself.
+      await sonarPool.query(
+        "update channel_accounts set settings=settings - 'socialAction' where id=$1",
+        [accountId],
+      );
       await sonarPool.query(
         "insert into companies(id,place_id,name,country_code) values($1::uuid,$1::text,'Rate limit test','UA')",
         [company],
@@ -556,6 +561,11 @@ it.skipIf(!enabled)(
       await accounts.withSocialSessionCheck(accountId, async () => ({
         valid: true,
       }));
+      // A session check now also spaces account actions; this test exercises the fetch itself.
+      await sonarPool.query(
+        "update channel_accounts set settings=settings - 'socialAction' where id=$1",
+        [accountId],
+      );
       fetch.mockResolvedValueOnce({ ...page, error: 'session_invalid' });
       await read(); // Session on 1, fallback on the fourth anonymous endpoint.
       expect(fetch.mock.calls.map((call) => call[1].server)).toEqual(
