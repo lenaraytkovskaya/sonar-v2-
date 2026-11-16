@@ -348,8 +348,16 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
     'select result,exists(select 1 from spend_events where task_id=tasks.id) as billed from tasks where id=$1',
     [taskId],
   );
-  if (task?.result?.draftInput && (task.billed || task.result.billingPending))
-    return task.result.draftInput;
+  if (task?.result?.draftInput && (task.billed || task.result.billingPending)) {
+    const input = task.result.draftInput;
+    if (!input.config?.['ai.reasoning']) {
+      const { rows: settings } = await sonarPool.query(
+        "select value from settings where key='ai.reasoning'",
+      );
+      if (settings[0]) input.config['ai.reasoning'] = settings[0].value;
+    }
+    return input;
+  }
   const {
     rows: [row],
   } = await sonarPool.query(
@@ -378,7 +386,7 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
     [`outreach:${taskId}`],
   );
   const { rows: settings } = await sonarPool.query(
-    "select key,value from settings where key like 'draft.%' or key in ('company.about','ai.models','ai.model.cheap')",
+    "select key,value from settings where key like 'draft.%' or key in ('company.about','ai.models','ai.model.cheap','ai.reasoning')",
   );
   const config = Object.fromEntries(settings.map((r) => [r.key, r.value]));
   const snapshot = {

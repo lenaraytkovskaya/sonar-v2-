@@ -90,8 +90,16 @@ export async function analysisSnapshot(
   if (
     task?.result?.analysisInput &&
     (task.billed || task.result.billingPending)
-  )
-    return task.result.analysisInput;
+  ) {
+    const input = task.result.analysisInput;
+    if (!input.config?.['ai.reasoning']) {
+      const { rows: settings } = await sonarPool.query(
+        "select value from settings where key='ai.reasoning'",
+      );
+      if (settings[0]) input.config['ai.reasoning'] = settings[0].value;
+    }
+    return input;
+  }
   const {
     rows: [input],
   } = await sonarPool.query(
@@ -111,7 +119,7 @@ export async function analysisSnapshot(
     return { url: p.source_url, text };
   });
   const { rows } = await sonarPool.query(
-    "select key,value from settings where key like 'analysis.%' or key in ('company.about','ai.models','ai.model.cheap')",
+    "select key,value from settings where key like 'analysis.%' or key in ('company.about','ai.models','ai.model.cheap','ai.reasoning')",
   );
   const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   if (typeof task?.payload?.analysisPrompt === 'string')

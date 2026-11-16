@@ -165,7 +165,7 @@ export async function resolveGoogleMaps(
       // Resolution is documented as free, including failed attempts. It has its
       // own durable receipt and never consumes the paid Place Details task ID.
       await client.query(
-        `insert into spend_events(service_code,units,cost_usd,task_id,meta) values('google_places',1,$1,$2,$3) on conflict(task_id) do nothing`,
+        `insert into spend_events(service_code,units,cost_usd,task_id,attempt,meta) values('google_places',1,$1,$2,0,$3) on conflict(task_id,attempt) do nothing`,
         [
           limits.priceUsd,
           receipt.id,
