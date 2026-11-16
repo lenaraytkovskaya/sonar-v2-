@@ -29,7 +29,8 @@ const loginUrls = {
   linkedin: 'https://www.linkedin.com/login',
 };
 const loginInputs = {
-  instagram: 'input[name="username"]',
+  // Instagram's 2026 login form names the field "email" (it accepts a username too).
+  instagram: 'input[name="username"],input[name="email"]',
   facebook: 'input[name="email"],input[name="email_address"]',
   linkedin: 'input[name="session_key"],input#username',
 };
