@@ -319,10 +319,10 @@ export default async function Page({
                 : label}
             </p>
           ))}
-          {contact.source === 'manual' && (
-            <DeleteManualContact companyId={id} contactId={contact.id} />
-          )}
         </div>
+        {contact.source === 'manual' && (
+          <DeleteManualContact companyId={id} contactId={contact.id} />
+        )}
       </li>
     );
   };
