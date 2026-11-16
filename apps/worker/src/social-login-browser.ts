@@ -326,7 +326,35 @@ export function createSocialLoginBrowser(
       await password.fill(credentials.password);
       await password.press('Enter');
       diag.stage = 'after_password';
-      let state = await settledState(page, account.channel, timeoutMs);
+      let state = await settledState(
+        page,
+        account.channel,
+        Math.min(timeoutMs, 6000),
+      );
+      // Facebook's 2026 form ignores Enter: press the visible "Log in" button once.
+      if (
+        state === 'pending' &&
+        (await password.isVisible().catch(() => false))
+      ) {
+        const submit = page
+          .locator(
+            'button[type="submit"],input[type="submit"],[role="button"][aria-label]',
+          )
+          .filter({
+            hasText: /^\s*(?:Log in|Увійти|Войти|Sign in|Вхід)\s*$/i,
+          })
+          .filter({ visible: true })
+          .first();
+        const fallback = page
+          .getByRole('button', { name: /^(?:Log in|Увійти|Войти|Sign in)$/i })
+          .filter({ visible: true })
+          .first();
+        if (await submit.count().catch(() => 0)) await submit.click();
+        else if (await fallback.count().catch(() => 0)) await fallback.click();
+        diag.stage = 'after_password_click';
+      }
+      if (state === 'pending')
+        state = await settledState(page, account.channel, timeoutMs);
       diag.state = state;
       let totpSubmitted = false,
         manualSubmitted = false;
