@@ -316,6 +316,13 @@
       "when": 1794800004000,
       "tag": "0044_analysis_output_lengths",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794800005000,
+      "tag": "0045_keepalive_task_settings",
+      "breakpoints": true
     }
   ]
 }
