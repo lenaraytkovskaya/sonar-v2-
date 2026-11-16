@@ -24,6 +24,7 @@ import { uk } from '@/i18n/uk';
 import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { MessageNotifier } from './message-notifier';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
@@ -116,6 +117,7 @@ export function Shell({
   );
   return (
     <TasksProvider>
+      <MessageNotifier />
       <div
         style={
           inbox && inboxHeight
