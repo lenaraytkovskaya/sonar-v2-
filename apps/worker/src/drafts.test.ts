@@ -49,6 +49,7 @@ const data = () => ({
     'draft.max_tokens': 1500,
     'draft.short_max_length': 1000,
     'ai.model.cheap': 'stub',
+    'ai.reasoning': { effort: 'low', exclude: true },
     'ai.models': [
       {
         id: 'stub',
@@ -159,7 +160,7 @@ it('rejects malformed or overly long paid replies without saving a draft', async
   }
   expect(save).not.toHaveBeenCalled();
 });
-it('pauses unknown billing and reports billed truncation or HTTP failures', async () => {
+it('pauses unknown billing and reports truncation after retry or HTTP failures', async () => {
   const api = client();
   api.complete.mockRejectedValueOnce(
     new OpenRouterError('network_unavailable'),
@@ -168,17 +169,59 @@ it('pauses unknown billing and reports billed truncation or HTTP failures', asyn
     status: 'paused',
     reasonCode: 'billing_uncertain',
   });
-  api.complete.mockRejectedValueOnce(
-    new OpenRouterError('finish_reason', { units: 5 }, 'length'),
-  );
+  api.complete
+    .mockRejectedValueOnce(
+      new OpenRouterError('finish_reason', { units: 5 }, 'length'),
+    )
+    .mockRejectedValueOnce(
+      new OpenRouterError('finish_reason', { units: 8 }, 'length'),
+    );
   await expect(runOutreachDraft(input, 'task', api)).rejects.toMatchObject({
     code: 'finish_reason',
-    reasonUk: expect.stringContaining('draft.max_tokens'),
+    reasonUk: expect.stringContaining('іншу дешеву модель'),
   });
   api.complete.mockRejectedValueOnce(new PaidHttpError(429));
   await expect(runOutreachDraft(input, 'task', api)).rejects.toMatchObject({
     code: 'http_429',
   });
+});
+
+it('retries a truncated draft once with increased tokens within its price cap', async () => {
+  const api = client();
+  api.complete
+    .mockRejectedValueOnce(
+      new OpenRouterError(
+        'finish_reason',
+        { units: 5, costUsd: 0.001 },
+        'length',
+      ),
+    )
+    .mockResolvedValueOnce(response);
+  expect(await runOutreachDraft(input, 'task', api)).toMatchObject({
+    status: 'done',
+  });
+  expect(api.complete).toHaveBeenCalledTimes(2);
+  expect(
+    (
+      api.complete.mock.calls as unknown as [
+        unknown,
+        unknown,
+        number,
+        unknown,
+      ][]
+    ).map((call) => [call[2], call[3]]),
+  ).toEqual([
+    [1500, { effort: 'low', exclude: true }],
+    [3000, { effort: 'low', exclude: true }],
+  ]);
+  expect(budgeted).toHaveBeenNthCalledWith(
+    2,
+    'openrouter',
+    expect.any(Number),
+    'task',
+    expect.any(Function),
+    1,
+  );
 });
 it('generates short body-only drafts for messengers, forms and social contacts', async () => {
   for (const channel of ['telegram', 'whatsapp', 'form', 'social']) {

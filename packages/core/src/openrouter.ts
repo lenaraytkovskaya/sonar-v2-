@@ -20,6 +20,10 @@ export type TextModel = {
   completionUsd: number;
   requestUsd: number;
 };
+export type ReasoningConfig = {
+  effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  exclude?: boolean;
+};
 export function compareModelPrice(a: TextModel, b: TextModel) {
   return (
     a.promptUsd + a.completionUsd - b.promptUsd - b.completionUsd ||
@@ -121,6 +125,7 @@ export function createOpenRouterClient(
       model: string,
       messages: { role: 'system' | 'user'; content: string }[],
       maxTokens: number,
+      reasoning: ReasoningConfig = { exclude: true },
     ): Promise<PaidResponse> {
       if (!model || !Number.isInteger(maxTokens) || maxTokens < 1)
         throw new OpenRouterError('invalid_response');
@@ -129,7 +134,7 @@ export function createOpenRouterClient(
         messages,
         max_tokens: maxTokens,
         stream: false,
-        reasoning: { exclude: true },
+        reasoning,
       });
       // Retain only validated billing numbers, never provider content or keys.
       const usage = response.usage as Record<string, unknown> | undefined;

@@ -4,6 +4,7 @@ import {
   PaidHttpError,
   createOpenRouterClient,
   parseAnalysis,
+  type ReasoningConfig,
   type TextModel,
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
@@ -63,7 +64,9 @@ export async function runCompanyAnalysis(
     !Number.isInteger(maxTokens) ||
     maxTokens < 1 ||
     maxTokens > 10000 ||
-    typeof config['analysis.prompt'] !== 'string'
+    typeof config['analysis.prompt'] !== 'string' ||
+    !config['ai.reasoning'] ||
+    typeof config['ai.reasoning'] !== 'object'
   )
     throw new TaskFailure(
       'analysis_config_invalid',
@@ -93,10 +96,11 @@ export async function runCompanyAnalysis(
       content: JSON.stringify({ untrusted_data: untrusted }),
     },
   ];
-  const estimate =
+  const estimateFor = (tokens: number) =>
     (Buffer.byteLength(JSON.stringify(messages)) + 100) * model.promptUsd +
-    maxTokens * model.completionUsd +
+    tokens * model.completionUsd +
     model.requestUsd;
+  const estimate = estimateFor(maxTokens);
   if (!Number.isFinite(estimate) || estimate < 0 || estimate > maxUsd)
     return {
       status: 'paused',
@@ -107,12 +111,37 @@ export async function runCompanyAnalysis(
   try {
     const api =
       client ?? createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? '');
-    const response = await runBudgetedRequest(
-      'openrouter',
-      estimate,
-      taskId,
-      () => api.complete(model.id, messages, maxTokens),
-    );
+    const reasoning = config['ai.reasoning'] as ReasoningConfig;
+    let response;
+    try {
+      response = await runBudgetedRequest('openrouter', estimate, taskId, () =>
+        api.complete(model.id, messages, maxTokens, reasoning),
+      );
+    } catch (error) {
+      if (
+        !(error instanceof OpenRouterError) ||
+        error.finishReason !== 'length'
+      )
+        throw error;
+      const retryTokens = Math.min(maxTokens * 2, 10000);
+      const retryEstimate = estimateFor(retryTokens);
+      if (
+        retryTokens <= maxTokens ||
+        !Number.isFinite(retryEstimate) ||
+        estimate + retryEstimate > maxUsd
+      )
+        throw new TaskFailure(
+          'analysis_truncated',
+          'Відповідь обрізана в межах ліміту вартості. Оберіть іншу дешеву модель у Налаштуваннях або збільште analysis.max_usd.',
+        );
+      response = await runBudgetedRequest(
+        'openrouter',
+        retryEstimate,
+        taskId,
+        () => api.complete(model.id, messages, retryTokens, reasoning),
+        1,
+      );
+    }
     let result;
     try {
       result = parseAnalysis(response.text, data.contacts, data.about);
@@ -184,7 +213,7 @@ export async function runCompanyAnalysis(
       throw new TaskFailure(
         error.code,
         error.finishReason === 'length'
-          ? 'Відповідь ШІ обрізана: збільште analysis.max_tokens. Витрати збережено.'
+          ? 'Відповідь ШІ обрізана і після повторної спроби. Модель витрачає ліміт на міркування — оберіть іншу дешеву модель у Налаштуваннях. Витрати збережено.'
           : error.code === 'empty_content'
             ? 'ШІ не повернув текст аналізу. Витрати збережено; спробуйте іншу модель.'
             : `OpenRouter не повернув коректний аналіз (${error.code}). Витрати збережено.`,

@@ -33,6 +33,21 @@ describe('OpenRouter adapter', () => {
     expect(body.reasoning).toEqual({ exclude: true });
     expect(body).not.toHaveProperty('usage');
   });
+  it('sends configured reasoning controls to OpenRouter', async () => {
+    const fetcher = stub(reply);
+    await createOpenRouterClient('test-token', fetcher).complete(
+      'chosen/model',
+      [{ role: 'user', content: 'Write a short draft' }],
+      1500,
+      { effort: 'low', exclude: true },
+    );
+    expect(
+      JSON.parse(fetcher.mock.calls[0]![1]!.body as string).reasoning,
+    ).toEqual({
+      effort: 'low',
+      exclude: true,
+    });
+  });
   it('reports missing cost with received-response billing evidence', async () => {
     await expect(
       createOpenRouterClient(
