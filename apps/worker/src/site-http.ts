@@ -290,11 +290,9 @@ export class SiteHttp {
             'Сайт недоступний: не вдалося перевірити robots.txt.',
           );
         const text = decodeSiteHtml(response.body, response.contentType);
-        if (/^\s*</.test(text))
-          throw new SiteUnavailable(
-            'robots_unavailable',
-            'Сайт недоступний: некоректний robots.txt.',
-          );
+        // Many sites answer /robots.txt with their HTML page: that is "no rules", as search
+        // engines treat it. Bot challenges are still detected on the pages themselves.
+        if (/^\s*</.test(text)) return '';
         return text;
       });
       this.robots.set(origin, rules);
