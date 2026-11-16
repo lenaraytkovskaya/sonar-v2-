@@ -12,6 +12,9 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   return handle(request, 'PATCH');
 }
+export async function DELETE(request: Request) {
+  return handle(request, 'DELETE');
+}
 async function handle(request: Request, method: string) {
   const user = await apiUser(request, method !== 'GET');
   if (!user) return respond({ error: uk.unauthorized }, 401);
@@ -25,7 +28,87 @@ async function handle(request: Request, method: string) {
   try {
     let queued = false;
     let inboxSync;
-    if (method === 'POST' && credentialAction) {
+    if (method === 'DELETE') {
+      if (
+        data?.action !== 'remove' ||
+        !validId(data.id) ||
+        Object.keys(data).some((key) => !['action', 'id'].includes(key))
+      )
+        return invalid();
+      await db.removeSocialAccount(data.id, user.id);
+    } else if (method === 'POST' && data?.action === 'createWithCredentials') {
+      const totpSecret =
+        typeof data.totpSecret === 'string'
+          ? data.totpSecret
+              .replace(/[\s-]/g, '')
+              .toUpperCase()
+              .replace(/=+$/, '')
+          : data.totpSecret;
+      if (
+        Object.keys(data).some(
+          (key) =>
+            ![
+              'action',
+              'name',
+              'network',
+              'dailyLimit',
+              'proxyIndex',
+              'ownProxy',
+              'keepaliveEnabled',
+              'login',
+              'password',
+              'totpSecret',
+            ].includes(key),
+        ) ||
+        !socialNetworks.includes(data.network) ||
+        typeof data.name !== 'string' ||
+        !data.name.trim() ||
+        data.name.length > 200 ||
+        !Number.isSafeInteger(data.dailyLimit) ||
+        data.dailyLimit < 1 ||
+        typeof data.login !== 'string' ||
+        !data.login.trim() ||
+        data.login.length > 320 ||
+        typeof data.password !== 'string' ||
+        !data.password ||
+        data.password.length > 1024 ||
+        (totpSecret !== undefined &&
+          totpSecret !== null &&
+          (typeof totpSecret !== 'string' ||
+            !/^[A-Z2-7]{16,256}$/.test(totpSecret))) ||
+        (data.proxyIndex !== undefined &&
+          (!Number.isSafeInteger(data.proxyIndex) ||
+            data.proxyIndex < 0 ||
+            data.proxyIndex >= db.getSocialProxyCount())) ||
+        (data.ownProxy !== undefined &&
+          data.ownProxy !== null &&
+          (typeof data.ownProxy !== 'string' || data.ownProxy.length > 4000)) ||
+        (data.keepaliveEnabled !== undefined &&
+          typeof data.keepaliveEnabled !== 'boolean')
+      )
+        return invalid();
+      await db.createSocialAccountWithCredentials(
+        {
+          name: data.name,
+          network: data.network,
+          dailyLimit: data.dailyLimit,
+          ...(data.proxyIndex === undefined
+            ? {}
+            : { proxyIndex: data.proxyIndex }),
+          ...(data.ownProxy === undefined ? {} : { ownProxy: data.ownProxy }),
+          ...(data.keepaliveEnabled === undefined
+            ? {}
+            : { keepaliveEnabled: data.keepaliveEnabled }),
+          login: data.login,
+          password: data.password,
+          ...(totpSecret === undefined || totpSecret === null
+            ? {}
+            : { totpSecret }),
+        },
+        user.id,
+      );
+      queued = true;
+    } else if (method === 'POST' && credentialAction) {
       const allowed =
         data.action === 'credentials'
           ? ['action', 'id', 'login', 'password', 'totpSecret']

@@ -488,6 +488,7 @@ export async function saveSocialAccount(
     dailyLimit: number;
   },
   userId: string,
+  existing?: PoolClient,
 ) {
   const name = input.name?.trim();
   if (
@@ -571,8 +572,82 @@ export async function saveSocialAccount(
       c,
     );
     return { id: String(id) };
+  }, existing);
+}
+
+export async function createSocialAccountWithCredentials(
+  input: {
+    network: SocialNetwork;
+    name: string;
+    ownProxy?: string | null;
+    keepaliveEnabled?: boolean;
+    proxyIndex?: number;
+    dailyLimit: number;
+    login: string;
+    password: string;
+    totpSecret?: string;
+  },
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const saved = await saveSocialAccount(input, userId, c);
+    const { saveSocialCredentials } = await import('./social-login.js');
+    const loginTask = await saveSocialCredentials(
+      saved.id,
+      {
+        login: input.login,
+        password: input.password,
+        ...(input.totpSecret === undefined
+          ? {}
+          : { totpSecret: input.totpSecret }),
+      },
+      userId,
+      c,
+    );
+    if (!loginTask.id)
+      invalid('Не вдалося додати вхід до черги. Перевірте ліміт спроб входу.');
+    return { id: saved.id, loginTaskId: loginTask.id };
   });
 }
+
+/** Deletes a social account and detaches its message history in one transaction. */
+export async function removeSocialAccount(id: string, userId: string) {
+  return transaction(async (c) => {
+    await lock(c, id, userId);
+    await c.query(
+      `update tasks t set status='skipped',reason_code='social_account_deleted',reason_uk='Акаунт видалено.',finished_at=now()
+       where t.status in ('queued','paused') and (
+         (t.type like 'social.session.%' and t.payload->>'accountId'=$1)
+         or (t.type='social.inbox.sync' and t.payload->>'accountId'=$1)
+         or (t.type='message.send' and t.payload->>'messageId' in
+           (select m.id::text from messages m where m.account_id=$2))
+       )`,
+      [id, id],
+    );
+    await c.query(
+      "select set_config('sonar.social_account_deleting',$1,true)",
+      [id],
+    );
+    await c.query(
+      'update conversations set account_id=null where account_id=$1',
+      [id],
+    );
+    await c.query('update messages set account_id=null where account_id=$1', [
+      id,
+    ]);
+    await c.query('delete from channel_accounts where id=$1', [id]);
+    await logActivity(
+      'social.account.removed',
+      'channel_account',
+      id,
+      userId,
+      {},
+      c,
+    );
+    return true;
+  });
+}
+
 export async function updateSocialAccount(
   id: string,
   input: {
