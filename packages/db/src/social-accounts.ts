@@ -400,6 +400,20 @@ export async function getSocialAccountProxyIndex(
   const index = network === 'linkedin' ? 1 : 0;
   return getSocialProxyCount() > index ? index : null;
 }
+/** Host names only (no credentials), so the UI can name each proxy. */
+export function getSocialProxyLabels(): string[] {
+  try {
+    return socialSessionProxies().map((proxy) => {
+      try {
+        return new URL(proxy.server).hostname;
+      } catch {
+        return '';
+      }
+    });
+  } catch {
+    return [];
+  }
+}
 export function getSocialProxyCount(): number {
   try {
     return socialSessionProxies().length;
