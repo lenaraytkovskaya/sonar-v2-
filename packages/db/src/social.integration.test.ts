@@ -454,7 +454,7 @@ it.skipIf(!enabled)(
   20000,
 );
 it.skipIf(!enabled)(
-  'keeps DB reservation before accounts, while paused, after stale binding and during fallback',
+  'reserves actual account endpoints while paused, after stale binding and during fallback',
   async () => {
     const { sonarPool } = await import('./index.js');
     const accounts = await import('./social-accounts.js');
@@ -515,7 +515,7 @@ it.skipIf(!enabled)(
       await sonarPool.query(
         "update settings set value='{}' where key='social.instagram.runtime'",
       );
-      await read(); // No account exists, but Proxy 1 is already reserved.
+      await read(); // An unused default endpoint remains available to anonymous reads.
       const input = {
         network: 'instagram' as const,
         name: 'Reservation test',
@@ -530,9 +530,19 @@ it.skipIf(!enabled)(
           },
         ]),
       };
-      await expect(
-        accounts.saveSocialAccount({ ...input, proxyIndex: 1 }, actor),
-      ).rejects.toThrow('резервний проксі');
+      // Any available list entry can be explicitly pinned, independently of the default.
+      const alternate = await accounts.saveSocialAccount(
+        { ...input, proxyIndex: 1 },
+        actor,
+      );
+      expect(
+        (await accounts.listSocialAccounts()).find(
+          (row) => row.id === alternate.id,
+        ),
+      ).toMatchObject({ proxyIndex: 1 });
+      await sonarPool.query('delete from channel_accounts where id=$1', [
+        alternate.id,
+      ]);
       accountId = (await accounts.saveSocialAccount(input, actor)).id;
       const {
         rows: [original],
@@ -569,7 +579,7 @@ it.skipIf(!enabled)(
       fetch.mockResolvedValueOnce({ ...page, error: 'session_invalid' });
       await read(); // Session on 1, fallback on the fourth anonymous endpoint.
       expect(fetch.mock.calls.map((call) => call[1].server)).toEqual(
-        [2, 3, 4, 1, 5].map((index) => `http://p${index}.example:8000`),
+        [1, 3, 4, 1, 5].map((index) => `http://p${index}.example:8000`),
       );
       const {
         rows: [stored],
@@ -605,10 +615,10 @@ it.skipIf(!enabled)(
       await sonarPool.query('delete from activity_log where user_id=$1', [
         actor,
       ]);
-      if (accountId)
-        await sonarPool.query('delete from channel_accounts where id=$1', [
-          accountId,
-        ]);
+      // Clean every fixture owned by this actor, including a save whose following assertion failed.
+      await sonarPool.query('delete from channel_accounts where owner_id=$1', [
+        actor,
+      ]);
       await sonarPool.query('delete from companies where id=$1', [company]);
       await sonarPool.query('delete from users where id=$1', [actor]);
       for (const setting of settings)

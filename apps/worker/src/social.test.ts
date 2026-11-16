@@ -8,6 +8,7 @@ const {
   reserveSession,
   pauseSession,
   releaseSession,
+  reservedProxies,
 } = vi.hoisted(() => ({
   connect: vi.fn(),
   budgeted: vi.fn(),
@@ -17,6 +18,7 @@ const {
   reserveSession: vi.fn(),
   pauseSession: vi.fn(),
   releaseSession: vi.fn(),
+  reservedProxies: vi.fn(),
 }));
 vi.mock('@sonar/db', () => ({ sonarPool: { connect } }));
 vi.mock('@sonar/db/tasks', () => ({ boss: {}, runTask: vi.fn() }));
@@ -24,6 +26,7 @@ vi.mock('@sonar/db/social', () => ({ saveSocialProfile: vi.fn() }));
 vi.mock('@sonar/db/scoring', () => ({ enqueueCompanyScores: vi.fn() }));
 vi.mock('@sonar/db/social-accounts', () => ({
   acquireSocialFetchSession: acquireSession,
+  getSocialReservedProxyEndpoints: reservedProxies,
   reserveSocialFetchSession: reserveSession,
   pauseSocialFetchSession: pauseSession,
   releaseSocialFetchSession: releaseSession,
@@ -48,7 +51,13 @@ const payload = {
     canonicalUrl: 'https://www.instagram.com/sonar/',
   },
 };
-beforeEach(() => acquireSession.mockResolvedValue(null));
+beforeEach(() => {
+  acquireSession.mockResolvedValue(null);
+  reservedProxies.mockResolvedValue([
+    { server: 'http://reserved.example:8000' },
+    { server: 'http://pinned.example:9000' },
+  ]);
+});
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -252,30 +261,46 @@ it('lets a newly active account recover an anonymous login wall while preserving
   });
   expect(fetch).not.toHaveBeenCalled();
 });
-it('pauses without a proxy before connecting to the database or starting a browser', async () => {
+it('pauses without any anonymous proxy or usable account before starting a browser', async () => {
+  prepareSocialFetch();
   vi.stubEnv('SOCIAL_PROXY_URLS', '');
   const fetch = vi.fn();
-  expect(await runSocialFetch(payload, 'task', fetch)).toEqual({
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
     status: 'paused',
-    reasonCode: 'social_proxy_missing',
-    reasonUk: 'Додайте SOCIAL_PROXY_URLS на сервері',
+    reasonCode: 'social_anonymous_proxy_missing',
   });
-  expect(connect).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
+  expect(budgeted).not.toHaveBeenCalled();
 });
-it.each([undefined, null, '0', -1, 1.5, 2])(
-  'fails closed for invalid reservation %s before billing',
-  async (value) => {
-    prepareSocialFetch({ 'social.account_proxy_index': value });
-    const fetch = vi.fn();
-    expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
-      status: 'paused',
-      reasonCode: 'social_proxy_reservation_invalid',
-    });
-    expect(fetch).not.toHaveBeenCalled();
-    expect(budgeted).not.toHaveBeenCalled();
-  },
-);
+it('reads through an own-proxy account when the global proxy pool is empty', async () => {
+  prepareSocialFetch();
+  vi.stubEnv('SOCIAL_PROXY_URLS', '');
+  acquireSession.mockResolvedValue(authenticated);
+  const fetch = vi.fn().mockResolvedValue(publicPage);
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'done',
+  });
+  expect(fetch).toHaveBeenCalledWith(
+    payload.target,
+    authenticated.session.proxy,
+    30000,
+    'SonarBot/1.0',
+    authenticated.session,
+  );
+});
+it('fails closed when actual account proxy reservations cannot be decrypted', async () => {
+  prepareSocialFetch();
+  reservedProxies.mockRejectedValueOnce(
+    Error('private invalid encrypted proxy'),
+  );
+  const fetch = vi.fn();
+  expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+    status: 'paused',
+    reasonCode: 'social_proxy_reservation_invalid',
+  });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(budgeted).not.toHaveBeenCalled();
+});
 it('fails closed for an empty anonymous pool before billing, including duplicate credentials', async () => {
   prepareSocialFetch();
   vi.stubEnv(

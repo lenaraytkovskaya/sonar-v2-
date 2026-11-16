@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import {
-  encryptSocialCookies,
+  encryptSocialStorageState,
+  encryptSocialProxy,
+  generateSocialDevice,
+  type SocialStorageState,
+  type SocialDevice,
+  type SocialSessionProxy,
   resolveSocialSession,
   socialProxyFingerprint,
   socialSessionProxies,
-  socialReservedProxyIndex,
+  normalizeSocialProxy,
   SocialSendError,
   socialSessionCheckReason,
   safeSocialSessionDiagnostic,
@@ -14,6 +19,7 @@ import {
   type SocialSessionCheckReason,
 } from '@sonar/core/social-session';
 import type { SocialNetwork } from '@sonar/core';
+import { decryptTelegramSession } from '@sonar/core/telegram';
 import { sonarPool } from './index.js';
 import { reserveSocialAction } from './social-action.js';
 import { EmailValidationError, transaction } from './email.js';
@@ -34,6 +40,14 @@ export interface SocialAccount {
   nextSendAt: Date | null;
   proxyIndex: number;
   ownerName: string | null;
+  hasOwnProxy: boolean;
+  sessionLostEventId: string | null;
+  sessionLossActive: boolean;
+  sessionLostAt: string | null;
+  sessionLostReasonUk: string | null;
+  keepaliveEnabled: boolean;
+  lastKeepaliveAt: string | null;
+  nextKeepaliveAt: string | null;
   canSyncInbox: boolean;
   inboxPollingEnabled: boolean;
   inboxSyncComplete: boolean | null;
@@ -46,8 +60,111 @@ export interface SocialSessionAccount {
 }
 export type SocialFetchSession = {
   account: SocialSessionAccount;
-  session: ReturnType<typeof resolveSocialSession>;
+  session: Awaited<ReturnType<typeof prepareSocialSession>>;
 };
+/** Caller holds the common account lock throughout the browser operation. */
+export async function persistSocialStorageState(
+  c: PoolClient,
+  id: string,
+  state: SocialStorageState,
+  device?: SocialDevice,
+) {
+  // Validation happens before any write; empty/error captures preserve the last good state.
+  const encrypted = encryptSocialStorageState(
+    JSON.stringify(state),
+    (await c.query('select channel from channel_accounts where id=$1', [id]))
+      .rows[0].channel,
+    secret(),
+  );
+  await c.query(
+    "update channel_accounts set settings=(settings-'cookiesEncrypted')||$2::jsonb where id=$1",
+    [
+      id,
+      {
+        storageStateEncrypted: encrypted,
+        ...(device ? { device } : {}),
+        storageStateUpdatedAt: new Date().toISOString(),
+      },
+    ],
+  );
+}
+export async function prepareSocialSession(
+  c: PoolClient,
+  account: SocialSessionAccount,
+) {
+  const updates: Record<string, unknown> = {};
+  if (account.settings.proxyFingerprintPending === true) {
+    const proxy = socialSessionProxies()[Number(account.settings.proxyIndex)];
+    if (proxy) updates.proxyFingerprint = socialProxyFingerprint(proxy);
+  }
+  if (!account.settings.device)
+    updates.device = generateSocialDevice(account.channel);
+  Object.assign(account.settings, updates);
+  const session = resolveSocialSession(account);
+  if (!account.settings.storageStateEncrypted) {
+    updates.storageStateEncrypted = encryptSocialStorageState(
+      JSON.stringify(session.storageState),
+      account.channel,
+      secret(),
+    );
+  }
+  if (Object.keys(updates).length) {
+    await c.query(
+      "update channel_accounts set settings=(settings-'cookiesEncrypted'-'proxyFingerprintPending')||$2::jsonb where id=$1",
+      [account.id, updates],
+    );
+    Object.assign(account.settings, updates);
+    delete account.settings.cookiesEncrypted;
+    delete account.settings.proxyFingerprintPending;
+  }
+  return {
+    ...session,
+    storageState: session.storageState!,
+    device: session.device!,
+    persistDevice: async (device: SocialDevice) => {
+      await c.query(
+        "update channel_accounts set settings=settings||jsonb_build_object('device',$2::jsonb) where id=$1",
+        [account.id, JSON.stringify(device)],
+      );
+      account.settings.device = device;
+    },
+    persistStorageState: async (
+      state: SocialStorageState,
+      device?: SocialDevice,
+    ) => {
+      await persistSocialStorageState(c, account.id, state, device);
+      if (device) account.settings.device = device;
+    },
+  };
+}
+/** Reserve every account endpoint, including disabled and own-proxy accounts. */
+export async function getSocialReservedProxyEndpoints(): Promise<
+  SocialSessionProxy[]
+> {
+  const { rows } = await sonarPool.query(
+    "select channel,settings from channel_accounts where channel in ('facebook','instagram','linkedin')",
+  );
+  const proxies = socialSessionProxies();
+  const reserved: SocialSessionProxy[] = [];
+  for (const account of rows) {
+    if (account.settings.ownProxyEncrypted) {
+      try {
+        reserved.push(
+          normalizeSocialProxy(
+            decryptTelegramSession(
+              account.settings.ownProxyEncrypted,
+              secret(),
+            ),
+          ),
+        );
+      } catch {
+        throw new Error('Account proxy reservation cannot be resolved');
+      }
+    } else if (proxies[Number(account.settings.proxyIndex)])
+      reserved.push(proxies[Number(account.settings.proxyIndex)]!);
+  }
+  return reserved;
+}
 type FetchRuntime = { day?: string; count?: number; nextAt?: string };
 
 /** The same account lock is held by sends, session checks and account edits. */
@@ -61,6 +178,13 @@ export async function acquireSocialFetchSession(
     "select id from channel_accounts where channel=$1 and status='active' and settings->>'sessionStatus'='valid' order by id",
     [network],
   );
+  const {
+    rows: [quota],
+  } = await c.query(
+    "select value from settings where key='social.action.daily_limit'",
+  );
+  if (!Number.isSafeInteger(quota?.value) || quota.value < 1)
+    throw new Error('Invalid social.action.daily_limit');
   let nextAt = Infinity;
   for (const candidate of rows) {
     const {
@@ -87,11 +211,28 @@ export async function acquireSocialFetchSession(
         account.settings.sessionStatus !== 'valid'
       )
         continue;
-      let session: ReturnType<typeof resolveSocialSession>;
+      let session: Awaited<ReturnType<typeof prepareSocialSession>>;
       try {
-        session = resolveSocialSession(account);
+        session = await prepareSocialSession(c, account);
       } catch {
         await pauseSocialFetchSession(c, account.id);
+        continue;
+      }
+      const action = account.settings.socialAction as
+        { day?: string; counts?: Record<string, number> } | undefined;
+      if (
+        action?.day === now.toISOString().slice(0, 10) &&
+        Object.values(action.counts ?? {}).reduce((a, b) => a + b, 0) >=
+          quota.value
+      ) {
+        nextAt = Math.min(
+          nextAt,
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() + 1,
+          ),
+        );
         continue;
       }
       const runtime = (account.settings.sessionFetch ?? {}) as FetchRuntime;
@@ -125,16 +266,36 @@ export async function releaseSocialFetchSession(c: PoolClient, id: string) {
     [id],
   );
 }
-export async function pauseSocialFetchSession(c: PoolClient, id: string) {
+export async function pauseSocialFetchSession(
+  c: PoolClient,
+  id: string,
+  reason: SocialSessionCheckReason = 'login_required',
+  now = new Date(),
+) {
+  const reasonUk = socialSessionCheckReasons[reason];
+  const lost = [
+    'login_required',
+    'cookies_invalid',
+    'captcha',
+    'checkpoint',
+  ].includes(reason);
   await c.query(
-    `update channel_accounts set status='paused',settings=settings||$2::jsonb where id=$1`,
+    `update channel_accounts set status=case when status='disabled' then status else 'paused' end,
+    settings=settings||$2::jsonb||case when $3::boolean and coalesce(settings->>'sessionLossActive','false')<>'true'
+    then jsonb_build_object('sessionLostEventId',$4::text,'sessionLostAt',$5::text,'sessionLostReasonUk',$6::text) else '{}'::jsonb end where id=$1`,
     [
       id,
-      JSON.stringify({
-        sessionStatus: 'invalid',
-        checkedAt: new Date().toISOString(),
-        reasonUk: 'Увійдіть знову (оновіть cookies)',
-      }),
+      {
+        sessionStatus: lost ? 'invalid' : 'unconfirmed',
+        checkedAt: now.toISOString(),
+        sessionCheckReason: reason,
+        reasonUk,
+        ...(lost ? { sessionLossActive: true } : {}),
+      },
+      lost,
+      randomUUID(),
+      now.toISOString(),
+      reasonUk,
     ],
   );
 }
@@ -189,9 +350,20 @@ const secret = () => {
     invalid('Налаштуйте AUTH_SECRET на сервері (щонайменше 32 символи).');
   return value!;
 };
-const proxySettings = async (index: number) => {
-  if (index !== (await getSocialAccountProxyIndex()))
-    invalid('Виберіть резервний проксі акаунтів.');
+const proxySettings = async (index: number, ownProxy?: string | null) => {
+  if (ownProxy) {
+    try {
+      return {
+        proxyIndex: index,
+        proxyFingerprint: socialProxyFingerprint(
+          normalizeSocialProxy(ownProxy),
+        ),
+        ownProxyEncrypted: encryptSocialProxy(ownProxy, secret()),
+      };
+    } catch {
+      return invalid('Вкажіть коректний URL власного проксі.');
+    }
+  }
   let proxies;
   try {
     proxies = socialSessionProxies();
@@ -204,19 +376,14 @@ const proxySettings = async (index: number) => {
   return {
     proxyIndex: index,
     proxyFingerprint: socialProxyFingerprint(proxy!),
+    ownProxyEncrypted: null,
   };
 };
-export async function getSocialAccountProxyIndex(): Promise<number | null> {
-  const {
-    rows: [setting],
-  } = await sonarPool.query(
-    "select value from settings where key='social.account_proxy_index'",
-  );
-  try {
-    return socialReservedProxyIndex(setting?.value, getSocialProxyCount());
-  } catch {
-    return null;
-  }
+export async function getSocialAccountProxyIndex(
+  network: SocialNetwork = 'facebook',
+): Promise<number | null> {
+  const index = network === 'linkedin' ? 1 : 0;
+  return getSocialProxyCount() > index ? index : null;
 }
 export function getSocialProxyCount(): number {
   try {
@@ -231,7 +398,9 @@ export async function listSocialAccounts(
   const { rows } = await sonarPool.query<SocialAccount>(
     `select a.id,a.name,a.channel as network,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,
     coalesce(a.settings->>'sessionStatus','pending') as "sessionStatus",a.settings->>'reasonUk' as "reasonUk",a.settings->>'sessionCheckReason' as "sessionCheckReason",a.settings->>'checkedAt' as "checkedAt",
-    a.next_send_at as "nextSendAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
+    a.next_send_at as "nextSendAt",
+    (a.settings->>'ownProxyEncrypted' is not null) as "hasOwnProxy",coalesce(a.settings->>'sessionLossActive','false')='true' as "sessionLossActive", a.settings->>'sessionLostEventId' as "sessionLostEventId",a.settings->>'sessionLostAt' as "sessionLostAt",a.settings->>'sessionLostReasonUk' as "sessionLostReasonUk",
+    coalesce(a.settings->>'keepaliveEnabled','true')<>'false' as "keepaliveEnabled",a.settings->>'lastKeepaliveAt' as "lastKeepaliveAt",a.settings->>'nextKeepaliveAt' as "nextKeepaliveAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
     coalesce(a.owner_id=$1::uuid and a.channel in ('instagram','facebook') and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
     coalesce(a.settings->>'inboxPollingEnabled'='true',false) as "inboxPollingEnabled",
     (a.settings->'inboxSync'->>'complete')::boolean as "inboxSyncComplete",
@@ -239,6 +408,21 @@ export async function listSocialAccounts(
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
+  );
+  return rows;
+}
+export async function listSocialSessionNotices(userId: string): Promise<
+  {
+    id: string;
+    name: string;
+    network: SocialNetwork;
+    eventId: string;
+    reasonUk: string;
+  }[]
+> {
+  const { rows } = await sonarPool.query(
+    "select id,name,channel as network,settings->>'sessionLostEventId' as \"eventId\",settings->>'sessionLostReasonUk' as \"reasonUk\" from channel_accounts where owner_id=$1 and channel in ('facebook','instagram','linkedin') and settings->>'sessionLossActive'='true' and settings->>'sessionLostEventId' is not null",
+    [userId],
   );
   return rows;
 }
@@ -254,11 +438,22 @@ async function lock(c: PoolClient, id: string, userId?: string) {
     [id, userId ?? null],
   );
   if (!account) invalid('Акаунт соцмережі не знайдено.');
+  if (account.settings.proxyFingerprintPending === true) {
+    const proxy = socialSessionProxies()[Number(account.settings.proxyIndex)];
+    if (proxy) {
+      account.settings.proxyFingerprint = socialProxyFingerprint(proxy);
+      delete account.settings.proxyFingerprintPending;
+      await c.query(
+        "update channel_accounts set settings=(settings-'proxyFingerprintPending')||jsonb_build_object('proxyFingerprint',$2::text) where id=$1",
+        [id, account.settings.proxyFingerprint],
+      );
+    }
+  }
   return account;
 }
 function encryptedCookies(raw: string, network: SocialNetwork) {
   try {
-    return encryptSocialCookies(raw, network, secret());
+    return encryptSocialStorageState(raw, network, secret());
   } catch (error) {
     if (error instanceof SocialSendError) invalid(error.reasonUk);
     throw error;
@@ -270,7 +465,10 @@ export async function saveSocialAccount(
     network: SocialNetwork;
     name: string;
     cookiesJson?: string;
-    proxyIndex: number;
+    storageStateJson?: string;
+    ownProxy?: string | null;
+    keepaliveEnabled?: boolean;
+    proxyIndex?: number;
     dailyLimit: number;
   },
   userId: string,
@@ -283,34 +481,52 @@ export async function saveSocialAccount(
     !validLimit(input.dailyLimit)
   )
     invalid('Вкажіть соцмережу, назву та додатний денний ліміт.');
-  const pinned = await proxySettings(input.proxyIndex);
+  const stateJson = input.storageStateJson ?? input.cookiesJson;
+  const index = input.proxyIndex ?? (input.network === 'linkedin' ? 1 : 0);
   return transaction(async (c) => {
     const existing = input.id ? await lock(c, input.id, userId) : undefined;
+    const pinned =
+      existing && input.proxyIndex === undefined && input.ownProxy === undefined
+        ? {
+            proxyIndex: existing.settings.proxyIndex,
+            proxyFingerprint: existing.settings.proxyFingerprint,
+            ownProxyEncrypted: existing.settings.ownProxyEncrypted,
+          }
+        : await proxySettings(
+            input.proxyIndex ?? existing?.settings.proxyIndex ?? index,
+            input.ownProxy,
+          );
     if (existing && existing.channel !== input.network)
       invalid('Соцмережу підключеного акаунта змінити неможливо.');
-    if (!existing && !input.cookiesJson)
+    if (!existing && !stateJson)
       invalid('Додайте cookies у форматі JSON Cookie-Editor.');
-    const replaced =
-      !!input.cookiesJson ||
-      !existing ||
-      existing.settings.proxyFingerprint !== pinned.proxyFingerprint ||
-      existing.settings.proxyIndex !== pinned.proxyIndex;
+    const proxyChanged =
+      !!existing &&
+      (existing.settings.proxyFingerprint !== pinned.proxyFingerprint ||
+        existing.settings.proxyIndex !== pinned.proxyIndex);
+    const replaced = !!stateJson || !existing || proxyChanged;
     const settings = {
       ...existing?.settings,
       ...pinned,
-      ...(input.cookiesJson
+      device: existing?.settings.device ?? generateSocialDevice(input.network),
+      ...(input.keepaliveEnabled !== undefined
+        ? { keepaliveEnabled: input.keepaliveEnabled }
+        : {}),
+      ...(stateJson
         ? {
-            cookiesEncrypted: encryptedCookies(
-              input.cookiesJson,
-              input.network,
-            ),
+            storageStateEncrypted: encryptedCookies(stateJson, input.network),
           }
         : {}),
       ...(replaced
         ? {
             sessionStatus: 'pending',
             checkedAt: null,
-            reasonUk: null,
+            reasonUk:
+              proxyChanged ||
+              existing?.settings.reasonUk ===
+                'Проксі змінено. Можлива перевірка входу.'
+                ? 'Проксі змінено. Можлива перевірка входу.'
+                : null,
             sessionCheckReason: null,
           }
         : {}),
@@ -350,6 +566,9 @@ export async function updateSocialAccount(
     dailyLimit?: number;
     proxyIndex?: number;
     cookiesJson?: string;
+    storageStateJson?: string;
+    ownProxy?: string | null;
+    keepaliveEnabled?: boolean;
   },
   userId: string,
 ) {
@@ -361,17 +580,34 @@ export async function updateSocialAccount(
     invalid('Вкажіть додатний денний ліміт та стан акаунта.');
   return transaction(async (c) => {
     const account = await lock(c, id, userId);
+    const pinned =
+      input.proxyIndex !== undefined || input.ownProxy !== undefined
+        ? await proxySettings(
+            input.proxyIndex ??
+              account.settings.proxyIndex ??
+              (account.channel === 'linkedin' ? 1 : 0),
+            input.ownProxy,
+          )
+        : undefined;
+    const proxyChanged =
+      !!pinned &&
+      (pinned.proxyFingerprint !== account.settings.proxyFingerprint ||
+        pinned.proxyIndex !== account.settings.proxyIndex);
     const replaced =
-      input.cookiesJson !== undefined || input.proxyIndex !== undefined;
+      input.cookiesJson !== undefined ||
+      input.storageStateJson !== undefined ||
+      proxyChanged;
     const settings = {
       ...account.settings,
-      ...(input.proxyIndex !== undefined
-        ? await proxySettings(input.proxyIndex)
+      ...(input.keepaliveEnabled !== undefined
+        ? { keepaliveEnabled: input.keepaliveEnabled }
         : {}),
-      ...(input.cookiesJson !== undefined
+      ...pinned,
+      ...(input.storageStateJson !== undefined ||
+      input.cookiesJson !== undefined
         ? {
-            cookiesEncrypted: encryptedCookies(
-              input.cookiesJson,
+            storageStateEncrypted: encryptedCookies(
+              (input.storageStateJson ?? input.cookiesJson)!,
               account.channel,
             ),
           }
@@ -380,7 +616,12 @@ export async function updateSocialAccount(
         ? {
             sessionStatus: 'pending',
             checkedAt: null,
-            reasonUk: null,
+            reasonUk:
+              proxyChanged ||
+              account.settings.reasonUk ===
+                'Проксі змінено. Можлива перевірка входу.'
+                ? 'Проксі змінено. Можлива перевірка входу.'
+                : null,
             sessionCheckReason: null,
           }
         : {}),
@@ -390,7 +631,11 @@ export async function updateSocialAccount(
       invalid('Спочатку перевірте сесію акаунта.');
     if (input.enabled) {
       try {
-        resolveSocialSession({ channel: account.channel, settings });
+        await prepareSocialSession(c, {
+          id,
+          channel: account.channel,
+          settings,
+        });
       } catch (error) {
         invalid(
           error instanceof SocialSendError
@@ -472,7 +717,7 @@ export async function syncSocialInbox(id: string, userId: string) {
         'Ручна синхронізація доступна лише власнику активного Instagram або Facebook із підтвердженою сесією.',
       );
     try {
-      resolveSocialSession(account);
+      await prepareSocialSession(c, account);
     } catch (error) {
       invalid(
         error instanceof SocialSendError
@@ -552,12 +797,16 @@ export async function setSocialInboxPolling(
 }
 export async function withSocialSessionCheck(
   id: string,
-  check: (account: SocialSessionAccount) => Promise<{
+  check: (
+    account: SocialSessionAccount,
+    session: Awaited<ReturnType<typeof prepareSocialSession>>,
+  ) => Promise<{
     valid: boolean;
     reason?: SocialSessionCheckReason;
     diagnostic?: SocialSessionCheckDiagnostic;
   }>,
   now = new Date(),
+  mode: 'check' | 'keepalive' = 'check',
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
@@ -572,17 +821,51 @@ export async function withSocialSessionCheck(
     await c.query('begin');
     inTransaction = true;
     const account = await lock(c, id);
+    if (mode === 'keepalive') {
+      const {
+        rows: [enabled],
+      } = await c.query(
+        "select value from settings where key='social.keepalive.enabled'",
+      );
+      if (
+        enabled?.value !== true ||
+        account.status !== 'active' ||
+        account.settings.enabled === false ||
+        account.settings.sessionStatus !== 'valid' ||
+        account.settings.keepaliveEnabled === false
+      ) {
+        await c.query('commit');
+        inTransaction = false;
+        return {
+          status: 'skipped',
+          reasonCode: 'social_keepalive_disabled',
+          reasonUk: 'Підтримку сесії вимкнено або сесія потребує перевірки.',
+        };
+      }
+    }
+    if (mode === 'keepalive') {
+      const due = Date.parse(account.settings.nextKeepaliveAt ?? '');
+      if (due > now.getTime()) {
+        await c.query('commit');
+        inTransaction = false;
+        return {
+          status: 'deferred',
+          runAt: new Date(due),
+          reasonCode: 'social_keepalive_scheduled',
+          reasonUk: 'Підтримка сесії запланована на наступний інтервал.',
+        };
+      }
+    }
+    let session: Awaited<ReturnType<typeof prepareSocialSession>> | undefined;
     let valid = false;
     let diagnostic: SocialSessionCheckDiagnostic | undefined;
     let reason: SocialSessionCheckReason | undefined;
     try {
-      resolveSocialSession(account);
+      session = await prepareSocialSession(c, account);
     } catch (error) {
       reason = socialSessionCheckReason(error);
     }
-    const runAt = reason
-      ? null
-      : await reserveSocialAction(c, id, 'check', now);
+    const runAt = reason ? null : await reserveSocialAction(c, id, mode, now);
     await c.query('commit');
     inTransaction = false;
     if (runAt)
@@ -594,7 +877,7 @@ export async function withSocialSessionCheck(
       };
     if (!reason) {
       try {
-        const result = await check(account);
+        const result = await check(account, session!);
         valid = result.valid;
         diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
         if (!valid)
@@ -608,30 +891,86 @@ export async function withSocialSessionCheck(
       }
     }
     const reasonUk = reason ? socialSessionCheckReasons[reason] : null;
-    const invalidCookies =
-      reason === 'login_required' || reason === 'cookies_invalid';
-    // Merge only session fields so the committed action reservation survives.
-    await c.query(
-      'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
-      [
-        id,
-        account.settings.enabled === false
-          ? 'disabled'
-          : valid
-            ? 'active'
-            : 'paused',
-        {
-          sessionStatus: valid
-            ? 'valid'
-            : invalidCookies
-              ? 'invalid'
-              : 'unconfirmed',
-          checkedAt: now.toISOString(),
-          sessionCheckReason: reason ?? null,
-          reasonUk,
+    if (
+      mode === 'keepalive' &&
+      reason &&
+      ['timeout', 'network', 'browser'].includes(reason)
+    ) {
+      const { rows } = await c.query(
+        "select key,value from settings where key in ('social.keepalive.retry_seconds','social.keepalive.interval_seconds')",
+      );
+      const config = Object.fromEntries(
+        rows.map((row) => [row.key, row.value]),
+      );
+      const retry = config['social.keepalive.retry_seconds'];
+      const interval = config['social.keepalive.interval_seconds'];
+      if (
+        !Number.isSafeInteger(retry) ||
+        retry < 1 ||
+        !Number.isSafeInteger(interval) ||
+        retry > interval
+      )
+        throw new Error('Invalid social.keepalive.retry_seconds');
+      const runAt = new Date(now.getTime() + retry * 1000);
+      // A transport failure is not evidence of lost authentication. Keep the last verified session.
+      await c.query(
+        'update channel_accounts set settings=settings||$2::jsonb where id=$1',
+        [
+          id,
+          {
+            lastKeepaliveAt: now.toISOString(),
+            lastKeepaliveReason: reason,
+            nextKeepaliveAt: runAt.toISOString(),
+          },
+        ],
+      );
+      return {
+        status: 'deferred',
+        runAt,
+        reasonCode: `social_keepalive_${reason}`,
+        reasonUk: reasonUk!,
+        result: {
+          valid: false,
+          retry: true,
+          ...(diagnostic ? { diagnostic } : {}),
         },
-      ],
-    );
+      };
+    }
+    if (!valid)
+      await pauseSocialFetchSession(c, id, reason ?? 'unknown_auth', now);
+    else
+      await c.query(
+        'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
+        [
+          id,
+          account.settings.enabled === false ? 'disabled' : 'active',
+          {
+            sessionStatus: 'valid',
+            sessionLossActive: false,
+            checkedAt: now.toISOString(),
+            sessionCheckReason: null,
+            reasonUk: null,
+          },
+        ],
+      );
+    if (mode === 'keepalive' || valid) {
+      const nextAt = await nextSocialKeepalive(c, now);
+      await c.query(
+        'update channel_accounts set settings=settings||$2::jsonb where id=$1',
+        [
+          id,
+          {
+            ...(mode === 'keepalive'
+              ? {
+                  lastKeepaliveAt: now.toISOString(),
+                  lastKeepaliveReason: reason ?? null,
+                }
+              : {}),
+            nextKeepaliveAt: nextAt.toISOString(),
+          },
+        ],
+      );
+    }
     return valid
       ? { status: 'done', result: { valid: true } }
       : {
@@ -647,4 +986,82 @@ export async function withSocialSessionCheck(
     if (locked) await releaseSocialFetchSession(c, id);
     c.release();
   }
+}
+
+async function nextSocialKeepalive(c: PoolClient, now: Date) {
+  const { rows } = await c.query(
+    "select key,value from settings where key in ('social.keepalive.interval_seconds','social.keepalive.jitter_seconds')",
+  );
+  const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const interval = settings['social.keepalive.interval_seconds'];
+  const jitter = settings['social.keepalive.jitter_seconds'];
+  if (
+    !Number.isSafeInteger(interval) ||
+    interval < 1 ||
+    !Number.isSafeInteger(jitter) ||
+    jitter < 0 ||
+    jitter >= interval
+  )
+    throw new Error('Invalid social keepalive schedule');
+  return new Date(
+    now.getTime() +
+      (interval + Math.floor(Math.random() * (2 * jitter + 1)) - jitter) * 1000,
+  );
+}
+/** Reconcile durable single-flight jobs after restarts; disabled accounts never open browsers. */
+export async function reconcileSocialSessionKeepalive(now = new Date()) {
+  return transaction(async (c) => {
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('social-keepalive-reconcile',0))",
+    );
+    const {
+      rows: [enabled],
+    } = await c.query(
+      "select value from settings where key='social.keepalive.enabled'",
+    );
+    if (enabled?.value !== true) return 0;
+    await c.query(`update tasks t set status='failed',finished_at=now(),reason_code='social_keepalive_interrupted',reason_uk='Підтримку сесії перервано. Заплановано повтор.'
+      where t.type='social.session.keepalive' and t.status in ('queued','running')
+      and not exists(select 1 from pgboss.job j where j.name=t.type and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))
+      and pg_try_advisory_xact_lock(hashtextextended('channel-account:'||(t.payload->>'accountId'),0))`);
+    const { rows } = await c.query(
+      "select id,settings from channel_accounts where channel in ('facebook','instagram','linkedin') and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false' and coalesce(settings->>'keepaliveEnabled','true')<>'false'",
+    );
+    let count = 0;
+    for (const candidate of rows) {
+      const account = await lock(c, candidate.id);
+      if (
+        account.status !== 'active' ||
+        account.settings.enabled === false ||
+        account.settings.sessionStatus !== 'valid' ||
+        account.settings.keepaliveEnabled === false
+      )
+        continue;
+      const {
+        rows: [pending],
+      } = await c.query(
+        "select id from tasks where type='social.session.keepalive' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
+        [account.id],
+      );
+      if (pending) continue;
+      const due = Date.parse(account.settings.nextKeepaliveAt ?? '');
+      const runAt = Number.isFinite(due)
+        ? new Date(Math.max(now.getTime(), due))
+        : await nextSocialKeepalive(c, now);
+      if (!Number.isFinite(due))
+        await c.query(
+          "update channel_accounts set settings=settings||jsonb_build_object('nextKeepaliveAt',$2::text) where id=$1",
+          [account.id, runAt.toISOString()],
+        );
+      await enqueueTask(
+        'social.session.keepalive',
+        `social.session.keepalive:${account.id}:${randomUUID()}`,
+        { accountId: account.id },
+        c,
+        runAt,
+      );
+      count++;
+    }
+    return count;
+  });
 }

@@ -7,6 +7,8 @@ import {
 } from 'playwright';
 import {
   SocialSendError,
+  generateSocialDevice,
+  type ResolvedSocialSession,
   SocialSessionCheckError,
   socialSessionCheckReason,
   type SocialSessionCheckDiagnostic,
@@ -23,7 +25,10 @@ export type SocialSessionAccount = {
 export type SocialBrowserSession = {
   cookies: Parameters<BrowserContext['addCookies']>[0];
   proxy: ReturnType<typeof socialProxies>[number];
-};
+} & Pick<
+  ResolvedSocialSession,
+  'storageState' | 'device' | 'persistStorageState' | 'persistDevice'
+>;
 const home = (network: SocialNetwork) => `https://www.${network}.com/`;
 const messageLabel =
   /^(?:message|send message|повідомлення|надіслати повідомлення|сообщение|отправить сообщение)$/i;
@@ -1505,12 +1510,15 @@ export function createSocialSendBrowser(
     session: SocialBrowserSession,
     timeoutMs: number,
     fn: (page: Page) => Promise<T>,
+    preserveResult = false,
   ) {
     return serialized(account.id, async () => {
       const key = JSON.stringify([
         account.channel,
-        account.settings.cookiesEncrypted,
+        account.settings.storageStateEncrypted ??
+          account.settings.cookiesEncrypted,
         session.proxy,
+        account.settings.device,
       ]);
       let cached = contexts.get(account.id);
       if (cached?.key !== key) {
@@ -1522,15 +1530,26 @@ export function createSocialSendBrowser(
             socialSessionCheckReason(error, 'browser'),
           );
         });
-        const context = await (
-          await browser
-        ).newContext({
+        const running = await browser;
+        const device = session.device?.userAgent
+          ? session.device
+          : generateSocialDevice(
+              account.channel,
+              running.version?.() ?? '0.0.0.0',
+            );
+        if (!session.device?.userAgent) await session.persistDevice?.(device);
+        session.device = device;
+        const context = await running.newContext({
+          ...device,
+          ...(session.storageState
+            ? { storageState: session.storageState }
+            : {}),
           proxy: session.proxy,
           serviceWorkers: 'block',
           acceptDownloads: false,
         });
         try {
-          await context.addCookies(session.cookies);
+          if (!session.storageState) await context.addCookies(session.cookies);
         } catch (error) {
           await context.close().catch(() => {});
           throw new SocialSessionCheckError(
@@ -1543,7 +1562,17 @@ export function createSocialSendBrowser(
       const page = await cached.context.newPage();
       page.setDefaultTimeout(timeoutMs);
       try {
-        return await fn(page);
+        const result = await fn(page);
+        if (session.persistStorageState) {
+          const save = async () => {
+            const state = await cached.context.storageState();
+            if (state.cookies.length)
+              await session.persistStorageState!(state, session.device);
+          };
+          if (preserveResult) await save().catch(() => {});
+          else await save();
+        }
+        return result;
       } finally {
         await page.close().catch(() => {});
       }
@@ -1614,6 +1643,32 @@ export function createSocialSendBrowser(
         );
       }
     },
+    async keepalive(
+      account: SocialSessionAccount,
+      session: SocialBrowserSession,
+      timeoutMs: number,
+      pauseMs: number,
+    ) {
+      return withPage(account, session, timeoutMs, async (page) => {
+        const url =
+          account.channel === 'linkedin'
+            ? `${home(account.channel)}feed/`
+            : home(account.channel);
+        const response = await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: timeoutMs,
+        });
+        if (response?.status() === 429)
+          throw new SocialSessionCheckError('rate_limit');
+        if (response?.status() === 407)
+          throw new SocialSessionCheckError('proxy');
+        await assertSocialSession(page, account.channel);
+        if (!response || response.status() < 200 || response.status() >= 300)
+          throw new SocialSessionCheckError('network');
+        await page.waitForTimeout(pauseMs);
+        await assertSocialSession(page, account.channel);
+      });
+    },
     async send(
       account: SocialSessionAccount,
       session: SocialBrowserSession,
@@ -1634,63 +1689,72 @@ export function createSocialSendBrowser(
           : failure('unavailable');
       let attempted = false;
       try {
-        return await withPage(account, session, timeoutMs, async (page) => {
-          if (account.channel === 'instagram')
-            return sendInstagram(page, target, timeoutMs, body, beforeSend);
-          if (account.channel === 'facebook')
-            return sendFacebook(
-              page,
-              target,
-              timeoutMs,
-              body,
-              beforeSend,
-              (sessionTimeoutMs) =>
-                assertSocialSession(page, 'facebook', sessionTimeoutMs),
-            );
-          await page.goto(target.canonicalUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: timeoutMs,
-          });
-          await assertSocialSession(page, account.channel);
-          const messageButton = page
-            .getByRole('button', { name: messageLabel })
-            .first();
-          if (!(await messageButton.isVisible()))
-            throw new SocialSendError(
-              'unavailable',
-              'Сторінка LinkedIn не приймає повідомлень',
-            );
-          await messageButton.click();
-          await assertSocialSession(page, account.channel);
-          const composer = page
-            .locator(
-              '[contenteditable="true"][role="textbox"], textarea[placeholder]',
-            )
-            .last();
-          await composer.fill(body);
-          const ownMessages = page
-            .locator(outgoing[account.channel])
-            .filter({ has: page.getByText(body, { exact: true }) });
-          const count = await ownMessages.count();
-          await beforeSend();
-          attempted = true;
-          try {
-            await page.getByRole('button', { name: sendLabel }).last().click();
-          } catch {
+        return await withPage(
+          account,
+          session,
+          timeoutMs,
+          async (page) => {
+            if (account.channel === 'instagram')
+              return sendInstagram(page, target, timeoutMs, body, beforeSend);
+            if (account.channel === 'facebook')
+              return sendFacebook(
+                page,
+                target,
+                timeoutMs,
+                body,
+                beforeSend,
+                (sessionTimeoutMs) =>
+                  assertSocialSession(page, 'facebook', sessionTimeoutMs),
+              );
+            await page.goto(target.canonicalUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: timeoutMs,
+            });
             await assertSocialSession(page, account.channel);
-            throw failure('delivery_uncertain');
-          }
-          try {
-            await ownMessages
-              .nth(count)
-              .waitFor({ state: 'visible', timeout: timeoutMs });
-          } catch {
+            const messageButton = page
+              .getByRole('button', { name: messageLabel })
+              .first();
+            if (!(await messageButton.isVisible()))
+              throw new SocialSendError(
+                'unavailable',
+                'Сторінка LinkedIn не приймає повідомлень',
+              );
+            await messageButton.click();
             await assertSocialSession(page, account.channel);
-            throw failure('delivery_uncertain');
-          }
-          await assertSocialSession(page, account.channel);
-          return confirmedDialogUrl(page, account.channel);
-        });
+            const composer = page
+              .locator(
+                '[contenteditable="true"][role="textbox"], textarea[placeholder]',
+              )
+              .last();
+            await composer.fill(body);
+            const ownMessages = page
+              .locator(outgoing[account.channel])
+              .filter({ has: page.getByText(body, { exact: true }) });
+            const count = await ownMessages.count();
+            await beforeSend();
+            attempted = true;
+            try {
+              await page
+                .getByRole('button', { name: sendLabel })
+                .last()
+                .click();
+            } catch {
+              await assertSocialSession(page, account.channel);
+              throw failure('delivery_uncertain');
+            }
+            try {
+              await ownMessages
+                .nth(count)
+                .waitFor({ state: 'visible', timeout: timeoutMs });
+            } catch {
+              await assertSocialSession(page, account.channel);
+              throw failure('delivery_uncertain');
+            }
+            await assertSocialSession(page, account.channel);
+            return confirmedDialogUrl(page, account.channel);
+          },
+          true,
+        );
       } catch (error) {
         if (account.channel === 'instagram') {
           if (error instanceof SocialSendError && 'stage' in error) throw error;

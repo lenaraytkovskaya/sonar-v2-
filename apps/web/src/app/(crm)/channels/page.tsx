@@ -22,7 +22,11 @@ export default async function Page() {
       listTelegramAccounts(),
       listWhatsAppAccounts(),
       listSocialAccounts(user?.id),
-      getSocialAccountProxyIndex(),
+      Promise.all([
+        getSocialAccountProxyIndex('facebook'),
+        getSocialAccountProxyIndex('instagram'),
+        getSocialAccountProxyIndex('linkedin'),
+      ]),
     ]);
   return (
     <>
@@ -32,7 +36,11 @@ export default async function Page() {
         social={{
           accounts: social,
           proxyCount: getSocialProxyCount(),
-          accountProxyIndex,
+          accountProxyIndexes: {
+            facebook: accountProxyIndex[0],
+            instagram: accountProxyIndex[1],
+            linkedin: accountProxyIndex[2],
+          },
         }}
         telegram={{
           accounts: telegram,

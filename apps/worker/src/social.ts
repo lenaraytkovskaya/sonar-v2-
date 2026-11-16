@@ -13,6 +13,7 @@ import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
 import { saveSocialProfile, type SocialPayload } from '@sonar/db/social';
 import {
   acquireSocialFetchSession,
+  getSocialReservedProxyEndpoints,
   releaseSocialFetchSession,
   reserveSocialFetchSession,
   pauseSocialFetchSession,
@@ -114,11 +115,6 @@ export async function runSocialFetch(
       'Перевірте SOCIAL_PROXY_URLS на сервері',
     );
   }
-  if (!proxies.length)
-    return paused(
-      'social_proxy_missing',
-      'Додайте SOCIAL_PROXY_URLS на сервері',
-    );
   const client = await sonarPool.connect();
   let locked = false;
   let session: SocialFetchSession | null = null;
@@ -148,12 +144,12 @@ export async function runSocialFetch(
     try {
       anonymousProxies = socialAnonymousProxies(
         proxies,
-        config['social.account_proxy_index'],
+        await getSocialReservedProxyEndpoints(),
       );
     } catch {
       return paused(
         'social_proxy_reservation_invalid',
-        'Налаштуйте резервний проксі акаунтів у БД (social.account_proxy_index).',
+        'Не вдалося визначити закріплені проксі акаунтів. Перевірте налаштування проксі.',
       );
     }
     const cost = number(config, 'social.cost_per_request_usd', 0, 100);

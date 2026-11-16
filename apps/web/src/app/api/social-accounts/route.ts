@@ -54,9 +54,18 @@ async function handle(request: Request, method: string) {
         data.name.length > 200 ||
         !Number.isSafeInteger(data.dailyLimit) ||
         data.dailyLimit < 1 ||
-        !Number.isSafeInteger(data.proxyIndex) ||
-        data.proxyIndex < 0 ||
-        data.proxyIndex >= db.getSocialProxyCount() ||
+        (data.proxyIndex !== undefined &&
+          (!Number.isSafeInteger(data.proxyIndex) ||
+            data.proxyIndex < 0 ||
+            data.proxyIndex >= db.getSocialProxyCount())) ||
+        (data.ownProxy !== undefined &&
+          data.ownProxy !== null &&
+          (typeof data.ownProxy !== 'string' || data.ownProxy.length > 4000)) ||
+        (data.keepaliveEnabled !== undefined &&
+          typeof data.keepaliveEnabled !== 'boolean') ||
+        (data.storageStateJson !== undefined &&
+          (typeof data.storageStateJson !== 'string' ||
+            data.storageStateJson.length > 200000)) ||
         (data.cookiesJson !== undefined &&
           (typeof data.cookiesJson !== 'string' ||
             data.cookiesJson.length > 200000))
@@ -68,7 +77,16 @@ async function handle(request: Request, method: string) {
           name: data.name,
           network: data.network,
           dailyLimit: data.dailyLimit,
-          proxyIndex: data.proxyIndex,
+          ...(data.proxyIndex === undefined
+            ? {}
+            : { proxyIndex: data.proxyIndex }),
+          ...(data.ownProxy === undefined ? {} : { ownProxy: data.ownProxy }),
+          ...(data.keepaliveEnabled === undefined
+            ? {}
+            : { keepaliveEnabled: data.keepaliveEnabled }),
+          ...(data.storageStateJson === undefined
+            ? {}
+            : { storageStateJson: data.storageStateJson }),
           ...(data.cookiesJson === undefined
             ? {}
             : { cookiesJson: data.cookiesJson }),
@@ -93,6 +111,10 @@ async function handle(request: Request, method: string) {
       checkedAt: account.checkedAt,
       nextSendAt: account.nextSendAt,
       proxyIndex: account.proxyIndex,
+      hasOwnProxy: account.hasOwnProxy,
+      keepaliveEnabled: account.keepaliveEnabled,
+      sessionLostEventId: account.sessionLostEventId,
+      sessionLostReasonUk: account.sessionLostReasonUk,
       ownerName: account.ownerName,
       canSyncInbox: account.canSyncInbox,
       inboxPollingEnabled: account.inboxPollingEnabled,

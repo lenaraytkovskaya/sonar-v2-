@@ -1127,7 +1127,7 @@ it.skipIf(!enabled)(
       ).toMatchObject({
         status: 'paused',
         settings: {
-          sessionStatus: reason === 'cookies_invalid' ? 'invalid' : 'valid',
+          sessionStatus: reason === 'rate_limit' ? 'unconfirmed' : 'invalid',
         },
       });
     }

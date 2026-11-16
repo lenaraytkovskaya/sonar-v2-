@@ -1,18 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, list, save, update, check, sync } = vi.hoisted(() => ({
-  session: vi.fn(),
-  list: vi.fn(),
-  save: vi.fn(),
-  update: vi.fn(),
-  check: vi.fn(),
-  sync: vi.fn(),
-}));
+const { session, list, listNotices, save, update, check, sync } = vi.hoisted(
+  () => ({
+    session: vi.fn(),
+    list: vi.fn(),
+    listNotices: vi.fn(),
+    save: vi.fn(),
+    update: vi.fn(),
+    check: vi.fn(),
+    sync: vi.fn(),
+  }),
+);
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
 vi.mock('@/lib/social-settings', () => import('./social-settings'));
 vi.mock('@/i18n/uk', () => import('../i18n/uk'));
 vi.mock('@sonar/db/social-accounts', () => ({
   listSocialAccounts: list,
+  listSocialSessionNotices: listNotices,
   saveSocialAccount: save,
   updateSocialAccount: update,
   checkSocialSession: check,
@@ -26,6 +30,7 @@ vi.mock('@sonar/db/email', () => ({
 }));
 import { GET, POST, PATCH } from '../app/api/social-accounts/route';
 import { uk } from '../i18n/uk';
+import { GET as notices } from '../app/api/social-accounts/notices/route';
 const id = '00000000-0000-0000-0000-000000000001';
 const request = (body: unknown, origin = 'http://localhost') =>
   new Request('http://localhost/api/social-accounts', {
@@ -42,6 +47,7 @@ const input = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  save.mockResolvedValue(undefined);
   session.mockResolvedValue({ user: { id: 'actor' } });
   list.mockResolvedValue([
     {
@@ -160,5 +166,70 @@ it('returns an account authorization failure before listing success or accepting
   const response = await POST(request({ action: 'syncInbox', id }));
   expect(response.status).toBe(400);
   expect(sync).toHaveBeenCalledWith(id, 'actor');
+  expect(list).not.toHaveBeenCalled();
+});
+
+it('accepts a private proxy and storageState without exposing either credential', async () => {
+  const fields = {
+    name: 'Test',
+    network: 'instagram',
+    dailyLimit: 20,
+    ownProxy: 'http://user:secret@proxy.example:8080',
+    storageStateJson: '{"cookies":[],"origins":[]}',
+    keepaliveEnabled: true,
+  };
+  const response = await POST(request(fields));
+  expect(response.status).toBe(200);
+  expect(save).toHaveBeenCalledWith(fields, 'actor');
+  const result = JSON.stringify(await response.json());
+  expect(result).not.toContain('secret');
+  expect(result).not.toContain('storageState');
+});
+it('allows changing the proxy without resubmitting cookies and validates secret input types', async () => {
+  const fields = {
+    id,
+    name: 'Test',
+    network: 'instagram',
+    dailyLimit: 20,
+    proxyIndex: 1,
+    ownProxy: null,
+  };
+  expect((await POST(request(fields))).status).toBe(200);
+  expect(save).toHaveBeenCalledWith(fields, 'actor');
+  for (const patch of [
+    { ownProxy: {} },
+    { storageStateJson: {} },
+    { keepaliveEnabled: 'yes' },
+  ])
+    expect((await POST(request({ ...fields, ...patch }))).status).toBe(400);
+});
+it('requires authentication and returns lightweight unresolved event metadata for polling', async () => {
+  const req = new Request('http://localhost/api/social-accounts/notices');
+  session.mockResolvedValueOnce({});
+  expect((await notices(req)).status).toBe(401);
+  expect(listNotices).not.toHaveBeenCalled();
+  const unresolved = [
+    {
+      id,
+      name: 'Test',
+      network: 'instagram',
+      eventId: 'event-1',
+      reasonUk: 'Потрібен вхід',
+    },
+  ];
+  listNotices.mockResolvedValue(
+    unresolved.map((notice) => ({
+      ...notice,
+      ownProxy: 'secret',
+      storageState: 'private',
+    })),
+  );
+  const response = await notices(req);
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(await response.json()).toEqual({
+    userId: 'actor',
+    notices: unresolved,
+  });
+  expect(listNotices).toHaveBeenCalledWith('actor');
   expect(list).not.toHaveBeenCalled();
 });

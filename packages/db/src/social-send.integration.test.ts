@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, expect, it, vi } from 'vitest';
 import {
   SocialSendError,
+  encryptSocialCookies,
+  socialProxyFingerprint,
   facebookDispatchReason,
   type FacebookDispatchResult,
   SocialSessionCheckError,
@@ -11,6 +13,29 @@ const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
   'queues only human %s replies and guards durable attempts, limits, sessions and refusals',
   async (network) => {
+    const originalSecret = process.env.AUTH_SECRET;
+    const originalProxies = process.env.SOCIAL_PROXY_URLS;
+    process.env.AUTH_SECRET = 'social-send-isolated-test-secret-over-32';
+    process.env.SOCIAL_PROXY_URLS = 'http://social-send.invalid:8000';
+    const sessionSettings = {
+      sessionStatus: 'valid',
+      proxyIndex: 0,
+      proxyFingerprint: socialProxyFingerprint({
+        server: 'http://social-send.invalid:8000',
+      }),
+      cookiesEncrypted: encryptSocialCookies(
+        JSON.stringify([
+          {
+            name: 'sid',
+            value: 'stub',
+            domain: `.${network}.com`,
+            session: true,
+          },
+        ]),
+        network,
+        process.env.AUTH_SECRET,
+      ),
+    };
     const { sonarPool } = await import('./index.js');
     const { sendEmailMessage } = await import('./email.js');
     const {
@@ -81,8 +106,8 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         [company, `https://www.${network}.com/sonar_test/`],
       );
       await sonarPool.query(
-        `insert into channel_accounts(id,channel,name,address,daily_limit,owner_id,settings) values($1,$3,'Social send',$3,20,$2,'{"sessionStatus":"valid"}')`,
-        [account, user, network],
+        `insert into channel_accounts(id,channel,name,address,daily_limit,owner_id,settings) values($1,$3,'Social send',$3,20,$2,$4)`,
+        [account, user, network, sessionSettings],
       );
       const conversationId = await ensureContactConversation(contact.id);
       expect((await getConversationChat(conversationId)).socialAvailable).toBe(
@@ -103,8 +128,8 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
       ) => sendEmailMessage(id, randomUUID(), sender, at, () => 0, 'social');
       const reset = () =>
         sonarPool.query(
-          'update channel_accounts set next_send_at=null,daily_limit=100,status=\'active\',settings=\'{"sessionStatus":"valid"}\' where id=$1',
-          [account],
+          "update channel_accounts set next_send_at=null,daily_limit=100,status='active',settings=$2 where id=$1",
+          [account, sessionSettings],
         );
       const dispatch = (url: string): FacebookDispatchResult => ({
         outcome: 'facebook_dispatched_unconfirmed',
@@ -484,6 +509,10 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           JSON.stringify(setting.value),
         ]);
       await admin.stop();
+      if (originalSecret === undefined) delete process.env.AUTH_SECRET;
+      else process.env.AUTH_SECRET = originalSecret;
+      if (originalProxies === undefined) delete process.env.SOCIAL_PROXY_URLS;
+      else process.env.SOCIAL_PROXY_URLS = originalProxies;
     }
   },
 );

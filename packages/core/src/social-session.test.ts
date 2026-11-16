@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   encryptSocialCookies,
+  encryptSocialStorageState,
+  encryptSocialProxy,
+  generateSocialDevice,
   normalizeSocialCookies,
   resolveSocialSession,
   SocialSendError,
@@ -441,4 +444,93 @@ it('rebuilds the FB page observation from fixed enums and bounded counts only', 
   expect(
     safeSocialSessionDiagnostic({ ...raw, semanticAuthImplemented: true }),
   ).toBeUndefined();
+});
+
+it('roundtrips full encrypted storage state including auxiliary Meta cookies and origins', () => {
+  const state = {
+    cookies: [
+      ...normalizeSocialCookies(raw, 'instagram'),
+      {
+        ...normalizeSocialCookies(raw, 'instagram')[0]!,
+        domain: '.messenger.com',
+      },
+    ],
+    origins: [
+      {
+        origin: 'https://www.instagram.com',
+        localStorage: [{ name: 'auth', value: 'private-rotated-token' }],
+      },
+      {
+        origin: 'https://www.messenger.com',
+        localStorage: [{ name: 'device', value: 'private-device' }],
+      },
+    ],
+  };
+  const value = account();
+  const encrypted = encryptSocialStorageState(
+    JSON.stringify(state),
+    'instagram',
+    secret,
+  );
+  expect(encrypted).not.toContain('private-rotated-token');
+  const resolved = resolveSocialSession(
+    {
+      ...value,
+      settings: { ...value.settings, storageStateEncrypted: encrypted },
+    },
+    secret,
+    proxyUrls,
+  );
+  expect(resolved.storageState).toEqual(state);
+  expect(() =>
+    encryptSocialStorageState(
+      JSON.stringify({ cookies: [], origins: [] }),
+      'instagram',
+      secret,
+    ),
+  ).toThrow();
+});
+it('prioritizes the encrypted own proxy without requiring a global proxy list', () => {
+  const value = account();
+  const ownProxyEncrypted = encryptSocialProxy(
+    'http://own:private@own.example:8001',
+    secret,
+  );
+  expect(ownProxyEncrypted).not.toContain('private');
+  const session = resolveSocialSession(
+    { ...value, settings: { ...value.settings, ownProxyEncrypted } },
+    secret,
+    '',
+  );
+  expect(session.proxy).toEqual({
+    server: 'http://own.example:8001',
+    username: 'own',
+    password: 'private',
+  });
+  expect(
+    socialAnonymousProxies(
+      socialSessionProxies(
+        'http://reserved.example:1,http://own.example:8001,http://public.example:2',
+      ),
+      0,
+      [session.proxy],
+    ),
+  ).toEqual([{ server: 'http://public.example:2' }]);
+});
+it('generates a desktop fingerprint from the actual browser version and preserves stored device identity', () => {
+  const device = generateSocialDevice('instagram', '142.0.0.0');
+  expect(device).toMatchObject({
+    userAgent: expect.stringContaining('Chrome/142.0.0.0'),
+    locale: 'uk-UA',
+    timezoneId: 'Europe/Kyiv',
+    deviceScaleFactor: 1,
+  });
+  const value = account();
+  expect(
+    resolveSocialSession(
+      { ...value, settings: { ...value.settings, device } },
+      secret,
+      proxyUrls,
+    ).device,
+  ).toEqual(device);
 });
