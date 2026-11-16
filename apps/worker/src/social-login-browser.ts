@@ -35,7 +35,9 @@ const loginInputs = {
   linkedin: 'input[name="session_key"],input#username',
 };
 const codeSelector =
-  'input[name="verificationCode"],input[name="security_code"],input[name="approvals_code"],input[name="pin"],input#input__phone_verification_pin,input[autocomplete="one-time-code"]';
+  'input[name="verificationCode"],input[name="security_code"],input[name="approvals_code"],input[name="pin"],input#input__phone_verification_pin,input[autocomplete="one-time-code"],input[inputmode="numeric"],input[type="tel"],input[type="number"],input[maxlength="6"],input[maxlength="8"]';
+const twoStepPath =
+  /two_step_verification|two_factor|\/checkpoint\/.*(?:code|two)/i;
 const captchaSelector =
   'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="captcha"],input[name="captcha_response"],#captcha';
 const identitySelector =
@@ -66,15 +68,22 @@ async function loginState(
     return 'wrong_password' as const;
   if (await visible(page, codeSelector)) {
     if (
-      /authentication app|authenticator|code generator|додатк.{0,20}автентиф|приложени.{0,20}аутентиф|генератор.{0,10}код/i.test(
+      /authentication app|authenticator|code generator|(?:додатк|програм).{0,25}(?:автентиф|аутентиф)|приложени.{0,20}аутентиф|генератор.{0,10}код/i.test(
         body,
       )
     )
       return 'totp' as const;
-    return /\bsms\b|text message|текстов.{0,10}повідом|текстов.{0,10}сообщ/i.test(
-      body,
+    if (
+      /\bsms\b|text message|текстов.{0,10}повідом|текстов.{0,10}сообщ/i.test(
+        body,
+      )
     )
-      ? ('sms' as const)
+      return 'sms' as const;
+    if (/e-?mail|ел\.\s?(?:пошт|адрес)|електронн|электронн|почт/i.test(body))
+      return 'email' as const;
+    // Instagram's 2026 two-step page with only an authenticator app set up.
+    return twoStepPath.test(page.url())
+      ? ('totp' as const)
       : ('email' as const);
   }
   if (/captcha|verify you are human|підтверд.{0,20}людина/i.test(body))
@@ -122,7 +131,7 @@ type PageSnapshot = {
 };
 /** Structure only: title, input name/type/visibility and short button labels; never page text or values. */
 async function pageSnapshot(page?: Page): Promise<PageSnapshot | undefined> {
-  if (!page) return undefined;
+  if (typeof page?.evaluate !== 'function') return undefined;
   return page
     .evaluate(() => ({
       title: document.title.slice(0, 80),
@@ -223,7 +232,8 @@ export function createSocialLoginBrowser(
       const domains = [
         `${account.channel}.com`,
         ...{
-          instagram: ['cdninstagram.com', 'fbcdn.net'],
+          // The 2026 Instagram login flow loads parts of Meta's shared login from facebook.com.
+          instagram: ['cdninstagram.com', 'fbcdn.net', 'facebook.com'],
           facebook: ['fbcdn.net', 'fbsbx.com'],
           linkedin: ['licdn.com'],
         }[account.channel],
@@ -323,13 +333,15 @@ export function createSocialLoginBrowser(
               : 'login_failed',
         };
       await session.persistStorageState?.(await context.storageState(), device);
+      diag.stage = 'done';
       return { valid: true };
     } catch (error) {
       diag.error = error;
-      diag.snapshot = await pageSnapshot(diag.page);
       return { valid: false, reason: 'login_failed' };
     } finally {
       if (context) {
+        if (diag.stage !== 'done')
+          diag.snapshot = await pageSnapshot(diag.page);
         diag.path = pagePath(diag.page);
         active.delete(context);
         await context.close().catch(() => {});
