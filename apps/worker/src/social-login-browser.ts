@@ -33,7 +33,8 @@ const loginInputs = {
   // Instagram's 2026 login form names the field "email" (it accepts a username too).
   instagram: 'input[name="username"],input[name="email"]',
   facebook: 'input[name="email"],input[name="email_address"]',
-  linkedin: 'input[name="session_key"],input#username',
+  // LinkedIn's 2026 form uses an unnamed type="email" input.
+  linkedin: 'input[name="session_key"],input#username,input[type="email"]',
 };
 const codeSelector =
   'input[name="verificationCode"],input[name="security_code"],input[name="approvals_code"],input[name="pin"],input#input__phone_verification_pin,input[autocomplete="one-time-code"],input[inputmode="numeric"],input[type="tel"],input[type="number"],input[maxlength="6"],input[maxlength="8"]';
