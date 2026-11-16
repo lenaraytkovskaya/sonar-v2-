@@ -59,7 +59,10 @@ export async function runBudgetedRequest(
   estimateUsd: number,
   taskId: string,
   operation: () => Promise<PaidResponse>,
+  attempt = 0,
 ): Promise<PaidResponse> {
+  if (!Number.isSafeInteger(attempt) || attempt < 0)
+    throw new Error('Invalid billing attempt');
   const client = await sonarPool.connect();
   let transaction = false;
   try {
@@ -69,8 +72,8 @@ export async function runBudgetedRequest(
     const {
       rows: [previous],
     } = await client.query(
-      'select service_code,meta from spend_events where task_id=$1',
-      [taskId],
+      'select service_code,meta from spend_events where task_id=$1 and attempt=$2',
+      [taskId, attempt],
     );
     if (previous) {
       if (previous.service_code !== service)
@@ -138,6 +141,7 @@ export async function runBudgetedRequest(
           billingPending: true,
           billingEstimate: estimateUsd,
           billingService: service,
+          billingAttempt: attempt,
           billingAt: new Date().toISOString(),
         }),
       ],
@@ -169,8 +173,8 @@ export async function runBudgetedRequest(
         await client.query('begin');
         transaction = true;
         await client.query(
-          'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,$2,$3,$4,$5)',
-          [service, received ? received.units : 0, cost, taskId, meta],
+          'insert into spend_events(service_code,units,cost_usd,task_id,attempt,meta) values($1,$2,$3,$4,$5,$6)',
+          [service, received ? received.units : 0, cost, taskId, attempt, meta],
         );
         await client.query(
           `update tasks set result=result||'{"billingPending":false}'::jsonb where id=$1`,
@@ -189,8 +193,15 @@ export async function runBudgetedRequest(
     await client.query('begin');
     transaction = true;
     await client.query(
-      'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,$2,$3,$4,$5)',
-      [service, response.units, response.costUsd, taskId, { response }],
+      'insert into spend_events(service_code,units,cost_usd,task_id,attempt,meta) values($1,$2,$3,$4,$5,$6)',
+      [
+        service,
+        response.units,
+        response.costUsd,
+        taskId,
+        attempt,
+        { response },
+      ],
     );
     await client.query(
       `update tasks set result=coalesce(result,'{}'::jsonb)||'{"billingPending":false}'::jsonb where id=$1`,
@@ -238,12 +249,15 @@ export async function reconcileBilling(
       return false;
     }
     await client.query(
-      'insert into spend_events(service_code,units,cost_usd,task_id,meta) values($1,$2,$3,$4,$5)',
+      'insert into spend_events(service_code,units,cost_usd,task_id,attempt,meta) values($1,$2,$3,$4,$5,$6)',
       [
         task.result.billingService,
         charged ? 1 : 0,
         charged ? task.result.billingEstimate : 0,
         taskId,
+        Number.isSafeInteger(task.result.billingAttempt)
+          ? task.result.billingAttempt
+          : 0,
         {
           reconciliation: charged ? 'charged' : 'not_charged',
           costBasis: 'estimated_tariff',

@@ -4,6 +4,7 @@ import {
   PaidHttpError,
   createOpenRouterClient,
   parseOutreachDraft,
+  type ReasoningConfig,
   type TextModel,
 } from '@sonar/core';
 import { draftSnapshot, saveOutreachDraft } from '@sonar/db/outreach';
@@ -50,6 +51,8 @@ export async function runOutreachDraft(
     shortMaxLength > 10000 ||
     typeof config['draft.prompt'] !== 'string' ||
     !config['draft.prompt'].trim() ||
+    !config['ai.reasoning'] ||
+    typeof config['ai.reasoning'] !== 'object' ||
     typeof data.analysis?.language !== 'string' ||
     !/^[a-z]{2,3}(?:-[a-zA-Z]{2,4})?$/.test(data.analysis.language)
   )
@@ -82,10 +85,11 @@ export async function runOutreachDraft(
       }),
     },
   ];
-  const estimate =
+  const estimateFor = (tokens: number) =>
     (Buffer.byteLength(JSON.stringify(messages)) + 100) * model.promptUsd +
-    maxTokens * model.completionUsd +
+    tokens * model.completionUsd +
     model.requestUsd;
+  const estimate = estimateFor(maxTokens);
   if (!Number.isFinite(estimate) || estimate < 0 || estimate > maxUsd)
     return {
       status: 'paused',
@@ -96,12 +100,37 @@ export async function runOutreachDraft(
   try {
     const api =
       client ?? createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? '');
-    const response = await runBudgetedRequest(
-      'openrouter',
-      estimate,
-      taskId,
-      () => api.complete(model.id, messages, maxTokens),
-    );
+    const reasoning = config['ai.reasoning'] as ReasoningConfig;
+    let response: Awaited<ReturnType<typeof api.complete>>;
+    try {
+      response = await runBudgetedRequest('openrouter', estimate, taskId, () =>
+        api.complete(model.id, messages, maxTokens, reasoning),
+      );
+    } catch (error) {
+      if (
+        !(error instanceof OpenRouterError) ||
+        error.finishReason !== 'length'
+      )
+        throw error;
+      const retryTokens = Math.min(maxTokens * 2, 10000);
+      const retryEstimate = estimateFor(retryTokens);
+      if (
+        retryTokens <= maxTokens ||
+        !Number.isFinite(retryEstimate) ||
+        estimate + retryEstimate > maxUsd
+      )
+        throw new TaskFailure(
+          'draft_truncated',
+          'Чернетку обрізано в межах ліміту вартості. Оберіть іншу дешеву модель у Налаштуваннях або збільште draft.max_usd.',
+        );
+      response = await runBudgetedRequest(
+        'openrouter',
+        retryEstimate,
+        taskId,
+        () => api.complete(model.id, messages, retryTokens, reasoning),
+        1,
+      );
+    }
     let draft;
     try {
       draft = parseOutreachDraft(response.text, data.channel, shortMaxLength);
@@ -140,7 +169,7 @@ export async function runOutreachDraft(
       throw new TaskFailure(
         error.code,
         error.finishReason === 'length'
-          ? 'Відповідь ШІ обрізана: збільште draft.max_tokens. Витрати збережено.'
+          ? 'Чернетку обрізано і після повторної спроби. Модель витрачає ліміт на міркування — оберіть іншу дешеву модель у Налаштуваннях. Витрати збережено.'
           : `OpenRouter не повернув коректну чернетку (${error.code}). Витрати збережено.`,
       );
     }

@@ -312,6 +312,108 @@ it.skipIf(!enabled)(
         'update channel_accounts set next_send_at=null where id=$1',
         [ids.account],
       );
+      const resolveFlood = await create();
+      let shouldFlood = true;
+      const resolveFloodSender = vi.fn(async () => {
+        if (shouldFlood) {
+          shouldFlood = false;
+          const error = new TelegramSendError(
+            'resolve_phone_flood_wait',
+            'Telegram обмежив пошук за номером, повторіть через 2 хв.',
+            false,
+            120,
+          );
+          error.taskStatus = 'paused';
+          error.providerCode = 'FLOOD_WAIT_120';
+          error.taskResult = {
+            operation: 'contacts.ResolvePhone',
+            providerCode: 'FLOOD_WAIT_120',
+          };
+          throw error;
+        }
+        return 'provider-resolved-flood';
+      });
+      expect(await send(resolveFlood.id, resolveFloodSender)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'resolve_phone_flood_wait',
+        reasonUk: 'Telegram обмежив пошук за номером, повторіть через 2 хв.',
+        result: {
+          operation: 'contacts.ResolvePhone',
+          providerCode: 'FLOOD_WAIT_120',
+          retryAt: new Date(now.getTime() + 120000).toISOString(),
+        },
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select status,reason_uk,scheduled_at from messages where id=$1',
+            [resolveFlood.id],
+          )
+        ).rows[0],
+      ).toMatchObject({
+        status: 'failed',
+        reason_uk: 'Telegram обмежив пошук за номером, повторіть через 2 хв.',
+        scheduled_at: new Date(now.getTime() + 120000),
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select next_send_at from channel_accounts where id=$1',
+            [ids.account],
+          )
+        ).rows[0].next_send_at,
+      ).toEqual(new Date(now.getTime() + 120000));
+      expect(
+        await send(
+          resolveFlood.id,
+          resolveFloodSender,
+          new Date(now.getTime() + 60000),
+        ),
+      ).toMatchObject({
+        status: 'deferred',
+        runAt: new Date(now.getTime() + 120000),
+      });
+      expect(resolveFloodSender).toHaveBeenCalledTimes(1);
+      expect(
+        await send(
+          resolveFlood.id,
+          resolveFloodSender,
+          new Date(now.getTime() + 120000),
+        ),
+      ).toMatchObject({ status: 'done' });
+      expect(resolveFloodSender).toHaveBeenCalledTimes(2);
+      await db.sonarPool.query(
+        'update channel_accounts set next_send_at=null where id=$1',
+        [ids.account],
+      );
+      const importPaused = await create(),
+        importRetrySender = vi.fn(async () => {
+          const error = new TelegramSendError(
+            'import_retry',
+            'Telegram обмежив повторний імпорт контакту. Повторіть вручну не раніше ніж через добу.',
+          );
+          error.taskStatus = 'paused';
+          error.providerCode = 'IMPORT_RETRY_CONTACTS';
+          error.taskResult = {
+            operation: 'contacts.ImportContacts',
+            providerCode: 'IMPORT_RETRY_CONTACTS',
+          };
+          throw error;
+        });
+      expect(await send(importPaused.id, importRetrySender)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'import_retry',
+        result: {
+          operation: 'contacts.ImportContacts',
+          providerCode: 'IMPORT_RETRY_CONTACTS',
+        },
+      });
+      await send(importPaused.id, importRetrySender);
+      expect(importRetrySender).toHaveBeenCalledTimes(1);
+      await db.sonarPool.query(
+        'update channel_accounts set next_send_at=null where id=$1',
+        [ids.account],
+      );
       const uncertainRetry = await create();
       expect(await send(uncertainRetry.id, flood)).toMatchObject({
         status: 'deferred',
