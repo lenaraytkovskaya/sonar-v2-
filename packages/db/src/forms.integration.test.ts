@@ -24,8 +24,7 @@ it.skipIf(!enabled)(
       batch: randomUUID(),
       company: randomUUID(),
     };
-    const now = new Date();
-    now.setUTCHours(10, 0, 0, 0);
+    const now = new Date(Date.now() + 60_000);
     const keys = [
       'send.hours',
       'send.time_zones',
@@ -77,12 +76,18 @@ it.skipIf(!enabled)(
         },
         ids.user,
       );
-    let tick = 0;
+    let lastAttempt = now;
     const send = async (
       id: string,
       sender: import('./forms.js').FormSender,
-      at = new Date(now.getTime() + ++tick * 1000),
-    ) => forms.sendFormMessage(id, randomUUID(), sender, at);
+      at?: Date,
+    ) => {
+      const nextAttempt =
+        at ??
+        new Date(Math.max(Date.now() + 60_000, lastAttempt.getTime() + 1000));
+      lastAttempt = nextAttempt;
+      return forms.sendFormMessage(id, randomUUID(), sender, nextAttempt);
+    };
     const sender = vi.fn(
       async (
         _request: import('./forms.js').FormRequest,
@@ -250,6 +255,10 @@ it.skipIf(!enabled)(
         ).rows[0].n,
       ).toBe(1);
       const captcha = await create();
+      await db.sonarPool.query(
+        'update channel_accounts set next_send_at=null where id=$1',
+        [account],
+      );
       expect(
         await send(captcha.id, async () => ({
           status: 'awaiting_manual',
@@ -296,7 +305,13 @@ it.skipIf(!enabled)(
         status: 'skipped',
       });
       await email.approveMessage(approval.id, ids.user);
-      expect(await send(approval.id, sender)).toMatchObject({ status: 'done' });
+      // Approval records the real database time; use the same current time for its send attempt.
+      const approvalNow = new Date(
+        Math.max(Date.now() + 120_000, lastAttempt.getTime() + 60_000),
+      );
+      expect(await send(approval.id, sender, approvalNow)).toMatchObject({
+        status: 'done',
+      });
       await db.sonarPool.query(
         "update campaigns set send_mode='manual' where id=$1",
         [ids.campaign],
@@ -304,7 +319,12 @@ it.skipIf(!enabled)(
       const draft = await create({ submit: false });
       expect(draft.status).toBe('draft');
       await email.submitMessage(draft.id, ids.user);
-      expect(await send(draft.id, sender)).toMatchObject({ status: 'done' });
+      const draftOutcome = await send(
+        draft.id,
+        sender,
+        new Date(approvalNow.getTime() + 60_000),
+      );
+      expect(draftOutcome).toMatchObject({ status: 'done' });
       await db.sonarPool.query(
         "insert into contacts(company_id,kind,value,normalized,source) values($1,'form','https://evil.invalid/contact','https://evil.invalid/contact','manual')",
         [ids.company],
@@ -359,7 +379,7 @@ it.skipIf(!enabled)(
       account = await createAccount();
       const concurrentB = await create();
       await set('send.form_company_daily_limit', 1);
-      const nextDay = new Date(now.getTime() + 86400000);
+      const nextDay = new Date(lastAttempt.getTime() + 86400000);
       const outcomes = await Promise.all([
         send(concurrentA.id, sender, nextDay),
         send(concurrentB.id, sender, nextDay),
