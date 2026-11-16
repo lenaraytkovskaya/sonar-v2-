@@ -42,7 +42,7 @@ export function ManualEntry({
     ? ['value', 'note']
     : ['name', 'website', 'city', 'countryCode'];
   return (
-    <div className="mb-4 space-y-3">
+    <div className="space-y-3">
       <CrudButton
         onClick={() => {
           setError('');
