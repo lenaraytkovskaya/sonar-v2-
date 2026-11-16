@@ -49,13 +49,37 @@ it.skipIf(!enabled)(
       const truncated = vi.fn(async () => {
         throw new OpenRouterError(
           'finish_reason',
-          { costUsd: 0.002, units: 12 },
+          {
+            costUsd: 0.002,
+            units: 12,
+            promptTokens: 220,
+            completionTokens: 900,
+            reasoningTokens: 450,
+          },
           'length',
         );
       });
       await expect(
         runBudgetedRequest('openrouter', 0.01, retryId, truncated),
       ).rejects.toMatchObject({ finishReason: 'length' });
+      const replay = vi.fn();
+      const cachedFailure = await runBudgetedRequest(
+        'openrouter',
+        0.01,
+        retryId,
+        replay,
+      ).catch((error: unknown) => error);
+      expect(cachedFailure).toMatchObject({
+        finishReason: 'length',
+        billing: {
+          costUsd: 0.002,
+          units: 12,
+          promptTokens: 220,
+          completionTokens: 900,
+          reasoningTokens: 450,
+        },
+      });
+      expect(replay).not.toHaveBeenCalled();
       const retry = vi.fn(async () => ({
         id: 'retry-generation',
         model: 'test',

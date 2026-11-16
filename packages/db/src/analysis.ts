@@ -130,6 +130,7 @@ export async function analysisSnapshot(
       typeof config['company.about'] === 'string'
         ? config['company.about'].trim()
         : '',
+    analysisSpentUsd: Number(task?.payload?.analysisSpentUsd ?? 0),
     config,
   };
   await sonarPool.query(

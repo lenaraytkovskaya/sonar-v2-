@@ -87,8 +87,15 @@ export async function runCompanyAnalysis(
       reasonCode: 'analysis_model_missing',
       reasonUk: 'Додайте ключ OpenRouter та виберіть дешеву модель.',
     };
-  const { config: _config, ...untrusted } = data;
+  const {
+    config: _config,
+    analysisSpentUsd: rawAnalysisSpentUsd = 0,
+    ...untrusted
+  } = data;
   void _config;
+  const analysisSpentUsd = Number.isFinite(Number(rawAnalysisSpentUsd))
+    ? Math.max(0, Number(rawAnalysisSpentUsd))
+    : 0;
   const messages = [
     { role: 'system' as const, content: config['analysis.prompt'] },
     {
@@ -97,11 +104,16 @@ export async function runCompanyAnalysis(
     },
   ];
   const estimateFor = (tokens: number) =>
-    (Buffer.byteLength(JSON.stringify(messages)) + 100) * model.promptUsd +
+    Math.ceil((Buffer.byteLength(JSON.stringify(messages)) + 100) / 3) *
+      model.promptUsd +
     tokens * model.completionUsd +
     model.requestUsd;
   const estimate = estimateFor(maxTokens);
-  if (!Number.isFinite(estimate) || estimate < 0 || estimate > maxUsd)
+  if (
+    !Number.isFinite(estimate) ||
+    estimate < 0 ||
+    estimate > maxUsd - analysisSpentUsd
+  )
     return {
       status: 'paused',
       reasonCode: 'analysis_price_limit',
@@ -123,12 +135,16 @@ export async function runCompanyAnalysis(
         error.finishReason !== 'length'
       )
         throw error;
+      await saveAnalysisUsage(taskId, error);
       const retryTokens = Math.min(maxTokens * 2, 10000);
       const retryEstimate = estimateFor(retryTokens);
+      const firstAttemptCost = error.billing?.costUsd ?? estimate;
+      const remainingUsd =
+        maxUsd - analysisSpentUsd - Math.max(0, firstAttemptCost);
       if (
         retryTokens <= maxTokens ||
         !Number.isFinite(retryEstimate) ||
-        estimate + retryEstimate > maxUsd
+        retryEstimate > remainingUsd
       )
         throw new TaskFailure(
           'analysis_truncated',
@@ -184,7 +200,12 @@ export async function runCompanyAnalysis(
     }
     return {
       status: 'done',
-      result: { analysisId: savedId, ...result, costUsd: response.costUsd },
+      result: {
+        analysisId: savedId,
+        ...result,
+        costUsd: response.costUsd,
+        ...(response.usage ? { usage: response.usage } : {}),
+      },
     };
   } catch (error) {
     if (error instanceof TaskFailure) throw error;
@@ -203,6 +224,7 @@ export async function runCompanyAnalysis(
         paidErrorReason(error.status, 'OpenRouter'),
       );
     if (error instanceof OpenRouterError) {
+      await saveAnalysisUsage(taskId, error);
       if (error.code === 'network_unavailable')
         return {
           status: 'paused',
@@ -221,6 +243,26 @@ export async function runCompanyAnalysis(
     }
     throw error;
   }
+}
+
+async function saveAnalysisUsage(taskId: string, error: OpenRouterError) {
+  if (!error.billing) return;
+  const usage = {
+    ...(error.billing.promptTokens !== undefined
+      ? { promptTokens: error.billing.promptTokens }
+      : {}),
+    ...(error.billing.completionTokens !== undefined
+      ? { completionTokens: error.billing.completionTokens }
+      : {}),
+    ...(error.billing.reasoningTokens !== undefined
+      ? { reasoningTokens: error.billing.reasoningTokens }
+      : {}),
+    ...(error.finishReason ? { finishReason: error.finishReason } : {}),
+  };
+  await sonarPool.query(
+    `update tasks set result=coalesce(result,'{}'::jsonb)||jsonb_build_object('analysisUsage',$2::jsonb) where id=$1`,
+    [taskId, JSON.stringify(usage)],
+  );
 }
 export async function registerAnalysisTasks() {
   await boss.createQueue('company.analyze');

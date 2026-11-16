@@ -361,6 +361,49 @@ export async function retryTask(
       "select id from spend_events where task_id=$1 and (meta ? 'error' or meta ? 'reconciliation')",
       [id],
     );
+    if (
+      original.type === 'company.analyze' &&
+      settled.length &&
+      ['failed', 'paused'].includes(original.status)
+    ) {
+      if (original.result?.retryTaskId) return false;
+      const {
+        rows: [spent],
+      } = await client.query(
+        'select coalesce(sum(cost_usd),0)::float8 as cost from spend_events where task_id=$1',
+        [id],
+      );
+      const { analysisPrompt: _oldPrompt, ...payload } = original.payload;
+      void _oldPrompt;
+      const retryId = await enqueueTask(
+        original.type,
+        `${original.idempotency_key}:retry:${randomUUID()}`,
+        {
+          ...payload,
+          analysisSpentUsd:
+            Number(original.payload.analysisSpentUsd ?? 0) + Number(spent.cost),
+        },
+        client,
+      );
+      if (!retryId) return false;
+      await client.query(
+        'update tasks set subject_type=$2,subject_id=$3 where id=$1',
+        [retryId, original.subject_type, original.subject_id],
+      );
+      await client.query(
+        "update tasks set dismissed_at=now(),result=coalesce(result,'{}'::jsonb)||jsonb_build_object('retryTaskId',$2::text) where id=$1",
+        [id, retryId],
+      );
+      await logActivity(
+        'task.retry',
+        'task',
+        id,
+        userId,
+        { retryTaskId: retryId },
+        client,
+      );
+      return true;
+    }
     if (original.type === 'google.company') {
       if (
         !['failed', 'paused', 'skipped'].includes(original.status) ||

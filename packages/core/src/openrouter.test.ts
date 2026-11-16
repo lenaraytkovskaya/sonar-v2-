@@ -4,7 +4,13 @@ const reply = {
   id: 'generation-1',
   model: 'chosen/model',
   choices: [{ message: { content: 'Текст' } }],
-  usage: { cost: 0.0042, total_tokens: 123 },
+  usage: {
+    cost: 0.0042,
+    total_tokens: 123,
+    prompt_tokens: 100,
+    completion_tokens: 23,
+    completion_tokens_details: { reasoning_tokens: 4 },
+  },
 };
 const stub = (body: unknown, status = 200) =>
   vi
@@ -26,6 +32,12 @@ describe('OpenRouter adapter', () => {
       text: 'Текст',
       costUsd: 0.0042,
       units: 123,
+      usage: {
+        promptTokens: 100,
+        completionTokens: 23,
+        reasoningTokens: 4,
+        finishReason: 'stop',
+      },
     });
     const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     expect(body.model).toBe('chosen/model');
@@ -91,6 +103,21 @@ describe('OpenRouter adapter', () => {
       expect(JSON.stringify(error)).not.toContain('partial');
     },
   );
+  it('retains a provider finish reason when the response content is empty', async () => {
+    await expect(
+      createOpenRouterClient(
+        'test',
+        stub({
+          ...reply,
+          choices: [{ finish_reason: 'stop', message: { content: null } }],
+        }),
+      ).complete('model', [], 100),
+    ).rejects.toMatchObject({
+      code: 'empty_content',
+      finishReason: 'stop',
+      billing: { promptTokens: 100, completionTokens: 23, reasoningTokens: 4 },
+    });
+  });
   it('settles malformed JSON but preserves network uncertainty', async () => {
     await expect(
       createOpenRouterClient(
