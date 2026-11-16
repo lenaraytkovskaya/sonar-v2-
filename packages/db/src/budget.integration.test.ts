@@ -1,5 +1,5 @@
 import { afterAll, expect, it, vi } from 'vitest';
-import { PaidHttpError } from '@sonar/core';
+import { OpenRouterError, PaidHttpError } from '@sonar/core';
 import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
@@ -45,6 +45,43 @@ it.skipIf(!enabled)(
       );
       expect(Number(spend.cost_usd)).toBe(0.0037);
       expect(Number(spend.units)).toBe(47);
+      const retryId = await id();
+      const truncated = vi.fn(async () => {
+        throw new OpenRouterError(
+          'finish_reason',
+          { costUsd: 0.002, units: 12 },
+          'length',
+        );
+      });
+      await expect(
+        runBudgetedRequest('openrouter', 0.01, retryId, truncated),
+      ).rejects.toMatchObject({ finishReason: 'length' });
+      const retry = vi.fn(async () => ({
+        id: 'retry-generation',
+        model: 'test',
+        text: 'complete response',
+        costUsd: 0.004,
+        units: 24,
+      }));
+      await runBudgetedRequest('openrouter', 0.02, retryId, retry, 1);
+      await expect(
+        runBudgetedRequest('openrouter', 0.01, retryId, vi.fn(), 0),
+      ).rejects.toMatchObject({ finishReason: 'length' });
+      expect(
+        await runBudgetedRequest('openrouter', 0.02, retryId, vi.fn(), 1),
+      ).toMatchObject({ costUsd: 0.004, text: 'complete response' });
+      expect(truncated).toHaveBeenCalledTimes(1);
+      expect(retry).toHaveBeenCalledTimes(1);
+      const { rows: attempts } = await sonarPool.query(
+        'select attempt,cost_usd from spend_events where task_id=$1 order by attempt',
+        [retryId],
+      );
+      expect(
+        attempts.map((row) => [row.attempt, Number(row.cost_usd)]),
+      ).toEqual([
+        [0, 0.002],
+        [1, 0.004],
+      ]);
       await sonarPool.query(
         "update settings set value='0' where key='budget.monthly_usd'",
       );
