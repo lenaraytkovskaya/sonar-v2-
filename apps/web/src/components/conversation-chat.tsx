@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,10 @@ import { Draft } from './company-email';
 import { AiAssist } from './ai-assist';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { ChannelIcon } from './channel-icon';
+type Message = NonNullable<
+  Awaited<ReturnType<typeof getConversationChat>>
+>['messages'][number];
 type Chat = Awaited<ReturnType<typeof getConversationChat>>;
 type Task = { id: string; status: string; reason_uk?: string };
 export function ConversationChat({
@@ -335,6 +339,11 @@ export function ConversationChat({
             compact && 'truncate text-xs',
           )}
         >
+          <ChannelIcon
+            channel={conversation.channel}
+            value={conversation.contactValue ?? ''}
+            className="mr-1"
+          />
           {channelLabel(conversation.channel, conversation.contactValue ?? '')}{' '}
           · {contactLabel(conversation.contactValue)}
         </p>
@@ -361,29 +370,51 @@ export function ConversationChat({
           aria-relevant="additions"
           className="h-full min-h-0 overflow-y-auto overscroll-contain bg-raised p-3"
         >
-          <div className="space-y-3">
-            {data.messages.map((message) => (
-              <Draft
-                key={message.id}
-                bubble
-                message={message}
-                blocked={data.blocked}
-                pending={pending}
-                approval={
-                  message.source !== 'reply' &&
-                  conversation.campaignSendMode === 'approval'
-                }
-                act={act}
-                onUseText={
-                  social && data.socialAvailable
-                    ? (text) => {
-                        setBody(text);
-                        document.getElementById('reply-body')?.focus();
-                      }
-                    : undefined
-                }
-              />
-            ))}
+          <div className="space-y-2">
+            {data.messages.map((message, index) => {
+              const day = (value: Message) =>
+                new Date(value.sentAt ?? value.createdAt).toDateString();
+              const newDay =
+                index === 0 || day(data.messages[index - 1]!) !== day(message);
+              return (
+                <Fragment key={message.id}>
+                  {newDay && (
+                    <p
+                      className="py-2 text-center text-xs text-muted-foreground"
+                      suppressHydrationWarning
+                    >
+                      <span className="rounded-full bg-surface px-3 py-1">
+                        {new Date(
+                          message.sentAt ?? message.createdAt,
+                        ).toLocaleDateString('uk-UA', {
+                          day: 'numeric',
+                          month: 'long',
+                        })}
+                      </span>
+                    </p>
+                  )}
+                  <Draft
+                    bubble
+                    message={message}
+                    blocked={data.blocked}
+                    pending={pending}
+                    approval={
+                      message.source !== 'reply' &&
+                      conversation.campaignSendMode === 'approval'
+                    }
+                    act={act}
+                    onUseText={
+                      social && data.socialAvailable
+                        ? (text) => {
+                            setBody(text);
+                            document.getElementById('reply-body')?.focus();
+                          }
+                        : undefined
+                    }
+                  />
+                </Fragment>
+              );
+            })}
           </div>
         </div>
         {newMessages > 0 && (

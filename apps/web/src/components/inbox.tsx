@@ -21,6 +21,7 @@ import { Card } from '@/components/shared';
 import { ConversationChat } from '@/components/conversation-chat';
 import { LocalTime } from '@/components/local-time';
 import { Button } from '@/components/ui/button';
+import { ChannelIcon } from './channel-icon';
 export function Inbox({
   initial,
   chat,
@@ -188,7 +189,11 @@ export function Inbox({
               {row.needsHuman && (
                 <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
               )}
-              <p className="break-words">
+              <p className="flex min-w-0 items-center gap-1.5 break-words">
+                <ChannelIcon
+                  channel={row.channel}
+                  value={row.contactValue ?? ''}
+                />
                 {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
                 {contactLabel(row.contactValue)}
               </p>

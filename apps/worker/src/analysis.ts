@@ -67,7 +67,7 @@ export async function runCompanyAnalysis(
   )
     throw new TaskFailure(
       'analysis_config_invalid',
-      'Перевірте налаштування ІІ-аналізу.',
+      'Перевірте налаштування ШІ-аналізу.',
     );
   if (data.score === null || data.score < minScore)
     return {
@@ -119,7 +119,7 @@ export async function runCompanyAnalysis(
     } catch {
       throw new TaskFailure(
         'analysis_schema_invalid',
-        'ІІ повернув некоректний аналіз. Витрати збережено; повтор використовує ту саму відповідь.',
+        'ШІ повернув некоректний аналіз. Витрати збережено; повтор використовує ту саму відповідь.',
       );
     }
     const tx = await sonarPool.connect();
@@ -184,9 +184,9 @@ export async function runCompanyAnalysis(
       throw new TaskFailure(
         error.code,
         error.finishReason === 'length'
-          ? 'Відповідь ІІ обрізана: збільште analysis.max_tokens. Витрати збережено.'
+          ? 'Відповідь ШІ обрізана: збільште analysis.max_tokens. Витрати збережено.'
           : error.code === 'empty_content'
-            ? 'ІІ не повернув текст аналізу. Витрати збережено; спробуйте іншу модель.'
+            ? 'ШІ не повернув текст аналізу. Витрати збережено; спробуйте іншу модель.'
             : `OpenRouter не повернув коректний аналіз (${error.code}). Витрати збережено.`,
       );
     }

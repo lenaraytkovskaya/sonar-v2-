@@ -56,7 +56,8 @@ const read = () =>
 const account = {
   id,
   name: 'Team',
-  address: '+••••4567',
+  address: '+380501234567',
+  addressMasked: '+••••4567',
   dailyLimit: 10,
   sentToday: 0,
   enabled: false,

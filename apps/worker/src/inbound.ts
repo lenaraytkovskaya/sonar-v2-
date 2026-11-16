@@ -287,7 +287,7 @@ export async function classifyInbound(
   } catch {
     throw new TaskFailure(
       'inbound_category_invalid',
-      'ІІ повернув некоректну категорію вхідного повідомлення.',
+      'ШІ повернув некоректну категорію вхідного повідомлення.',
     );
   }
   await applyInboundClassification(input.messageId, category);
@@ -349,7 +349,7 @@ export async function draftReply(
   } catch {
     throw new TaskFailure(
       'reply_invalid',
-      'ІІ повернув некоректну чернетку відповіді.',
+      'ШІ повернув некоректну чернетку відповіді.',
     );
   }
   const draft = await saveReplyDraft(input.conversationId, content, taskId);

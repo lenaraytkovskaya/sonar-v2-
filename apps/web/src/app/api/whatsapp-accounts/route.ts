@@ -100,6 +100,7 @@ async function handle(request: Request, method: string) {
       id: account.id,
       name: account.name,
       address: account.address,
+      addressMasked: account.addressMasked,
       dailyLimit: account.dailyLimit,
       sentToday: account.sentToday,
       enabled: account.enabled,

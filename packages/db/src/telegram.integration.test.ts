@@ -105,7 +105,7 @@ it.skipIf(!enabled)(
         (a) => a.id === pending.id,
       )!;
       expect(account.enabled).toBe(true);
-      expect(account.address).not.toContain('501234');
+      expect(account.addressMasked).not.toContain('501234');
       expect(account).not.toHaveProperty('settings');
       expect(
         await telegram.updateTelegramAccount(

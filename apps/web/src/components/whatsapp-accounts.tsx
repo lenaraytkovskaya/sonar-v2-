@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { RevealValue } from './ui/reveal-value';
 
 type Account = Awaited<ReturnType<typeof listWhatsAppAccounts>>[number];
 export function WhatsAppAccounts({
@@ -115,7 +116,16 @@ export function WhatsAppAccounts({
             <p className="font-medium">
               {account.name}
               {account.providerName && ` · ${account.providerName}`}
-              {account.address && ` · ${account.address}`}
+              {account.address && account.address !== '—' && (
+                <>
+                  {' · '}
+                  <RevealValue
+                    value={account.address}
+                    masked={account.addressMasked}
+                    copy
+                  />
+                </>
+              )}
             </p>
             <p className="text-sm text-muted-foreground">
               {uk.email.owner}: {account.ownerName}

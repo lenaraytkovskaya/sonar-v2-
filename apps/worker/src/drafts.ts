@@ -108,7 +108,7 @@ export async function runOutreachDraft(
     } catch {
       throw new TaskFailure(
         'draft_schema_invalid',
-        'ІІ повернув некоректну чернетку. Витрати збережено; повтор використовує ту саму відповідь.',
+        'ШІ повернув некоректну чернетку. Витрати збережено; повтор використовує ту саму відповідь.',
       );
     }
     const saved = await saveOutreachDraft(input, draft, taskId);
@@ -140,7 +140,7 @@ export async function runOutreachDraft(
       throw new TaskFailure(
         error.code,
         error.finishReason === 'length'
-          ? 'Відповідь ІІ обрізана: збільште draft.max_tokens. Витрати збережено.'
+          ? 'Відповідь ШІ обрізана: збільште draft.max_tokens. Витрати збережено.'
           : `OpenRouter не повернув коректну чернетку (${error.code}). Витрати збережено.`,
       );
     }
