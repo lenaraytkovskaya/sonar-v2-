@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ProzorroSearch } from './prozorro-search';
 import { uk } from '@/i18n/uk';
 import { CompanyCard, type CompanyCardRow } from './company-card';
+import { CompanyTable } from './company-table';
 
 const shown = 6;
 
@@ -60,7 +61,15 @@ export function CampaignCompanies({ campaignId }: { campaignId: string }) {
           {uk.campaign.noCompanies}
         </p>
       )}
-      <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+      {!!data?.companies.length && (
+        <div className="hidden md:block">
+          <CompanyTable
+            companies={data.companies.slice(0, shown)}
+            link={(id) => `/companies/${id}?campaignId=${campaignId}`}
+          />
+        </div>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2 md:hidden">
         {data?.companies.slice(0, shown).map((company) => (
           <CompanyCard
             key={company.id}

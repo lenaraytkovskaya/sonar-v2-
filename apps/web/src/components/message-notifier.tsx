@@ -150,7 +150,7 @@ export function NotificationSettings() {
     );
   }, []);
   return (
-    <section className="space-y-3 rounded-xl border border-border bg-surface p-4">
+    <section className="space-y-3 rounded-xl border border-border bg-surface p-6 shadow-xs">
       <h2 className="font-heading text-base font-bold">
         {uk.notifications.settings}
       </h2>

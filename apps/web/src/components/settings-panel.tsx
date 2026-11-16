@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { TextModel, GoogleProfile } from '@sonar/core';
 import { uk } from '@/i18n/uk';
-import { Card, PageHeader } from './shared';
+import { Card } from './shared';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { AiAssist } from './ai-assist';
@@ -234,7 +234,6 @@ export function SettingsPanel() {
   };
   return (
     <>
-      <PageHeader {...uk.pages.settings} />
       <div className="grid items-start gap-6 xl:grid-cols-2">
         <RegistryPhoneSync />
         <ProzorroSync />
@@ -260,17 +259,19 @@ export function SettingsPanel() {
             pending={pending || !loaded}
             valid={validSocialSettings}
             summary={
-              <dl className="space-y-2 text-sm">
+              <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 {Object.keys(socialFields).map((key) => (
                   <div key={key}>
-                    <dt className="text-muted-foreground">
+                    <dt className="text-xs text-muted-foreground">
                       {
                         uk.social.settings[
                           key as keyof typeof uk.social.settings
                         ]
                       }
                     </dt>
-                    <dd>{String(social[key] ?? '—')}</dd>
+                    <dd className="font-medium tabular-nums">
+                      {String(social[key] ?? '—')}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -329,7 +330,7 @@ export function SettingsPanel() {
               setStrong(draft.strong);
             }}
             summary={
-              <dl className="space-y-2 text-sm">
+              <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 <div>
                   <dt>{uk.ai.cheap}</dt>
                   <dd className="break-all text-muted-foreground">
@@ -522,11 +523,11 @@ export function SettingsPanel() {
             pending={pending || !loaded}
             valid={validScannerSettings}
             summary={
-              <dl className="space-y-2 text-sm">
+              <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 {[...Object.keys(scannerFields), 'scanner.user_agent'].map(
                   (key) => (
                     <div key={key}>
-                      <dt className="text-muted-foreground">
+                      <dt className="text-xs text-muted-foreground">
                         {
                           uk.scanner.settings[
                             key as keyof typeof uk.scanner.settings
