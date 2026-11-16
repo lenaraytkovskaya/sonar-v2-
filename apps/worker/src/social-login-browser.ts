@@ -119,11 +119,15 @@ async function settledState(
   page: Page,
   network: SocialNetwork,
   timeoutMs: number,
+  /** After a code is submitted the same page stays up while it is checked: keep waiting. */
+  submitted?: { state: string; url: string },
 ) {
   const deadline = Date.now() + timeoutMs;
   do {
     const state = await loginState(page, network, timeoutMs);
-    if (state !== 'pending') return state;
+    const unchanged =
+      submitted?.state === state && submitted.url === page.url();
+    if (state !== 'pending' && !unchanged) return state;
     await page.waitForTimeout(250);
   } while (Date.now() < deadline);
   return 'pending' as const;
@@ -346,10 +350,14 @@ export function createSocialLoginBrowser(
           .locator(codeInputs(page))
           .filter({ visible: true })
           .first();
+        const submittedUrl = page.url();
         await input.fill(code);
         await input.press('Enter');
         diag.stage = `after_${state}_code`;
-        state = await settledState(page, account.channel, timeoutMs);
+        state = await settledState(page, account.channel, timeoutMs, {
+          state,
+          url: submittedUrl,
+        });
         diag.state = state;
       }
       if (state !== 'authenticated')
