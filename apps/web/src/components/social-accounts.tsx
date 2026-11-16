@@ -9,6 +9,7 @@ import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
 import { SocialLoginDialog } from './social-login-dialog';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { RowActions } from './ui/row-actions';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
 const selectClass =
@@ -39,6 +40,12 @@ export function SocialAccounts({
     String(accountProxyIndex ?? 'own'),
   );
   const [cookiesJson, setCookiesJson] = useState('');
+  const [addMode, setAddMode] = useState<'credentials' | 'cookies'>(
+    'credentials',
+  );
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [totpSecret, setTotpSecret] = useState('');
   const [visible, setVisible] = useState(false);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState('');
@@ -78,25 +85,32 @@ export function SocialAccounts({
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
       setNotice(
-        method === 'POST' &&
-          'action' in fields &&
-          ['credentials', 'login', 'loginCode'].includes(String(fields.action))
-          ? fields.action === 'credentials' && response.status === 200
-            ? uk.socialAccounts.credentialsSavedOnly
-            : uk.socialAccounts.loginQueued
+        method === 'DELETE'
+          ? uk.socialAccounts.removed
           : method === 'POST' &&
               'action' in fields &&
-              fields.action === 'syncInbox'
-            ? result.inboxSync?.created
-              ? uk.socialAccounts.syncInboxQueued
-              : uk.socialAccounts.syncInboxExisting
+              [
+                'credentials',
+                'login',
+                'loginCode',
+                'createWithCredentials',
+              ].includes(String(fields.action))
+            ? fields.action === 'credentials' && response.status === 200
+              ? uk.socialAccounts.credentialsSavedOnly
+              : uk.socialAccounts.loginQueued
             : method === 'POST' &&
                 'action' in fields &&
-                fields.action === 'inboxPolling'
-              ? uk.outreach.saved
-              : method === 'POST' && 'action' in fields
-                ? uk.socialAccounts.checkQueued
-                : uk.outreach.saved,
+                fields.action === 'syncInbox'
+              ? result.inboxSync?.created
+                ? uk.socialAccounts.syncInboxQueued
+                : uk.socialAccounts.syncInboxExisting
+              : method === 'POST' &&
+                  'action' in fields &&
+                  fields.action === 'inboxPolling'
+                ? uk.outreach.saved
+                : method === 'POST' && 'action' in fields
+                  ? uk.socialAccounts.checkQueued
+                  : uk.outreach.saved,
       );
       return true;
     } catch (error) {
@@ -111,6 +125,10 @@ export function SocialAccounts({
     setEditing(undefined);
     setName('');
     setCookiesJson('');
+    setLogin('');
+    setPassword('');
+    setTotpSecret('');
+    setAddMode('credentials');
     setOwnProxy('');
     setKeepaliveEnabled(true);
     setVisible(false);
@@ -266,43 +284,49 @@ export function SocialAccounts({
             >
               {uk.socialAccounts.check}
             </Button>
-            <CrudButton
-              action="edit"
-              aria-label={`${uk.socialAccounts.edit}: ${account.name}`}
+            <RowActions
               disabled={pending}
-              onClick={() => {
-                setNotice('');
-                setOpen(true);
-                setEditing(account.id);
-                setName(account.name);
-                setDailyLimit(String(account.dailyLimit));
-                setProxyIndex(
-                  account.hasOwnProxy ? 'own' : String(account.proxyIndex),
-                );
-                setOwnProxy('');
-                setKeepaliveEnabled(account.keepaliveEnabled);
-                setCookiesJson('');
-                setVisible(false);
-              }}
-            >
-              {uk.socialAccounts.edit}
-            </CrudButton>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={
-                pending ||
-                (!account.enabled && account.sessionStatus !== 'valid')
-              }
-              onClick={() =>
-                void mutate('PATCH', {
-                  id: account.id,
-                  enabled: !account.enabled,
-                })
-              }
-            >
-              {account.enabled ? uk.email.disable : uk.email.enable}
-            </Button>
+              actions={[
+                {
+                  kind: 'edit',
+                  label: uk.socialAccounts.edit,
+                  onSelect: () => {
+                    setNotice('');
+                    setOpen(true);
+                    setEditing(account.id);
+                    setName(account.name);
+                    setDailyLimit(String(account.dailyLimit));
+                    setProxyIndex(
+                      account.hasOwnProxy ? 'own' : String(account.proxyIndex),
+                    );
+                    setOwnProxy('');
+                    setKeepaliveEnabled(account.keepaliveEnabled);
+                    setCookiesJson('');
+                    setAddMode('cookies');
+                    setVisible(false);
+                  },
+                },
+                {
+                  kind: account.enabled ? 'disable' : 'enable',
+                  label: account.enabled ? uk.email.disable : uk.email.enable,
+                  disabled:
+                    !account.enabled && account.sessionStatus !== 'valid',
+                  onSelect: () =>
+                    void mutate('PATCH', {
+                      id: account.id,
+                      enabled: !account.enabled,
+                    }),
+                },
+                {
+                  kind: 'delete',
+                  label: uk.email.remove,
+                  danger: true,
+                  confirm: uk.socialAccounts.removeConfirm(account.name),
+                  onSelect: () =>
+                    void mutate('DELETE', { action: 'remove', id: account.id }),
+                },
+              ]}
+            />
           </div>
           {['instagram', 'facebook'].includes(account.network) && (
             <p className="text-muted-foreground">
@@ -335,13 +359,17 @@ export function SocialAccounts({
           cookiesJson,
           ownProxy,
           keepaliveEnabled,
+          login,
+          password,
+          totpSecret,
+          addMode,
         }}
       >
         <form
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
-            void mutate('POST', {
+            const accountFields = {
               ...(editing ? { id: editing } : {}),
               name,
               network,
@@ -352,8 +380,25 @@ export function SocialAccounts({
                   : {}
                 : { proxyIndex: Number(proxyIndex), ownProxy: null }),
               keepaliveEnabled,
-              ...(cookiesJson.trim() ? { storageStateJson: cookiesJson } : {}),
-            }).then((saved) => {
+            };
+            const fields =
+              !editing && addMode === 'credentials'
+                ? {
+                    action: 'createWithCredentials',
+                    ...accountFields,
+                    login,
+                    password,
+                    ...(totpSecret.trim()
+                      ? { totpSecret: totpSecret.trim() }
+                      : {}),
+                  }
+                : {
+                    ...accountFields,
+                    ...(cookiesJson.trim()
+                      ? { storageStateJson: cookiesJson }
+                      : {}),
+                  };
+            void mutate('POST', fields).then((saved) => {
               if (saved) {
                 reset();
                 setOpen(false);
@@ -361,6 +406,29 @@ export function SocialAccounts({
             });
           }}
         >
+          {!editing && (
+            <div
+              role="tablist"
+              aria-label={uk.socialAccounts.addMethod}
+              className="flex gap-2 border-b border-border pb-2"
+            >
+              {(['credentials', 'cookies'] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={addMode === mode}
+                  tabIndex={addMode === mode ? 0 : -1}
+                  variant={addMode === mode ? 'default' : 'outline'}
+                  onClick={() => setAddMode(mode)}
+                >
+                  {mode === 'credentials'
+                    ? uk.socialAccounts.loginAndPassword
+                    : uk.socialAccounts.cookiesTab}
+                </Button>
+              ))}
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label htmlFor={`social-${network}-name`}>
@@ -465,46 +533,101 @@ export function SocialAccounts({
             />
             {uk.socialAccounts.keepalive}
           </label>
-          <div>
-            <label htmlFor={`social-${network}-cookies`}>
-              {uk.socialAccounts.cookies} · {uk.social.networks[network]}
-            </label>
-            <textarea
-              id={`social-${network}-cookies`}
-              placeholder={uk.socialAccounts.cookiesPlaceholder}
-              aria-describedby={`social-${network}-cookies-help`}
-              className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
-              style={
-                visible || !cookiesJson
-                  ? undefined
-                  : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
-              }
-              rows={4}
-              autoComplete="off"
-              spellCheck={false}
-              value={cookiesJson}
-              onChange={(event) => setCookiesJson(event.target.value)}
-            />
-            <p
-              id={`social-${network}-cookies-help`}
-              className="text-xs text-muted-foreground"
-            >
-              {uk.socialAccounts.passwordSetup}{' '}
-              {uk.socialAccounts.cookiesHint[network]}{' '}
-              {editing
-                ? uk.socialAccounts.replaceCookies
-                : uk.socialAccounts.cookiePrivacy}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setVisible(!visible)}
-            >
-              {visible ? uk.socialAccounts.hide : uk.socialAccounts.show}
-            </Button>
-          </div>
+          {!editing && addMode === 'credentials' && (
+            <div className="space-y-3">
+              <div>
+                <label htmlFor={`social-${network}-login`}>
+                  {uk.socialAccounts.login}
+                </label>
+                <Input
+                  id={`social-${network}-login`}
+                  type="text"
+                  autoComplete="username"
+                  maxLength={320}
+                  value={login}
+                  required
+                  onChange={(event) => setLogin(event.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor={`social-${network}-password`}>
+                  {uk.socialAccounts.password}
+                </label>
+                <Input
+                  id={`social-${network}-password`}
+                  type="password"
+                  autoComplete="new-password"
+                  maxLength={1024}
+                  value={password}
+                  required
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor={`social-${network}-totp`}>
+                  {uk.socialAccounts.totpSecret}
+                </label>
+                <Input
+                  id={`social-${network}-totp`}
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={256}
+                  value={totpSecret}
+                  onChange={(event) => setTotpSecret(event.target.value)}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {uk.socialAccounts.credentialsPrivacy}
+              </p>
+            </div>
+          )}
+          {(editing || addMode === 'cookies') && (
+            <div>
+              <label htmlFor={`social-${network}-cookies`}>
+                {uk.socialAccounts.cookies} · {uk.social.networks[network]}
+              </label>
+              <textarea
+                id={`social-${network}-cookies`}
+                placeholder={uk.socialAccounts.cookiesPlaceholder}
+                aria-describedby={`social-${network}-cookies-help`}
+                className="w-full rounded-lg border border-border bg-surface p-3 font-mono text-sm"
+                style={
+                  visible || !cookiesJson
+                    ? undefined
+                    : ({ WebkitTextSecurity: 'disc' } as React.CSSProperties)
+                }
+                rows={4}
+                autoComplete="off"
+                spellCheck={false}
+                value={cookiesJson}
+                onChange={(event) => setCookiesJson(event.target.value)}
+              />
+              <p
+                id={`social-${network}-cookies-help`}
+                className="text-xs text-muted-foreground"
+              >
+                {uk.socialAccounts.passwordSetup}{' '}
+                {uk.socialAccounts.cookiesHint[network]}{' '}
+                {editing
+                  ? uk.socialAccounts.replaceCookies
+                  : uk.socialAccounts.cookiePrivacy}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVisible(!visible)}
+              >
+                {visible ? uk.socialAccounts.hide : uk.socialAccounts.show}
+              </Button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button disabled={pending || !proxyIndex}>{uk.forms.save}</Button>
+            <Button disabled={pending || proxyIndex === ''}>
+              {!editing && addMode === 'credentials'
+                ? uk.socialAccounts.saveAndLogin
+                : uk.forms.save}
+            </Button>
           </div>
           {notice && (
             <p role="status" className="text-sm">

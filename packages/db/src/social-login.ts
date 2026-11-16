@@ -107,6 +107,7 @@ export async function saveSocialCredentials(
   id: string,
   input: { login?: string; password?: string; totpSecret?: string | null },
   userId: string,
+  existing?: PoolClient,
 ) {
   return transaction(async (c) => {
     await lock(c, id);
@@ -168,7 +169,7 @@ export async function saveSocialCredentials(
         };
       throw error;
     }
-  });
+  }, existing);
 }
 export async function queueSocialCredentialLogin(id: string, userId: string) {
   return transaction(async (c) => {

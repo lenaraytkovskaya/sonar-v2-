@@ -140,7 +140,13 @@ export const uk = {
         'Експортуйте cookies з linkedin.com через Cookie-Editor → Export → JSON.',
     },
     add: 'Додати акаунт',
+    removed: 'Акаунт видалено.',
+    addMethod: 'Спосіб додавання акаунта',
+    loginAndPassword: 'Логін і пароль',
+    cookiesTab: 'Cookies',
     edit: 'Редагувати акаунт',
+    removeConfirm: (name: string) =>
+      `Видалити акаунт «${name}»? Збережена сесія, логін, пароль і ключ 2FA будуть видалені. Листування з компаніями залишиться.`,
     credentialLogin: 'Вхід за паролем',
     login: 'Логін',
     password: 'Пароль',

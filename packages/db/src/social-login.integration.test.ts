@@ -386,6 +386,44 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
       expect((await settings(stale.id)).loginRecoveryPending).not.toBe(true);
       await accounts.reconcileSocialCredentialLogins();
       expect(await autoCount()).toBe(1);
+
+      const createdWithPassword =
+        await accounts.createSocialAccountWithCredentials(
+          {
+            network: 'linkedin',
+            name: 'Created with credentials',
+            dailyLimit: 20,
+            proxyIndex: 1,
+            login: 'new-private-login',
+            password: 'new-private-password',
+            totpSecret: 'JBSWY3DPEHPK3PXP',
+          },
+          actor,
+        );
+      ids.push(createdWithPassword.id);
+      const createdSettings = await settings(createdWithPassword.id);
+      expect(createdSettings).not.toHaveProperty('storageStateEncrypted');
+      expect(
+        decryptSocialCredentials(
+          createdSettings.credentialsEncrypted,
+          process.env.AUTH_SECRET!,
+        ),
+      ).toEqual({
+        login: 'new-private-login',
+        password: 'new-private-password',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+      });
+      expect(
+        (
+          await sonarPool.query(
+            "select status,payload from tasks where id=$1 and type='social.session.login'",
+            [createdWithPassword.loginTaskId],
+          )
+        ).rows[0],
+      ).toEqual({
+        status: 'queued',
+        payload: { accountId: createdWithPassword.id, automatic: false },
+      });
     } finally {
       await sonarPool.query(
         "delete from pgboss.job where name='social.session.login' and data->>'taskId' in (select id::text from tasks where payload->>'accountId'=any($1::text[]))",

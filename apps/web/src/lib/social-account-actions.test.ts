@@ -10,6 +10,8 @@ const {
   credentials,
   login,
   code,
+  remove,
+  createWithCredentials,
 } = vi.hoisted(() => ({
   session: vi.fn(),
   list: vi.fn(),
@@ -21,6 +23,8 @@ const {
   credentials: vi.fn(),
   login: vi.fn(),
   code: vi.fn(),
+  remove: vi.fn(),
+  createWithCredentials: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
@@ -36,6 +40,8 @@ vi.mock('@sonar/db/social-accounts', () => ({
   saveSocialCredentials: credentials,
   queueSocialCredentialLogin: login,
   submitSocialLoginCode: code,
+  removeSocialAccount: remove,
+  createSocialAccountWithCredentials: createWithCredentials,
   getSocialProxyCount: () => 2,
 }));
 vi.mock('@sonar/db/email', () => ({
@@ -43,7 +49,7 @@ vi.mock('@sonar/db/email', () => ({
     reasonUk = 'Некоректні дані.';
   },
 }));
-import { GET, POST, PATCH } from '../app/api/social-accounts/route';
+import { GET, POST, PATCH, DELETE } from '../app/api/social-accounts/route';
 import { uk } from '../i18n/uk';
 import { GET as notices } from '../app/api/social-accounts/notices/route';
 const id = '00000000-0000-0000-0000-000000000001';
@@ -63,6 +69,11 @@ const input = {
 beforeEach(() => {
   vi.clearAllMocks();
   save.mockResolvedValue(undefined);
+  remove.mockResolvedValue(true);
+  createWithCredentials.mockResolvedValue({
+    id: 'new-account',
+    loginTaskId: 'new-login-task',
+  });
   credentials.mockResolvedValue({ id: 'login-task', created: true });
   session.mockResolvedValue({ user: { id: 'actor' } });
   list.mockResolvedValue([
@@ -140,6 +151,61 @@ describe('social account API', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: uk.email.error });
   });
+});
+
+it('creates an account with credentials through the shared credential flow and returns no secret', async () => {
+  const fields = {
+    action: 'createWithCredentials',
+    name: 'Login account',
+    network: 'facebook',
+    dailyLimit: 20,
+    proxyIndex: 0,
+    login: 'private-login',
+    password: 'private-password',
+    totpSecret: 'JBSW Y3DP-EHPK3PXP',
+  };
+  const response = await POST(request(fields));
+  expect(response.status).toBe(202);
+  expect(createWithCredentials).toHaveBeenCalledWith(
+    {
+      name: fields.name,
+      network: fields.network,
+      dailyLimit: fields.dailyLimit,
+      proxyIndex: fields.proxyIndex,
+      login: fields.login,
+      password: fields.password,
+      totpSecret: 'JBSWY3DPEHPK3PXP',
+    },
+    'actor',
+  );
+  const body = JSON.stringify(await response.json());
+  expect(body).not.toContain('private-login');
+  expect(body).not.toContain('private-password');
+  expect(body).not.toContain('JBSW');
+});
+
+it('removes a social account only with the exact remove action and authenticated actor', async () => {
+  const response = await DELETE(
+    new Request('http://localhost/api/social-accounts', {
+      method: 'DELETE',
+      headers: { Origin: 'http://localhost', Host: 'localhost' },
+      body: JSON.stringify({ action: 'remove', id }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(remove).toHaveBeenCalledWith(id, 'actor');
+  expect(
+    (
+      await DELETE(
+        new Request('http://localhost/api/social-accounts', {
+          method: 'DELETE',
+          headers: { Origin: 'http://localhost', Host: 'localhost' },
+          body: JSON.stringify({ action: 'remove', id, extra: true }),
+        }),
+      )
+    ).status,
+  ).toBe(400);
+  expect(remove).toHaveBeenCalledOnce();
 });
 
 it('queues only the server-authorized account action and returns its existing task receipt', async () => {
