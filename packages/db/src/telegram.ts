@@ -53,7 +53,7 @@ const maskPhone = (phone: string) =>
   `+${'•'.repeat(Math.max(4, phone.length - 5))}${phone.slice(-4)}`;
 export async function listTelegramAccounts(): Promise<TelegramAccount[]> {
   const { rows } = await sonarPool.query(
-    `select a.id,a.name,a.address,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='telegram' and a.status<>'pending' order by a.name,a.id`,
+    `select a.id,a.name,a.address,a.daily_limit as "dailyLimit",a.status,(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='telegram' and a.status not in ('pending','removed') order by a.name,a.id`,
   );
   return rows.map((a) => ({ ...a, addressMasked: maskPhone(a.address) }));
 }
@@ -395,5 +395,36 @@ export async function logoutTelegramAccount(
       c,
     );
     return true;
+  });
+}
+/** Removes a disconnected Telegram account, preserving its message history. */
+export async function removeTelegramAccount(id: string, userId: string) {
+  return transaction(async (c) => {
+    const account = await lockAccount(c, id, userId);
+    if (account.status !== 'disconnected' || account.settings.sessionEncrypted)
+      invalid('Спочатку від’єднайте акаунт Telegram.');
+    const {
+      rows: [history],
+    } = await c.query(
+      'select exists(select 1 from messages where account_id=$1) as used',
+      [id],
+    );
+    if (history.used) {
+      await c.query(
+        "update channel_accounts set status='removed' where id=$1",
+        [id],
+      );
+    } else {
+      await c.query('delete from channel_accounts where id=$1', [id]);
+    }
+    await logActivity(
+      'telegram.account.removed',
+      'channel_account',
+      id,
+      userId,
+      {},
+      c,
+    );
+    return { id };
   });
 }

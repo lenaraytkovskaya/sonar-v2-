@@ -116,6 +116,10 @@ async function mutate(request: Request, method: string) {
         ? respond({ ok: true })
         : invalid();
     }
+    if (method === 'DELETE' && data.action === 'remove')
+      return (await telegram.removeTelegramAccount(data.id, user.id))
+        ? respond({ ok: true })
+        : invalid();
     if (method === 'DELETE')
       return (await telegram.logoutTelegramAccount(data.id, user.id))
         ? respond({ ok: true })

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { session, begin, complete, update, logout } = vi.hoisted(() => ({
+const { session, begin, complete, update, logout, remove } = vi.hoisted(() => ({
   session: vi.fn(),
   begin: vi.fn(),
   complete: vi.fn(),
   update: vi.fn(),
   logout: vi.fn(),
+  remove: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
@@ -19,6 +20,7 @@ vi.mock('@sonar/db/telegram', () => ({
   completeTelegramLogin: complete,
   updateTelegramAccount: update,
   logoutTelegramAccount: logout,
+  removeTelegramAccount: remove,
 }));
 import { POST, PATCH, DELETE } from '../app/api/telegram-accounts/route';
 import { uk } from '../i18n/uk';
@@ -115,6 +117,7 @@ describe('Telegram account routes', () => {
   it('binds account changes and disconnects to the authenticated owner', async () => {
     update.mockResolvedValue(true);
     logout.mockResolvedValue(true);
+    remove.mockResolvedValue({ id });
     expect((await PATCH(request({ id, enabled: false }))).status).toBe(200);
     expect(update).toHaveBeenCalledWith(id, { enabled: false }, 'actor');
     expect((await PATCH(request({ id, dailyLimit: 25 }))).status).toBe(200);
@@ -122,5 +125,7 @@ describe('Telegram account routes', () => {
     expect((await PATCH(request({ id, dailyLimit: 0 }))).status).toBe(400);
     expect((await DELETE(request({ id }))).status).toBe(200);
     expect(logout).toHaveBeenCalledWith(id, 'actor');
+    expect((await DELETE(request({ id, action: 'remove' }))).status).toBe(200);
+    expect(remove).toHaveBeenCalledWith(id, 'actor');
   });
 });

@@ -224,6 +224,21 @@ export function TelegramAccounts({
               ]}
             />
           )}
+          {account.status === 'disconnected' && (
+            <RowActions
+              disabled={pending}
+              actions={[
+                {
+                  kind: 'delete',
+                  label: uk.email.remove,
+                  danger: true,
+                  confirm: `${uk.email.removeConfirm} ${account.name}?`,
+                  onSelect: () =>
+                    void mutate('DELETE', { id: account.id, action: 'remove' }),
+                },
+              ]}
+            />
+          )}
         </section>
       ))}
       <CrudButton

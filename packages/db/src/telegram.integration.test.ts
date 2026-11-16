@@ -587,6 +587,94 @@ it.skipIf(!enabled)(
     }
   },
 );
+it.skipIf(!enabled)(
+  'deletes unused disconnected Telegram accounts and hides message history',
+  async () => {
+    const user = randomUUID(),
+      campaign = randomUUID(),
+      company = randomUUID(),
+      unused = randomUUID(),
+      used = randomUUID(),
+      conversation = randomUUID(),
+      message = randomUUID();
+    await db.sonarPool.query(
+      "insert into users(id,email,name,password_hash) values($1,$2,'Telegram removal test','stub')",
+      [user, `${user}@invalid.test`],
+    );
+    try {
+      await db.sonarPool.query(
+        "insert into campaigns(id,name,country_code,language_code,cities,queries,offer,budget_usd,channels,scoring_weights) values($1,'Removal test','UA','uk','{}','{}','test',1,'{}','{}')",
+        [campaign],
+      );
+      await db.sonarPool.query(
+        "insert into companies(id,place_id,name) values($1,$2,'Removal test')",
+        [company, company],
+      );
+      for (const id of [unused, used])
+        await db.sonarPool.query(
+          "insert into channel_accounts(id,channel,name,address,owner_id,status,daily_limit) values($1,'telegram','Removal test','+380501234567',$2,'disconnected',10)",
+          [id, user],
+        );
+      await db.sonarPool.query(
+        "insert into conversations(id,company_id,campaign_id,channel) values($1,$2,$3,'telegram')",
+        [conversation, company, campaign],
+      );
+      await db.sonarPool.query(
+        "insert into messages(id,conversation_id,account_id,channel,to_value,subject,body,idempotency_key) values($1,$2,$3,'telegram','+380501234567','','history',$4)",
+        [message, conversation, used, randomUUID()],
+      );
+
+      expect(await telegram.removeTelegramAccount(unused, user)).toEqual({
+        id: unused,
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select id from channel_accounts where id=$1',
+            [unused],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(await telegram.removeTelegramAccount(used, user)).toEqual({
+        id: used,
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select status from channel_accounts where id=$1',
+            [used],
+          )
+        ).rows[0].status,
+      ).toBe('removed');
+      expect(
+        (
+          await db.sonarPool.query('select id from messages where id=$1', [
+            message,
+          ])
+        ).rowCount,
+      ).toBe(1);
+      expect(await telegram.listTelegramAccounts()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: used })]),
+      );
+    } finally {
+      await db.sonarPool.query(
+        'delete from activity_log where entity_id=any($1::text[])',
+        [[unused, used]],
+      );
+      await db.sonarPool.query('delete from messages where id=$1', [message]);
+      await db.sonarPool.query('delete from conversations where id=$1', [
+        conversation,
+      ]);
+      await db.sonarPool.query(
+        'delete from channel_accounts where id=any($1::uuid[])',
+        [[unused, used]],
+      );
+      await db.sonarPool.query('delete from companies where id=$1', [company]);
+      await db.sonarPool.query('delete from campaigns where id=$1', [campaign]);
+      await db.sonarPool.query('delete from users where id=$1', [user]);
+    }
+  },
+);
 afterAll(async () => {
   if (!enabled) return;
   await admin.stop();
