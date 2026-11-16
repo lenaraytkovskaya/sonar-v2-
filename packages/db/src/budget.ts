@@ -72,7 +72,7 @@ export async function runBudgetedRequest(
     const {
       rows: [previous],
     } = await client.query(
-      'select service_code,meta from spend_events where task_id=$1 and attempt=$2',
+      'select service_code,units,cost_usd,meta from spend_events where task_id=$1 and attempt=$2',
       [taskId, attempt],
     );
     if (previous) {
@@ -80,12 +80,34 @@ export async function runBudgetedRequest(
         throw new Error('Task already billed to another service');
       await client.query('commit');
       transaction = false;
-      if (previous.meta.error?.code)
+      if (previous.meta.error?.code) {
+        const savedUsage = previous.meta.error.usage;
+        const token = (key: string) => {
+          const value = savedUsage?.[key];
+          return Number.isSafeInteger(value) && value >= 0
+            ? Number(value)
+            : undefined;
+        };
+        const costUsd = Number(previous.cost_usd);
+        const units = Number(previous.units);
         throw new OpenRouterError(
           previous.meta.error.code,
-          undefined,
+          {
+            ...(Number.isFinite(costUsd) && costUsd >= 0 ? { costUsd } : {}),
+            units: Number.isSafeInteger(units) && units >= 0 ? units : 0,
+            ...(token('promptTokens') !== undefined
+              ? { promptTokens: token('promptTokens') }
+              : {}),
+            ...(token('completionTokens') !== undefined
+              ? { completionTokens: token('completionTokens') }
+              : {}),
+            ...(token('reasoningTokens') !== undefined
+              ? { reasoningTokens: token('reasoningTokens') }
+              : {}),
+          },
           previous.meta.error.finishReason,
         );
+      }
       if (previous.meta.error)
         throw new PaidHttpError(previous.meta.error.status);
       if (!previous.meta.response) throw new BillingUncertain();

@@ -103,6 +103,21 @@ describe('OpenRouter adapter', () => {
       expect(JSON.stringify(error)).not.toContain('partial');
     },
   );
+  it('retains a provider finish reason when the response content is empty', async () => {
+    await expect(
+      createOpenRouterClient(
+        'test',
+        stub({
+          ...reply,
+          choices: [{ finish_reason: 'stop', message: { content: null } }],
+        }),
+      ).complete('model', [], 100),
+    ).rejects.toMatchObject({
+      code: 'empty_content',
+      finishReason: 'stop',
+      billing: { promptTokens: 100, completionTokens: 23, reasoningTokens: 4 },
+    });
+  });
   it('settles malformed JSON but preserves network uncertainty', async () => {
     await expect(
       createOpenRouterClient(

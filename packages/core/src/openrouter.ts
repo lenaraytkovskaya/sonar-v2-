@@ -54,7 +54,7 @@ export class OpenRouterError extends Error {
       completionTokens?: number;
       reasoningTokens?: number;
     },
-    public finishReason?: 'length' | 'content_filter' | 'error' | 'tool_calls',
+    public finishReason?: string,
   ) {
     super(code);
   }
@@ -180,22 +180,23 @@ export function createOpenRouterClient(
       billing.reasoningTokens = tokenCount(
         completionDetails?.reasoning_tokens ?? usage?.reasoning_tokens,
       );
+      let finishReason: string | undefined;
       try {
         const choices = response.choices;
         const choice = record(Array.isArray(choices) ? choices[0] : null);
+        finishReason =
+          typeof choice.finish_reason === 'string'
+            ? choice.finish_reason
+            : undefined;
         if (
           ['length', 'content_filter', 'error', 'tool_calls'].includes(
-            String(choice.finish_reason),
+            finishReason ?? '',
           )
         )
-          throw new OpenRouterError(
-            'finish_reason',
-            billing,
-            choice.finish_reason as OpenRouterError['finishReason'],
-          );
+          throw new OpenRouterError('finish_reason', billing, finishReason);
         const text = record(choice.message).content;
         if (text == null || (typeof text === 'string' && !text.trim()))
-          throw new OpenRouterError('empty_content');
+          throw new OpenRouterError('empty_content', billing, finishReason);
         if (
           typeof response.id !== 'string' ||
           typeof text !== 'string' ||
@@ -223,14 +224,14 @@ export function createOpenRouterClient(
             ...(billing.reasoningTokens !== undefined
               ? { reasoningTokens: billing.reasoningTokens }
               : {}),
-            finishReason:
-              typeof choice.finish_reason === 'string'
-                ? choice.finish_reason
-                : 'stop',
+            finishReason: finishReason ?? 'stop',
           },
         };
       } catch (error) {
-        if (error instanceof OpenRouterError) error.billing = billing;
+        if (error instanceof OpenRouterError) {
+          error.billing = billing;
+          error.finishReason ??= finishReason;
+        }
         throw error;
       }
     },
