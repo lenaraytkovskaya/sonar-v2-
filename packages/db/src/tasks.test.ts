@@ -57,19 +57,21 @@ describe('task transitions', () => {
   });
   it('keeps a deferred operation queued with an explanatory reason', async () => {
     const save = vi.fn(async () => {});
+    const result = { providerCode: 'FLOOD_WAIT_120' };
     await executeTask(
       async () => ({
         status: 'deferred',
         runAt: new Date('2026-11-13T08:00:00Z'),
         reasonCode: 'outside_send_hours',
         reasonUk: 'Наступне робоче вікно',
+        result,
       }),
       save,
       false,
     );
     expect(save).toHaveBeenLastCalledWith(
       'queued',
-      undefined,
+      result,
       'outside_send_hours',
       'Наступне робоче вікно',
     );

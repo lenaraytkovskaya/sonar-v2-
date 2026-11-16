@@ -714,16 +714,31 @@ export async function draftFromAnalysis(
 const whatsappRetry = 'Тимчасова помилка WhatsApp. Повтор після паузи акаунта.';
 const telegramFloodRetry =
   'Telegram обмежив частоту. Повтор після паузи акаунта.';
+const telegramPhoneFloodRetryPrefix =
+  'Telegram обмежив пошук за номером, повторіть через ';
 const terminal = (
   status: 'skipped' | 'paused' | 'failed',
   reasonCode: string,
   reasonUk: string,
-): TaskOutcome => ({ status, reasonCode, reasonUk });
+  result?: object,
+): TaskOutcome => ({
+  status,
+  reasonCode,
+  reasonUk,
+  ...(result ? { result } : {}),
+});
 const deferred = (
   runAt: Date,
   reasonCode: string,
   reasonUk: string,
-): TaskOutcome => ({ status: 'deferred', runAt, reasonCode, reasonUk });
+  result?: object,
+): TaskOutcome => ({
+  status: 'deferred',
+  runAt,
+  reasonCode,
+  reasonUk,
+  ...(result ? { result } : {}),
+});
 export type SendAccount = {
   id: string;
   settings: Record<string, unknown>;
@@ -794,7 +809,10 @@ export async function sendEmailMessage(
               ? whatsappRetry
               : channel === 'telegram' && m.reason_uk === telegramFloodRetry
                 ? telegramFloodRetry
-                : outcome.reasonUk,
+                : channel === 'telegram' &&
+                    m.reason_uk?.startsWith(telegramPhoneFloodRetryPrefix)
+                  ? m.reason_uk
+                  : outcome.reasonUk,
           ],
         );
       if (reason)
@@ -898,7 +916,11 @@ export async function sendEmailMessage(
           ),
           'Telegram цього контакту недоступний.',
         );
-      if (m.first_attempt_at && m.reason_uk !== telegramFloodRetry)
+      if (
+        m.first_attempt_at &&
+        m.reason_uk !== telegramFloodRetry &&
+        !m.reason_uk?.startsWith(telegramPhoneFloodRetryPrefix)
+      )
         return finish(
           terminal(
             'paused',
@@ -1397,6 +1419,33 @@ export async function sendEmailMessage(
           typeof error.providerMessageId === 'string'
         )
           return recordDelivery(error.providerMessageId, error.reasonUk);
+        if (error.taskStatus) {
+          const retryAt =
+            error.retryAfterSeconds === undefined
+              ? undefined
+              : new Date(now.getTime() + error.retryAfterSeconds * 1000);
+          if (retryAt)
+            await transaction(async (tx) => {
+              await tx.query(
+                'update channel_accounts set next_send_at=greatest(next_send_at,$2::timestamptz) where id=$1',
+                [account.id, retryAt],
+              );
+              await tx.query(
+                "update messages set status='failed',scheduled_at=$2,reason_uk=$3 where id=$1",
+                [messageId, retryAt, error.reasonUk],
+              );
+            });
+          else
+            await c.query(
+              "update messages set status='failed',reason_uk=$2 where id=$1",
+              [messageId, error.reasonUk],
+            );
+          const result = {
+            ...(error.taskResult ?? {}),
+            ...(retryAt ? { retryAt: retryAt.toISOString() } : {}),
+          };
+          return terminal(error.taskStatus, error.code, error.reasonUk, result);
+        }
         if (error.retryAfterSeconds !== undefined) {
           const runAt = new Date(
             now.getTime() + error.retryAfterSeconds * 1000,
@@ -1411,7 +1460,7 @@ export async function sendEmailMessage(
               [messageId, runAt, telegramFloodRetry],
             );
           });
-          return deferred(runAt, error.code, error.reasonUk);
+          return deferred(runAt, error.code, error.reasonUk, error.taskResult);
         }
         if (error.unavailable) {
           const contacts = await telegramContacts(c, m.company_id, m.to_value);
@@ -1437,11 +1486,13 @@ export async function sendEmailMessage(
               : 'failed',
             error.code,
             error.reasonUk,
+            error.taskResult,
           );
         return terminal(
           'paused',
           'telegram_delivery_uncertain',
           'Перевірте попередню доставку Telegram вручну. Автоматичний повтор заблоковано.',
+          error.taskResult,
         );
       }
       const reason =

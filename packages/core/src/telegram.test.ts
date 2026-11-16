@@ -119,6 +119,14 @@ describe('Telegram transport', () => {
       'messages.SendMessage',
       'contacts.DeleteContacts',
     ]);
+    expect(client.invoke.mock.calls[0]?.[0]).toMatchObject({
+      phone: '380501234567',
+    });
+    const importRequest = client.invoke.mock.calls[2]?.[0];
+    expect(
+      importRequest instanceof Api.contacts.ImportContacts &&
+        importRequest.contacts[0]?.phone,
+    ).toBe('+380501234567');
     const messages = client.invoke.mock.calls
       .map(([r]) => r)
       .filter((r) => r instanceof Api.messages.SendMessage);
@@ -222,7 +230,9 @@ describe('Telegram transport', () => {
           }),
     );
     await expect(adapter.send(delivery)).rejects.toMatchObject({
-      code: 'unavailable',
+      code: 'resolve_phone_privacy',
+      taskStatus: 'skipped',
+      reasonUk: 'Користувач приховав номер.',
       unavailable: true,
     });
     expect(
@@ -444,8 +454,16 @@ describe('Telegram transport', () => {
     );
     await expect(retry.adapter.send(delivery)).rejects.toMatchObject({
       code: 'import_retry',
-      retryable: true,
+      retryable: false,
       unavailable: false,
+      taskStatus: 'paused',
+      providerCode: 'IMPORT_RETRY_CONTACTS',
+      reasonUk: expect.stringContaining('через добу'),
+      taskResult: expect.objectContaining({
+        operation: 'contacts.ImportContacts',
+        providerCode: 'IMPORT_RETRY_CONTACTS',
+        resolvePhoneCode: 'NO_USERS',
+      }),
     });
     expect(
       retry.client.invoke.mock.calls.some(
@@ -453,6 +471,73 @@ describe('Telegram transport', () => {
       ),
     ).toBe(false);
     await retry.adapter.closeAll();
+  });
+  it.each([
+    ['PHONE_NOT_OCCUPIED', 'Номер не зареєстровано в Telegram.', 'skipped'],
+    ['PHONE_NUMBER_INVALID', 'PHONE_NUMBER_INVALID', 'failed'],
+    ['USER_PRIVACY_RESTRICTED', 'Користувач приховав номер.', 'skipped'],
+    ['NO_USERS', 'Користувач приховав номер.', 'skipped'],
+    ['NEW_PROVIDER_ERROR', 'NEW_PROVIDER_ERROR', 'failed'],
+  ])(
+    'keeps ResolvePhone code %s with a safe reason and outcome',
+    async (code, reason, taskStatus) => {
+      const stub = mockClient((r) => {
+        if (r instanceof Api.contacts.ResolvePhone && code === 'NO_USERS')
+          return new Api.contacts.ResolvedPeer({
+            peer: new Api.PeerUser({ userId: user.id }),
+            chats: [],
+            users: [],
+          });
+        if (r instanceof Api.contacts.ResolvePhone)
+          throw { errorMessage: code };
+        if (r instanceof Api.contacts.GetContacts) return saved();
+        if (r instanceof Api.contacts.ImportContacts)
+          return new Api.contacts.ImportedContacts({
+            users: [],
+            imported: [],
+            popularInvites: [],
+            retryContacts: [],
+          });
+        throw new Error('unexpected request');
+      });
+      await expect(stub.adapter.send(delivery)).rejects.toMatchObject({
+        providerCode: code === 'NO_USERS' ? 'NO_USERS' : code,
+        taskStatus,
+        reasonUk: expect.stringContaining(reason),
+        taskResult: expect.objectContaining({
+          operation: 'contacts.ResolvePhone',
+          providerCode: code === 'NO_USERS' ? 'NO_USERS' : code,
+        }),
+      });
+      await stub.adapter.closeAll();
+    },
+  );
+  it('pauses ResolvePhone FLOOD_WAIT until the provider wait expires', async () => {
+    const stub = mockClient((r) => {
+      if (r instanceof Api.contacts.ResolvePhone)
+        throw { errorMessage: 'FLOOD_WAIT_125', seconds: 125 };
+      throw new Error(
+        'ResolvePhone flood wait must stop before contact import',
+      );
+    });
+    await expect(stub.adapter.send(delivery)).rejects.toMatchObject({
+      code: 'resolve_phone_flood_wait',
+      providerCode: 'FLOOD_WAIT_125',
+      taskStatus: 'paused',
+      retryAfterSeconds: 125,
+      reasonUk: 'Telegram обмежив пошук за номером, повторіть через 3 хв.',
+      taskResult: expect.objectContaining({
+        operation: 'contacts.ResolvePhone',
+        providerCode: 'FLOOD_WAIT_125',
+        retryAfterSeconds: 125,
+      }),
+    });
+    expect(
+      stub.client.invoke.mock.calls.some(
+        ([r]) => r instanceof Api.contacts.ImportContacts,
+      ),
+    ).toBe(false);
+    await stub.adapter.closeAll();
   });
 });
 
