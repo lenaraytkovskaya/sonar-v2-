@@ -114,7 +114,7 @@ const chat: { note: string; message: ChatMessage }[] = [
       direction: 'in',
       source: 'inbound',
       body: t.chat.replyText,
-      classification: 'interested',
+      classification: 'price',
       needsHuman: true,
       sentAt: day(0, 14),
     }),
