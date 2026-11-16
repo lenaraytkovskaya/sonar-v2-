@@ -110,7 +110,35 @@ type LoginDiagnostics = {
   page?: Page;
   path?: string;
   error?: unknown;
+  snapshot?: PageSnapshot;
+  blocked?: Set<string>;
 };
+type PageSnapshot = {
+  title: string;
+  inputs: string[];
+  buttons: string[];
+  textLength: number;
+};
+/** Structure only: title, input name/type/visibility and short button labels; never page text or values. */
+async function pageSnapshot(page?: Page): Promise<PageSnapshot | undefined> {
+  if (!page) return undefined;
+  return page
+    .evaluate(() => ({
+      title: document.title.slice(0, 80),
+      inputs: Array.from(document.querySelectorAll('input'))
+        .slice(0, 12)
+        .map(
+          (input) =>
+            `${input.name || '-'}:${input.type}:${(input as HTMLElement).offsetParent ? 'v' : 'h'}`,
+        ),
+      buttons: Array.from(document.querySelectorAll('button,[role="button"]'))
+        .map((button) => (button as HTMLElement).innerText.trim().slice(0, 40))
+        .filter(Boolean)
+        .slice(0, 8),
+      textLength: document.body?.innerText.length ?? 0,
+    }))
+    .catch(() => undefined);
+}
 function pagePath(page?: Page) {
   try {
     return page ? new URL(page.url()).pathname.slice(0, 120) : undefined;
@@ -125,6 +153,10 @@ export function loginDiagnostics(
   diag: LoginDiagnostics,
   credentials: SocialCredentials,
 ) {
+  const scrub = (text: string) =>
+    [credentials.login, credentials.password, credentials.totpSecret]
+      .filter((value): value is string => !!value && value.length > 2)
+      .reduce((out, value) => out.split(value).join('***'), text);
   let error: string | undefined;
   if (diag.error) {
     const raw =
@@ -146,6 +178,8 @@ export function loginDiagnostics(
     state: diag.state,
     path: diag.path,
     ...(error ? { error } : {}),
+    ...(diag.snapshot ? { page: scrub(JSON.stringify(diag.snapshot)) } : {}),
+    ...(diag.blocked?.size ? { blocked: [...diag.blocked].slice(0, 10) } : {}),
   };
 }
 export function createSocialLoginBrowser(
@@ -203,6 +237,7 @@ export function createSocialLoginBrowser(
             (host) =>
               url.hostname === host || url.hostname.endsWith(`.${host}`),
           );
+        if (!allowed) (diag.blocked ??= new Set()).add(url.hostname);
         return allowed ? route.continue() : route.abort();
       });
       const page = await context.newPage();
@@ -281,6 +316,7 @@ export function createSocialLoginBrowser(
       return { valid: true };
     } catch (error) {
       diag.error = error;
+      diag.snapshot = await pageSnapshot(diag.page);
       return { valid: false, reason: 'login_failed' };
     } finally {
       if (context) {
