@@ -86,6 +86,9 @@ export function Shell({
     return () => viewport.removeEventListener('resize', update);
   }, [inbox]);
   const [open, setOpen] = useState(false);
+  const current = links.find(([href]) =>
+    href === '/' ? path === '/' : path === href || path.startsWith(href + '/'),
+  )?.[1];
   const navigation = (
     <nav aria-label={uk.navigation} className="flex flex-1 flex-col gap-1">
       {links.map(([href, key, Icon]) => {
@@ -103,11 +106,14 @@ export function Shell({
               'flex min-h-9 items-center gap-3 rounded-lg px-3 text-sm font-medium',
               href === '/settings' && 'mt-auto',
               active
-                ? 'bg-chip text-accent'
-                : 'text-muted-foreground hover:bg-raised hover:text-foreground',
+                ? 'bg-surface text-foreground shadow-xs'
+                : 'text-muted-foreground hover:bg-surface/70 hover:text-foreground',
             )}
           >
-            <Icon aria-hidden="true" className="size-5" />
+            <Icon
+              aria-hidden="true"
+              className={cn('size-4', active && 'text-accent')}
+            />
             {uk.pages[key].title}
             {key === 'overview' && <FailureBadge />}
             {key === 'inbox' && <FailureBadge inbox />}
@@ -129,7 +135,7 @@ export function Shell({
             : undefined
         }
         className={cn(
-          'min-h-dvh md:grid md:grid-cols-[208px_minmax(0,1fr)]',
+          'min-h-dvh bg-background md:grid md:grid-cols-[232px_minmax(0,1fr)]',
           inbox && 'flex h-dvh min-h-0 flex-col overflow-hidden md:grid',
         )}
       >
@@ -139,99 +145,115 @@ export function Shell({
         >
           {uk.skip}
         </a>
-        <aside className="sticky top-0 hidden h-dvh flex-col gap-6 border-r border-border bg-surface p-4 md:flex">
+        <aside className="sticky top-0 hidden h-dvh flex-col gap-6 px-3 py-4 md:flex">
           <Link href="/" className="px-2">
             <Logo />
           </Link>
           {navigation}
           <ThemeSelect />
         </aside>
-        <div className={cn('min-w-0', inbox && 'flex min-h-0 flex-1 flex-col')}>
-          <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 md:justify-end md:px-6">
-            <div className="flex items-center gap-3 md:hidden">
-              <Dialog.Root open={open} onOpenChange={setOpen}>
-                <Dialog.Trigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="px-2"
-                    aria-label={uk.openMenu}
-                  >
-                    <Menu />
-                  </Button>
-                </Dialog.Trigger>
-                <Dialog.Portal>
-                  <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
-                  <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col gap-6 border-r border-border bg-surface p-5">
-                    <div className="flex items-center justify-between">
-                      <Dialog.Title>
-                        <Logo />
-                      </Dialog.Title>
-                      <Dialog.Close asChild>
-                        <Button
-                          variant="ghost"
-                          className="px-2"
-                          aria-label={uk.closeMenu}
-                        >
-                          <X />
-                        </Button>
-                      </Dialog.Close>
-                    </div>
-                    <Dialog.Description className="sr-only">
-                      {uk.navigation}
-                    </Dialog.Description>
-                    {navigation}
-                    <ThemeSelect />
-                  </Dialog.Content>
-                </Dialog.Portal>
-              </Dialog.Root>
-              <Logo />
-            </div>
-            <Dropdown.Root>
-              <Dropdown.Trigger asChild>
-                <Button
-                  variant="ghost"
-                  aria-label={uk.userMenu}
-                  className="max-w-40 md:max-w-64"
-                >
-                  <span className="truncate">{name}</span>
-                  <ChevronDown />
-                </Button>
-              </Dropdown.Trigger>
-              <Dropdown.Portal>
-                <Dropdown.Content
-                  align="end"
-                  sideOffset={8}
-                  className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-                >
-                  <form action={logout}>
-                    <Dropdown.Item
-                      asChild
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      <button
-                        type="submit"
-                        className="flex min-h-9 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
-                      >
-                        <LogOut aria-hidden="true" className="size-4" />
-                        {uk.logout}
-                      </button>
-                    </Dropdown.Item>
-                  </form>
-                </Dropdown.Content>
-              </Dropdown.Portal>
-            </Dropdown.Root>
-          </header>
-          <main
-            id="content"
-            tabIndex={-1}
+        {/* Inset panel (shadcn sidebar-inset): the page sits on a raised sheet beside the sidebar. */}
+        <div
+          className={cn(
+            'min-w-0 md:py-2 md:pr-2',
+            inbox && 'flex min-h-0 flex-1 flex-col',
+          )}
+        >
+          <div
             className={cn(
-              'w-full p-4 md:p-6 2xl:px-8',
-              inbox && 'min-h-0 flex-1 overflow-hidden p-2 md:p-3 2xl:px-3',
+              'flex min-h-dvh flex-col bg-surface md:min-h-[calc(100dvh-1rem)] md:rounded-xl md:border md:border-border md:shadow-xs',
+              inbox && 'min-h-0 flex-1 overflow-hidden md:min-h-0',
             )}
           >
-            <SocialSessionNotices />
-            {children}
-          </main>
+            <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
+              <p className="hidden text-sm font-medium md:block">
+                {current ? uk.pages[current].title : ''}
+              </p>
+              <div className="flex items-center gap-3 md:hidden">
+                <Dialog.Root open={open} onOpenChange={setOpen}>
+                  <Dialog.Trigger asChild>
+                    <Button
+                      variant="ghost"
+                      className="px-2"
+                      aria-label={uk.openMenu}
+                    >
+                      <Menu />
+                    </Button>
+                  </Dialog.Trigger>
+                  <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+                    <Dialog.Content className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col gap-6 border-r border-border bg-surface p-5">
+                      <div className="flex items-center justify-between">
+                        <Dialog.Title>
+                          <Logo />
+                        </Dialog.Title>
+                        <Dialog.Close asChild>
+                          <Button
+                            variant="ghost"
+                            className="px-2"
+                            aria-label={uk.closeMenu}
+                          >
+                            <X />
+                          </Button>
+                        </Dialog.Close>
+                      </div>
+                      <Dialog.Description className="sr-only">
+                        {uk.navigation}
+                      </Dialog.Description>
+                      {navigation}
+                      <ThemeSelect />
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                </Dialog.Root>
+                <Logo />
+              </div>
+              <Dropdown.Root>
+                <Dropdown.Trigger asChild>
+                  <Button
+                    variant="ghost"
+                    aria-label={uk.userMenu}
+                    className="max-w-40 md:max-w-64"
+                  >
+                    <span className="truncate">{name}</span>
+                    <ChevronDown />
+                  </Button>
+                </Dropdown.Trigger>
+                <Dropdown.Portal>
+                  <Dropdown.Content
+                    align="end"
+                    sideOffset={8}
+                    className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
+                  >
+                    <form action={logout}>
+                      <Dropdown.Item
+                        asChild
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        <button
+                          type="submit"
+                          className="flex min-h-9 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+                        >
+                          <LogOut aria-hidden="true" className="size-4" />
+                          {uk.logout}
+                        </button>
+                      </Dropdown.Item>
+                    </form>
+                  </Dropdown.Content>
+                </Dropdown.Portal>
+              </Dropdown.Root>
+            </header>
+            <main
+              id="content"
+              tabIndex={-1}
+              className={cn(
+                'mx-auto w-full max-w-[1440px] px-4 py-5 md:px-8 md:py-7',
+                inbox && 'max-w-none min-h-0 flex-1 overflow-hidden p-2 md:p-3',
+              )}
+            >
+              <SocialSessionNotices />
+              {children}
+            </main>
+          </div>
         </div>
       </div>
     </TasksProvider>

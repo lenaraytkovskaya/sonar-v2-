@@ -2,7 +2,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { listSocialAccounts } from '@sonar/db/social-accounts';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
+import { Callout, DetailList, InfoTip, Section } from './ui/layout';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -146,214 +148,279 @@ export function SocialAccounts({
     (account) => account.network === network,
   );
   return (
-    <Card className="space-y-4 p-5">
-      <h2 className="font-heading text-base font-bold">
-        {uk.socialAccounts.title} · {uk.social.networks[network]}
-      </h2>
-      <details className="text-sm">
-        <summary className="min-h-11 cursor-pointer text-accent">
-          {uk.socialAccounts.cookieHelp}
-        </summary>
-        <ol className="list-decimal space-y-2 pl-5">
-          {uk.socialAccounts.cookieSteps.map((step) => (
-            <li key={step}>{step}</li>
-          ))}
-        </ol>
-        <p className="mt-2 text-muted-foreground">
-          {uk.socialAccounts.cookiePrivacy}
-        </p>
-      </details>
-      {networkAccounts.map((account) => (
-        <section
-          key={account.id}
-          className="space-y-2 border-t border-border pt-3 text-sm"
+    <Section
+      title={
+        <span className="inline-flex items-center gap-2">
+          {uk.socialAccounts.title} · {uk.social.networks[network]}
+          <InfoTip label={uk.socialAccounts.cookieHelp}>
+            <ol className="list-decimal space-y-2 pl-5">
+              {uk.socialAccounts.cookieSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <p className="mt-2">{uk.socialAccounts.cookiePrivacy}</p>
+          </InfoTip>
+        </span>
+      }
+      actions={
+        <CrudButton
+          disabled={pending}
+          onClick={() => {
+            reset();
+            setNotice('');
+            setOpen(true);
+          }}
         >
-          <h3 className="font-semibold">
-            {account.name} · {uk.social.networks[account.network]}
-          </h3>
-          <p>
-            {uk.email.owner}: {account.ownerName}
+          {uk.socialAccounts.add}
+        </CrudButton>
+      }
+    >
+      <div className="space-y-4">
+        {!networkAccounts.length && (
+          <p className="text-sm text-muted-foreground">
+            {uk.socialAccounts.empty}
           </p>
-          <p>
-            {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
-            {account.hasOwnProxy
-              ? uk.socialAccounts.ownProxy
-              : proxyName(account.proxyIndex, proxyLabels)}
-          </p>
-          <p role="status">
-            {account.sessionStatus === 'invalid'
-              ? uk.socialAccounts.needsLogin
-              : (uk.socialAccounts.statuses[
-                  account.status as keyof typeof uk.socialAccounts.statuses
-                ] ?? uk.tasks.status.paused)}
-          </p>
-          {account.network === 'facebook' && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={
-                pending ||
-                (!account.inboxPollingEnabled && !account.canSyncInbox)
-              }
-              onClick={() =>
-                void mutate('POST', {
-                  action: 'inboxPolling',
-                  id: account.id,
-                  enabled: !account.inboxPollingEnabled,
-                })
-              }
+        )}
+        {networkAccounts.map((account) => {
+          const needsLogin = account.sessionStatus === 'invalid';
+          const statusKey = needsLogin
+            ? 'needs_login'
+            : account.enabled
+              ? account.status
+              : 'disabled';
+          return (
+            <article
+              key={account.id}
+              className="space-y-4 rounded-lg border border-border p-4"
             >
-              {account.inboxPollingEnabled
-                ? uk.socialAccounts.pollDisable
-                : uk.socialAccounts.pollEnable}
-            </Button>
-          )}
-          {account.inboxSyncCreated !== null && (
-            <p>
-              {uk.socialAccounts.syncImported} {account.inboxSyncCreated}
-            </p>
-          )}
-          {account.inboxSyncComplete === false && (
-            <p className="text-wait">{uk.socialAccounts.syncPartial}</p>
-          )}
-          {account.loginBlocked && (
-            <p className="text-err">{uk.socialAccounts.loginBlocked}</p>
-          )}
-          {account.loginChallengeKind && (
-            <p className="text-wait">
-              {account.loginChallengeKind === 'captcha'
-                ? uk.socialAccounts.captchaHelp
-                : account.loginChallengeKind === 'email'
-                  ? uk.socialAccounts.emailCode
-                  : uk.socialAccounts.smsCode}
-            </p>
-          )}
-          {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
-          {account.checkedAt && (
-            <p>
-              {uk.social.checked}: <LocalTime value={account.checkedAt} />
-            </p>
-          )}
-          {account.nextSendAt && (
-            <p>
-              {uk.email.next}: <LocalTime value={account.nextSendAt} />
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              className="min-h-11"
-              variant="outline"
-              disabled={pending}
-              onClick={() => {
-                setNotice('');
-                setLoginAccountId(account.id);
-              }}
-            >
-              {uk.socialAccounts.credentialLogin}
-            </Button>
-            {account.hasCredentials && (
-              <Button
-                type="button"
-                className="min-h-11"
-                variant="outline"
-                disabled={
-                  pending ||
-                  account.loginBlocked ||
-                  ['email', 'sms'].includes(account.loginChallengeKind ?? '')
-                }
-                onClick={() =>
-                  void mutate('POST', { action: 'login', id: account.id })
-                }
-              >
-                {uk.socialAccounts.retryLogin}
-              </Button>
-            )}
-            {['instagram', 'facebook'].includes(account.network) && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || !account.canSyncInbox}
-                onClick={() =>
-                  void mutate('POST', { action: 'syncInbox', id: account.id })
-                }
-              >
-                {uk.socialAccounts.syncInbox}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={() =>
-                void mutate('POST', { action: 'check', id: account.id })
-              }
-            >
-              {uk.socialAccounts.check}
-            </Button>
-            <RowActions
-              disabled={pending}
-              actions={[
-                {
-                  kind: 'edit',
-                  label: uk.socialAccounts.edit,
-                  onSelect: () => {
-                    setNotice('');
-                    setOpen(true);
-                    setEditing(account.id);
-                    setName(account.name);
-                    setDailyLimit(String(account.dailyLimit));
-                    setProxyIndex(
-                      account.hasOwnProxy ? 'own' : String(account.proxyIndex),
-                    );
-                    setOwnProxy('');
-                    setKeepaliveEnabled(account.keepaliveEnabled);
-                    setCookiesJson('');
-                    setAddMode('cookies');
-                    setVisible(false);
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-chip">
+                    <ChannelIcon channel={account.network} />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold">{account.name}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {uk.email.owner}: {account.ownerName}
+                    </p>
+                  </div>
+                  <span role="status">
+                    <StatusBadge status={statusKey}>
+                      {needsLogin
+                        ? uk.socialAccounts.needsLogin
+                        : (uk.socialAccounts.statuses[
+                            account.status as keyof typeof uk.socialAccounts.statuses
+                          ] ?? uk.tasks.status.paused)}
+                    </StatusBadge>
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {account.hasCredentials ? (
+                    <Button
+                      type="button"
+                      variant={needsLogin ? 'default' : 'outline'}
+                      disabled={
+                        pending ||
+                        account.loginBlocked ||
+                        ['email', 'sms'].includes(
+                          account.loginChallengeKind ?? '',
+                        )
+                      }
+                      onClick={() =>
+                        void mutate('POST', { action: 'login', id: account.id })
+                      }
+                    >
+                      {uk.socialAccounts.retryLogin}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant={needsLogin ? 'default' : 'outline'}
+                      disabled={pending}
+                      onClick={() => {
+                        setNotice('');
+                        setLoginAccountId(account.id);
+                      }}
+                    >
+                      {uk.socialAccounts.credentialLogin}
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() =>
+                      void mutate('POST', { action: 'check', id: account.id })
+                    }
+                  >
+                    {uk.socialAccounts.check}
+                  </Button>
+                  <RowActions
+                    disabled={pending}
+                    actions={[
+                      ...(account.hasCredentials
+                        ? [
+                            {
+                              kind: 'login' as const,
+                              label: uk.socialAccounts.credentialLogin,
+                              onSelect: () => {
+                                setNotice('');
+                                setLoginAccountId(account.id);
+                              },
+                            },
+                          ]
+                        : []),
+                      ...(['instagram', 'facebook'].includes(account.network)
+                        ? [
+                            {
+                              kind: 'sync' as const,
+                              label: uk.socialAccounts.syncInbox,
+                              disabled: !account.canSyncInbox,
+                              onSelect: () =>
+                                void mutate('POST', {
+                                  action: 'syncInbox',
+                                  id: account.id,
+                                }),
+                            },
+                          ]
+                        : []),
+                      ...(account.network === 'facebook'
+                        ? [
+                            {
+                              kind: 'poll' as const,
+                              label: account.inboxPollingEnabled
+                                ? uk.socialAccounts.pollDisable
+                                : uk.socialAccounts.pollEnable,
+                              disabled:
+                                !account.inboxPollingEnabled &&
+                                !account.canSyncInbox,
+                              onSelect: () =>
+                                void mutate('POST', {
+                                  action: 'inboxPolling',
+                                  id: account.id,
+                                  enabled: !account.inboxPollingEnabled,
+                                }),
+                            },
+                          ]
+                        : []),
+                      {
+                        kind: 'edit',
+                        label: uk.socialAccounts.edit,
+                        separator: true,
+                        onSelect: () => {
+                          setNotice('');
+                          setOpen(true);
+                          setEditing(account.id);
+                          setName(account.name);
+                          setDailyLimit(String(account.dailyLimit));
+                          setProxyIndex(
+                            account.hasOwnProxy
+                              ? 'own'
+                              : String(account.proxyIndex),
+                          );
+                          setOwnProxy('');
+                          setKeepaliveEnabled(account.keepaliveEnabled);
+                          setCookiesJson('');
+                          setAddMode('cookies');
+                          setVisible(false);
+                        },
+                      },
+                      {
+                        kind: account.enabled ? 'disable' : 'enable',
+                        label: account.enabled
+                          ? uk.email.disable
+                          : uk.email.enable,
+                        disabled:
+                          !account.enabled && account.sessionStatus !== 'valid',
+                        onSelect: () =>
+                          void mutate('PATCH', {
+                            id: account.id,
+                            enabled: !account.enabled,
+                          }),
+                      },
+                      {
+                        kind: 'delete',
+                        label: uk.email.remove,
+                        danger: true,
+                        confirm: uk.socialAccounts.removeConfirm(account.name),
+                        onSelect: () =>
+                          void mutate('DELETE', {
+                            action: 'remove',
+                            id: account.id,
+                          }),
+                      },
+                    ]}
+                  />
+                </div>
+              </div>
+              <DetailList
+                items={[
+                  {
+                    label: uk.email.today,
+                    value: `${account.sentToday} / ${account.dailyLimit}`,
                   },
-                },
-                {
-                  kind: account.enabled ? 'disable' : 'enable',
-                  label: account.enabled ? uk.email.disable : uk.email.enable,
-                  disabled:
-                    !account.enabled && account.sessionStatus !== 'valid',
-                  onSelect: () =>
-                    void mutate('PATCH', {
-                      id: account.id,
-                      enabled: !account.enabled,
-                    }),
-                },
-                {
-                  kind: 'delete',
-                  label: uk.email.remove,
-                  danger: true,
-                  confirm: uk.socialAccounts.removeConfirm(account.name),
-                  onSelect: () =>
-                    void mutate('DELETE', { action: 'remove', id: account.id }),
-                },
-              ]}
-            />
-          </div>
-          {['instagram', 'facebook'].includes(account.network) && (
-            <p className="text-muted-foreground">
-              {account.network === 'facebook'
-                ? uk.socialAccounts.syncFacebookInboxHint
-                : uk.socialAccounts.syncInboxHint}
-            </p>
-          )}
-        </section>
-      ))}
-      <CrudButton
-        disabled={pending}
-        onClick={() => {
-          reset();
-          setNotice('');
-          setOpen(true);
-        }}
-      >
-        {uk.socialAccounts.add}
-      </CrudButton>
+                  {
+                    label: uk.socialAccounts.proxy,
+                    value: account.hasOwnProxy
+                      ? uk.socialAccounts.ownProxy
+                      : proxyName(account.proxyIndex, proxyLabels),
+                  },
+                  {
+                    label: uk.social.checked,
+                    value: account.checkedAt ? (
+                      <LocalTime value={account.checkedAt} />
+                    ) : (
+                      '—'
+                    ),
+                  },
+                  {
+                    label: uk.email.next,
+                    value: account.nextSendAt ? (
+                      <LocalTime value={account.nextSendAt} />
+                    ) : (
+                      '—'
+                    ),
+                    hidden: !account.nextSendAt,
+                  },
+                  {
+                    label: uk.socialAccounts.syncImported,
+                    value: account.inboxSyncCreated,
+                    hidden: account.inboxSyncCreated === null,
+                  },
+                ]}
+              />
+              {account.loginBlocked && (
+                <Callout tone="err">{uk.socialAccounts.loginBlocked}</Callout>
+              )}
+              {account.loginChallengeKind && (
+                <Callout tone="wait">
+                  {account.loginChallengeKind === 'captcha'
+                    ? uk.socialAccounts.captchaHelp
+                    : account.loginChallengeKind === 'email'
+                      ? uk.socialAccounts.emailCode
+                      : uk.socialAccounts.smsCode}
+                </Callout>
+              )}
+              {account.reasonUk && (
+                <Callout tone="err">{account.reasonUk}</Callout>
+              )}
+              {account.inboxSyncComplete === false && (
+                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                  {uk.socialAccounts.syncPartialShort}
+                  <InfoTip>
+                    <p>{uk.socialAccounts.syncPartial}</p>
+                    <p className="mt-2">
+                      {account.network === 'facebook'
+                        ? uk.socialAccounts.syncFacebookInboxHint
+                        : uk.socialAccounts.syncInboxHint}
+                    </p>
+                  </InfoTip>
+                </p>
+              )}
+            </article>
+          );
+        })}
+      </div>
       <CrudDialog
         open={open}
         onOpenChange={setOpen}
@@ -660,6 +727,6 @@ export function SocialAccounts({
           {notice}
         </p>
       )}
-    </Card>
+    </Section>
   );
 }
