@@ -8,6 +8,7 @@ import {
 import { detectSocialBlock, type SocialTarget } from '@sonar/core';
 import {
   socialProxyList,
+  generateSocialDevice,
   type resolveSocialSession,
 } from '@sonar/core/social-session';
 import { assertSocialSession } from './social-send-browser.js';
@@ -92,13 +93,25 @@ export async function fetchSocialPage(
         sharedBrowser = undefined;
         throw new Error('Не вдалося запустити браузер соцмереж.');
       }));
+    const device = session
+      ? session.device?.userAgent
+        ? session.device
+        : generateSocialDevice(target.network, browser.version?.() ?? '0.0.0.0')
+      : undefined;
+    if (session && device) {
+      if (!session.device?.userAgent) await session.persistDevice?.(device);
+      session.device = device;
+    }
     context = await browser.newContext({
       proxy: session?.proxy ?? proxy,
       userAgent,
+      ...device,
+      ...(session?.storageState ? { storageState: session.storageState } : {}),
       serviceWorkers: 'block',
       acceptDownloads: false,
     });
-    if (session) await context.addCookies(session.cookies);
+    if (session && !session.storageState)
+      await context.addCookies(session.cookies);
     if (session) {
       // All resource traffic uses the pinned context proxy. Only the platform and its
       // static CDNs are allowed; external links and local-network redirects stay blocked.
@@ -133,10 +146,19 @@ export async function fetchSocialPage(
       const page = await context.newPage();
       page.setDefaultTimeout(timeoutMs);
       await page.routeWebSocket('**/*', (socket) => socket.close());
-      return {
-        ...(await renderSocialDocuments(page, target, timeoutMs)),
-        usedProxy,
-      };
+      const result = await renderSocialDocuments(page, target, timeoutMs);
+      if (
+        !result.error &&
+        !detectSocialBlock(result.html, result.url, result.status, target) &&
+        result.status >= 200 &&
+        result.status < 300 &&
+        session.persistStorageState
+      ) {
+        const state = await context.storageState();
+        if (state.cookies.length)
+          await session.persistStorageState(state, device);
+      }
+      return { ...result, usedProxy };
     }
     usedProxy = true;
     const result = await readSocialDocuments(

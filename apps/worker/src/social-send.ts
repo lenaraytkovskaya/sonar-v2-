@@ -6,7 +6,10 @@ import {
 } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { sendEmailMessage, type ChannelSender } from '@sonar/db/email';
-import { withSocialSessionCheck } from '@sonar/db/social-accounts';
+import {
+  withSocialSessionCheck,
+  reconcileSocialSessionKeepalive,
+} from '@sonar/db/social-accounts';
 import { boss, runTask, type TaskOutcome } from '@sonar/db/tasks';
 import {
   socialSendBrowser,
@@ -60,7 +63,11 @@ export async function runSocialSend(
         };
         return socialSendBrowser.send(
           sessionAccount,
-          resolveSocialSession(sessionAccount),
+          {
+            ...resolveSocialSession(sessionAccount),
+            persistStorageState: account.persistStorageState,
+            persistDevice: account.persistDevice,
+          },
           await timeout(),
           request.to,
           request.body,
@@ -73,11 +80,11 @@ export async function runSocialSend(
   );
 }
 export async function runSocialSessionCheck(input: { accountId: string }) {
-  return withSocialSessionCheck(input.accountId, async (account) => {
+  return withSocialSessionCheck(input.accountId, async (account, session) => {
     try {
       await socialSendBrowser.check(
         account,
-        resolveSocialSession(account),
+        session ?? resolveSocialSession(account),
         await timeout(),
       );
       return { valid: true };
@@ -92,8 +99,50 @@ export async function runSocialSessionCheck(input: { accountId: string }) {
     }
   });
 }
+export async function runSocialSessionKeepalive(input: { accountId: string }) {
+  return withSocialSessionCheck(
+    input.accountId,
+    async (account, session) => {
+      try {
+        const {
+          rows: [setting],
+        } = await sonarPool.query(
+          "select value from settings where key='social.keepalive.pause_ms'",
+        );
+        const pauseMs = Number(setting?.value);
+        if (!Number.isSafeInteger(pauseMs) || pauseMs < 0 || pauseMs > 30000)
+          throw new SocialSessionCheckError('browser');
+        await socialSendBrowser.keepalive(
+          account,
+          session,
+          await timeout(),
+          pauseMs,
+        );
+        return { valid: true };
+      } catch (error) {
+        return { valid: false, reason: socialSessionCheckReason(error) };
+      }
+    },
+    new Date(),
+    'keepalive',
+  );
+}
 export async function registerSocialSessionTasks() {
   await boss.createQueue('social.session.check');
+  await boss.createQueue('social.session.keepalive');
+  await runTask(
+    'social.session.keepalive',
+    (payload) => runSocialSessionKeepalive(payload as { accountId: string }),
+    async () => {
+      await reconcileSocialSessionKeepalive();
+    },
+  );
+  await boss.createQueue('social.session.keepalive.reconcile');
+  await boss.work('social.session.keepalive.reconcile', async () => {
+    await reconcileSocialSessionKeepalive();
+  });
+  await boss.schedule('social.session.keepalive.reconcile', '* * * * *');
+  await reconcileSocialSessionKeepalive();
   await runTask('social.session.check', (payload) =>
     runSocialSessionCheck(payload as { accountId: string }),
   );

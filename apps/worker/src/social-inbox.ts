@@ -19,6 +19,8 @@ import {
 import { reserveSocialAction } from '@sonar/db/social-action';
 import {
   releaseSocialFetchSession,
+  prepareSocialSession,
+  pauseSocialFetchSession,
   type SocialSessionAccount,
 } from '@sonar/db/social-accounts';
 import { boss, runTask, type TaskOutcome } from '@sonar/db/tasks';
@@ -143,7 +145,7 @@ export async function runSocialInboxSync(
         reasonCode: 'social_inbox_disabled',
         reasonUk: 'Синхронізацію вхідних соцмереж вимкнено.',
       };
-    const session = resolveSocialSession(account);
+    const session = await prepareSocialSession(c, account);
     const poll = Number(config['social.inbox.poll_seconds']);
     const limit = Number(config['social.inbox.daily_limit']);
     if (
@@ -261,23 +263,13 @@ export async function runSocialInboxSync(
           : error.code === 'rate_limit'
             ? 'rate_limit'
             : socialSessionCheckReason(error);
-      const invalid = ['login_required', 'cookies_invalid'].includes(reason);
+
       const diagnostic =
         error instanceof SocialSessionCheckError
           ? safeSocialSessionDiagnostic(error.diagnostic)
           : undefined;
       if (error.code === 'session_invalid' || error.code === 'rate_limit')
-        await c.query(
-          "update channel_accounts set status='paused',settings=settings||$2::jsonb where id=$1",
-          [
-            input.accountId,
-            JSON.stringify({
-              reasonUk: socialSessionCheckReasons[reason],
-              sessionCheckReason: reason,
-              ...(invalid ? { sessionStatus: 'invalid' } : {}),
-            }),
-          ],
-        );
+        await pauseSocialFetchSession(c, input.accountId, reason, now);
       return {
         status: 'paused',
         reasonCode: `social_inbox_${reason}`,

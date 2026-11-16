@@ -25,6 +25,7 @@ import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { MessageNotifier } from './message-notifier';
+import { SocialSessionNotices } from './social-session-notices';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
@@ -228,6 +229,7 @@ export function Shell({
               inbox && 'min-h-0 flex-1 overflow-hidden p-2 md:p-3 2xl:px-3',
             )}
           >
+            <SocialSessionNotices />
             {children}
           </main>
         </div>
