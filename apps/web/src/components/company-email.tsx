@@ -60,7 +60,7 @@ function DeliveryMark({ message }: { message: Message }) {
     </Icon>
   );
 }
-function MessageBubble({ message }: { message: Message }) {
+export function MessageBubble({ message }: { message: Message }) {
   const incoming = message.direction === 'in';
   const historyLink = facebookHistoryLink(message.status, message);
   const dispatched = facebookDispatched(message.status, message);
@@ -127,6 +127,7 @@ function MessageBubble({ message }: { message: Message }) {
 }
 type Chat = Awaited<ReturnType<typeof getCompanyChat>>;
 type Message = Chat['messages'][number];
+export type ChatMessage = Message;
 type Action = (
   action: string,
   fields?: Record<string, unknown>,
