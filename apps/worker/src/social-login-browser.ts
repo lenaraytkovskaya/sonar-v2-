@@ -61,6 +61,17 @@ async function loginState(
 ) {
   if (await visible(page, captchaSelector)) return 'captcha' as const;
   const body = (await page.locator('body').innerText()).slice(0, 12000);
+  // An authenticator prompt with a code field wins over its "lost access? confirm your identity" link (LinkedIn 2026).
+  if (
+    /authentication app|authenticator|(?:додатк|програм).{0,25}(?:автентиф|аутентиф)|приложени.{0,20}аутентиф/i.test(
+      body,
+    ) &&
+    (await visible(
+      page,
+      `${codeSelector},input[type="text"],input:not([type])`,
+    ))
+  )
+    return 'totp' as const;
   if (
     (await visible(page, identitySelector)) ||
     /confirm your identity|confirm (?:it[’']?s|this is) you|підтверд.{0,20}що це ви|подтверд.{0,20}это вы|upload.{0,25}(?:id|photo)|підтверд.{0,20}особ|подтверд.{0,20}личност/i.test(
@@ -380,7 +391,11 @@ export function createSocialLoginBrowser(
         else manualSubmitted = true;
         // The same page/context remains live throughout waitForCode (bounded by DB).
         const input = page
-          .locator(codeInputs(page))
+          .locator(
+            state === 'totp'
+              ? `${codeSelector},input[type="text"],input:not([type])`
+              : codeInputs(page),
+          )
           .filter({ visible: true })
           .first();
         const submittedUrl = page.url();
