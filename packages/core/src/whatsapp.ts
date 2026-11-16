@@ -250,6 +250,7 @@ export function createWhatsAppAdapter(
   }
   function webhookConfig() {
     return {
+      noweb: { store: { enabled: true, fullSync: true } },
       webhooks: [
         {
           url: webhookUrl,
@@ -309,11 +310,31 @@ export function createWhatsAppAdapter(
       )
     );
   }
+  // NOWEB keeps contacts (and the LID → phone map used to link inbound chats) only with its store
+  // enabled; without it /api/default/lids answers 400 (WAHA NOWEB docs).
+  const storeConfig = { enabled: true, fullSync: true };
+  function storeCorrect(current: Record<string, unknown>) {
+    const noweb = object(current.noweb) ? current.noweb : {};
+    const store = object(noweb.store) ? noweb.store : {};
+    return store.enabled === true && store.fullSync === true;
+  }
+  const withStore = (current: Record<string, unknown>) => ({
+    ...(object(current.noweb) ? current.noweb : {}),
+    store: storeConfig,
+  });
   async function configureWebhook() {
     const data = await request('/api/sessions/default');
     const session = sessionOf(data),
       current = sessionConfig(data);
-    if (webhookCorrect(current)) return { session, changed: false };
+    if (webhookCorrect(current) && storeCorrect(current))
+      return { session, changed: false };
+    if (webhookCorrect(current)) {
+      await request('/api/sessions/default', 'PUT', {
+        name: 'default',
+        config: { ...current, noweb: withStore(current) },
+      });
+      return { session, changed: true };
+    }
     const hooks = managedHooks(current),
       first = hooks[0] ?? {};
     const events = [
@@ -342,6 +363,7 @@ export function createWhatsAppAdapter(
       name: 'default',
       config: {
         ...current,
+        noweb: withStore(current),
         webhooks: [
           ...((current.webhooks ?? []) as unknown[]).filter(
             (item) => !object(item) || item.url !== webhookUrl,

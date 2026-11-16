@@ -95,6 +95,8 @@ describe('explicit webhook repair', () => {
     };
     const fixed = {
       ...current,
+      // The NOWEB store is switched on so LID chats can be linked to phone numbers.
+      noweb: { store: { enabled: true, fullSync: true } },
       webhooks: [
         other,
         {
@@ -125,7 +127,13 @@ describe('explicit webhook repair', () => {
     'does not update correct %s config or perform writes in refresh',
     async (event) => {
       const network = fake(
-        { ...working, config: { webhooks: [{ ...hook, events: [event] }] } },
+        {
+          ...working,
+          config: {
+            noweb: { store: { enabled: true, fullSync: true } },
+            webhooks: [{ ...hook, events: [event] }],
+          },
+        },
         working,
       );
       const client = adapter(network);
@@ -582,3 +590,24 @@ it('does not interpret a phone-looking LID as a phone', () =>
   expect(normalizeWhatsAppRecipient('12025550123@lid')).toBe(
     'whatsapp:lid:12025550123',
   ));
+
+describe('NOWEB store for LID → phone links', () => {
+  const hook = {
+    url: 'http://web:3000/api/webhooks/waha',
+    events: ['message'],
+    customHeaders: [{ name: 'X-Api-Key', value: 'private-test-key' }],
+  };
+  it('turns the store on with a single PUT when only the store is missing', async () => {
+    const current = { webhooks: [{ ...hook, events: ['message'] }] };
+    const network = fake({ ...working, config: current }, {});
+    await adapter(network).repairWebhook();
+    expect(network.mock.calls[1]?.[1]?.method).toBe('PUT');
+    expect(JSON.parse(String(network.mock.calls[1]?.[1]?.body))).toEqual({
+      name: 'default',
+      config: {
+        ...current,
+        noweb: { store: { enabled: true, fullSync: true } },
+      },
+    });
+  });
+});
