@@ -100,7 +100,7 @@ export function TelegramAccounts({
   };
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="font-heading text-base font-bold">
+      <h2 className="border-b border-border pb-4 font-heading text-base font-semibold">
         {uk.telegram.accounts}
       </h2>
       {!configured && <p role="status">{uk.telegram.configuration}</p>}

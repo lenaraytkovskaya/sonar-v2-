@@ -73,7 +73,7 @@ export function Inbox({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className={cn('shrink-0', explicitSelection && 'hidden lg:block')}>
-        <h1 className="font-heading text-xl font-bold">
+        <h1 className="font-heading text-2xl font-bold tracking-tight">
           {uk.pages.inbox.title}
         </h1>
         <details className="mt-2 max-h-[calc(var(--inbox-height,100dvh)*0.35)] overflow-y-auto">
@@ -153,12 +153,12 @@ export function Inbox({
           {uk.inbound.refreshError}
         </p>
       )}
-      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)]">
         <Card
           role="navigation"
           aria-label={uk.inbound.dialogs}
           className={cn(
-            'min-h-0 min-w-0 overflow-y-auto overscroll-contain',
+            'min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain',
             explicitSelection && 'hidden lg:block',
           )}
         >
@@ -174,46 +174,59 @@ export function Inbox({
               href={conversationLink(row.id)}
               aria-current={selectedId === row.id ? 'true' : undefined}
               className={cn(
-                'block space-y-1 border-b border-border p-4 text-sm last:border-b-0 hover:bg-raised',
-                selectedId === row.id && 'bg-chip',
+                'block min-w-0 space-y-1 border-b border-border px-4 py-3 text-sm last:border-b-0 hover:bg-raised',
+                selectedId === row.id && 'bg-chip hover:bg-chip',
               )}
             >
-              <p className="flex items-center gap-2 font-semibold">
-                {row.companyName || uk.inbound.unknownCompany}
-                {row.unreadCount > 0 && (
-                  <span className="rounded-full bg-err-bg px-2 text-err">
-                    {row.unreadCount}
+              <div className="flex min-w-0 items-baseline justify-between gap-3">
+                <p className="flex min-w-0 items-center gap-2 font-medium">
+                  <span className="truncate">
+                    {row.companyName || uk.inbound.unknownCompany}
+                  </span>
+                  {row.unreadCount > 0 && (
+                    <span className="shrink-0 rounded-full bg-accent px-1.5 text-xs font-semibold text-accent-foreground tabular-nums">
+                      {row.unreadCount}
+                    </span>
+                  )}
+                </p>
+                {row.lastAt && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    <LocalTime value={row.lastAt} />
                   </span>
                 )}
-              </p>
-              {row.needsHuman && (
-                <p className="text-xs text-wait">{uk.inbound.needsHuman}</p>
-              )}
-              <p className="flex min-w-0 items-center gap-1.5 break-words">
+              </div>
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                 <ChannelIcon
                   channel={row.channel}
                   value={row.contactValue ?? ''}
+                  className="size-3.5 shrink-0"
                 />
-                {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
-                {contactLabel(row.contactValue)}
+                <span className="truncate">
+                  {channelLabel(row.channel, row.contactValue ?? '')} ·{' '}
+                  {contactLabel(row.contactValue)}
+                </span>
               </p>
               <p className="line-clamp-2 break-words text-muted-foreground [overflow-wrap:anywhere]">
                 {row.lastMessage
                   ? splitEmailHistory(row.lastMessage, row.channel).current
                   : uk.email.noMessages}
               </p>
-              <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                {row.lastStatus && (
-                  <span>
-                    {messageStatus(row.lastStatus, {
-                      channel: row.channel,
-                      toValue: row.contactValue,
-                      reasonUk: row.lastReasonUk,
-                    })}
-                  </span>
-                )}
-                {row.lastAt && <LocalTime value={row.lastAt} />}
-              </div>
+              {(row.needsHuman || row.lastStatus) && (
+                <p className="flex flex-wrap gap-x-2 text-xs">
+                  {row.needsHuman && (
+                    <span className="text-wait">{uk.inbound.needsHuman}</span>
+                  )}
+                  {row.lastStatus && (
+                    <span className="text-muted-foreground">
+                      {messageStatus(row.lastStatus, {
+                        channel: row.channel,
+                        toValue: row.contactValue,
+                        reasonUk: row.lastReasonUk,
+                      })}
+                    </span>
+                  )}
+                </p>
+              )}
             </Link>
           ))}
         </Card>

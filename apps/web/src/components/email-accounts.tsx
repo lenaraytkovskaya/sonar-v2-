@@ -88,12 +88,25 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
   };
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="font-heading text-base font-bold">{uk.email.accounts}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+        <h2 className="font-heading text-base font-semibold">
+          {uk.email.accounts}
+        </h2>
+        <CrudButton
+          disabled={pending}
+          onClick={() => {
+            setError('');
+            setOpen(true);
+          }}
+        >
+          {uk.email.add}
+        </CrudButton>
+      </div>
       {!accounts.length && <p>{uk.email.empty}</p>}
       {!!accounts.length && (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead>
+            <thead className="text-xs text-muted-foreground">
               <tr>
                 {[
                   uk.email.name,
@@ -158,15 +171,6 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
           </table>
         </div>
       )}
-      <CrudButton
-        disabled={pending}
-        onClick={() => {
-          setError('');
-          setOpen(true);
-        }}
-      >
-        {uk.email.add}
-      </CrudButton>
       <CrudDialog
         open={open}
         onOpenChange={setOpen}

@@ -1,4 +1,5 @@
 import { Card, PageHeader } from '@/components/shared';
+import { InfoTip } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { uk } from '@/i18n/uk';
 const money = (value: number | null) =>
@@ -27,40 +28,42 @@ export default async function Page({
   const peak = Math.max(...data.daily.map((day) => day.spentUsd), 0.001);
   return (
     <>
-      <PageHeader {...uk.pages.finance} />
-      <form className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="grid gap-1 text-sm">
-          {t.month}
-          <input
-            className="min-h-11 rounded-lg border border-border bg-surface px-3"
-            type="month"
-            name="month"
-            defaultValue={data.month}
-            required
-          />
-        </label>
-        <Button type="submit" className="min-h-11">
-          {t.apply}
-        </Button>
-      </form>
-      <p className="mb-4 text-sm text-muted-foreground">{t.periodHint}</p>
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <PageHeader
+        {...uk.pages.finance}
+        actions={
+          <form className="flex flex-wrap items-center gap-2">
+            <input
+              aria-label={t.month}
+              className="min-h-9 rounded-lg border border-border bg-surface px-3 text-sm shadow-xs"
+              type="month"
+              name="month"
+              defaultValue={data.month}
+              required
+            />
+            <Button type="submit" variant="outline">
+              {t.apply}
+            </Button>
+            <InfoTip>{t.periodHint}</InfoTip>
+          </form>
+        }
+      />
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
           [t.spent, data.totalUsd],
           [t.budget, data.monthlyLimitUsd],
           [t.reserved, data.reservedUsd],
           [t.remaining, data.remainingUsd],
         ].map(([label, value]) => (
-          <Card className="p-4" key={String(label)}>
+          <Card className="p-5" key={String(label)}>
             <p className="text-sm text-muted-foreground">{label}</p>
-            <strong className="text-xl tabular-nums">
+            <strong className="mt-1 block font-heading text-3xl font-bold tabular-nums">
               {money(Number(value))}
             </strong>
           </Card>
         ))}
       </div>
-      <Card className="mb-4 p-4">
-        <h2 className="mb-4 font-heading font-bold">{t.daily}</h2>
+      <Card className="mb-6 p-5">
+        <h2 className="mb-4 font-heading text-base font-semibold">{t.daily}</h2>
         <div className="overflow-x-auto">
           <div
             className="flex min-w-[580px] items-end gap-1"
@@ -98,8 +101,10 @@ export default async function Page({
           </dl>
         </details>
       </Card>
-      <Card className="mb-4 overflow-x-auto p-4">
-        <h2 className="mb-3 font-heading font-bold">{t.services}</h2>
+      <Card className="mb-6 overflow-x-auto p-5">
+        <h2 className="mb-3 font-heading text-base font-semibold">
+          {t.services}
+        </h2>
         <table className="w-full text-left text-sm">
           <thead>
             <tr>
@@ -137,7 +142,9 @@ export default async function Page({
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-4">
-          <h2 className="mb-3 font-heading font-bold">{t.campaigns}</h2>
+          <h2 className="mb-3 font-heading text-base font-semibold">
+            {t.campaigns}
+          </h2>
           <dl className="space-y-2">
             {data.campaigns.map((campaign) => (
               <div
@@ -154,7 +161,9 @@ export default async function Page({
           )}
         </Card>
         <Card className="p-4">
-          <h2 className="mb-3 font-heading font-bold">{t.unitCosts}</h2>
+          <h2 className="mb-3 font-heading text-base font-semibold">
+            {t.unitCosts}
+          </h2>
           <dl className="space-y-2">
             <div className="flex justify-between gap-3">
               <dt>
