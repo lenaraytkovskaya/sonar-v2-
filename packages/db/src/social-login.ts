@@ -248,6 +248,8 @@ export type SocialCredentialLoginResult = {
     | 'checkpoint'
     | 'code_expired'
     | 'login_failed';
+  /** JPEG (base64) of the page at the failure, for the owner to review. */
+  screenshot?: string;
 };
 const reasons = {
   wrong_password:
@@ -452,7 +454,7 @@ export async function withSocialCredentialLogin(
     }
     if (result.valid) {
       await c.query(
-        "update channel_accounts set status=case when settings->>'enabled'='false' then 'disabled' else 'active' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId')||$2::jsonb where id=$1",
+        "update channel_accounts set status=case when settings->>'enabled'='false' then 'disabled' else 'active' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId'-'loginShot')||$2::jsonb where id=$1",
         [
           id,
           {
@@ -476,6 +478,14 @@ export async function withSocialCredentialLogin(
         ? result.reason
         : 'login_failed';
     await finishFailure(c, id, reason, new Date());
+    if (
+      typeof result.screenshot === 'string' &&
+      result.screenshot.length < 3_000_000
+    )
+      await c.query(
+        "update channel_accounts set settings=settings||jsonb_build_object('loginShot',jsonb_build_object('at',now(),'jpeg',$2::text)) where id=$1",
+        [id, result.screenshot],
+      );
     return {
       status: 'paused',
       reasonCode: `social_login_${reason}`,

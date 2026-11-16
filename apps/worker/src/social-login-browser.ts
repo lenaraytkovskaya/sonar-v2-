@@ -15,6 +15,7 @@ export type SocialLoginResult = {
     | 'checkpoint'
     | 'code_expired'
     | 'login_failed';
+  screenshot?: string;
 };
 export type SocialLoginSession = Pick<
   ResolvedSocialSession,
@@ -85,7 +86,15 @@ async function loginState(
       )
     )
       return 'sms' as const;
-    if (/e-?mail|ел\.\s?(?:пошт|адрес)|електронн|электронн|почт/i.test(body))
+    // On the two-step page footer/help text mentions email; only a "code sent to email" means email.
+    const twoStep = twoStepPath.test(page.url());
+    if (
+      twoStep
+        ? /(?:sent|надісл|відправ|отправ).{0,40}(?:e-?mail|пошт|почт)/i.test(
+            body,
+          )
+        : /e-?mail|ел\.\s?(?:пошт|адрес)|електронн|электронн|почт/i.test(body)
+    )
       return 'email' as const;
     // Instagram's 2026 two-step page with only an authenticator app set up.
     return twoStepPath.test(page.url())
@@ -126,6 +135,7 @@ type LoginDiagnostics = {
   path?: string;
   error?: unknown;
   snapshot?: PageSnapshot;
+  screenshot?: string;
   response?: { status: number; type: string; length: string };
   blocked?: Set<string>;
 };
@@ -136,6 +146,20 @@ type PageSnapshot = {
   textLength: number;
 };
 /** Structure only: title, input name/type/visibility and short button labels; never page text or values. */
+/** Viewport JPEG for the owner; password inputs render masked. */
+async function pageScreenshot(page?: Page): Promise<string | undefined> {
+  if (typeof page?.screenshot !== 'function') return undefined;
+  try {
+    const image = await page.screenshot({
+      type: 'jpeg',
+      quality: 55,
+      timeout: 5000,
+    });
+    return image.toString('base64');
+  } catch {
+    return undefined;
+  }
+}
 async function pageSnapshot(page?: Page): Promise<PageSnapshot | undefined> {
   if (typeof page?.evaluate !== 'function') return undefined;
   return page
@@ -346,8 +370,10 @@ export function createSocialLoginBrowser(
       return { valid: false, reason: 'login_failed' };
     } finally {
       if (context) {
-        if (diag.stage !== 'done')
+        if (diag.stage !== 'done') {
           diag.snapshot = await pageSnapshot(diag.page);
+          diag.screenshot = await pageScreenshot(diag.page);
+        }
         diag.path = pagePath(diag.page);
         active.delete(context);
         await context.close().catch(() => {});
@@ -371,6 +397,7 @@ export function createSocialLoginBrowser(
         timeoutMs,
         diag,
       );
+      if (!result.valid && diag.screenshot) result.screenshot = diag.screenshot;
       if (!result.valid)
         console.warn(
           '[social-login] failed',
