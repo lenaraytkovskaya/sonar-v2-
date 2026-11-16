@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ChevronDown } from 'lucide-react';
 import { CompanyCard, type CompanyCardRow } from './company-card';
+import { CompanyTable } from './company-table';
 import { Card, PageHeader } from './shared';
 import { runAiJob } from '@/lib/ai-job';
 import { ManualEntry } from './manual-entry';
@@ -141,10 +142,14 @@ export function CompanyList({
     (filters.campaignId ? '?campaignId=' + filters.campaignId : '');
   return (
     <>
-      <PageHeader {...uk.pages.companies} />
-      <ManualEntry
-        campaigns={campaigns}
-        initialCampaignId={initialCampaignId}
+      <PageHeader
+        {...uk.pages.companies}
+        actions={
+          <ManualEntry
+            campaigns={campaigns}
+            initialCampaignId={initialCampaignId}
+          />
+        }
       />
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Input
@@ -428,17 +433,17 @@ export function CompanyList({
         </div>
       )}
       <div
-        className="mb-3 flex flex-wrap gap-1.5"
+        className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-chip p-1"
         aria-label={uk.company.status}
       >
         {['', ...Object.keys(uk.company.statuses)].map((status) => (
           <Button
             key={status}
-            className="min-h-8 px-2.5 text-xs"
+            className="text-xs"
             variant={
               filters.status === status || (!filters.status && !status)
-                ? 'default'
-                : 'outline'
+                ? 'tabActive'
+                : 'tab'
             }
             aria-pressed={
               filters.status === status || (!filters.status && !status)
@@ -463,7 +468,12 @@ export function CompanyList({
           {error}
         </p>
       )}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <div className="hidden md:block">
+        {data.companies.length > 0 && (
+          <CompanyTable companies={data.companies} link={link} />
+        )}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 md:hidden">
         {data.companies.map((c) => (
           <CompanyCard key={c.id} company={c} link={link} />
         ))}
@@ -471,7 +481,7 @@ export function CompanyList({
       {!loading && !data.companies.length && (
         <Card className="p-5">{uk.company.noResults}</Card>
       )}
-      <div className="mt-4 flex items-center gap-3 text-sm">
+      <div className="mt-4 flex items-center justify-end gap-3 text-sm">
         <Button
           variant="outline"
           disabled={loading || page === 1}

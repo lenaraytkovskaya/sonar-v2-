@@ -246,7 +246,7 @@ export function Shell({
               id="content"
               tabIndex={-1}
               className={cn(
-                'mx-auto w-full max-w-[1440px] px-4 py-5 md:px-8 md:py-7',
+                'mx-auto w-full max-w-[1760px] px-4 py-5 md:px-8 md:py-7',
                 inbox && 'max-w-none min-h-0 flex-1 overflow-hidden p-2 md:p-3',
               )}
             >

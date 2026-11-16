@@ -645,6 +645,10 @@ export const uk = {
     },
   },
   company: {
+    tableName: 'Компанія',
+    tableContact: 'Контакт',
+    tableRating: 'Рейтинг',
+    tableAdded: 'Додано',
     sectionTabs: {
       googleMaps: 'Google Maps',
       website: 'Сайт',
