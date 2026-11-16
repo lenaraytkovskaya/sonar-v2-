@@ -12,6 +12,7 @@ export default async function Page() {
   const {
     listSocialAccounts,
     getSocialProxyCount,
+    getSocialProxyLabels,
     getSocialAccountProxyIndex,
   } = await import('@sonar/db/social-accounts');
   const [email, forms, manual, telegram, whatsapp, social, accountProxyIndex] =
@@ -36,6 +37,7 @@ export default async function Page() {
         social={{
           accounts: social,
           proxyCount: getSocialProxyCount(),
+          proxyLabels: getSocialProxyLabels(),
           accountProxyIndexes: {
             facebook: accountProxyIndex[0],
             instagram: accountProxyIndex[1],

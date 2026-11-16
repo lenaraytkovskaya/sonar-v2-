@@ -290,8 +290,11 @@ async function handle(request: Request, method: string) {
   } catch (error) {
     return respond(
       {
+        // Credential errors stay redacted; only the fixed daily-limit reason is shown.
         error:
-          !credentialAction && error instanceof EmailValidationError
+          error instanceof EmailValidationError &&
+          (!credentialAction ||
+            (error as { code?: string }).code === 'social_login_daily_limit')
             ? error.reasonUk
             : uk.email.error,
       },

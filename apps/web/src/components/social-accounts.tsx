@@ -12,6 +12,11 @@ import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
+/** "Проксі 7 · sol.ua-proxy.net": the number stays, the host makes it recognisable. */
+function proxyName(index: number, labels: string[]) {
+  const host = labels[index];
+  return `${uk.socialAccounts.proxy} ${index + 1}${host ? ` · ${host}` : ''}`;
+}
 const selectClass =
   'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
 export function SocialAccounts({
@@ -19,12 +24,14 @@ export function SocialAccounts({
   network,
   active,
   proxyCount,
+  proxyLabels = [],
   accountProxyIndexes,
 }: {
   accounts: Account[];
   network: Account['network'];
   active: boolean;
   proxyCount: number;
+  proxyLabels?: string[];
   accountProxyIndexes: Record<Account['network'], number | null>;
 }) {
   const accountProxyIndex = accountProxyIndexes[network];
@@ -171,7 +178,7 @@ export function SocialAccounts({
             {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
             {account.hasOwnProxy
               ? uk.socialAccounts.ownProxy
-              : `${uk.socialAccounts.proxy} ${account.proxyIndex + 1}`}
+              : proxyName(account.proxyIndex, proxyLabels)}
           </p>
           <p role="status">
             {account.sessionStatus === 'invalid'
@@ -471,7 +478,7 @@ export function SocialAccounts({
               >
                 {Array.from({ length: proxyCount }, (_, index) => (
                   <option key={index} value={index}>
-                    {uk.socialAccounts.proxy} {index + 1}
+                    {proxyName(index, proxyLabels)}
                     {' — '}
                     {Array.from(
                       new Set(
