@@ -111,6 +111,7 @@ type LoginDiagnostics = {
   path?: string;
   error?: unknown;
   snapshot?: PageSnapshot;
+  response?: { status: number; type: string; length: string };
   blocked?: Set<string>;
 };
 type PageSnapshot = {
@@ -179,6 +180,7 @@ export function loginDiagnostics(
     path: diag.path,
     ...(error ? { error } : {}),
     ...(diag.snapshot ? { page: scrub(JSON.stringify(diag.snapshot)) } : {}),
+    ...(diag.response ? { response: diag.response } : {}),
     ...(diag.blocked?.size ? { blocked: [...diag.blocked].slice(0, 10) } : {}),
   };
 }
@@ -245,10 +247,18 @@ export function createSocialLoginBrowser(
       diag.stage = 'open';
       page.setDefaultTimeout(timeoutMs);
       await page.routeWebSocket('**/*', (socket) => socket.close());
-      await page.goto(loginUrls[account.channel], {
+      const response = await page.goto(loginUrls[account.channel], {
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
       });
+      if (response) {
+        const headers = response.headers();
+        diag.response = {
+          status: response.status(),
+          type: (headers['content-type'] ?? '').slice(0, 40),
+          length: (headers['content-length'] ?? '').slice(0, 12),
+        };
+      }
       const consent = page
         .getByRole('button', {
           name: /^(?:Decline optional cookies|Only allow essential cookies|Відхилити необов’язкові файли cookie|Отклонить необязательные файлы cookie)$/i,
