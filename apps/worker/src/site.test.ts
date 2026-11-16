@@ -345,3 +345,10 @@ it('does not fetch a queued website after a newer manual replacement', async () 
   ).toBe(false);
   expect(client.release).toHaveBeenCalledOnce();
 });
+it('treats an HTML page served as robots.txt as "no rules" and reads the site', async () => {
+  const { http } = website(
+    { [home]: '<html><body>Welcome</body></html>' },
+    '<!doctype html><html><body>Home page instead of robots</body></html>',
+  );
+  await expect(http.read(home)).resolves.toMatchObject({ status: 200 });
+});

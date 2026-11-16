@@ -469,6 +469,15 @@ export async function runSiteScan(
         await saveFact(fact.kind, fact.value, page.url, ai ? 'ai' : 'website');
       contacts = foundContacts.size;
     };
+    // Only one site status is current: a new status (done or unavailable) replaces the old one,
+    // also when the website itself was changed by hand.
+    const replaceSiteStatus = async (value: unknown) => {
+      await client.query(
+        "delete from company_facts where company_id=$1 and kind='site_status' and source='website'",
+        [companyId],
+      );
+      await saveFact('site_status', value, company.website);
+    };
     const saveFact = async (
       kind: string,
       value: unknown,
@@ -566,11 +575,22 @@ export async function runSiteScan(
           "delete from contacts where company_id=$1 and source='website' and not (kind||':'||normalized = any($2::text[])) and not exists(select 1 from conversations v where v.contact_id=contacts.id)",
           [companyId, [...foundContacts]],
         );
-      await saveFact(
-        'site_status',
-        { status: 'done', pages: pageCount },
-        company.website,
-      );
+      // Facts read from a previous website (e.g. before a manual change) are no longer true.
+      const host = (value: string) => {
+        try {
+          return new URL(value).hostname.replace(/^www./, '');
+        } catch {
+          return '';
+        }
+      };
+      const current = host(company.website);
+      if (current)
+        await client.query(
+          `delete from company_facts where company_id=$1 and source='website' and source_url is not null
+             and regexp_replace(split_part(split_part(source_url,'://',2),'/',1),'^www[.]','') <> $2`,
+          [companyId, current],
+        );
+      await replaceSiteStatus({ status: 'done', pages: pageCount });
       await logActivity(
         'site.scan.done',
         'company',
@@ -602,15 +622,11 @@ export async function runSiteScan(
               'Площадка не дозволяє автоматичне читання сторінки',
             )
           : error;
-      await saveFact(
-        'site_status',
-        {
-          status: 'unavailable',
-          reason: unavailable.reasonUk,
-          pages: pageCount,
-        },
-        company.website,
-      );
+      await replaceSiteStatus({
+        status: 'unavailable',
+        reason: unavailable.reasonUk,
+        pages: pageCount,
+      });
       await client.query(
         "update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1",
         [
