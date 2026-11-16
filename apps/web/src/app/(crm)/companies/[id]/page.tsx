@@ -45,9 +45,9 @@ function Section({
   action?: ReactNode;
 }) {
   return (
-    <Card className={cn('min-w-0 space-y-2.5 break-words p-4', className)}>
+    <Card className={cn('min-w-0 space-y-3 break-words p-5', className)}>
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
+        <h2 className="font-heading text-base font-semibold">
           {title}
         </h2>
         {action}
@@ -69,15 +69,15 @@ function Collapsible({
   return (
     <Card className="min-w-0 break-words">
       <details>
-        <summary className="flex cursor-pointer items-center justify-between gap-2 p-4 font-heading text-sm font-bold uppercase tracking-wide text-muted-foreground">
+        <summary className="flex cursor-pointer items-center justify-between gap-2 px-5 py-4 font-heading text-base font-semibold">
           {title}
           {count !== undefined && (
-            <span className="rounded-full bg-chip px-2 text-xs normal-case">
+            <span className="rounded-full bg-chip px-2 text-xs font-medium">
               {count}
             </span>
           )}
         </summary>
-        <div className="space-y-2 border-t border-border p-4 text-sm">
+        <div className="space-y-2 border-t border-border px-5 py-4 text-sm">
           {children}
         </div>
       </details>
@@ -337,10 +337,10 @@ export default async function Page({
       >
         ← {uk.company.back}
       </Link>
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-heading text-xl font-bold tracking-tight">
+            <h1 className="font-heading text-2xl font-bold tracking-tight">
               {c.name}
             </h1>
             <CompanyStatus
@@ -373,7 +373,7 @@ export default async function Page({
           enrich={c.place_id.startsWith('manual:')}
         />
       </header>
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Section title={uk.company.score}>
           {mainScore ? (
             <>
