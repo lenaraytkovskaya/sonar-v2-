@@ -119,7 +119,7 @@ it.skipIf(!enabled)(
         );
         if (scenario.code === 'finish_reason')
           expect(saved.reason_uk).toBe(
-            'Відповідь ІІ обрізана, збільште ліміт токенів',
+            'Відповідь ШІ обрізана, збільште ліміт токенів',
           );
         const { rows: spend } = await sonarPool.query(
           'select * from spend_events where task_id=$1',

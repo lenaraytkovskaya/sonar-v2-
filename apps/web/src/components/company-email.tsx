@@ -19,6 +19,112 @@ import { LocalTime } from './local-time';
 import { useMessageDraft } from './use-message-draft';
 import { sameDraft, normalizedDraft } from '@/lib/draft-state';
 import { MessageBody } from './message-body';
+import {
+  AlertCircle,
+  Ban,
+  Check,
+  CheckCheck,
+  Clock,
+  Hourglass,
+  PencilLine,
+  Sparkles,
+} from 'lucide-react';
+
+/** Messenger-style delivery mark: clock, one tick, two ticks, error. */
+function DeliveryMark({ message }: { message: Message }) {
+  const label = messageStatus(message.status, message);
+  const Icon =
+    message.status === 'failed'
+      ? AlertCircle
+      : message.status === 'skipped'
+        ? Ban
+        : message.status === 'draft'
+          ? PencilLine
+          : ['awaiting_approval', 'awaiting_manual'].includes(message.status)
+            ? Hourglass
+            : ['delivered', 'read'].includes(message.status)
+              ? CheckCheck
+              : message.status === 'sent'
+                ? Check
+                : Clock;
+  return (
+    <Icon
+      aria-label={label}
+      className={cn(
+        'size-3.5',
+        message.status === 'failed' && 'text-err',
+        message.status === 'read' && 'text-accent',
+      )}
+    >
+      <title>{label}</title>
+    </Icon>
+  );
+}
+function MessageBubble({ message }: { message: Message }) {
+  const incoming = message.direction === 'in';
+  const historyLink = facebookHistoryLink(message.status, message);
+  const dispatched = facebookDispatched(message.status, message);
+  const generated = ['ai', 'generated'].includes(message.source);
+  return (
+    <div className={cn('flex', incoming ? 'justify-start' : 'justify-end')}>
+      <section
+        className={cn(
+          'min-w-0 max-w-[85%] space-y-1 rounded-2xl px-3 py-2 shadow-sm lg:max-w-[70%]',
+          incoming
+            ? 'rounded-bl-md border border-border bg-surface'
+            : 'rounded-br-md border border-accent/30 bg-accent/15',
+          message.status === 'failed' && 'border-err/40',
+        )}
+      >
+        {message.subject && (
+          <h3 className="text-sm font-semibold">{message.subject}</h3>
+        )}
+        <div className="text-sm">
+          <MessageBody body={message.body} channel={message.channel} />
+        </div>
+        {message.classification && (
+          <p className="text-xs text-muted-foreground">
+            {
+              uk.inbound.categories[
+                message.classification as keyof typeof uk.inbound.categories
+              ]
+            }
+            {message.needsHuman && ` · ${uk.inbound.needsHuman}`}
+          </p>
+        )}
+        <p className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+          {generated && (
+            <Sparkles aria-label={uk.outreach.sources.ai} className="size-3">
+              <title>{uk.outreach.sources.ai}</title>
+            </Sparkles>
+          )}
+          {message.providerTimestampUnknown ? (
+            <span>{uk.socialAccounts.timestampUnknown}</span>
+          ) : (
+            <LocalTime value={message.sentAt ?? message.createdAt} timeOnly />
+          )}
+          {!incoming && <DeliveryMark message={message} />}
+        </p>
+        {historyLink && (
+          <a
+            href={historyLink}
+            target="_blank"
+            rel="noreferrer"
+            className="block text-xs underline"
+          >
+            {uk.outreach.verifyFacebook}
+          </a>
+        )}
+        {message.reasonUk && !dispatched && (
+          <p className="flex items-start gap-1 text-xs text-err">
+            <AlertCircle aria-hidden className="mt-0.5 size-3 shrink-0" />
+            {message.reasonUk}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
 type Chat = Awaited<ReturnType<typeof getCompanyChat>>;
 type Message = Chat['messages'][number];
 type Action = (
@@ -72,6 +178,7 @@ export function Draft({
   const dispatched = facebookDispatched(message.status, message);
   const manual = ['form', 'social'].includes(message.channel);
   const changed = !sameDraft(draft.state.value, draft.state.base);
+  const showEditor = editable && !blocked;
   const proceed = async (action: string) => {
     if (busy.current || pending || draft.conflict) return;
     busy.current = true;
@@ -102,6 +209,7 @@ export function Draft({
       busy.current = false;
     }
   };
+  if (bubble && !showEditor) return <MessageBubble message={message} />;
   return (
     <section
       className={cn(

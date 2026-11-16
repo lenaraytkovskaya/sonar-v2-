@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { uk } from '@/i18n/uk';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { statusTone } from '@/lib/status-tone';
 export { Card } from '@/components/ui/card';
 /** Score bands: 70+ strong lead, 40–70 worth a look, below 40 weak. */
 export function scoreTone(value: number | null) {
@@ -173,4 +174,34 @@ export function ScanSummary({ result }: { result: ScanResult | null }) {
       )}
     </span>
   ) : null;
+}
+
+/** One colour language for every status: ok / err / wait / run / idle (see lib/status-tone). */
+export function StatusBadge({
+  status,
+  children,
+}: {
+  status: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1.5 self-start rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+        {
+          ok: 'bg-ok-bg text-ok',
+          err: 'bg-err-bg text-err',
+          wait: 'bg-wait-bg text-wait',
+          run: 'bg-run-bg text-run',
+          idle: 'bg-idle-bg text-idle',
+        }[statusTone(status)],
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className="size-1.5 shrink-0 rounded-full bg-current"
+      />
+      {children}
+    </span>
+  );
 }

@@ -31,7 +31,7 @@ const needsInstruction = (action: Action) =>
   action === 'translate' || action === 'custom';
 
 /**
- * Compact AI helper, as in most editors: a small «✨ ІІ» button opens a menu of actions;
+ * Compact AI helper, as in most editors: a small «✨ ШІ» button opens a menu of actions;
  * an action runs at once and the result appears as a suggestion to replace the text with.
  */
 export function AiAssist({

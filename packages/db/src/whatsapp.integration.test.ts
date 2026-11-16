@@ -104,7 +104,7 @@ it.skipIf(!enabled)(
         providerName: 'Profile',
         status: 'active',
       });
-      expect(account.address).not.toContain('671234');
+      expect(account.addressMasked).not.toContain('671234');
       expect(account).not.toHaveProperty('settings');
       await accounts.updateWhatsAppAccount(
         accountId,

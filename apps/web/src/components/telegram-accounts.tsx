@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { RevealValue } from './ui/reveal-value';
 
 type Account = Awaited<ReturnType<typeof listTelegramAccounts>>[number];
 export function TelegramAccounts({
@@ -110,7 +111,12 @@ export function TelegramAccounts({
         >
           <div className="min-w-0 space-y-1 break-words">
             <p className="font-medium">
-              {account.name} · {account.address}
+              {account.name} ·{' '}
+              <RevealValue
+                value={account.address}
+                masked={account.addressMasked}
+                copy
+              />
             </p>
             <p className="text-sm text-muted-foreground">
               {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}

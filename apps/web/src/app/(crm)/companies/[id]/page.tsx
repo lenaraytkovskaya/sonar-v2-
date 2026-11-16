@@ -19,6 +19,7 @@ import { RegistryMatch } from '@/components/registry-match';
 import { LocalTime } from '@/components/local-time';
 import { ScanSummary, Score } from '@/components/shared';
 import { cn } from '@/lib/utils';
+import { ChannelIcon } from '@/components/channel-icon';
 
 const kindOrder = [
   'email',
@@ -254,7 +255,8 @@ export default async function Page({
         key={contact.id}
         className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
       >
-        <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
+        <span className="flex w-24 shrink-0 items-start gap-1.5 pt-0.5 text-xs text-muted-foreground">
+          <ChannelIcon channel={contact.kind} value={contact.value} />
           {contact.kind === 'social'
             ? channelLabel(contact.kind, contact.value)
             : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
