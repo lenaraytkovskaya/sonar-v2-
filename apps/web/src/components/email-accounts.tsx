@@ -3,11 +3,12 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { EmailAccount } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { RowActions } from './ui/row-actions';
 
 export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
   const router = useRouter(),
@@ -43,12 +44,8 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
       setPending(false);
     }
   };
-  const remove = async (id: string, name: string) => {
-    if (
-      busy.current ||
-      !window.confirm(uk.email.removeConfirm + ' ' + name + '?')
-    )
-      return;
+  const remove = async (id: string) => {
+    if (busy.current) return;
     busy.current = true;
     setPending(true);
     setError('');
@@ -128,35 +125,31 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
                   </td>
                   <td className="p-3">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={
-                          account.enabled
-                            ? 'rounded-full bg-ok-bg px-2 py-0.5 text-xs text-ok'
-                            : 'rounded-full bg-idle-bg px-2 py-0.5 text-xs text-idle'
-                        }
+                      <StatusBadge
+                        status={account.enabled ? 'active' : 'disabled'}
                       >
                         {account.enabled ? uk.email.enabled : uk.email.disabled}
-                      </span>
-                      <Button
-                        variant="outline"
-                        className="min-h-7 px-2 text-xs"
+                      </StatusBadge>
+                      <RowActions
                         disabled={pending}
-                        onClick={() =>
-                          void toggle(account.id, !account.enabled)
-                        }
-                      >
-                        {account.enabled ? uk.email.disable : uk.email.enable}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="min-h-7 px-2 text-xs"
-                        disabled={pending}
-                        onClick={() =>
-                          void remove(account.id, account.fromAddress)
-                        }
-                      >
-                        {uk.email.remove}
-                      </Button>
+                        actions={[
+                          {
+                            kind: account.enabled ? 'disable' : 'enable',
+                            label: account.enabled
+                              ? uk.email.disable
+                              : uk.email.enable,
+                            onSelect: () =>
+                              void toggle(account.id, !account.enabled),
+                          },
+                          {
+                            kind: 'delete',
+                            label: uk.email.remove,
+                            danger: true,
+                            confirm: `${uk.email.removeConfirm} ${account.fromAddress}?`,
+                            onSelect: () => void remove(account.id),
+                          },
+                        ]}
+                      />
                     </span>
                   </td>
                 </tr>
