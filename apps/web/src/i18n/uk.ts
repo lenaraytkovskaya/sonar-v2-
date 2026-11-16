@@ -1,4 +1,5 @@
 export const uk = {
+  more: 'Докладніше',
   notifications: {
     title: 'Нове повідомлення',
     close: 'Закрити',
@@ -106,6 +107,9 @@ export const uk = {
     },
   },
   socialAccounts: {
+    empty:
+      'Акаунтів ще немає. Додайте акаунт через логін і пароль або cookies.',
+    syncPartialShort: 'Історія листування неповна.',
     title: 'Акаунти соцмереж',
     network: 'Соцмережа',
     proxy: 'Проксі',

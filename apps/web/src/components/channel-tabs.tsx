@@ -79,7 +79,7 @@ export function ChannelTabs({
       <div
         role="tablist"
         aria-label={uk.pages.channels.title}
-        className="flex gap-2 overflow-x-auto p-1"
+        className="inline-flex max-w-full gap-1 overflow-x-auto rounded-lg bg-chip p-1"
       >
         {tabs.map((tab, index) => (
           <Button
@@ -90,8 +90,8 @@ export function ChannelTabs({
             aria-selected={active === tab.key}
             aria-controls={`${id}-panel-${tab.key}`}
             tabIndex={active === tab.key ? 0 : -1}
-            variant={active === tab.key ? 'default' : 'outline'}
-            className="min-h-11 shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            variant={active === tab.key ? 'tabActive' : 'tab'}
+            className="shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onClick={(event) => {
               select(tab.key);
               event.currentTarget.scrollIntoView({

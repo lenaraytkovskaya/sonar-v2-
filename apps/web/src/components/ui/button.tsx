@@ -9,7 +9,11 @@ const buttonVariants = cva(
       variant: {
         default: 'bg-accent text-accent-foreground hover:opacity-90',
         ghost: 'hover:bg-chip text-foreground',
-        outline: 'border border-border bg-surface hover:bg-raised',
+        outline: 'border border-border bg-surface shadow-xs hover:bg-raised',
+        /** Segmented tabs (DESIGN.md §2): inactive / active segment inside a bg-chip track. */
+        tab: 'min-h-8 rounded-md px-3 text-muted-foreground hover:text-foreground',
+        tabActive:
+          'min-h-8 rounded-md bg-surface px-3 text-foreground shadow-sm',
       },
     },
     defaultVariants: { variant: 'default' },

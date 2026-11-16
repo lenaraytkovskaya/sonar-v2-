@@ -12,6 +12,9 @@ import {
   Trash2,
   Unplug,
   RefreshCw,
+  KeyRound,
+  Inbox,
+  Radio,
 } from 'lucide-react';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
@@ -29,6 +32,9 @@ const icons = {
   block: Ban,
   pause: Pause,
   score: RefreshCw,
+  login: KeyRound,
+  sync: Inbox,
+  poll: Radio,
 };
 export type RowAction = {
   kind: keyof typeof icons;
