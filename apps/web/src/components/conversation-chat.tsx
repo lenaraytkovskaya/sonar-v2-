@@ -3,6 +3,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { normalizedDraft, sameDraft } from '@/lib/draft-state';
 import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
 import { channelLabel, contactLabel } from '@/lib/outreach-labels';
@@ -269,6 +270,50 @@ export function ConversationChat({
       if (mounted.current) setPending(false);
     }
   };
+  // One composer: an AI draft is edited and sent from the bottom box, not as a second editor.
+  const pendingDraft = [...data.messages]
+    .reverse()
+    .find(
+      (m) =>
+        m.direction === 'out' &&
+        ['draft', 'awaiting_approval'].includes(m.status) &&
+        ['email', 'telegram', 'whatsapp'].includes(m.channel),
+    );
+  const pendingDraftId = pendingDraft?.id;
+  useEffect(() => {
+    if (!pendingDraft || !draftLoaded) return;
+    setBody((current) => (current.trim() ? current : pendingDraft.body));
+    if (pendingDraft.subject)
+      setSubject((current) =>
+        current.trim() ? current : (pendingDraft.subject ?? ''),
+      );
+    // Only when a different draft appears.
+  }, [pendingDraftId, draftLoaded]);
+  const sendDraft = async () => {
+    if (!pendingDraft) return;
+    const base = normalizedDraft({
+      subject: pendingDraft.subject ?? '',
+      body: pendingDraft.body,
+    });
+    const submitted = normalizedDraft({ subject, body });
+    const changed = !sameDraft(submitted, base);
+    if (
+      changed &&
+      !(await act('save', {
+        messageId: pendingDraft.id,
+        ...submitted,
+        expected: base,
+      }))
+    )
+      return;
+    if (
+      await act(
+        pendingDraft.status === 'awaiting_approval' ? 'approve' : 'send',
+        { messageId: pendingDraft.id, expected: changed ? submitted : base },
+      )
+    )
+      setBody('');
+  };
   const conversation = data.conversation;
   if (!conversation) return null;
   const generating =
@@ -371,50 +416,52 @@ export function ConversationChat({
           className="h-full min-h-0 overflow-y-auto overscroll-contain bg-raised p-3"
         >
           <div className="space-y-2">
-            {data.messages.map((message, index) => {
-              const day = (value: Message) =>
-                new Date(value.sentAt ?? value.createdAt).toDateString();
-              const newDay =
-                index === 0 || day(data.messages[index - 1]!) !== day(message);
-              return (
-                <Fragment key={message.id}>
-                  {newDay && (
-                    <p
-                      className="py-2 text-center text-xs text-muted-foreground"
-                      suppressHydrationWarning
-                    >
-                      <span className="rounded-full bg-surface px-3 py-1">
-                        {new Date(
-                          message.sentAt ?? message.createdAt,
-                        ).toLocaleDateString('uk-UA', {
-                          day: 'numeric',
-                          month: 'long',
-                        })}
-                      </span>
-                    </p>
-                  )}
-                  <Draft
-                    bubble
-                    message={message}
-                    blocked={data.blocked}
-                    pending={pending}
-                    approval={
-                      message.source !== 'reply' &&
-                      conversation.campaignSendMode === 'approval'
-                    }
-                    act={act}
-                    onUseText={
-                      social && data.socialAvailable
-                        ? (text) => {
-                            setBody(text);
-                            document.getElementById('reply-body')?.focus();
-                          }
-                        : undefined
-                    }
-                  />
-                </Fragment>
-              );
-            })}
+            {data.messages
+              .filter((message) => message.id !== pendingDraftId)
+              .map((message, index, shown) => {
+                const day = (value: Message) =>
+                  new Date(value.sentAt ?? value.createdAt).toDateString();
+                const newDay =
+                  index === 0 || day(shown[index - 1]!) !== day(message);
+                return (
+                  <Fragment key={message.id}>
+                    {newDay && (
+                      <p
+                        className="py-2 text-center text-xs text-muted-foreground"
+                        suppressHydrationWarning
+                      >
+                        <span className="rounded-full bg-surface px-3 py-1">
+                          {new Date(
+                            message.sentAt ?? message.createdAt,
+                          ).toLocaleDateString('uk-UA', {
+                            day: 'numeric',
+                            month: 'long',
+                          })}
+                        </span>
+                      </p>
+                    )}
+                    <Draft
+                      bubble
+                      message={message}
+                      blocked={data.blocked}
+                      pending={pending}
+                      approval={
+                        message.source !== 'reply' &&
+                        conversation.campaignSendMode === 'approval'
+                      }
+                      act={act}
+                      onUseText={
+                        social && data.socialAvailable
+                          ? (text) => {
+                              setBody(text);
+                              document.getElementById('reply-body')?.focus();
+                            }
+                          : undefined
+                      }
+                    />
+                  </Fragment>
+                );
+              })}
           </div>
         </div>
         {newMessages > 0 && (
@@ -530,25 +577,47 @@ export function ConversationChat({
                 (conversation.channel === 'email' && !subject.trim())
               }
               onClick={() =>
-                void act('reply', {
-                  body,
-                  subject,
-                  ...(social
-                    ? {
-                        socialDelivery: data.socialAvailable
-                          ? 'browser'
-                          : 'manual',
-                      }
-                    : {}),
-                })
+                pendingDraft
+                  ? void sendDraft()
+                  : void act('reply', {
+                      body,
+                      subject,
+                      ...(social
+                        ? {
+                            socialDelivery: data.socialAvailable
+                              ? 'browser'
+                              : 'manual',
+                          }
+                        : {}),
+                    })
               }
             >
               {conversation.channel === 'call'
                 ? uk.outreach.logCall
                 : manual
                   ? uk.outreach.manualSent
-                  : uk.email.send}
+                  : pendingDraft?.status === 'awaiting_approval'
+                    ? uk.email.approve
+                    : pendingDraft &&
+                        conversation.campaignSendMode === 'approval'
+                      ? uk.email.requestApproval
+                      : uk.email.send}
             </Button>
+            {pendingDraft && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                title={uk.outreach.skipDraftHint}
+                onClick={() =>
+                  void act('skip', { messageId: pendingDraft.id }).then(
+                    (ok) => ok && setBody(''),
+                  )
+                }
+              >
+                {uk.outreach.skip}
+              </Button>
+            )}
             {link && (
               <Button
                 type="button"
