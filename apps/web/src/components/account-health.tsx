@@ -1,4 +1,5 @@
 'use client';
+import { alarmHealthKinds } from '@sonar/core/account-health';
 import type { accountHealth } from '@sonar/db/account-health';
 import { uk } from '@/i18n/uk';
 import { StatusBadge } from './shared';
@@ -12,6 +13,9 @@ export type AccountHealth = Awaited<ReturnType<typeof accountHealth>>[number];
 const t = uk.accountHealth;
 export function HealthBadge({ health }: { health?: AccountHealth }) {
   if (!health) return null;
+  const lastAlarm = health.events.find((event) =>
+    alarmHealthKinds.includes(event.kind),
+  );
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-1">
       <StatusBadge
@@ -32,7 +36,18 @@ export function HealthBadge({ health }: { health?: AccountHealth }) {
           t.statuses[health.status]
         )}
       </StatusBadge>
-      <InfoTip label={t.title}>{t.hint}</InfoTip>
+      <InfoTip label={t.title}>
+        {health.status === 'warning' && lastAlarm ? (
+          <span className="block space-y-1">
+            <span className="block">{lastAlarm.reasonUk}</span>
+            <span className="block text-xs text-muted-foreground">
+              <LocalTime value={lastAlarm.createdAt} />
+            </span>
+          </span>
+        ) : (
+          t.hint
+        )}
+      </InfoTip>
     </span>
   );
 }
@@ -177,7 +192,7 @@ export function AccountHealthOverview({ health }: { health: AccountHealth[] }) {
       }
       description={t.description}
     >
-      {!health.length ? (
+      {!health.some((account) => account.visible) ? (
         <p className="text-sm text-muted-foreground">{t.empty}</p>
       ) : (
         <table className="block w-full text-left text-sm md:table">
@@ -193,13 +208,18 @@ export function AccountHealthOverview({ health }: { health: AccountHealth[] }) {
             </tr>
           </thead>
           <tbody className="block divide-y divide-border md:table-row-group">
-            {health.map((account) => (
+            {health.filter((account) => account.visible).map((account) => (
               <tr
                 key={account.accountId}
                 className="grid gap-2 py-4 md:table-row"
               >
                 <td className="min-w-0 break-words md:py-3 md:pr-3">
-                  {account.name}
+                  <span className="block font-medium">{account.name}</span>
+                  {account.addressMasked && (
+                    <span className="block text-xs text-muted-foreground">
+                      {account.addressMasked}
+                    </span>
+                  )}
                 </td>
                 <td className="md:py-3">
                   {

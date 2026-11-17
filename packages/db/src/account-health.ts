@@ -234,6 +234,8 @@ export async function cleanupAccountHealthEvents(now = new Date()) {
 export type AccountHealthSummary = {
   accountId: string;
   name: string;
+  addressMasked: string;
+  visible: boolean;
   channel: string;
   status: AccountHealthStatus;
   pauseUntil: string | null;
@@ -269,7 +271,7 @@ export async function accountHealth(
       select 1 from messages m join conversations v on v.id=m.conversation_id
       where coalesce(m.account_id,v.account_id)=cohort.account_id and v.company_id=cohort.company_id
       and m.direction='in' and m.created_at>=cohort.first_sent and m.created_at<=b.finish))
-    select a.id,a.name,a.channel,a.status,a.settings,a.created_at,a.daily_limit,
+    select a.id,a.name,a.address,a.channel,a.status,a.settings,a.created_at,a.daily_limit,
     (select count(*)::int from messages m,bounds b where m.account_id=a.id and m.direction='out' and m.sent_at>=date_trunc('day',b.finish at time zone 'UTC') at time zone 'UTC' and m.sent_at<=b.finish) as sent_today,
     (select coalesce(jsonb_agg(jsonb_build_object('date',to_char(d,'YYYY-MM-DD'),'sent',
       (select count(*)::int from messages m where m.account_id=a.id and m.direction='out' and m.sent_at>=d at time zone 'UTC' and m.sent_at<(d+interval '1 day') at time zone 'UTC' and m.sent_at<=$2::timestamptz)) order by d),'[]')
@@ -287,7 +289,7 @@ export async function accountHealth(
     Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) -
     (config.summary_days - 1) * 86_400_000;
   return rows.map((row) => {
-    const events = (row.events as HealthEvent[]).map((event) => ({
+      const events = (row.events as HealthEvent[]).map((event) => ({
       ...event,
       createdAt: new Date(event.createdAt).toISOString(),
     }));
@@ -298,6 +300,14 @@ export async function accountHealth(
     return {
       accountId: row.id,
       name: row.name,
+      addressMasked: row.address
+        ? row.address.includes('@')
+          ? `${row.address[0]}•••@${row.address.split('@').at(-1)}`
+          : `${row.address.slice(0, 3)}${'•'.repeat(Math.max(3, row.address.length - 7))}${row.address.slice(-4)}`
+        : '',
+      visible:
+        !['disabled', 'removed', 'disconnected'].includes(row.status) &&
+        row.settings.enabled !== false,
       channel: row.channel,
       ...calculateAccountHealth({
         accountStatus: row.status,
