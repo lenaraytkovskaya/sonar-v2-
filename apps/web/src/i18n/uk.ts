@@ -1318,6 +1318,13 @@ export const uk = {
       paused: 'Призупинено',
     },
   },
+  errors: {
+    technicalDetails: 'Технічні подробиці',
+    instagramChatUnavailable: 'Не вдалося відкрити чат Instagram',
+    messageFieldMissing: 'Поле повідомлення не знайдено',
+    analysisTokenLimit:
+      'Для аналізу бракує токенів. Збільште ліміт у Налаштування → Аналіз компаній.',
+  },
   ai: {
     title: 'ШІ',
     cheap: 'Дешева модель',
