@@ -133,9 +133,19 @@ export function ProzorroSync({ embedded = false }: { embedded?: boolean }) {
                     : '—'}
                 </p>
                 {data['prozorro.full_sync.enabled'] === false ? (
-                  <p>{progress?.reasonUk ? <FriendlyError reason={progress.reasonUk} /> : uk.prozorro.paused}</p>
+                  <p>
+                    {progress?.reasonUk ? (
+                      <FriendlyError reason={progress.reasonUk} />
+                    ) : (
+                      uk.prozorro.paused
+                    )}
+                  </p>
                 ) : (
-                  progress?.reasonUk && <p><FriendlyError reason={progress.reasonUk} /></p>
+                  progress?.reasonUk && (
+                    <p>
+                      <FriendlyError reason={progress.reasonUk} />
+                    </p>
+                  )
                 )}
               </section>
             );

@@ -138,8 +138,12 @@ export function EmailAccounts({
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="break-words font-semibold">{account.name}</h3>
-                      <StatusBadge status={account.enabled ? 'active' : 'disabled'}>
+                      <h3 className="break-words font-semibold">
+                        {account.name}
+                      </h3>
+                      <StatusBadge
+                        status={account.enabled ? 'active' : 'disabled'}
+                      >
                         {account.enabled ? uk.email.enabled : uk.email.disabled}
                       </StatusBadge>
                       <HealthBadge health={accountHealth} />

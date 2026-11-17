@@ -109,7 +109,11 @@ export function BatchList({ campaignId }: { campaignId: string }) {
                 <td className="p-2">#{b.number}</td>
                 <td className="p-2">
                   {uk.tasks.status[b.status]}
-                  {b.reason_uk && <p><FriendlyError reason={b.reason_uk} /></p>}
+                  {b.reason_uk && (
+                    <p>
+                      <FriendlyError reason={b.reason_uk} />
+                    </p>
+                  )}
                   {b.fixture && <p>{uk.google.fixture}</p>}
                 </td>
                 <td className="p-2">{b.found_new + b.found_known}</td>

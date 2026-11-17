@@ -186,7 +186,12 @@ export function CompanySocial({
               {uk.tasks.status[
                 row.task.status as keyof typeof uk.tasks.status
               ] ?? '—'}
-              {row.task.reasonUk && <> · <FriendlyError reason={row.task.reasonUk} /></>}
+              {row.task.reasonUk && (
+                <>
+                  {' '}
+                  · <FriendlyError reason={row.task.reasonUk} />
+                </>
+              )}
             </p>
           )}
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">

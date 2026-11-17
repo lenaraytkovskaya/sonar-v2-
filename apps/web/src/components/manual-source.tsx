@@ -317,7 +317,14 @@ export function ManualSource({
               <div key={task.id}>
                 <p>
                   {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-                  {task.reason_uk ? <> · <FriendlyError reason={task.reason_uk} /></> : ''}
+                  {task.reason_uk ? (
+                    <>
+                      {' '}
+                      · <FriendlyError reason={task.reason_uk} />
+                    </>
+                  ) : (
+                    ''
+                  )}
                 </p>
                 {task.status === 'done' && (
                   <p className="text-xs text-muted-foreground">

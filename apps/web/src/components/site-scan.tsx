@@ -75,7 +75,12 @@ export function SiteScan({
         <>
           <p>
             {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-            {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
+            {task.reason_uk && (
+              <>
+                {' '}
+                · <FriendlyError reason={task.reason_uk} />
+              </>
+            )}
           </p>
           {task.type === 'site.scan' && <ScanSummary result={task.result} />}
         </>

@@ -289,7 +289,7 @@ export async function accountHealth(
     Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) -
     (config.summary_days - 1) * 86_400_000;
   return rows.map((row) => {
-      const events = (row.events as HealthEvent[]).map((event) => ({
+    const events = (row.events as HealthEvent[]).map((event) => ({
       ...event,
       createdAt: new Date(event.createdAt).toISOString(),
     }));

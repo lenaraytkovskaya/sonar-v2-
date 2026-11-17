@@ -87,7 +87,12 @@ export function CompanyAnalysis({
       {task && (
         <p className="text-sm text-muted-foreground">
           {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
+          {task.reason_uk && (
+            <>
+              {' '}
+              · <FriendlyError reason={task.reason_uk} />
+            </>
+          )}
         </p>
       )}
       {result ? (

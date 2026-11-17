@@ -147,18 +147,22 @@ export function WhatsAppAccounts({
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{account.name}</h3>
                   <StatusBadge
-                    status={{
-                      active: account.desiredEnabled ? 'active' : 'disabled',
-                      qr: 'queued',
-                      starting: 'running',
-                      failed: 'failed',
-                      stopped: 'disabled',
-                    }[account.status]}
+                    status={
+                      {
+                        active: account.desiredEnabled ? 'active' : 'disabled',
+                        qr: 'queued',
+                        starting: 'running',
+                        failed: 'failed',
+                        stopped: 'disabled',
+                      }[account.status]
+                    }
                   >
                     {uk.whatsapp.statuses[account.status]}
                   </StatusBadge>
                   <HealthBadge
-                    health={health.find((item) => item.accountId === account.id)}
+                    health={health.find(
+                      (item) => item.accountId === account.id,
+                    )}
                   />
                   <InfoTip>{uk.whatsapp.singleSession}</InfoTip>
                   <InfoTip label={uk.whatsapp.repairWebhook}>
@@ -167,7 +171,11 @@ export function WhatsAppAccounts({
                 </div>
                 {account.address && account.address !== '—' && (
                   <p className="text-sm text-muted-foreground">
-                    <RevealValue value={account.address} masked={account.addressMasked} copy />
+                    <RevealValue
+                      value={account.address}
+                      masked={account.addressMasked}
+                      copy
+                    />
                   </p>
                 )}
               </div>
@@ -176,7 +184,9 @@ export function WhatsAppAccounts({
               {['failed', 'stopped'].includes(account.status) ? (
                 <Button
                   disabled={pending || !configured}
-                  onClick={() => void mutate('POST', { action: 'restart', id: account.id })}
+                  onClick={() =>
+                    void mutate('POST', { action: 'restart', id: account.id })
+                  }
                 >
                   {uk.whatsapp.restart}
                 </Button>
@@ -196,26 +206,48 @@ export function WhatsAppAccounts({
               <RowActions
                 disabled={pending}
                 actions={[
-                  ...healthJournalAction(health.find((item) => item.accountId === account.id), setHealthJournal),
+                  ...healthJournalAction(
+                    health.find((item) => item.accountId === account.id),
+                    setHealthJournal,
+                  ),
                   {
                     kind: 'sync',
                     label: uk.whatsapp.repairWebhook,
-                    onSelect: () => void mutate('POST', { action: 'repair-webhook', id: account.id }),
+                    onSelect: () =>
+                      void mutate('POST', {
+                        action: 'repair-webhook',
+                        id: account.id,
+                      }),
                   },
                   ...(account.status === 'active' || healthPaused
-                    ? [{
-                        kind: account.desiredEnabled && !healthPaused ? 'disable' as const : 'enable' as const,
-                        label: account.desiredEnabled && !healthPaused ? uk.email.disable : uk.email.enable,
-                        onSelect: () => void mutate('PATCH', { id: account.id, enabled: healthPaused || !account.desiredEnabled }),
-                      }]
+                    ? [
+                        {
+                          kind:
+                            account.desiredEnabled && !healthPaused
+                              ? ('disable' as const)
+                              : ('enable' as const),
+                          label:
+                            account.desiredEnabled && !healthPaused
+                              ? uk.email.disable
+                              : uk.email.enable,
+                          onSelect: () =>
+                            void mutate('PATCH', {
+                              id: account.id,
+                              enabled: healthPaused || !account.desiredEnabled,
+                            }),
+                        },
+                      ]
                     : []),
                   ...(account.status !== 'stopped'
-                    ? [{
-                        kind: 'disconnect' as const,
-                        label: uk.whatsapp.disconnect,
-                        danger: true,
-                        onSelect: () => void mutate('DELETE', { id: account.id }),
-                      }]
+                    ? [
+                        {
+                          kind: 'disconnect' as const,
+                          label: uk.whatsapp.disconnect,
+                          danger: true,
+                          onSelect: () =>
+                            void mutate('DELETE', { id: account.id }),
+                        },
+                      ]
                     : []),
                 ]}
               />
@@ -224,11 +256,24 @@ export function WhatsAppAccounts({
           <DetailList
             items={[
               { label: uk.email.owner, value: account.ownerName ?? '—' },
-              { label: uk.email.today, value: `${account.sentToday} / ${account.dailyLimit}` },
-              { label: uk.email.next, value: account.nextSendAt ? new Date(account.nextSendAt).toLocaleString('uk-UA') : '—', hidden: !account.nextSendAt },
+              {
+                label: uk.email.today,
+                value: `${account.sentToday} / ${account.dailyLimit}`,
+              },
+              {
+                label: uk.email.next,
+                value: account.nextSendAt
+                  ? new Date(account.nextSendAt).toLocaleString('uk-UA')
+                  : '—',
+                hidden: !account.nextSendAt,
+              },
             ]}
           />
-          {account.reasonUk && <p className="text-sm text-err"><FriendlyError reason={account.reasonUk} /></p>}
+          {account.reasonUk && (
+            <p className="text-sm text-err">
+              <FriendlyError reason={account.reasonUk} />
+            </p>
+          )}
           <HealthDetails
             health={health.find((item) => item.accountId === account.id)}
           />

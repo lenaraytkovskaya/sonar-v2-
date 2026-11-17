@@ -139,7 +139,15 @@ export function TelegramAccounts({
               <div className="min-w-0 space-y-1 break-words">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{account.name}</h3>
-                  <StatusBadge status={account.status === 'disconnected' ? 'disabled' : account.enabled ? 'active' : 'paused'}>
+                  <StatusBadge
+                    status={
+                      account.status === 'disconnected'
+                        ? 'disabled'
+                        : account.enabled
+                          ? 'active'
+                          : 'paused'
+                    }
+                  >
                     {account.status === 'disconnected'
                       ? uk.telegram.disconnected
                       : account.enabled
@@ -147,7 +155,9 @@ export function TelegramAccounts({
                         : uk.email.disabled}
                   </StatusBadge>
                   <HealthBadge
-                    health={health.find((item) => item.accountId === account.id)}
+                    health={health.find(
+                      (item) => item.accountId === account.id,
+                    )}
                   />
                 </div>
                 <p className="text-sm text-muted-foreground">
@@ -167,7 +177,10 @@ export function TelegramAccounts({
                   disabled={pending}
                   onClick={() => {
                     setError('');
-                    setLimits({ ...limits, [account.id]: String(account.dailyLimit) });
+                    setLimits({
+                      ...limits,
+                      [account.id]: String(account.dailyLimit),
+                    });
                     setEditing(account.id);
                   }}
                 >
@@ -178,11 +191,20 @@ export function TelegramAccounts({
                 <RowActions
                   disabled={pending}
                   actions={[
-                    ...healthJournalAction(health.find((item) => item.accountId === account.id), setHealthJournal),
+                    ...healthJournalAction(
+                      health.find((item) => item.accountId === account.id),
+                      setHealthJournal,
+                    ),
                     {
                       kind: account.enabled ? 'disable' : 'enable',
-                      label: account.enabled ? uk.email.disable : uk.email.enable,
-                      onSelect: () => void mutate('PATCH', { id: account.id, enabled: !account.enabled }),
+                      label: account.enabled
+                        ? uk.email.disable
+                        : uk.email.enable,
+                      onSelect: () =>
+                        void mutate('PATCH', {
+                          id: account.id,
+                          enabled: !account.enabled,
+                        }),
                     },
                     {
                       kind: 'disconnect',
@@ -196,13 +218,20 @@ export function TelegramAccounts({
                 <RowActions
                   disabled={pending}
                   actions={[
-                    ...healthJournalAction(health.find((item) => item.accountId === account.id), setHealthJournal),
+                    ...healthJournalAction(
+                      health.find((item) => item.accountId === account.id),
+                      setHealthJournal,
+                    ),
                     {
                       kind: 'delete',
                       label: uk.email.remove,
                       danger: true,
                       confirm: `${uk.email.removeConfirm} ${account.name}?`,
-                      onSelect: () => void mutate('DELETE', { id: account.id, action: 'remove' }),
+                      onSelect: () =>
+                        void mutate('DELETE', {
+                          id: account.id,
+                          action: 'remove',
+                        }),
                     },
                   ]}
                 />
@@ -211,8 +240,17 @@ export function TelegramAccounts({
           </div>
           <DetailList
             items={[
-              { label: uk.email.today, value: `${account.sentToday} / ${account.dailyLimit}` },
-              { label: uk.email.next, value: account.nextSendAt ? new Date(account.nextSendAt).toLocaleString('uk-UA') : '—', hidden: !account.nextSendAt },
+              {
+                label: uk.email.today,
+                value: `${account.sentToday} / ${account.dailyLimit}`,
+              },
+              {
+                label: uk.email.next,
+                value: account.nextSendAt
+                  ? new Date(account.nextSendAt).toLocaleString('uk-UA')
+                  : '—',
+                hidden: !account.nextSendAt,
+              },
               { label: uk.email.owner, value: account.ownerName ?? '—' },
             ]}
           />

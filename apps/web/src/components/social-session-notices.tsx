@@ -102,7 +102,14 @@ export function SocialSessionNotices() {
                 '{network}',
                 uk.social.networks[notice.network],
               )}{' '}
-              ({notice.name}){notice.reasonUk ? <>: <FriendlyError reason={notice.reasonUk} /></> : ''}
+              ({notice.name})
+              {notice.reasonUk ? (
+                <>
+                  : <FriendlyError reason={notice.reasonUk} />
+                </>
+              ) : (
+                ''
+              )}
             </p>
           ))}
           <Link

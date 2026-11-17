@@ -507,7 +507,12 @@ export function ConversationChat({
           {task && (
             <p>
               {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-              {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
+              {task.reason_uk && (
+                <>
+                  {' '}
+                  · <FriendlyError reason={task.reason_uk} />
+                </>
+              )}
             </p>
           )}
           {notice && <p>{notice}</p>}

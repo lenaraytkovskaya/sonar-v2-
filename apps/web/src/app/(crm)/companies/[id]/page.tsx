@@ -519,7 +519,9 @@ export default async function Page({
                       {
                         label: uk.company.address,
                         value:
-                          google?.formattedAddress ?? c.address ?? uk.company.noData,
+                          google?.formattedAddress ??
+                          c.address ??
+                          uk.company.noData,
                       },
                       {
                         label: uk.company.rating,
@@ -527,7 +529,8 @@ export default async function Page({
                       },
                       {
                         label: uk.company.reviews,
-                        value: google?.userRatingCount ?? c.ratings_count ?? '—',
+                        value:
+                          google?.userRatingCount ?? c.ratings_count ?? '—',
                       },
                       {
                         label: uk.company.type,
@@ -535,7 +538,10 @@ export default async function Page({
                       },
                       {
                         label: uk.company.phone,
-                        value: google?.nationalPhoneNumber ?? googlePhone?.value ?? '—',
+                        value:
+                          google?.nationalPhoneNumber ??
+                          googlePhone?.value ??
+                          '—',
                       },
                       {
                         label: uk.company.website,
@@ -543,8 +549,13 @@ export default async function Page({
                       },
                       {
                         label: uk.company.hours,
-                        value: google?.regularOpeningHours?.weekdayDescriptions?.join('; ') ?? '—',
-                        hidden: !google?.regularOpeningHours?.weekdayDescriptions?.length,
+                        value:
+                          google?.regularOpeningHours?.weekdayDescriptions?.join(
+                            '; ',
+                          ) ?? '—',
+                        hidden:
+                          !google?.regularOpeningHours?.weekdayDescriptions
+                            ?.length,
                       },
                     ]}
                   />
@@ -871,20 +882,30 @@ export default async function Page({
                     </p>
                   )}
                   <ul className="text-sm">
-                    {([
-                      { key: 'email', kinds: ['email'] },
-                      { key: 'phones', kinds: ['phone'] },
-                      { key: 'messengers', kinds: ['telegram', 'whatsapp', 'viber'] },
-                      { key: 'social', kinds: ['social'] },
-                      { key: 'forms', kinds: ['form'] },
-                      { key: 'websites', kinds: ['website'] },
-                    ] as const).map(({ key, kinds }) => {
+                    {(
+                      [
+                        { key: 'email', kinds: ['email'] },
+                        { key: 'phones', kinds: ['phone'] },
+                        {
+                          key: 'messengers',
+                          kinds: ['telegram', 'whatsapp', 'viber'],
+                        },
+                        { key: 'social', kinds: ['social'] },
+                        { key: 'forms', kinds: ['form'] },
+                        { key: 'websites', kinds: ['website'] },
+                      ] as const
+                    ).map(({ key, kinds }) => {
                       const group = sortedContacts
-                        .filter((contact) => kinds.includes(contact.kind as never))
+                        .filter((contact) =>
+                          kinds.includes(contact.kind as never),
+                        )
                         .sort((a, b) => b.rank - a.rank);
                       if (!group.length) return null;
                       return (
-                        <li key={key} className="list-none space-y-1.5 py-3 first:pt-0">
+                        <li
+                          key={key}
+                          className="list-none space-y-1.5 py-3 first:pt-0"
+                        >
                           <h3 className="text-sm font-semibold">
                             {uk.company.contactGroups[key]} ({group.length})
                           </h3>

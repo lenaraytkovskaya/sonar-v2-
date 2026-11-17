@@ -135,7 +135,8 @@ export function ProzorroSearch({
       )}
       {!open && (message || task?.reason_uk) && (
         <p role="status" className="text-xs text-muted-foreground">
-          {message || (task?.reason_uk && <FriendlyError reason={task.reason_uk} />)}
+          {message ||
+            (task?.reason_uk && <FriendlyError reason={task.reason_uk} />)}
         </p>
       )}
     </div>

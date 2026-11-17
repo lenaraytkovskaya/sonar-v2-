@@ -86,7 +86,9 @@ export function FormReplyMatch({
         </p>
       )}
       {match.reasonUk && (
-        <p className="text-xs text-muted-foreground"><FriendlyError reason={match.reasonUk} /></p>
+        <p className="text-xs text-muted-foreground">
+          <FriendlyError reason={match.reasonUk} />
+        </p>
       )}
       {match.confidence != null && (
         <p className="text-xs text-muted-foreground">

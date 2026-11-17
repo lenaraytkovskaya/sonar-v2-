@@ -271,7 +271,11 @@ export function FormInbox({
                   </p>
                 </div>
               </section>
-              {selected.reasonUk && <Callout><FriendlyError reason={selected.reasonUk} /></Callout>}
+              {selected.reasonUk && (
+                <Callout>
+                  <FriendlyError reason={selected.reasonUk} />
+                </Callout>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 {(['before', 'after'] as const)
                   .filter((phase) =>

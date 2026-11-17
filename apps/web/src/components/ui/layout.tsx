@@ -71,7 +71,9 @@ export function DetailList({
         .map((item, index) => (
           <div key={index} className="min-w-0 space-y-0.5">
             <dt className="text-xs text-muted-foreground">{item.label}</dt>
-            <dd className="font-medium [overflow-wrap:anywhere]">{item.value}</dd>
+            <dd className="font-medium [overflow-wrap:anywhere]">
+              {item.value}
+            </dd>
           </div>
         ))}
     </dl>

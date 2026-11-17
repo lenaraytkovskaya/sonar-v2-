@@ -254,8 +254,7 @@ export function SettingsPanel({ section }: { section?: string }) {
       </span>
     );
   const socialUnit = (key: string) => {
-    if (key.endsWith('daily_limit'))
-      return uk.social.units.day;
+    if (key.endsWith('daily_limit')) return uk.social.units.day;
     if (key.endsWith('session_fetch_daily_limit')) return uk.social.units.day;
     if (key.endsWith('relogin_cooldown_hours')) return uk.social.units.hours;
     if (key.endsWith('_seconds')) return uk.social.units.seconds;
@@ -272,7 +271,9 @@ export function SettingsPanel({ section }: { section?: string }) {
       <SettingRow
         key={key}
         label={label}
-        description={editing ? uk.settings.range(range.min, range.max) : undefined}
+        description={
+          editing ? uk.settings.range(range.min, range.max) : undefined
+        }
       >
         <span className="inline-flex flex-wrap items-center gap-2">
           {numeric(
@@ -281,7 +282,9 @@ export function SettingsPanel({ section }: { section?: string }) {
             (value) => setSocial({ ...social, [key]: value }),
             range,
           )}
-          <span className="text-xs text-muted-foreground">{socialUnit(key)}</span>
+          <span className="text-xs text-muted-foreground">
+            {socialUnit(key)}
+          </span>
         </span>
       </SettingRow>
     );
@@ -419,7 +422,7 @@ export function SettingsPanel({ section }: { section?: string }) {
                       defaultOnlyCheap={false}
                     />
                   ) : (
-                    models.find((model) => model.id === strong)?.name ??
+                    (models.find((model) => model.id === strong)?.name ??
                     (strong ? (
                       strong
                     ) : (
@@ -439,7 +442,7 @@ export function SettingsPanel({ section }: { section?: string }) {
                           {uk.ai.choose}
                         </Button>
                       </span>
-                    ))
+                    )))
                   )}
                 </SettingRow>
                 <SettingRow
@@ -627,30 +630,44 @@ export function SettingsPanel({ section }: { section?: string }) {
                       disabled={!editing}
                       checked={social['social.enabled'] === true}
                       onChange={(event) =>
-                        setSocial({ ...social, 'social.enabled': event.target.checked })
+                        setSocial({
+                          ...social,
+                          'social.enabled': event.target.checked,
+                        })
                       }
                     />
                   </SettingRow>
                   {socialGeneralKeys.map(socialNumberRow)}
                 </div>
-                {(['facebook', 'instagram', 'linkedin'] as const).map((network) => (
-                  <div key={network} className="mt-6 space-y-2">
-                    <h3 className="border-b border-border pb-2 text-sm font-semibold">
-                      {uk.social.groups[network]}
-                    </h3>
-                    {socialNumericKeys
-                      .filter((key) => key.startsWith(`social.${network}.`))
-                      .map(socialNumberRow)}
-                  </div>
-                ))}
+                {(['facebook', 'instagram', 'linkedin'] as const).map(
+                  (network) => (
+                    <div key={network} className="mt-6 space-y-2">
+                      <h3 className="border-b border-border pb-2 text-sm font-semibold">
+                        {uk.social.groups[network]}
+                      </h3>
+                      {socialNumericKeys
+                        .filter((key) => key.startsWith(`social.${network}.`))
+                        .map(socialNumberRow)}
+                    </div>
+                  ),
+                )}
                 <details className="mt-6 rounded-lg border border-border px-4">
                   <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">
                     {uk.social.groups.inbox}
                   </summary>
                   <div className="border-t border-border py-2">
-                    {socialToggleRow('social.inbox.enabled', uk.social.inboxSettings.enabled)}
-                    {socialToggleRow('social.inbox.facebook.enabled', uk.social.inboxSettings.facebook)}
-                    {socialToggleRow('social.inbox.instagram.enabled', uk.social.inboxSettings.instagram)}
+                    {socialToggleRow(
+                      'social.inbox.enabled',
+                      uk.social.inboxSettings.enabled,
+                    )}
+                    {socialToggleRow(
+                      'social.inbox.facebook.enabled',
+                      uk.social.inboxSettings.facebook,
+                    )}
+                    {socialToggleRow(
+                      'social.inbox.instagram.enabled',
+                      uk.social.inboxSettings.instagram,
+                    )}
                     {socialNumericKeys
                       .filter((key) => key.startsWith('social.inbox.'))
                       .map(socialNumberRow)}

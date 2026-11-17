@@ -713,7 +713,12 @@ export function CompanyChat({
       {task && (
         <p role="status" className="text-muted-foreground">
           {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
+          {task.reason_uk && (
+            <>
+              {' '}
+              · <FriendlyError reason={task.reason_uk} />
+            </>
+          )}
         </p>
       )}
       {notice && <p role="status">{notice}</p>}

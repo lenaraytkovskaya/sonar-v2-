@@ -527,7 +527,9 @@ export function SocialAccounts({
                 </Callout>
               )}
               {account.reasonUk && (
-                <Callout tone="err"><FriendlyError reason={account.reasonUk} /></Callout>
+                <Callout tone="err">
+                  <FriendlyError reason={account.reasonUk} />
+                </Callout>
               )}
               {account.inboxSyncErrorUk && (
                 <Callout tone="err">{account.inboxSyncErrorUk}</Callout>

@@ -172,7 +172,9 @@ export function HealthJournal({
                     <LocalTime value={event.createdAt} />
                   </span>
                 </div>
-                <p><FriendlyError reason={event.reasonUk} /></p>
+                <p>
+                  <FriendlyError reason={event.reasonUk} />
+                </p>
               </li>
             ))}
           </ol>
@@ -208,44 +210,46 @@ export function AccountHealthOverview({ health }: { health: AccountHealth[] }) {
             </tr>
           </thead>
           <tbody className="block divide-y divide-border md:table-row-group">
-            {health.filter((account) => account.visible).map((account) => (
-              <tr
-                key={account.accountId}
-                className="grid gap-2 py-4 md:table-row"
-              >
-                <td className="min-w-0 break-words md:py-3 md:pr-3">
-                  <span className="block font-medium">{account.name}</span>
-                  {account.addressMasked && (
-                    <span className="block text-xs text-muted-foreground">
-                      {account.addressMasked}
+            {health
+              .filter((account) => account.visible)
+              .map((account) => (
+                <tr
+                  key={account.accountId}
+                  className="grid gap-2 py-4 md:table-row"
+                >
+                  <td className="min-w-0 break-words md:py-3 md:pr-3">
+                    <span className="block font-medium">{account.name}</span>
+                    {account.addressMasked && (
+                      <span className="block text-xs text-muted-foreground">
+                        {account.addressMasked}
+                      </span>
+                    )}
+                  </td>
+                  <td className="md:py-3">
+                    {
+                      { ...uk.campaign.channelNames, ...uk.social.networks }[
+                        account.channel as keyof (typeof uk.campaign.channelNames &
+                          typeof uk.social.networks)
+                      ]
+                    }
+                  </td>
+                  <td className="md:py-3">
+                    <HealthBadge health={account} />
+                  </td>
+                  <td className="tabular-nums md:py-3">
+                    <span className="mr-2 text-xs text-muted-foreground md:hidden">
+                      {t.today}
                     </span>
-                  )}
-                </td>
-                <td className="md:py-3">
-                  {
-                    { ...uk.campaign.channelNames, ...uk.social.networks }[
-                      account.channel as keyof (typeof uk.campaign.channelNames &
-                        typeof uk.social.networks)
-                    ]
-                  }
-                </td>
-                <td className="md:py-3">
-                  <HealthBadge health={account} />
-                </td>
-                <td className="tabular-nums md:py-3">
-                  <span className="mr-2 text-xs text-muted-foreground md:hidden">
-                    {t.today}
-                  </span>
-                  {account.sentToday} / {account.dailyLimit}
-                </td>
-                <td className="tabular-nums md:py-3">
-                  <span className="mr-2 text-xs text-muted-foreground md:hidden">
-                    {t.alarms}
-                  </span>
-                  {account.alarmCount7Days}
-                </td>
-              </tr>
-            ))}
+                    {account.sentToday} / {account.dailyLimit}
+                  </td>
+                  <td className="tabular-nums md:py-3">
+                    <span className="mr-2 text-xs text-muted-foreground md:hidden">
+                      {t.alarms}
+                    </span>
+                    {account.alarmCount7Days}
+                  </td>
+                </tr>
+              ))}
           </tbody>
         </table>
       )}
