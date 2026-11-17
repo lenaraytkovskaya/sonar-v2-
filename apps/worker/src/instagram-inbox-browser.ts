@@ -4,6 +4,7 @@ import type {
   SocialInboxBatch,
   SocialInboxMessage,
 } from '@sonar/core/social-inbox';
+import { isNewSocialInboxMessage } from '@sonar/core/social-inbox';
 import {
   SocialSessionCheckError,
   type SocialSessionCheckDiagnostic,
@@ -96,6 +97,12 @@ export async function captureInstagramInbox(
   persistBatch: (batch: SocialInboxBatch) => Promise<void>,
   assertSession = () => assertSocialSession(page, 'instagram', timeoutMs),
   expectedViewerId?: string,
+  maxThreads = 50,
+  maxMessages = 100,
+  threadCursors: Record<
+    string,
+    { lastMessageAt?: string; lastMessageIds?: string[] }
+  > = {},
 ) {
   const capture = emptyCapture();
   let navigationHttpStatus: number | null = null;
@@ -134,6 +141,7 @@ export async function captureInstagramInbox(
   ];
   const seen = new Map<string, string>();
   const threads = new Map<string, InstagramInboxPage['threads'][number]>();
+  const threadMessageCounts = new Map<string, number>();
   let scope = 'inbox';
   const deadline = Date.now() + timeoutMs;
   const onResponse = (response: Response) => {
@@ -300,6 +308,10 @@ export async function captureInstagramInbox(
           skipped.add('missing_pagination');
         }
         for (const thread of parsed.threads) {
+          if (!threads.has(thread.id) && threads.size >= maxThreads) {
+            skipped.add('thread_limit_reached');
+            continue;
+          }
           threads.set(thread.id, thread);
           if (!thread.page) {
             invalid = true;
@@ -309,6 +321,12 @@ export async function captureInstagramInbox(
         parsed.skipped.forEach((reason) => skipped.add(reason));
         const messages: SocialInboxMessage[] = [];
         for (const message of parsed.messages) {
+          if (
+            !isNewSocialInboxMessage(message, threadCursors[message.threadId])
+          )
+            continue;
+          const count = threadMessageCounts.get(message.threadId) ?? 0;
+          if (count >= maxMessages) continue;
           const key = JSON.stringify({ ...message, observedAt: undefined });
           const previous = seen.get(message.externalMessageId);
           if (previous && previous !== key) {
@@ -318,6 +336,7 @@ export async function captureInstagramInbox(
           if (previous) continue;
           seen.set(message.externalMessageId, key);
           messages.push(message);
+          threadMessageCounts.set(message.threadId, count + 1);
         }
         // Serialize and commit each captured chunk before any further UI action.
         stage = 'persist';
@@ -489,6 +508,12 @@ export function createSocialInboxAdapter(
             persistBatch,
             undefined,
             checkpoint.resumeAnchor,
+            Number(account.settings.inboxMaxThreads) || 50,
+            Number(account.settings.inboxMaxMessages) || 100,
+            (checkpoint.threadCursors ?? {}) as Record<
+              string,
+              { lastMessageId?: string }
+            >,
           ),
         );
       }
@@ -525,6 +550,12 @@ export function createSocialInboxAdapter(
           persistBatch,
           undefined,
           expectedViewerId,
+          Number(account.settings.inboxMaxThreads) || 50,
+          Number(account.settings.inboxMaxMessages) || 100,
+          (checkpoint.threadCursors ?? {}) as Record<
+            string,
+            { lastMessageAt?: string; lastMessageIds?: string[] }
+          >,
         ),
       );
     },

@@ -277,6 +277,8 @@ async function handle(request: Request, method: string) {
       inboxPollingEnabled: account.inboxPollingEnabled,
       inboxSyncComplete: account.inboxSyncComplete,
       inboxSyncCreated: account.inboxSyncCreated,
+      inboxSyncCheckedAt: account.inboxSyncCheckedAt,
+      inboxSyncErrorUk: account.inboxSyncErrorUk,
       hasCredentials: account.hasCredentials,
       hasTotpSecret: account.hasTotpSecret,
       loginBlocked: account.loginBlocked,

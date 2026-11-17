@@ -94,6 +94,9 @@ it.each([
                 { key: `social.inbox.${channel}.enabled`, value: true },
                 { key: 'social.inbox.poll_seconds', value: 60 },
                 { key: 'social.inbox.daily_limit', value: 10 },
+                { key: 'social.inbox.max_threads', value: 50 },
+                { key: 'social.inbox.max_messages', value: 100 },
+                { key: 'social.inbox.quiet_hours', value: '00:00-07:00' },
               ]
             : [],
     }));

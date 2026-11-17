@@ -372,6 +372,13 @@
       "when": 1794910002000,
       "tag": "0052_draft_sender",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1794910003000,
+      "tag": "0053_social_inbox_auto",
+      "breakpoints": true
     }
   ]
 }

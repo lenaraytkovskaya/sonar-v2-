@@ -16,6 +16,7 @@ export const emptySocialCheckpoint = (): SocialInboxCheckpoint => ({
   watermark: null,
   resumeAnchor: null,
   cycleStartedAt: null,
+  threadCursors: {},
 });
 
 /** Current contacts are routing hints, never proof that an old dialog belongs

@@ -66,6 +66,8 @@ export interface SocialAccount {
   inboxPollingEnabled: boolean;
   inboxSyncComplete: boolean | null;
   inboxSyncCreated: number | null;
+  inboxSyncCheckedAt: string | null;
+  inboxSyncErrorUk: string | null;
 }
 export interface SocialSessionAccount {
   id: string;
@@ -469,6 +471,8 @@ export async function listSocialAccounts(
     coalesce(a.settings->>'inboxPollingEnabled'='true',false) as "inboxPollingEnabled",
     (a.settings->'inboxSync'->>'complete')::boolean as "inboxSyncComplete",
     (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
+    a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
+    a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
@@ -936,17 +940,17 @@ export async function setSocialInboxPolling(
   return transaction(async (c) => {
     const account = await lock(c, id, userId);
     if (
-      account.channel !== 'facebook' ||
+      !['instagram', 'facebook'].includes(account.channel) ||
       (enabled &&
         (account.status !== 'active' ||
           account.settings.enabled === false ||
           account.settings.sessionStatus !== 'valid'))
     )
       invalid(
-        'Опитування доступне власнику активного Facebook із підтвердженою сесією.',
+        'Опитування доступне власнику активного Instagram або Facebook із підтвердженою сесією.',
       );
     await c.query(
-      "update channel_accounts set settings=settings||jsonb_build_object('inboxPollingEnabled',$2::boolean) where id=$1",
+      "update channel_accounts set settings=settings||jsonb_build_object('inboxPollingEnabled',$2::boolean,'inboxSync',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('errorUk',null)) where id=$1",
       [id, enabled],
     );
     await logActivity(
@@ -1120,6 +1124,9 @@ export async function withSocialSessionCheck(
               : 'active',
           {
             sessionStatus: 'valid',
+            ...(account.settings.inboxPollingEnabled === undefined
+              ? { inboxPollingEnabled: true }
+              : {}),
             sessionLossActive: false,
             loginAutoAttempted: false,
             loginRecoveryPending: false,

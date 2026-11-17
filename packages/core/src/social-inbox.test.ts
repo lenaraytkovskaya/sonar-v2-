@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   canonicalSocialPeer,
+  isNewSocialInboxMessage,
   validateSocialInboxMessage,
 } from './social-inbox.js';
 it('canonicalizes provider profiles and rejects inbox URLs as peer identities', () => {
@@ -25,6 +26,35 @@ it('canonicalizes provider profiles and rejects inbox URLs as peer identities', 
   expect(() =>
     canonicalSocialPeer('instagram', 'https://facebook.com/example'),
   ).toThrow();
+});
+it('uses per-thread message timestamps as inbox cursors and keeps equal-time new IDs', () => {
+  const message = {
+    externalMessageId: 'message-2',
+    threadId: 'thread-1',
+    direction: 'in' as const,
+    senderProfile: 'https://instagram.com/peer/',
+    peerProfile: 'https://instagram.com/peer/',
+    body: 'hello',
+    occurredAt: '2026-11-16T10:00:00.000Z',
+    observedAt: '2026-11-16T10:00:01.000Z',
+  };
+  const cursor = {
+    lastMessageAt: '2026-11-16T10:00:00.000Z',
+    lastMessageIds: ['message-1'],
+  };
+  expect(isNewSocialInboxMessage(message, cursor)).toBe(true);
+  expect(
+    isNewSocialInboxMessage(
+      { ...message, occurredAt: '2026-11-16T09:59:59.000Z' },
+      cursor,
+    ),
+  ).toBe(false);
+  expect(
+    isNewSocialInboxMessage(
+      { ...message, externalMessageId: 'message-1' },
+      cursor,
+    ),
+  ).toBe(false);
 });
 it('requires provider IDs and actual timestamps without synthesizing identities', () => {
   const message = {
