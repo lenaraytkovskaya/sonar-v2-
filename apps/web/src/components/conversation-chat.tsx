@@ -306,13 +306,17 @@ export function ConversationChat({
       }))
     )
       return;
+    const requestingApproval =
+      pendingDraft.status !== 'awaiting_approval' &&
+      conversation?.campaignSendMode === 'approval';
     if (
       await act(
         pendingDraft.status === 'awaiting_approval' ? 'approve' : 'send',
         { messageId: pendingDraft.id, expected: changed ? submitted : base },
       )
-    )
-      setBody('');
+    ) {
+      if (!requestingApproval) setBody('');
+    }
   };
   const conversation = data.conversation;
   if (!conversation) return null;
@@ -533,20 +537,20 @@ export function ConversationChat({
                   · {uk.outreach.manualHint}
                 </p>
               )}
-              {conversation.channel === 'email' && (
-                <div>
-                  <label htmlFor="reply-subject">{uk.email.subject}</label>
-                  <Input
-                    id="reply-subject"
-                    value={subject}
-                    maxLength={998}
-                    onChange={(event) => setSubject(event.target.value)}
-                  />
-                  <AiAssist text={subject} onApply={setSubject} />
-                </div>
-              )}
             </div>
           </details>
+          {conversation.channel === 'email' && (
+            <div>
+              <label htmlFor="reply-subject">{uk.email.subject}</label>
+              <Input
+                id="reply-subject"
+                value={subject}
+                maxLength={998}
+                onChange={(event) => setSubject(event.target.value)}
+              />
+              <AiAssist text={subject} onApply={setSubject} />
+            </div>
+          )}
           <label className="sr-only" htmlFor="reply-body">
             {conversation.channel === 'call'
               ? uk.outreach.callNote

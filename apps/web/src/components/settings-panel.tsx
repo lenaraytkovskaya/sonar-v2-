@@ -11,6 +11,7 @@ import { ModelPicker } from './model-picker';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RegistryPhoneSync } from './registry-phone-sync';
 import { ProzorroSync } from './prozorro-sync';
+import { LocalTime } from './local-time';
 import {
   socialFields,
   socialKeys,
@@ -160,6 +161,7 @@ export function SettingsPanel() {
     [budget, setBudget] = useState(50),
     [about, setAbout] = useState(''),
     [analysisPrompt, setAnalysisPrompt] = useState(''),
+    [resendLastEvent, setResendLastEvent] = useState<string | null>(null),
     [message, setMessage] = useState(''),
     [pending, setPending] = useState(false);
   const load = async (modelsOnly = false) => {
@@ -173,6 +175,7 @@ export function SettingsPanel() {
     setBudget(data['budget.monthly_usd'] ?? 50);
     setAbout(data['company.about'] ?? '');
     setAnalysisPrompt(data['analysis.prompt'] ?? '');
+    setResendLastEvent(data['email.resend.last_event'] ?? null);
     setProfiles(data['google.field_profiles'] ?? []);
     setGoogleDays(data['retention.google_days'] ?? 365);
     setSocial(
@@ -234,6 +237,20 @@ export function SettingsPanel() {
   };
   return (
     <>
+      <Card className="space-y-2 p-5">
+        <h2 className="font-heading text-base font-semibold">
+          {uk.email.title}
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          {resendLastEvent ? (
+            <>
+              {uk.email.resendLastEvent} <LocalTime value={resendLastEvent} />
+            </>
+          ) : (
+            uk.email.resendNever
+          )}
+        </p>
+      </Card>
       <div className="grid items-start gap-6 xl:grid-cols-2">
         <RegistryPhoneSync />
         <ProzorroSync />

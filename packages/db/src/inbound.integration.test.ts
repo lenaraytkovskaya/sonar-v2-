@@ -6,6 +6,7 @@ let db: typeof import('./index.js');
 let inbound: typeof import('./inbound.js');
 let email: typeof import('./email.js');
 let tasks: typeof import('./tasks.js');
+let originalResendEvent: unknown;
 let admin: import('pg-boss').PgBoss;
 const companyId = randomUUID(),
   accountId = randomUUID(),
@@ -15,7 +16,8 @@ const companyId = randomUUID(),
   userId = randomUUID(),
   batchId = randomUUID(),
   contactId = randomUUID(),
-  telegramAccountId = randomUUID();
+  telegramAccountId = randomUUID(),
+  whatsappAccountId = randomUUID();
 const sender = `${companyId}@example.invalid`;
 const unknown = `${randomUUID()}@example.invalid`;
 beforeAll(async () => {
@@ -24,6 +26,11 @@ beforeAll(async () => {
   inbound = await import('./inbound.js');
   email = await import('./email.js');
   tasks = await import('./tasks.js');
+  originalResendEvent = (
+    await db.sonarPool.query(
+      "select value from settings where key='email.resend.last_event'",
+    )
+  ).rows[0]?.value;
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
@@ -36,6 +43,10 @@ beforeAll(async () => {
   await db.sonarPool.query(
     "insert into channel_accounts(id,name,address,daily_limit,channel) values($1,'Inbound Telegram','+447700900123',100,'telegram')",
     [telegramAccountId],
+  );
+  await db.sonarPool.query(
+    "insert into channel_accounts(id,name,address,daily_limit,channel) values($1,'Inbound WhatsApp','+48500100201',100,'whatsapp')",
+    [whatsappAccountId],
   );
   await db.sonarPool.query(
     "insert into channel_accounts(id,name,address,daily_limit) values($1,'Inbound test','from@example.invalid',100),($2,'Other inbound test','other@example.invalid',100)",
@@ -64,6 +75,18 @@ beforeAll(async () => {
   await db.sonarPool.query(
     "insert into contacts(company_id,kind,value,normalized,source) values($1,'phone','+447700900123','+447700900123','manual'),($1,'telegram','@inbound_known','@inbound_known','manual')",
     [companyId],
+  );
+  await db.sonarPool.query(
+    "insert into contacts(company_id,kind,value,normalized,source,meta) values($1,'phone','+48 500 100 200','+48 500 100 200','manual',$2)",
+    [
+      companyId,
+      {
+        whatsapp_unavailable: {
+          reason_uk: 'Недоступний',
+          at: new Date().toISOString(),
+        },
+      },
+    ],
   );
   await db.sonarPool.query(
     "insert into conversations(id,company_id,campaign_id,channel,contact_id) values($1,$2,$3,'email',$4)",
@@ -123,6 +146,56 @@ it.skipIf(!enabled)(
       body: 'Received on a different account',
     });
     expect(sameKnown.conversationId).toBe(conversationId);
+  },
+);
+it.skipIf(!enabled)(
+  'clears a matching WhatsApp unavailable mark on inbound',
+  async () => {
+    const result = await inbound.recordInbound({
+      channel: 'whatsapp',
+      accountId: whatsappAccountId,
+      providerId: `whatsapp-${companyId}`,
+      sender: '+48500100200',
+      body: 'Incoming test only',
+    });
+    expect(result.companyId).toBe(companyId);
+    const contact = (
+      await db.sonarPool.query(
+        "select meta from contacts where company_id=$1 and kind='phone' and normalized='+48 500 100 200'",
+        [companyId],
+      )
+    ).rows[0];
+    expect(contact.meta).not.toHaveProperty('whatsapp_unavailable');
+    expect(
+      (
+        await db.sonarPool.query(
+          "select count(*)::int as n from activity_log where entity_id=$1 and action='contact.whatsapp_rechecked' and details->>'source'='inbound'",
+          [companyId],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  },
+);
+it.skipIf(!enabled)(
+  'updates the outgoing email matched by Resend provider ID',
+  async () => {
+    const occurredAt = new Date('2026-11-16T10:20:30.000Z');
+    expect(
+      await email.recordResendEvent(
+        'email.delivered',
+        `original-${companyId}`,
+        occurredAt,
+      ),
+    ).toBe(1);
+    expect(
+      (
+        await db.sonarPool.query(
+          'select status from messages where provider_id=$1',
+          [`original-${companyId}`],
+        )
+      ).rows[0].status,
+    ).toBe('delivered');
+    expect(await email.getLastResendEvent()).toEqual(occurredAt);
   },
 );
 it.skipIf(!enabled)(
@@ -381,7 +454,7 @@ afterAll(async () => {
   if (!enabled) return;
   const { rows: conversations } = await db.sonarPool.query(
     'select distinct conversation_id id from messages where account_id=any($1::uuid[])',
-    [[accountId, otherAccountId, telegramAccountId]],
+    [[accountId, otherAccountId, telegramAccountId, whatsappAccountId]],
   );
   const ids = conversations.map((r) => r.id);
   await db.sonarPool.query(
@@ -416,8 +489,17 @@ afterAll(async () => {
   await db.sonarPool.query('delete from companies where id=$1', [companyId]);
   await db.sonarPool.query(
     'delete from channel_accounts where id=any($1::uuid[])',
-    [[accountId, otherAccountId, telegramAccountId]],
+    [[accountId, otherAccountId, telegramAccountId, whatsappAccountId]],
   );
+  if (originalResendEvent === undefined)
+    await db.sonarPool.query(
+      "delete from settings where key='email.resend.last_event'",
+    );
+  else
+    await db.sonarPool.query(
+      "update settings set value=$1 where key='email.resend.last_event'",
+      [JSON.stringify(originalResendEvent)],
+    );
   await db.sonarPool.query('delete from users where id=$1', [userId]);
   await tasks.closeTaskQueue();
   await admin.stop();

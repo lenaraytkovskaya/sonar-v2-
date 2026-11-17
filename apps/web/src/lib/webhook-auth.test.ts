@@ -1,8 +1,12 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { enqueue } = vi.hoisted(() => ({ enqueue: vi.fn() }));
+const { enqueue, resendEvent } = vi.hoisted(() => ({
+  enqueue: vi.fn(),
+  resendEvent: vi.fn(),
+}));
 vi.mock('@sonar/db/tasks', () => ({ enqueueTask: enqueue }));
+vi.mock('@sonar/db/email', () => ({ recordResendEvent: resendEvent }));
 vi.mock('@/lib/webhook-auth', () => import('./webhook-auth'));
 import { verifyResendWebhook, verifyWebhookKey } from './webhook-auth';
 import { POST as resend } from '../app/api/webhooks/resend/route';
@@ -53,6 +57,7 @@ beforeEach(() => {
   vi.stubEnv('RESEND_WEBHOOK_SECRET', secret);
   vi.stubEnv('WAHA_API_KEY', 'waha-test-secret');
   enqueue.mockResolvedValue('task-1');
+  resendEvent.mockResolvedValue(1);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -179,9 +184,19 @@ describe('inbound webhook routes', () => {
       expect.objectContaining({ body: '', id: message.payload.id }),
     );
   });
-  it('acknowledges unrelated events and outgoing WAHA echoes without queueing', async () => {
-    const body = JSON.stringify({ type: 'email.delivered' });
+  it('links Resend delivery events and acknowledges unrelated provider events', async () => {
+    const delivered = {
+      type: 'email.delivered',
+      created_at: '2026-11-16T10:20:30.000Z',
+      data: { email_id: 'resend-provider-id' },
+    };
+    const body = JSON.stringify(delivered);
     expect((await resend(request(body, signed(body)))).status).toBe(200);
+    expect(resendEvent).toHaveBeenCalledWith(
+      'email.delivered',
+      'resend-provider-id',
+      new Date(delivered.created_at),
+    );
     for (const event of [
       { event: 'session.status' },
       { ...message, payload: { ...message.payload, fromMe: true } },
