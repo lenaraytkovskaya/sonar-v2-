@@ -1420,8 +1420,8 @@ export async function sendEmailMessage(
         const threadId = identity?.threadId ?? instagramThreadId;
         if (channel === 'social' && threadId) {
           await tx.query(
-            `update conversations v set provider_thread_id=$2
-            where v.id=$1 and v.channel='social' and v.account_id=$3
+            `update conversations v set account_id=coalesce(v.account_id,$3),provider_thread_id=$2
+            where v.id=$1 and v.channel='social' and (v.account_id is null or v.account_id=$3)
               and v.provider_thread_id is null and not exists(
                 select 1 from conversations other
                 where other.channel='social' and other.account_id=$3
