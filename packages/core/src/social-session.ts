@@ -683,6 +683,141 @@ export interface SocialDevice {
   locale: string;
   timezoneId: string;
   deviceScaleFactor: number;
+  screen?: { width: number; height: number };
+  extraHTTPHeaders?: Record<string, string>;
+}
+export interface OwnerBrowserDeviceInput {
+  userAgent: string;
+  userAgentData?: {
+    brands: { brand: string; version: string }[];
+    platform: string;
+    mobile: boolean;
+  };
+  screen: { width: number; height: number };
+  viewport: { width: number; height: number };
+  devicePixelRatio: number;
+  timeZone: string;
+  language: string;
+  languages: string[];
+}
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function exactKeys(value: Record<string, unknown>, allowed: string[]) {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+function validDimensions(
+  value: unknown,
+): value is { width: number; height: number } {
+  if (!record(value) || !exactKeys(value, ['width', 'height'])) return false;
+  return (
+    Number.isInteger(value.width) &&
+    Number.isInteger(value.height) &&
+    Number(value.width) >= 1 &&
+    Number(value.width) <= 16384 &&
+    Number(value.height) >= 1 &&
+    Number(value.height) <= 16384
+  );
+}
+/** Validates the deliberately small browser fingerprint captured by the owner UI. */
+export function socialDeviceFromOwnerBrowser(raw: unknown): SocialDevice {
+  if (
+    !record(raw) ||
+    !exactKeys(raw, [
+      'userAgent',
+      'userAgentData',
+      'screen',
+      'viewport',
+      'devicePixelRatio',
+      'timeZone',
+      'language',
+      'languages',
+    ]) ||
+    typeof raw.userAgent !== 'string' ||
+    raw.userAgent.length < 20 ||
+    raw.userAgent.length > 1024 ||
+    !validDimensions(raw.screen) ||
+    !validDimensions(raw.viewport) ||
+    typeof raw.devicePixelRatio !== 'number' ||
+    !Number.isFinite(raw.devicePixelRatio) ||
+    raw.devicePixelRatio < 0.25 ||
+    raw.devicePixelRatio > 4 ||
+    typeof raw.timeZone !== 'string' ||
+    !raw.timeZone ||
+    raw.timeZone.length > 100 ||
+    typeof raw.language !== 'string' ||
+    raw.language.length > 35 ||
+    !Array.isArray(raw.languages) ||
+    raw.languages.length < 1 ||
+    raw.languages.length > 20 ||
+    !raw.languages.every(
+      (language) => typeof language === 'string' && language.length <= 35,
+    )
+  )
+    invalid();
+
+  let locale: string;
+  try {
+    locale = Intl.getCanonicalLocales(raw.language)[0] ?? '';
+    if (!locale) invalid();
+    new Intl.DateTimeFormat('en', { timeZone: raw.timeZone });
+    for (const language of raw.languages) Intl.getCanonicalLocales(language);
+  } catch {
+    invalid();
+  }
+
+  let width = raw.viewport.width;
+  let height = raw.viewport.height;
+  const scale = Math.min(1, 1920 / width, 1200 / height);
+  if (scale < 1) {
+    width = Math.max(1, Math.floor(width * scale));
+    height = Math.max(1, Math.floor(height * scale));
+  }
+
+  const headers: Record<string, string> = {};
+  if (raw.userAgentData !== undefined) {
+    const hints = raw.userAgentData;
+    if (
+      !record(hints) ||
+      !exactKeys(hints, ['brands', 'platform', 'mobile']) ||
+      !Array.isArray(hints.brands) ||
+      hints.brands.length > 10 ||
+      typeof hints.platform !== 'string' ||
+      hints.platform.length > 50 ||
+      typeof hints.mobile !== 'boolean' ||
+      !hints.brands.every(
+        (brand) =>
+          record(brand) &&
+          exactKeys(brand, ['brand', 'version']) &&
+          typeof brand.brand === 'string' &&
+          brand.brand.length > 0 &&
+          brand.brand.length <= 100 &&
+          typeof brand.version === 'string' &&
+          brand.version.length <= 32,
+      )
+    )
+      invalid();
+    if (hints.brands.length)
+      headers['sec-ch-ua'] = hints.brands
+        .map(
+          ({ brand, version }) =>
+            `${JSON.stringify(brand)};v=${JSON.stringify(version)}`,
+        )
+        .join(', ');
+    if (hints.platform)
+      headers['sec-ch-ua-platform'] = JSON.stringify(hints.platform);
+    headers['sec-ch-ua-mobile'] = hints.mobile ? '?1' : '?0';
+  }
+
+  return {
+    userAgent: raw.userAgent,
+    viewport: { width, height },
+    locale,
+    timezoneId: raw.timeZone,
+    deviceScaleFactor: raw.devicePixelRatio,
+    screen: { ...raw.screen },
+    ...(Object.keys(headers).length ? { extraHTTPHeaders: headers } : {}),
+  };
 }
 export function generateSocialDevice(
   _network: SocialNetwork,

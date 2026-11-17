@@ -509,13 +509,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(f.mark).not.toHaveBeenCalled();
         expect(f.inputs).toEqual([]);
         expect(f.events).toEqual([]);
-        expect(f.requests).toEqual(
-          [
-            'www.instagram.com/fixture_company/',
-            'ig.me/m/fixture_company',
-            'www.instagram.com/fixture_company/',
-          ],
-        );
+        expect(f.requests).toEqual([
+          'www.instagram.com/fixture_company/',
+          'ig.me/m/fixture_company',
+          'www.instagram.com/fixture_company/',
+        ]);
       } finally {
         await f.close();
       }
