@@ -24,7 +24,11 @@ function EnrichButton({ batchId }: { batchId: string }) {
   };
   return (
     <div className="space-y-1">
-      <Button disabled={state === 'pending'} onClick={() => void run()}>
+      <Button
+        variant="outline"
+        disabled={state === 'pending'}
+        onClick={() => void run()}
+      >
         {uk.enrich.batch}
       </Button>
       {state === 'done' && (
