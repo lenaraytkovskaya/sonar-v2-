@@ -91,6 +91,10 @@
     "./account-health": {
       "types": "./dist/account-health.d.ts",
       "default": "./dist/account-health.js"
+    },
+    "./form-replies": {
+      "types": "./dist/form-replies.d.ts",
+      "default": "./dist/form-replies.js"
     }
   },
   "files": [

@@ -44,6 +44,7 @@ beforeAll(async () => {
   tasks = await import('./tasks.js');
   await tasks.boss.start();
   await tasks.boss.createQueue('ai.inbound');
+  await tasks.boss.createQueue('form.reply.match');
 });
 it.skipIf(!enabled)(
   'orders an earlier unknown-date message before the overlap from the previous poll without changing dates',

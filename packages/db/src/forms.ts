@@ -1,7 +1,106 @@
-import { nextSendTime, type SendHours } from '@sonar/core';
+import {
+  nextSendTime,
+  normalizePhone,
+  type SharedFormContact,
+  type SendHours,
+} from '@sonar/core';
+import type { PoolClient } from 'pg';
 import { sonarPool } from './index.js';
-import { isContactBlocked, sameFormDomain, transaction } from './email.js';
+import {
+  EmailValidationError,
+  isContactBlocked,
+  sameFormDomain,
+  transaction,
+  validFormUrl,
+} from './email.js';
 import { logActivity, type TaskOutcome } from './tasks.js';
+
+export type ContactDetails = {
+  name: string;
+  email: string;
+  phone: string;
+  whatsapp: string;
+  telegram: string;
+  website: string;
+};
+const contactFields = [
+  'name',
+  'email',
+  'phone',
+  'whatsapp',
+  'telegram',
+  'website',
+] as const;
+async function loadContactDetails(
+  c: Pick<PoolClient, 'query'>,
+): Promise<ContactDetails> {
+  const { rows } = await c.query(
+    "select key,value from settings where key like 'contact.%'",
+  );
+  const values = Object.fromEntries(
+    rows.map((r) => [r.key, typeof r.value === 'string' ? r.value.trim() : '']),
+  );
+  const { rows: accounts } = await c.query(
+    "select channel,address from channel_accounts where (channel='email' and status='active') or (channel='whatsapp' and status='active' and settings->>'providerStatus'='WORKING') order by created_at,id",
+  );
+  return Object.fromEntries(
+    contactFields.map((key) => [
+      key,
+      values[`contact.${key}`] ||
+        (key === 'email'
+          ? accounts.find((a) => a.channel === 'email')?.address
+          : key === 'whatsapp'
+            ? accounts.find((a) => a.channel === 'whatsapp')?.address
+            : '') ||
+        '',
+    ]),
+  ) as ContactDetails;
+}
+export async function getContactDetails(): Promise<ContactDetails> {
+  return loadContactDetails(sonarPool);
+}
+export async function saveContactDetails(
+  input: ContactDetails,
+  userId: string,
+): Promise<void> {
+  const values = Object.fromEntries(
+    contactFields.map((key) => [
+      key,
+      typeof input[key] === 'string' ? input[key].trim() : '',
+    ]),
+  ) as ContactDetails;
+  if (
+    values.name.length > 200 ||
+    (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) ||
+    (values.website && !validFormUrl(values.website)) ||
+    Object.values(values).some((v) => v.length > 2000)
+  )
+    throw new EmailValidationError('Перевірте ім’я, email та адресу сайту.');
+  for (const key of ['phone', 'whatsapp'] as const) {
+    if (!values[key]) continue;
+    const phone = values[key].startsWith('+') && normalizePhone(values[key]);
+    if (!phone)
+      throw new EmailValidationError(
+        'Телефон і WhatsApp мають бути міжнародними номерами.',
+      );
+    values[key] = phone;
+  }
+  await transaction(async (c) => {
+    for (const key of contactFields)
+      await c.query(
+        'insert into settings(key,value) values($1,$2::jsonb) on conflict(key) do update set value=excluded.value',
+        [`contact.${key}`, JSON.stringify(values[key])],
+      );
+    await logActivity(
+      'contact.details.updated',
+      'settings',
+      null,
+      userId,
+      {},
+      c,
+    );
+  });
+}
 
 export type FormRequest = {
   messageId: string;
@@ -12,7 +111,11 @@ export type FormRequest = {
   name: string;
   email: string;
   phone: string;
+  whatsapp: string;
+  telegram: string;
+  senderWebsite: string;
   body: string;
+  sharedContacts: SharedFormContact[];
   captcha?: string;
 };
 export type FormResult = {
@@ -22,6 +125,10 @@ export type FormResult = {
   evidence?: string;
 };
 export type FormControls = {
+  onFilled: (snapshot: {
+    body: string;
+    sharedContacts: SharedFormContact[];
+  }) => Promise<void>;
   beforeSubmit: () => Promise<void>;
   saveScreenshot: (phase: 'before' | 'after', bytes: Buffer) => Promise<void>;
 };
@@ -100,11 +207,7 @@ export async function sendFormMessage(
       );
       return stop('paused', 'form_manual_required', manualReason);
     }
-    const {
-      rows: [account],
-    } = await c.query('select * from channel_accounts where id=$1', [
-      accountId,
-    ]);
+    const details = await loadContactDetails(c);
     const { rows: settings } = await c.query(
       "select key,value from settings where key like 'send.%'",
     );
@@ -263,10 +366,14 @@ export async function sendFormMessage(
       campaignId: m.campaign_id,
       url: m.to_value,
       website: m.website,
-      name: account.settings.senderName,
-      email: account.address,
-      phone: account.settings.senderPhone,
+      name: details.name,
+      email: details.email,
+      phone: details.phone,
+      whatsapp: details.whatsapp,
+      telegram: details.telegram,
+      senderWebsite: details.website,
       body: m.body,
+      sharedContacts: [],
       captcha: contact?.meta?.captcha,
     };
     await c.query(
@@ -274,6 +381,14 @@ export async function sendFormMessage(
       [messageId, request],
     );
     const controls: FormControls = {
+      onFilled: async (snapshot) => {
+        request.body = snapshot.body;
+        request.sharedContacts = snapshot.sharedContacts;
+        await c.query(
+          'update messages set request_snapshot=$2 where id=$1 and first_attempt_at is null',
+          [messageId, request],
+        );
+      },
       saveScreenshot: async (phase, bytes) => {
         if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 10000000)
           throw Error('Invalid screenshot');
@@ -409,12 +524,68 @@ export async function sendFormMessage(
   }
 }
 
+export type FormInboxStatus =
+  | 'awaiting_manual'
+  | 'sent'
+  | 'replied'
+  | 'awaiting_approval'
+  | 'queued'
+  | 'draft'
+  | 'failed';
+export type FormInboxReply = {
+  id: string;
+  companyName: string;
+  contactValue: string | null;
+  channel: string;
+  lastMessage: string;
+  lastAt: string;
+};
+export type FormInboxMessage = {
+  id: string;
+  companyId: string;
+  companyName: string;
+  conversationId: string;
+  url: string;
+  body: string;
+  status: Exclude<FormInboxStatus, 'replied'> | 'delivered' | 'read';
+  createdAt: Date;
+  sentAt: Date | null;
+  reasonUk: string | null;
+  senderName: string;
+  senderEmail: string;
+  senderPhone: string;
+  senderWhatsapp: string;
+  senderTelegram: string;
+  senderWebsite: string;
+  sharedContacts: SharedFormContact[];
+  screenshotBefore: boolean;
+  screenshotAfter: boolean;
+  replyConversations: FormInboxReply[];
+  replies: number;
+};
+export async function listFormMessages(
+  options: { status?: FormInboxStatus } = {},
+): Promise<FormInboxMessage[]> {
+  const { rows } = await sonarPool.query<FormInboxMessage>(
+    `select m.id,v.company_id as "companyId",co.name as "companyName",v.id as "conversationId",m.to_value as url,
+      coalesce(m.request_snapshot->>'body',m.body) as body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.reason_uk as "reasonUk",
+      coalesce(m.request_snapshot->>'name','') as "senderName",coalesce(m.request_snapshot->>'email','') as "senderEmail",coalesce(m.request_snapshot->>'phone','') as "senderPhone",
+      coalesce(m.request_snapshot->>'whatsapp','') as "senderWhatsapp",coalesce(m.request_snapshot->>'telegram','') as "senderTelegram",coalesce(m.request_snapshot->>'senderWebsite','') as "senderWebsite",
+      coalesce(m.request_snapshot->'sharedContacts','[]'::jsonb) as "sharedContacts",(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",
+      coalesce(replies.items,'[]'::jsonb) as "replyConversations",coalesce(replies.n,0)::int as replies
+     from messages m join conversations v on v.id=m.conversation_id join companies co on co.id=v.company_id
+     left join lateral (
+       select jsonb_agg(jsonb_build_object('id',r.id,'companyName',co.name,'contactValue',r.peer_value,'channel',r.channel,'lastMessage',latest.body,'lastAt',latest.created_at) order by latest.created_at desc) as items,sum(latest.n) as n
+       from conversations r join lateral (select body,created_at,count(*) over() as n from messages where conversation_id=r.id and direction='in' order by created_at desc,id desc limit 1) latest on true
+       where r.form_reply_match->>'state'='bound' and r.form_reply_match->>'formMessageId'=m.id::text
+     ) replies on true
+     where m.channel='form' and m.direction='out' and ($1::text is null or ($1='replied' and replies.n>0) or ($1<>'replied' and m.status=$1)) order by m.created_at desc,m.id desc`,
+    [options.status ?? null],
+  );
+  return rows;
+}
 export async function listManualFormMessages() {
-  return (
-    await sonarPool.query(
-      `select m.id,v.company_id as "companyId",co.name as "companyName",m.to_value as url,m.body,m.reason_uk as "reasonUk",coalesce(m.request_snapshot->>'name',a.settings->>'senderName') as "senderName",coalesce(m.request_snapshot->>'email',a.address) as "senderEmail",coalesce(m.request_snapshot->>'phone',a.settings->>'senderPhone') as "senderPhone",(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter" from messages m join conversations v on v.id=m.conversation_id join companies co on co.id=v.company_id join channel_accounts a on a.id=m.account_id where m.channel='form' and m.status='awaiting_manual' order by m.created_at,m.id`,
-    )
-  ).rows;
+  return listFormMessages({ status: 'awaiting_manual' });
 }
 export async function getFormScreenshot(
   messageId: string,

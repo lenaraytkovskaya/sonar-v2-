@@ -46,6 +46,7 @@ beforeAll(async () => {
   for (const name of [
     'message.send',
     'ai.inbound',
+    'form.reply.match',
     'ai.reply',
     'whatsapp.identity.repair',
   ])

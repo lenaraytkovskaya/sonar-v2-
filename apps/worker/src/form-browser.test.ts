@@ -76,7 +76,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         });
         res.setHeader(
           'Content-Type',
-          req.url === '/robots.txt' ? 'text/plain' : 'text/html',
+          req.url === '/robots.txt' ? 'text/plain' : 'text/html; charset=utf-8',
         );
         if (req.url === '/robots.txt') res.end(rules);
         else if (req.method === 'POST' || req.url?.startsWith('/send?')) {
@@ -188,6 +188,54 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       responseHtml = '{"success":true}';
       expect((await sendWebsiteForm(input, options)).status).toBe('sent');
       expect(posts()[0]!.path).toBe('/api/contact');
+    });
+    it('fills all requested contact fields without adding duplicate contact text', async () => {
+      html = form(
+        '<input name="telegram"><input name="whatsapp"><input type="url" name="website">',
+      );
+      options.onFilled = vi.fn(async () => {});
+      const request = {
+        ...input,
+        telegram: '@sonar_team',
+        whatsapp: '+380671234567',
+        senderWebsite: 'https://sender.example.com',
+      };
+      expect((await sendWebsiteForm(request, options)).status).toBe('sent');
+      const payload = new URLSearchParams(posts()[0]!.body);
+      expect(payload.get('telegram')).toBe(request.telegram);
+      expect(payload.get('whatsapp')).toBe(request.whatsapp);
+      expect(payload.get('website')).toBe(request.senderWebsite);
+      expect(payload.get('message')).toBe(input.body);
+      expect(options.onFilled).toHaveBeenCalledWith({
+        body: input.body,
+        sharedContacts: ['email', 'phone', 'telegram', 'whatsapp'],
+      });
+    });
+    it('persists the composed message and shared contacts before a manual captcha handoff', async () => {
+      html = form('<div class="g-recaptcha" data-sitekey="key"></div>').replace(
+        '<input type="tel" name="phone">',
+        '',
+      );
+      options.onFilled = vi.fn(async () => {});
+      expect(
+        (await sendWebsiteForm({ ...input, telegram: '@sonar_team' }, options))
+          .status,
+      ).toBe('awaiting_manual');
+      expect(options.onFilled).toHaveBeenCalledWith({
+        body: `${input.body}\n\nЗв’язатися: телефон ${input.phone}, Telegram @sonar_team`,
+        sharedContacts: ['email', 'phone', 'telegram'],
+      });
+      expect(posts()).toHaveLength(0);
+    });
+    it('recognizes submissions carrying the final appended message', async () => {
+      html = form().replace('<input type="tel" name="phone">', '');
+      expect(
+        (await sendWebsiteForm({ ...input, telegram: '@sonar_team' }, options))
+          .status,
+      ).toBe('sent');
+      expect(new URLSearchParams(posts()[0]!.body).get('message')).toBe(
+        `${input.body}\r\n\r\nЗв’язатися: телефон ${input.phone}, Telegram @sonar_team`,
+      );
     });
     it('does not mistake analytics HTTP 200 for a successful submission', async () => {
       html =

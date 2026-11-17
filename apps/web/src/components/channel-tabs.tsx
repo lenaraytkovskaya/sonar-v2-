@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useId, type ComponentProps } from 'react';
 import { useUrlTab } from './use-url-tab';
+import { ContactDetails } from './contact-details';
 import { EmailAccounts } from './email-accounts';
 import { SocialAccounts } from './social-accounts';
 import { TelegramAccounts } from './telegram-accounts';
@@ -12,12 +13,14 @@ import { uk } from '@/i18n/uk';
 type Network = ComponentProps<typeof SocialAccounts>['network'];
 export function ChannelTabs({
   email,
+  contactDetails,
   social,
   telegram,
   forms,
   whatsapp,
 }: {
   email: ComponentProps<typeof EmailAccounts>;
+  contactDetails: ComponentProps<typeof ContactDetails>;
   social: Omit<ComponentProps<typeof SocialAccounts>, 'network' | 'active'>;
   telegram: ComponentProps<typeof TelegramAccounts>;
   forms: ComponentProps<typeof FormAccounts>;
@@ -26,13 +29,14 @@ export function ChannelTabs({
   const id = useId();
   const { active, select, visited } = useUrlTab(
     [
+      'contact-details',
       'email',
       ...Object.keys(uk.social.networks),
       'telegram',
       'forms',
       'whatsapp',
     ],
-    'email',
+    'contact-details',
   );
   useEffect(() => {
     document.getElementById(`${id}-tab-${active}`)?.scrollIntoView({
@@ -41,6 +45,11 @@ export function ChannelTabs({
     });
   }, [id, active]);
   const tabs = [
+    {
+      key: 'contact-details',
+      label: uk.forms.contactDetails,
+      content: <ContactDetails {...contactDetails} />,
+    },
     {
       key: 'email',
       label: uk.campaign.channelNames.email,

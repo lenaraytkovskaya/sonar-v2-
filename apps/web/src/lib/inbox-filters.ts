@@ -6,7 +6,6 @@ export const inboxChannels = [
   'email',
   'telegram',
   'whatsapp',
-  'form',
   'social',
   'call',
 ];

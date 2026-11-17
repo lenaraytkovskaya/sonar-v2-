@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import { chromium, type Browser, type Page } from 'playwright';
+import { prepareFormContacts, type SharedFormContact } from '@sonar/core';
 import {
   SiteHttp,
   SiteUnavailable,
@@ -12,6 +13,9 @@ export type FormRequest = {
   name: string;
   email: string;
   phone: string;
+  whatsapp?: string;
+  telegram?: string;
+  senderWebsite?: string;
   body: string;
   subject?: string;
   captcha?: string;
@@ -25,6 +29,10 @@ export type FormResult = {
 export type FormOptions = {
   settings: SiteSettings;
   beforeSubmit: () => Promise<void>;
+  onFilled?: (snapshot: {
+    body: string;
+    sharedContacts: SharedFormContact[];
+  }) => Promise<void>;
   saveScreenshot: (phase: 'before' | 'after', buffer: Buffer) => Promise<void>;
   solveCaptcha?: (captcha: {
     kind: 'recaptcha' | 'hcaptcha' | 'turnstile';
@@ -57,10 +65,14 @@ export async function sendWebsiteForm(
     evidence = '';
   let bytes = 0,
     count = 0;
+  let messageBody = input.body;
   // A request is the submission only if it carries our exact message text, under any field name.
   function containsMessage(url: string, data: string) {
+    // Browsers serialize textarea line endings as CRLF in native and FormData submissions.
+    const matchesMessage = (value: string) =>
+      value.replace(/\r\n/g, '\n') === messageBody.replace(/\r\n/g, '\n');
     const matches = (pairs: Iterable<[string, string]>) =>
-      Array.from(pairs).some(([, value]) => value === input.body);
+      Array.from(pairs).some(([, value]) => matchesMessage(value));
     if (
       matches(new URL(url).searchParams) ||
       matches(new URLSearchParams(data))
@@ -71,19 +83,21 @@ export async function sendWebsiteForm(
         !!value &&
         typeof value === 'object' &&
         Object.entries(value).some(
-          ([, child]) => child === input.body || visit(child),
+          ([, child]) =>
+            (typeof child === 'string' && matchesMessage(child)) ||
+            visit(child),
         );
       if (visit(JSON.parse(data))) return true;
     } catch {
       /* Form payloads are not JSON. */
     }
     return (
-      data === input.body ||
+      matchesMessage(data) ||
       Array.from(
         data.matchAll(
           /name="([^"]+)"[^\r\n]*\r\n(?:[^\r\n]+\r\n)*\r\n([\s\S]*?)\r\n--/g,
         ),
-      ).some((match) => match[2] === input.body)
+      ).some((match) => matchesMessage(match[2]!))
     );
   }
   let submitResponse:
@@ -257,18 +271,31 @@ export async function sendWebsiteForm(
               ? 'body'
               : el.type === 'email' || /email|e-mail|пошт|почт/i.test(label)
                 ? 'email'
-                : el.type === 'tel' || /phone|тел|mobile/i.test(label)
-                  ? 'phone'
-                  : /subject|title|тема|звернення/i.test(label)
-                    ? 'subject'
-                    : /name|ім.я|имя/i.test(label)
-                      ? 'name'
-                      : undefined;
+                : /telegram|телеграм/i.test(label)
+                  ? 'telegram'
+                  : /whatsapp|ватсап|вотсап/i.test(label)
+                    ? 'whatsapp'
+                    : el.type === 'tel' ||
+                        /phone|телефон|mobile|^\s*тел\s/i.test(label)
+                      ? 'phone'
+                      : el.type === 'url' ||
+                          /website|web.?site|сайт/i.test(label)
+                        ? 'senderWebsite'
+                        : /subject|title|тема|звернення/i.test(label)
+                          ? 'subject'
+                          : /name|ім.я|имя|company|organi[sz]ation|компан|організа|организа/i.test(
+                                label,
+                              )
+                            ? 'name'
+                            : undefined;
           if (kind && fields[kind] === undefined) fields[kind] = i;
         }
         if (
           fields.body !== undefined &&
-          (fields.email !== undefined || fields.phone !== undefined)
+          (fields.email !== undefined ||
+            fields.phone !== undefined ||
+            fields.telegram !== undefined ||
+            fields.whatsapp !== undefined)
         )
           return {
             index,
@@ -300,13 +327,35 @@ export async function sendWebsiteForm(
       );
     await http.assertAllowed(found.action);
     const form = page.locator('form').nth(found.index);
+    const prepared = prepareFormContacts(
+      input,
+      messageBody,
+      Object.keys(found.fields),
+    );
+    messageBody = prepared.body;
     filling = true;
     for (const [kind, index] of Object.entries(found.fields)) {
       const value =
         kind === 'subject'
           ? (input.subject ?? input.body)
-          : input[kind as 'name' | 'email' | 'phone' | 'body'];
+          : kind === 'body'
+            ? messageBody
+            : (input[
+                kind as
+                  | 'name'
+                  | 'email'
+                  | 'phone'
+                  | 'telegram'
+                  | 'whatsapp'
+                  | 'senderWebsite'
+              ] ?? '');
       await form.locator('input,textarea').nth(index).fill(value);
+    }
+    try {
+      await options.onFilled?.(prepared);
+    } catch (error) {
+      hookError = error;
+      throw error;
     }
     const captcha = await page.evaluate(() => {
       const el = document.querySelector('[data-sitekey]');

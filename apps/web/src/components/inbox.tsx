@@ -21,6 +21,7 @@ import { Card } from '@/components/shared';
 import { ConversationChat } from '@/components/conversation-chat';
 import { LocalTime } from '@/components/local-time';
 import { Button } from '@/components/ui/button';
+import { InboxModeTabs } from './inbox-mode-tabs';
 import { ChannelIcon } from './channel-icon';
 export function Inbox({
   initial,
@@ -162,6 +163,7 @@ export function Inbox({
             explicitSelection && 'hidden lg:block',
           )}
         >
+          <InboxModeTabs mode="chats" />
           {!data.conversations.length && (
             <p className="p-5 text-sm text-muted-foreground">
               {uk.pages.inbox.empty}

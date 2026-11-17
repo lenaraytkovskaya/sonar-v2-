@@ -65,7 +65,12 @@ beforeAll(async () => {
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
-  for (const name of ['ai.inbound', 'message.send', 'social.inbox.sync'])
+  for (const name of [
+    'form.reply.match',
+    'ai.inbound',
+    'message.send',
+    'social.inbox.sync',
+  ])
     await admin.createQueue(name);
   originalSettings = (
     await db.sonarPool.query(

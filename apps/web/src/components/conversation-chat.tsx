@@ -15,6 +15,7 @@ import { Draft } from './company-email';
 import { AiAssist } from './ai-assist';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { FormReplyMatch } from './form-reply-match';
 import { ChannelIcon } from './channel-icon';
 type Message = NonNullable<
   Awaited<ReturnType<typeof getConversationChat>>
@@ -31,6 +32,7 @@ export function ConversationChat({
   backHref?: string;
 }) {
   const [data, setData] = useState(initial);
+  useEffect(() => setData(initial), [initial]);
   const [body, setBody] = useState('');
   const [subject, setSubject] = useState(
     [...initial.messages].reverse().find((m) => m.subject)?.subject ?? '',
@@ -402,6 +404,11 @@ export function ConversationChat({
           </p>
         )}
       </header>
+      <FormReplyMatch
+        conversationId={conversation.id}
+        companyId={conversation.companyId}
+        active={active}
+      />
       <div className="relative min-h-12 flex-1">
         <div
           ref={history}

@@ -35,7 +35,12 @@ beforeAll(async () => {
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
-  for (const name of ['ai.inbound', 'whatsapp.identity.repair', 'message.send'])
+  for (const name of [
+    'form.reply.match',
+    'ai.inbound',
+    'whatsapp.identity.repair',
+    'message.send',
+  ])
     await admin.createQueue(name);
   await db.sonarPool.query(
     "insert into users(id,email,name,password_hash) values($1,$2,'Identity test','stub')",

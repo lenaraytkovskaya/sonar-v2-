@@ -2,7 +2,6 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { listFormAccounts } from '@sonar/db/email';
-import type { listManualFormMessages } from '@sonar/db/forms';
 import { uk } from '@/i18n/uk';
 import { Card } from './shared';
 import { Button } from './ui/button';
@@ -11,21 +10,11 @@ import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 
 type Account = Awaited<ReturnType<typeof listFormAccounts>>[number];
-type Manual = Awaited<ReturnType<typeof listManualFormMessages>>;
 const blank = {
   name: '',
-  fromAddress: '',
-  senderName: '',
-  senderPhone: '',
   dailyLimit: '',
 };
-export function FormAccounts({
-  accounts,
-  manual,
-}: {
-  accounts: Account[];
-  manual: Manual;
-}) {
+export function FormAccounts({ accounts }: { accounts: Account[] }) {
   const router = useRouter(),
     busy = useRef(false);
   const [form, setForm] = useState(blank),
@@ -74,10 +63,6 @@ export function FormAccounts({
                 {account.name} ·{' '}
                 {account.enabled ? uk.email.enabled : uk.email.disabled}
               </p>
-              <p>
-                {account.senderName} · {account.fromAddress} ·{' '}
-                {account.senderPhone}
-              </p>
               <p className="text-sm text-muted-foreground">
                 {uk.email.owner}: {account.ownerName ?? '—'} · {uk.email.today}:{' '}
                 {account.sentToday} / {account.dailyLimit}
@@ -97,9 +82,6 @@ export function FormAccounts({
                 setError('');
                 setForm({
                   name: account.name,
-                  fromAddress: account.fromAddress,
-                  senderName: account.senderName,
-                  senderPhone: account.senderPhone,
                   dailyLimit: String(account.dailyLimit),
                 });
                 setEditing(account.id);
@@ -139,39 +121,20 @@ export function FormAccounts({
               });
             }}
           >
-            {(
-              [
-                'name',
-                'senderName',
-                'fromAddress',
-                'senderPhone',
-                'dailyLimit',
-              ] as const
-            ).map((key) => (
+            {(['name', 'dailyLimit'] as const).map((key) => (
               <div key={key}>
                 <label htmlFor={'form-' + key}>
                   {
                     {
                       name: uk.email.name,
-                      senderName: uk.forms.senderName,
-                      fromAddress: uk.email.address,
-                      senderPhone: uk.forms.senderPhone,
                       dailyLimit: uk.email.limit,
                     }[key]
                   }
                 </label>
                 <Input
                   id={'form-' + key}
-                  required={key !== 'senderPhone'}
-                  type={
-                    key === 'dailyLimit'
-                      ? 'number'
-                      : key === 'fromAddress'
-                        ? 'email'
-                        : key === 'senderPhone'
-                          ? 'tel'
-                          : 'text'
-                  }
+                  required
+                  type={key === 'dailyLimit' ? 'number' : 'text'}
                   min={key === 'dailyLimit' ? 1 : undefined}
                   step={key === 'dailyLimit' ? 1 : undefined}
                   maxLength={key === 'dailyLimit' ? undefined : 254}
@@ -198,49 +161,6 @@ export function FormAccounts({
             )}
           </form>
         </CrudDialog>
-      </Card>
-      <Card className="space-y-4 p-5">
-        <h2 className="border-b border-border pb-4 font-heading text-base font-semibold">
-          {uk.forms.manual}
-        </h2>
-        <p className="text-sm text-muted-foreground">{uk.forms.manualHint}</p>
-        {!manual.length && <p>{uk.forms.manualEmpty}</p>}
-        {manual.map((message) => (
-          <section
-            key={message.id}
-            className="space-y-3 border-t border-border pt-4"
-          >
-            <a
-              className="font-medium text-accent"
-              href={`/companies/${message.companyId}`}
-            >
-              {message.companyName}
-            </a>
-            <p>{message.reasonUk}</p>
-            <p className="break-words">
-              {message.senderName} · {message.senderEmail} ·{' '}
-              {message.senderPhone}
-            </p>
-            <p className="whitespace-pre-wrap break-words">{message.body}</p>
-            <div className="flex flex-wrap gap-3">
-              <Button asChild variant="outline">
-                <a href={message.url} target="_blank" rel="noreferrer">
-                  {uk.forms.open}
-                </a>
-              </Button>
-              <Button
-                disabled={pending}
-                onClick={() =>
-                  void mutate(`/api/form-messages/${message.id}`, {
-                    action: 'sent',
-                  })
-                }
-              >
-                {uk.forms.markSent}
-              </Button>
-            </div>
-          </section>
-        ))}
       </Card>
       {!open && error && (
         <p role="alert" className="text-err">

@@ -7,9 +7,7 @@ export async function POST(request: Request) {
   const data = await request.json().catch(() => null);
   if (
     !data ||
-    !['name', 'fromAddress', 'senderName', 'senderPhone'].every(
-      (key) => typeof data[key] === 'string',
-    ) ||
+    typeof data.name !== 'string' ||
     !Number.isSafeInteger(data.dailyLimit) ||
     (data.id != null && !validId(data.id))
   )
@@ -19,9 +17,6 @@ export async function POST(request: Request) {
       await import('@sonar/db/email');
     const input = {
       name: data.name,
-      fromAddress: data.fromAddress,
-      senderName: data.senderName,
-      senderPhone: data.senderPhone,
       dailyLimit: data.dailyLimit,
     };
     if (!data.id) return createFormAccount(input, user.id);

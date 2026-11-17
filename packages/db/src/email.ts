@@ -17,7 +17,6 @@ import {
   EmailSendError,
   socialTarget,
   messageStatusForMode,
-  normalizePhone,
   nextSendTime,
   type SendHours,
   type CountryCode,
@@ -1858,52 +1857,26 @@ export const sameFormDomain = (value: string, website: string): boolean => {
     return false;
   }
 };
-export interface FormAccount extends EmailAccount {
-  senderName: string;
-  senderPhone: string;
-}
-type FormAccountInput = {
-  name: string;
-  fromAddress: string;
-  senderName: string;
-  senderPhone: string;
-  dailyLimit: number;
-};
+export type FormAccount = EmailAccount;
+type FormAccountInput = { name: string; dailyLimit: number };
 export async function listFormAccounts(): Promise<FormAccount[]> {
   return (
     await sonarPool.query(
-      `select a.id,a.name,a.address as "fromAddress",a.settings->>'senderName' as "senderName",a.settings->>'senderPhone' as "senderPhone",a.daily_limit as "dailyLimit",(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='form' order by a.name,a.id`,
+      `select a.id,a.name,a.address as "fromAddress",a.daily_limit as "dailyLimit",(a.status='active') as enabled,a.next_send_at as "nextSendAt",u.name as "ownerName",(select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday" from channel_accounts a left join users u on u.id=a.owner_id where a.channel='form' order by a.name,a.id`,
     )
   ).rows;
 }
 function formAccountValues(input: FormAccountInput) {
-  const name = input.name?.trim(),
-    address = input.fromAddress?.trim().toLowerCase(),
-    senderName = input.senderName?.trim(),
-    senderPhone = input.senderPhone?.trim()
-      ? normalizePhone(input.senderPhone.trim(), 'UA')
-      : '';
+  const name = input.name?.trim();
   if (
     !name ||
     name.length > 200 ||
-    !validEmail(address) ||
-    !senderName ||
-    senderName.length > 200 ||
-    (input.senderPhone?.trim() &&
-      (!senderPhone || !input.senderPhone.trim().startsWith('+'))) ||
     !Number.isInteger(input.dailyLimit) ||
     input.dailyLimit < 1 ||
     input.dailyLimit > 100000
   )
-    invalid(
-      'Вкажіть назву, ім’я, email та додатний денний ліміт. Телефон, якщо вказано, має бути міжнародним.',
-    );
-  return [
-    name,
-    address,
-    input.dailyLimit,
-    JSON.stringify({ senderName, senderPhone }),
-  ];
+    invalid('Вкажіть назву та додатний денний ліміт.');
+  return [name, input.dailyLimit];
 }
 export async function createFormAccount(
   input: FormAccountInput,
@@ -1914,7 +1887,7 @@ export async function createFormAccount(
     const {
       rows: [account],
     } = await c.query(
-      "insert into channel_accounts(name,address,daily_limit,settings,owner_id,channel) values($1,$2,$3,$4,$5,'form') returning id",
+      "insert into channel_accounts(name,address,daily_limit,owner_id,channel) values($1,'',$2,$3,'form') returning id",
       [...values, userId],
     );
     await logActivity(
@@ -1936,7 +1909,7 @@ export async function updateFormAccount(
   const values = formAccountValues(input);
   return transaction(async (c) => {
     const { rowCount } = await c.query(
-      "update channel_accounts set name=$1,address=$2,daily_limit=$3,settings=$4 where id=$5 and channel='form'",
+      "update channel_accounts set name=$1,daily_limit=$2 where id=$3 and channel='form'",
       [...values, id],
     );
     if (rowCount)

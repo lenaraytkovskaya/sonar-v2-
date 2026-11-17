@@ -1,3 +1,4 @@
+import { registerFormReplyTasks } from './form-replies.js';
 import {
   reconcileAccountHealthPauses,
   cleanupAccountHealthEvents,
@@ -40,6 +41,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerEmailTasks();
+  await registerFormReplyTasks();
   await registerInboundTasks();
   await registerSocialInboxTasks(createSocialInboxAdapter(socialPageTimeout));
   await registerDraftTasks();
