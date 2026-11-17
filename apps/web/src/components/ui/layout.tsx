@@ -7,12 +7,14 @@ import { Popover, PopoverContent, PopoverTrigger } from './popover';
 
 /** A titled block of a page (docs/DESIGN.md §3): header row with an optional action, then content. */
 export function Section({
+  id,
   title,
   description,
   actions,
   className,
   children,
 }: {
+  id?: string;
   title?: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -21,6 +23,7 @@ export function Section({
 }) {
   return (
     <section
+      id={id}
       className={cn(
         'rounded-xl border border-border bg-surface shadow-xs',
         className,

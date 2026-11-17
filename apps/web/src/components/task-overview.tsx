@@ -19,6 +19,7 @@ type Task = {
   subject_id?: string;
   company_name?: string;
   status: string;
+  created_at?: string;
   reason_uk: string | null;
   repetitions: number;
   result:
@@ -100,6 +101,23 @@ export function useTasks() {
   const context = useContext(TasksContext);
   if (!context) throw Error('TasksProvider missing');
   return context;
+}
+export function RecentFailuresCallout() {
+  const { failures } = useTasks();
+  const count = failures.filter(
+    (task) =>
+      task.status === 'failed' &&
+      task.created_at &&
+      Date.parse(task.created_at) >= Date.now() - 86_400_000,
+  ).length;
+  if (!count) return null;
+  return (
+    <Callout tone="err">
+      <Link href="#task-failures" className="underline underline-offset-2">
+        {uk.overview.errors}: {count}
+      </Link>
+    </Callout>
+  );
 }
 export function WorkerStatus() {
   const { workerHealth } = useTasks();
@@ -253,6 +271,7 @@ export function TaskOverview() {
     <div className="space-y-6">
       {(error || retryError) && <Callout tone="err">{uk.tasks.error}</Callout>}
       <Section
+        id="task-failures"
         title={uk.tasks.failures}
         description={failures.length ? undefined : uk.tasks.noFailures}
       >

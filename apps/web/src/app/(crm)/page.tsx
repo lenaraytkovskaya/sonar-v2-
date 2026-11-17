@@ -1,8 +1,11 @@
 import { AccountHealthOverview } from '@/components/account-health';
-import { TaskOverview } from '@/components/task-overview';
+import {
+  RecentFailuresCallout,
+  TaskOverview,
+} from '@/components/task-overview';
 import { PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
-import { Callout, InfoTip, Section } from '@/components/ui/layout';
+import { InfoTip, Section } from '@/components/ui/layout';
 import { uk } from '@/i18n/uk';
 import { validId } from '@/lib/api-access';
 
@@ -165,13 +168,9 @@ export default async function Page({
               ))}
             </tbody>
           </table>
-          {data.failedTasks24h > 0 && (
-            <div className="mt-4">
-              <Callout tone="err">
-                {t.errors}: {data.failedTasks24h}
-              </Callout>
-            </div>
-          )}
+          <div className="mt-4">
+            <RecentFailuresCallout />
+          </div>
         </Section>
       </div>
       <AccountHealthOverview health={health} />
