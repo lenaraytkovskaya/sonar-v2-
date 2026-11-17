@@ -969,8 +969,9 @@ async function sendInstagram(
     throw stagedFailure(stage, kind);
   }
 }
+// LinkedIn 2026 has obfuscated classes and no visible messaging link; notifications and My Network links only render signed in.
 const legacyLinkedInAuth =
-  'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger';
+  'a[href*="/messaging/"], button.global-nav__primary-link-me-menu-trigger, a[href$="/notifications/"], a[href$="/mynetwork/"], a[href$="/mynetwork"]';
 const instagramAuth = 'a[href^="/direct/"], a[href="/accounts/edit/"]';
 const facebookAuth =
   '[aria-label="Your profile"], [aria-label="Ваш профіль"], [aria-label="Account"], a[href*="/me/"], a[href*="/messages/t/"]';
@@ -997,7 +998,7 @@ function linkedInNavigation(page: Page) {
     .filter({ visible: true })
     .filter({
       has: page
-        .getByRole('button', { name: /^(?:Профиль|Профіль|Me)$/i })
+        .getByRole('button', { name: /^(?:Профиль|Профіль|Me|Я)$/i })
         .and(page.locator('[aria-expanded]:visible')),
     })
     .filter({
