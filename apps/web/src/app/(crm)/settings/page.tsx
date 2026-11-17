@@ -1,9 +1,13 @@
 import { SettingsPanel } from '@/components/settings-panel';
-import { NotificationSettings } from '@/components/message-notifier';
 import { PageHeader } from '@/components/shared';
 import Link from 'next/link';
 import { uk } from '@/i18n/uk';
-export default function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<{ section?: string }>;
+}) {
+  const { section } = await searchParams;
   return (
     <div className="space-y-6">
       <PageHeader
@@ -17,8 +21,7 @@ export default function Page() {
           </Link>
         }
       />
-      <NotificationSettings />
-      <SettingsPanel />
+      <SettingsPanel key={section} section={section} />
     </div>
   );
 }

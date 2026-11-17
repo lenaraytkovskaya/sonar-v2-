@@ -11,7 +11,11 @@ type Progress = {
   updatedAt: string | null;
   status: 'running' | 'done';
 };
-export function RegistryPhoneSync() {
+export function RegistryPhoneSync({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const { tasks, counts } = useTasks();
   const task = tasks.find((item) => item.type === 'registry.phones.sync');
   const status =
@@ -62,22 +66,29 @@ export function RegistryPhoneSync() {
       setPending(false);
     }
   };
+  const Container = embedded ? 'section' : Card;
   return (
-    <Card className="space-y-3 p-6">
-      <h2 className="font-heading text-base font-bold">
-        {uk.registry.syncTitle}
-      </h2>
-      <Button disabled={pending || !!active} onClick={() => void sync()}>
-        {pending || active
-          ? uk.tasks.status[
-              status === 'running'
-                ? 'running'
-                : status === 'paused'
-                  ? 'paused'
-                  : 'queued'
-            ]
-          : uk.registry.sync}
-      </Button>
+    <Container className={embedded ? 'space-y-3' : 'space-y-3 p-6'}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-heading text-base font-bold">
+          {uk.registry.syncTitle}
+        </h2>
+        <Button
+          type="button"
+          disabled={pending || !!active}
+          onClick={() => void sync()}
+        >
+          {pending || active
+            ? uk.tasks.status[
+                status === 'running'
+                  ? 'running'
+                  : status === 'paused'
+                    ? 'paused'
+                    : 'queued'
+              ]
+            : uk.registry.sync}
+        </Button>
+      </div>
       {progress && (
         <div role="status" className="space-y-1 text-sm text-muted-foreground">
           <p>
@@ -105,6 +116,6 @@ export function RegistryPhoneSync() {
           {error}
         </p>
       )}
-    </Card>
+    </Container>
   );
 }
