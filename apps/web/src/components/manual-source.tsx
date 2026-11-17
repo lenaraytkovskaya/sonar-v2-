@@ -176,7 +176,11 @@ export function ManualSource({
     }
   };
   return (
-    <div className="space-y-3 border-t border-border pt-3 text-sm">
+    <div
+      className={
+        menuAction ? 'text-sm' : 'space-y-3 border-t border-border pt-3 text-sm'
+      }
+    >
       {menuAction ? (
         <RowActions
           disabled={pending}

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import {
+  normalizeWebsite,
   socialTarget,
   type SocialTarget,
   type SocialProfile,
@@ -201,19 +202,26 @@ export async function saveSocialProfile(
       ['phone', profile.phones],
       ['email', profile.emails],
       ['address', profile.address ? [profile.address] : []],
+      ['website', profile.website ? [profile.website] : []],
     ] as const)
-      for (const value of values)
+      for (const value of values) {
+        const normalized =
+          kind === 'website'
+            ? (normalizeWebsite(value)?.domain ?? value)
+            : value;
         await client.query(
-          `insert into contacts(company_id,kind,value,normalized,source,source_url,found_at) values($1,$2,$3,$3,$4,$5,$6) on conflict(company_id,kind,normalized) do update set found_at=case when contacts.source=excluded.source then excluded.found_at else contacts.found_at end,source_url=case when contacts.source=excluded.source then excluded.source_url else contacts.source_url end,meta=contacts.meta||jsonb_build_object('alsoOnSocial',jsonb_build_object('url',excluded.source_url,'foundAt',excluded.found_at))`,
+          `insert into contacts(company_id,kind,value,normalized,source,source_url,found_at) values($1,$2,$3,$4,$5,$6,$7) on conflict(company_id,kind,normalized) do update set found_at=case when contacts.source=excluded.source then excluded.found_at else contacts.found_at end,source_url=case when contacts.source=excluded.source then excluded.source_url else contacts.source_url end,meta=contacts.meta||jsonb_build_object('alsoOnSocial',jsonb_build_object('url',excluded.source_url,'foundAt',excluded.found_at))`,
           [
             companyId,
             kind,
             value,
+            normalized,
             target.network,
             target.canonicalUrl,
             foundAt,
           ],
         );
+      }
   }
 }
 export async function getCompanySocial(companyId: string): Promise<{

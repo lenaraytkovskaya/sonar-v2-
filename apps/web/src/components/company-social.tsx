@@ -15,12 +15,16 @@ const fields = {
     'name',
     'category',
     'description',
+    'address',
     'followers',
     'friendsCount',
     'rating',
     'reviewsCount',
     'postsCount',
     'lastPostAt',
+    'priceRange',
+    'openingHours',
+    'canMessage',
   ],
   instagram: [
     'name',
@@ -226,6 +230,12 @@ export function CompanySocial({
                     field !== 'foundedYear' ? (
                     new Intl.NumberFormat('uk-UA').format(
                       row.profile[field] as number,
+                    )
+                  ) : field === 'canMessage' ? (
+                    row.profile?.canMessage ? (
+                      uk.social.messageAvailable
+                    ) : (
+                      '—'
                     )
                   ) : (
                     (row.profile?.[field] ?? '—')

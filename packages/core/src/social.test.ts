@@ -135,6 +135,49 @@ describe('parseSocialProfile', () => {
     expect(profile.posts).toHaveLength(2);
     expect(profile.industry).toBeNull();
   });
+  it('extracts anonymized Facebook business details and separates Instagram counters from bio', () => {
+    const fbTarget = socialTarget('https://www.facebook.com/demo.q2/')!;
+    const igTarget = socialTarget('https://www.instagram.com/demo.q2/')!;
+    const fb = parseSocialProfile(fixture('facebook-q2'), fbTarget, 'UA');
+    expect(fb).toMatchObject({
+      followers: 1200,
+      category: 'Автосервіс',
+      address: 'вул. Тестова, 5, Київ',
+      rating: '100%',
+      reviewsCount: 5,
+      priceRange: '₴₴',
+      openingHours: 'Години роботи: Пн–Пт, 09:00–18:00',
+      canMessage: true,
+      website: 'https://demo.invalid/',
+      phones: ['+380440000000'],
+      emails: ['office@demo.invalid'],
+      lastPostAt: '2026-10-01T00:00:00.000Z',
+    });
+    const ig = parseSocialProfile(fixture('instagram-q2'), igTarget, 'PL');
+    expect(ig).toMatchObject({
+      description: 'Дизайн для бізнесу · studio@demo.invalid · +48 22 000 0000',
+      category: 'Design studio',
+      website: 'https://studio.demo.invalid/',
+      followers: 402,
+      followingCount: 260,
+      postsCount: 55,
+      phones: ['+48220000000'],
+      emails: ['studio@demo.invalid'],
+      lastPostAt: '2026-10-01T00:00:00.000Z',
+    });
+    expect(ig.description).not.toContain('Followers');
+    const serviceOnly = parseSocialProfile(
+      '<meta property="og:url" content="https://www.instagram.com/demo.q2/"><meta property="og:title" content="Demo Studio (@demo.q2)"><meta property="og:description" content="402 Followers, 260 Following, 55 Posts - See Instagram photos and videos from Demo Studio">',
+      igTarget,
+      'PL',
+    );
+    expect(serviceOnly).toMatchObject({
+      description: null,
+      followers: 402,
+      followingCount: 260,
+      postsCount: 55,
+    });
+  });
   it('extracts LinkedIn organization JSON-LD, overview and author-scoped post dates', () => {
     expect(
       parseSocialProfile(fixture('linkedin'), linkedin, 'PL'),

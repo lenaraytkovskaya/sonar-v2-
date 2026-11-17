@@ -329,13 +329,14 @@ export async function runGoogleBatch(
           const {
             rows: [company],
           } = await tx.query(
-            `insert into companies(place_id,name,primary_type,types,address,city,country_code,lat,lng,website,domain,google_maps_uri,rating,ratings_count,business_status,google_expires_at)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now()+$16*interval '1 day')
-      on conflict(place_id) do update set name=excluded.name,primary_type=excluded.primary_type,types=excluded.types,address=excluded.address,city=excluded.city,country_code=excluded.country_code,lat=excluded.lat,lng=excluded.lng,website=coalesce(excluded.website,companies.website),domain=coalesce(excluded.domain,companies.domain),google_maps_uri=excluded.google_maps_uri,rating=coalesce(excluded.rating,companies.rating),ratings_count=coalesce(excluded.ratings_count,companies.ratings_count),business_status=excluded.business_status,google_expires_at=excluded.google_expires_at,updated_at=now() returning id,(xmax=0) as created`,
+            `insert into companies(place_id,name,primary_type,primary_type_display_name,types,address,city,country_code,lat,lng,website,domain,google_maps_uri,rating,ratings_count,business_status,google_expires_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()+$17*interval '1 day')
+      on conflict(place_id) do update set name=excluded.name,primary_type=excluded.primary_type,primary_type_display_name=coalesce(excluded.primary_type_display_name,companies.primary_type_display_name),types=excluded.types,address=excluded.address,city=excluded.city,country_code=excluded.country_code,lat=excluded.lat,lng=excluded.lng,website=coalesce(excluded.website,companies.website),domain=coalesce(excluded.domain,companies.domain),google_maps_uri=excluded.google_maps_uri,rating=coalesce(excluded.rating,companies.rating),ratings_count=coalesce(excluded.ratings_count,companies.ratings_count),business_status=excluded.business_status,google_expires_at=excluded.google_expires_at,updated_at=now() returning id,(xmax=0) as created`,
             [
               place.id,
               place.displayName?.text ?? place.id,
               place.primaryType ?? null,
+              place.primaryTypeDisplayName?.text ?? null,
               place.types ?? [],
               place.formattedAddress ?? null,
               city,

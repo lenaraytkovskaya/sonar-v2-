@@ -1,12 +1,14 @@
 import Link from 'next/link';
 import { Network, Store } from 'lucide-react';
 import { uk } from '@/i18n/uk';
+import { googleTypeLabel } from '@/lib/google-type';
 import { Card, CompanyStatus, Score } from './shared';
 export type CompanyCardRow = {
   id: string;
   name: string;
   city: string | null;
   primary_type: string | null;
+  primary_type_display_name?: string | null;
   rating: string | null;
   score: number | null;
   fit: number | null;
@@ -56,14 +58,19 @@ export function CompanyCard({
       <div className="flex items-end justify-between gap-3">
         <div className="min-w-0 text-xs text-muted-foreground">
           <p className="truncate">
-            {[c.city, c.primary_type].filter(Boolean).join(' · ') || '—'}
+            {[
+              c.city,
+              c.primary_type_display_name ?? googleTypeLabel(c.primary_type),
+            ]
+              .filter(Boolean)
+              .join(' · ') || '—'}
           </p>
           <p>
             <span className="text-wait">★</span> {c.rating ?? '—'}
             {c.ratings_count ? (
               <>
                 {' '}
-                · {c.ratings_count} {uk.company.reviews}
+                · {c.ratings_count} {uk.company.reviewsCountSuffix}
               </>
             ) : null}
           </p>
