@@ -4,6 +4,10 @@ export const socialFields = {
   'social.login.relogin_cooldown_hours': { min: 1, max: 8760, step: 1 },
   'social.cost_per_request_usd': { min: 0, max: 100, step: 0.001 },
   'social.page_timeout_ms': { min: 100, max: 120000, step: 1 },
+  'social.inbox.poll_seconds': { min: 30, max: 86400, step: 1 },
+  'social.inbox.daily_limit': { min: 1, max: 100000, step: 1 },
+  'social.inbox.max_threads': { min: 1, max: 10000, step: 1 },
+  'social.inbox.max_messages': { min: 1, max: 10000, step: 1 },
   ...Object.fromEntries(
     socialNetworks.flatMap((network) => [
       [`social.${network}.daily_limit`, { min: 1, max: 100000, step: 1 }],
@@ -20,13 +24,24 @@ export const socialFields = {
     ]),
   ),
 } as Record<string, { min: number; max: number; step: number }>;
-export const socialKeys = ['social.enabled', ...Object.keys(socialFields)];
+export const socialKeys = [
+  'social.enabled',
+  'social.inbox.enabled',
+  'social.inbox.facebook.enabled',
+  'social.inbox.instagram.enabled',
+  ...Object.keys(socialFields),
+];
 export type SocialSettings = Record<string, number | boolean>;
 export function validSocialSettings(value: unknown): value is SocialSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const data = value as SocialSettings;
   return (
     typeof data['social.enabled'] === 'boolean' &&
+    [
+      'social.inbox.enabled',
+      'social.inbox.facebook.enabled',
+      'social.inbox.instagram.enabled',
+    ].every((key) => typeof data[key] === 'boolean') &&
     Object.keys(data).every((key) => socialKeys.includes(key)) &&
     Object.entries(socialFields).every(
       ([key, range]) =>

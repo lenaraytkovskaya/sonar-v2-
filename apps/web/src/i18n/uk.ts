@@ -391,12 +391,40 @@ export const uk = {
     enabled: 'Автоматично збирати публічні профілі під час збагачення',
     settingsHint:
       'Ручне оновлення доступне також без автоматичного збору. ШІ пропонує налаштування у форматі JSON; збереження застосує їх до наступних запитів.',
+    groups: {
+      general: 'Загальні',
+      facebook: 'Facebook',
+      instagram: 'Instagram',
+      linkedin: 'LinkedIn',
+      inbox: 'Вхідні',
+    },
+    units: {
+      day: 'на день',
+      hours: 'год',
+      seconds: 'сек',
+      minutes: 'хв',
+      milliseconds: 'мс',
+      dollars: 'USD / запит',
+    },
+    inboxSettings: {
+      enabled: 'Синхронізувати вхідні повідомлення',
+      facebook: 'Facebook: синхронізація вхідних',
+      instagram: 'Instagram: синхронізація вхідних',
+      poll: 'Інтервал перевірки',
+      daily: 'Максимум перевірок на день',
+      threads: 'Розмов за перевірку',
+      messages: 'Повідомлень за розмову',
+    },
     settings: {
       'social.login.daily_limit': 'Спроб входу на акаунт за добу',
       'social.login.relogin_cooldown_hours':
         'Пауза між повторними входами, годин',
       'social.cost_per_request_usd': 'Вартість запиту проксі, USD',
       'social.page_timeout_ms': 'Тайм-аут сторінки, мс',
+      'social.inbox.poll_seconds': 'Інтервал перевірки вхідних, секунд',
+      'social.inbox.daily_limit': 'Перевірок вхідних на день',
+      'social.inbox.max_threads': 'Розмов за перевірку вхідних',
+      'social.inbox.max_messages': 'Повідомлень у розмові',
       'social.facebook.session_fetch_gap_seconds':
         'Facebook: інтервал збору через акаунт, секунд',
       'social.facebook.session_fetch_daily_limit':

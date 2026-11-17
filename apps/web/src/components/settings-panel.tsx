@@ -7,7 +7,7 @@ import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
-import { Section } from './ui/layout';
+import { InfoTip, Section } from './ui/layout';
 import { AiAssist } from './ai-assist';
 import { runAiJob } from '@/lib/ai-job';
 import { ModelPicker } from './model-picker';
@@ -37,7 +37,7 @@ function SettingRow({
   children,
 }: {
   label: string;
-  description?: string;
+  description?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -253,6 +253,56 @@ export function SettingsPanel({ section }: { section?: string }) {
         {Number.isFinite(value) ? value : '—'}
       </span>
     );
+  const socialUnit = (key: string) => {
+    if (key.endsWith('daily_limit'))
+      return uk.social.units.day;
+    if (key.endsWith('session_fetch_daily_limit')) return uk.social.units.day;
+    if (key.endsWith('relogin_cooldown_hours')) return uk.social.units.hours;
+    if (key.endsWith('_seconds')) return uk.social.units.seconds;
+    if (key.endsWith('_minutes')) return uk.social.units.minutes;
+    if (key.endsWith('_ms')) return uk.social.units.milliseconds;
+    if (key.endsWith('_usd')) return uk.social.units.dollars;
+    return '';
+  };
+  const socialNumberRow = (key: string) => {
+    const range = socialFields[key as keyof typeof socialFields];
+    if (!range) return null;
+    const label = uk.social.settings[key as keyof typeof uk.social.settings];
+    return (
+      <SettingRow
+        key={key}
+        label={label}
+        description={editing ? uk.settings.range(range.min, range.max) : undefined}
+      >
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {numeric(
+            label,
+            Number(social[key]),
+            (value) => setSocial({ ...social, [key]: value }),
+            range,
+          )}
+          <span className="text-xs text-muted-foreground">{socialUnit(key)}</span>
+        </span>
+      </SettingRow>
+    );
+  };
+  const socialToggleRow = (key: string, label: string) => (
+    <SettingRow key={key} label={label}>
+      <input
+        aria-label={label}
+        type="checkbox"
+        disabled={!editing}
+        checked={social[key] === true}
+        onChange={(event) =>
+          setSocial({ ...social, [key]: event.target.checked })
+        }
+      />
+    </SettingRow>
+  );
+  const socialNumericKeys = Object.keys(socialFields);
+  const socialGeneralKeys = socialNumericKeys.filter(
+    (key) => !/^social\.(facebook|instagram|linkedin|inbox)\./.test(key),
+  );
   return (
     <div className="grid min-w-0 items-start gap-6 lg:grid-cols-[12rem_minmax(0,1fr)] lg:gap-8">
       <label className="space-y-2 lg:hidden">
@@ -558,41 +608,54 @@ export function SettingsPanel({ section }: { section?: string }) {
             )}
             {active === 'social' && (
               <>
-                <SettingRow
-                  label={uk.social.enabled}
-                  description={uk.social.settingsHint}
-                >
-                  <input
-                    aria-label={uk.social.enabled}
-                    type="checkbox"
-                    disabled={!editing}
-                    checked={social['social.enabled'] === true}
-                    onChange={(event) =>
-                      setSocial({
-                        ...social,
-                        'social.enabled': event.target.checked,
-                      })
+                <div className="space-y-2">
+                  <h3 className="border-b border-border pb-2 text-sm font-semibold">
+                    {uk.social.groups.general}
+                  </h3>
+                  <SettingRow
+                    label={uk.social.enabled}
+                    description={
+                      <span className="inline-flex items-center gap-1">
+                        {uk.social.settingsHint}
+                        <InfoTip>{uk.social.settingsHint}</InfoTip>
+                      </span>
                     }
-                  />
-                </SettingRow>
-                {Object.entries(socialFields).map(([key, range]) => {
-                  const label =
-                    uk.social.settings[key as keyof typeof uk.social.settings];
-                  return (
-                    <SettingRow
-                      key={key}
-                      label={label}
-                      description={uk.settings.range(range.min, range.max)}
-                    >
-                      {numeric(
-                        label,
-                        Number(social[key]),
-                        (value) => setSocial({ ...social, [key]: value }),
-                        range,
-                      )}
-                    </SettingRow>
-                  );
-                })}
+                  >
+                    <input
+                      aria-label={uk.social.enabled}
+                      type="checkbox"
+                      disabled={!editing}
+                      checked={social['social.enabled'] === true}
+                      onChange={(event) =>
+                        setSocial({ ...social, 'social.enabled': event.target.checked })
+                      }
+                    />
+                  </SettingRow>
+                  {socialGeneralKeys.map(socialNumberRow)}
+                </div>
+                {(['facebook', 'instagram', 'linkedin'] as const).map((network) => (
+                  <div key={network} className="mt-6 space-y-2">
+                    <h3 className="border-b border-border pb-2 text-sm font-semibold">
+                      {uk.social.groups[network]}
+                    </h3>
+                    {socialNumericKeys
+                      .filter((key) => key.startsWith(`social.${network}.`))
+                      .map(socialNumberRow)}
+                  </div>
+                ))}
+                <details className="mt-6 rounded-lg border border-border px-4">
+                  <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">
+                    {uk.social.groups.inbox}
+                  </summary>
+                  <div className="border-t border-border py-2">
+                    {socialToggleRow('social.inbox.enabled', uk.social.inboxSettings.enabled)}
+                    {socialToggleRow('social.inbox.facebook.enabled', uk.social.inboxSettings.facebook)}
+                    {socialToggleRow('social.inbox.instagram.enabled', uk.social.inboxSettings.instagram)}
+                    {socialNumericKeys
+                      .filter((key) => key.startsWith('social.inbox.'))
+                      .map(socialNumberRow)}
+                  </div>
+                </details>
                 {editing && (
                   <div className="mt-5">
                     <AiAssist
