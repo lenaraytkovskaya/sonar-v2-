@@ -1,9 +1,11 @@
 'use client';
-import { Fragment, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { EmailAccount } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
 import { Card, StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
+import { DetailList } from './ui/layout';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -119,109 +121,77 @@ export function EmailAccounts({
         </CrudButton>
       </div>
       {!accounts.length && <p>{uk.email.empty}</p>}
-      {!!accounts.length && (
-        <div className="min-w-0">
-          <table className="block w-full text-left text-sm md:table">
-            <thead className="hidden text-xs text-muted-foreground md:table-header-group">
-              <tr>
-                {[
-                  uk.email.name,
-                  uk.email.address,
-                  uk.email.owner,
-                  uk.email.today,
-                  uk.email.next,
-                  uk.company.status,
-                ].map((label) => (
-                  <th key={label} className="p-3">
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="block md:table-row-group">
-              {accounts.map((account) => (
-                <Fragment key={account.id}>
-                  <tr className="grid border-t border-border py-3 md:table-row md:py-0">
-                    <td className="min-w-0 break-words py-2 md:p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {account.name}
-                        <HealthBadge
-                          health={health.find(
-                            (item) => item.accountId === account.id,
-                          )}
-                        />
-                      </div>
-                    </td>
-                    <td className="min-w-0 break-words py-2 md:p-3">
+      <div className="space-y-3">
+        {accounts.map((account) => {
+          const accountHealth = health.find(
+            (item) => item.accountId === account.id,
+          );
+          return (
+            <article
+              key={account.id}
+              className="space-y-4 rounded-lg border border-border p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-chip">
+                    <ChannelIcon channel="email" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="break-words font-semibold">{account.name}</h3>
+                      <StatusBadge status={account.enabled ? 'active' : 'disabled'}>
+                        {account.enabled ? uk.email.enabled : uk.email.disabled}
+                      </StatusBadge>
+                      <HealthBadge health={accountHealth} />
+                    </div>
+                    <p className="text-sm text-muted-foreground break-all">
                       {account.fromAddress}
-                    </td>
-                    <td className="min-w-0 break-words py-2 md:p-3">
-                      {account.ownerName ?? '—'}
-                    </td>
-                    <td className="min-w-0 break-words py-2 md:p-3">
-                      {account.sentToday} / {account.dailyLimit}
-                    </td>
-                    <td className="min-w-0 break-words py-2 md:p-3">
-                      {account.nextSendAt
-                        ? new Date(account.nextSendAt).toLocaleString('uk-UA')
-                        : '—'}
-                    </td>
-                    <td className="min-w-0 break-words py-2 md:p-3">
-                      <span className="flex flex-wrap items-center gap-2">
-                        <StatusBadge
-                          status={account.enabled ? 'active' : 'disabled'}
-                        >
-                          {account.enabled
-                            ? uk.email.enabled
-                            : uk.email.disabled}
-                        </StatusBadge>
-                        <RowActions
-                          disabled={pending}
-                          actions={[
-                            ...healthJournalAction(
-                              health.find(
-                                (item) => item.accountId === account.id,
-                              ),
-                              setHealthJournal,
-                            ),
-                            {
-                              kind: account.enabled ? 'disable' : 'enable',
-                              label: account.enabled
-                                ? uk.email.disable
-                                : uk.email.enable,
-                              onSelect: () =>
-                                void toggle(account.id, !account.enabled),
-                            },
-                            {
-                              kind: 'delete',
-                              label: uk.email.remove,
-                              danger: true,
-                              confirm: `${uk.email.removeConfirm} ${account.fromAddress}?`,
-                              onSelect: () => void remove(account.id),
-                            },
-                          ]}
-                        />
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="block md:table-row">
-                    <td
-                      colSpan={6}
-                      className="block pb-4 md:table-cell md:px-3"
-                    >
-                      <HealthDetails
-                        health={health.find(
-                          (item) => item.accountId === account.id,
-                        )}
-                      />
-                    </td>
-                  </tr>
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button
+                    variant={account.enabled ? 'outline' : 'default'}
+                    disabled={pending}
+                    onClick={() => void toggle(account.id, !account.enabled)}
+                  >
+                    {account.enabled ? uk.email.disable : uk.email.enable}
+                  </Button>
+                  <RowActions
+                    disabled={pending}
+                    actions={[
+                      ...healthJournalAction(accountHealth, setHealthJournal),
+                      {
+                        kind: 'delete',
+                        label: uk.email.remove,
+                        danger: true,
+                        confirm: `${uk.email.removeConfirm} ${account.fromAddress}?`,
+                        onSelect: () => void remove(account.id),
+                      },
+                    ]}
+                  />
+                </div>
+              </div>
+              <DetailList
+                items={[
+                  { label: uk.email.owner, value: account.ownerName ?? '—' },
+                  {
+                    label: uk.email.today,
+                    value: `${account.sentToday} / ${account.dailyLimit}`,
+                  },
+                  {
+                    label: uk.email.next,
+                    value: account.nextSendAt
+                      ? new Date(account.nextSendAt).toLocaleString('uk-UA')
+                      : '—',
+                  },
+                ]}
+              />
+              <HealthDetails health={accountHealth} />
+            </article>
+          );
+        })}
+      </div>
       <HealthJournal
         health={
           health.find((item) => item.accountId === healthJournal?.accountId) ??

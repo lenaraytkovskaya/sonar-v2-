@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import type { listWhatsAppAccounts } from '@sonar/db/whatsapp';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
+import { DetailList, InfoTip } from './ui/layout';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -134,48 +136,99 @@ export function WhatsAppAccounts({
         {uk.whatsapp.accounts}
       </h2>
       {!configured && <p role="status">{uk.whatsapp.configuration}</p>}
-      <p className="text-sm text-muted-foreground">
-        {uk.whatsapp.singleSession}
-      </p>
       {account ? (
-        <section className="space-y-4 border-t border-border pt-4">
-          <div className="space-y-1 break-words">
-            <p className="font-medium">
-              {account.name}{' '}
-              <HealthBadge
-                health={health.find((item) => item.accountId === account.id)}
-              />
-              {account.providerName && ` · ${account.providerName}`}
-              {account.address && account.address !== '—' && (
-                <>
-                  {' · '}
-                  <RevealValue
-                    value={account.address}
-                    masked={account.addressMasked}
-                    copy
+        <article className="space-y-4 rounded-lg border border-border p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-chip">
+                <ChannelIcon channel="whatsapp" />
+              </span>
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">{account.name}</h3>
+                  <StatusBadge
+                    status={{
+                      active: account.desiredEnabled ? 'active' : 'disabled',
+                      qr: 'queued',
+                      starting: 'running',
+                      failed: 'failed',
+                      stopped: 'disabled',
+                    }[account.status]}
+                  >
+                    {uk.whatsapp.statuses[account.status]}
+                  </StatusBadge>
+                  <HealthBadge
+                    health={health.find((item) => item.accountId === account.id)}
                   />
-                </>
+                  <InfoTip>{uk.whatsapp.singleSession}</InfoTip>
+                  <InfoTip label={uk.whatsapp.repairWebhook}>
+                    {uk.whatsapp.repairWebhookHint}
+                  </InfoTip>
+                </div>
+                {account.address && account.address !== '—' && (
+                  <p className="text-sm text-muted-foreground">
+                    <RevealValue value={account.address} masked={account.addressMasked} copy />
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {['failed', 'stopped'].includes(account.status) ? (
+                <Button
+                  disabled={pending || !configured}
+                  onClick={() => void mutate('POST', { action: 'restart', id: account.id })}
+                >
+                  {uk.whatsapp.restart}
+                </Button>
+              ) : (
+                <CrudButton
+                  action="edit"
+                  disabled={pending}
+                  onClick={() => {
+                    setLimit(String(account.dailyLimit));
+                    setError('');
+                    setEditing(true);
+                  }}
+                >
+                  {uk.crud.editLimit}
+                </CrudButton>
               )}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {uk.email.owner}: {account.ownerName}
-            </p>
-            <p role="status">
-              {uk.whatsapp.statuses[account.status]}
-              {account.status === 'active' &&
-                ` · ${account.desiredEnabled ? uk.email.enabled : uk.email.disabled}`}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {uk.email.today}: {account.sentToday} / {account.dailyLimit}
-            </p>
-            {account.nextSendAt && (
-              <p className="text-sm text-muted-foreground">
-                {uk.email.next}:{' '}
-                {new Date(account.nextSendAt).toLocaleString('uk-UA')}
-              </p>
-            )}
-            {account.reasonUk && <p className="text-err"><FriendlyError reason={account.reasonUk} /></p>}
+              <RowActions
+                disabled={pending}
+                actions={[
+                  ...healthJournalAction(health.find((item) => item.accountId === account.id), setHealthJournal),
+                  {
+                    kind: 'sync',
+                    label: uk.whatsapp.repairWebhook,
+                    onSelect: () => void mutate('POST', { action: 'repair-webhook', id: account.id }),
+                  },
+                  ...(account.status === 'active' || healthPaused
+                    ? [{
+                        kind: account.desiredEnabled && !healthPaused ? 'disable' as const : 'enable' as const,
+                        label: account.desiredEnabled && !healthPaused ? uk.email.disable : uk.email.enable,
+                        onSelect: () => void mutate('PATCH', { id: account.id, enabled: healthPaused || !account.desiredEnabled }),
+                      }]
+                    : []),
+                  ...(account.status !== 'stopped'
+                    ? [{
+                        kind: 'disconnect' as const,
+                        label: uk.whatsapp.disconnect,
+                        danger: true,
+                        onSelect: () => void mutate('DELETE', { id: account.id }),
+                      }]
+                    : []),
+                ]}
+              />
+            </div>
           </div>
+          <DetailList
+            items={[
+              { label: uk.email.owner, value: account.ownerName ?? '—' },
+              { label: uk.email.today, value: `${account.sentToday} / ${account.dailyLimit}` },
+              { label: uk.email.next, value: account.nextSendAt ? new Date(account.nextSendAt).toLocaleString('uk-UA') : '—', hidden: !account.nextSendAt },
+            ]}
+          />
+          {account.reasonUk && <p className="text-sm text-err"><FriendlyError reason={account.reasonUk} /></p>}
           <HealthDetails
             health={health.find((item) => item.accountId === account.id)}
           />
@@ -196,17 +249,6 @@ export function WhatsAppAccounts({
               )}
             </div>
           )}
-          <CrudButton
-            action="edit"
-            disabled={pending}
-            onClick={() => {
-              setLimit(String(account.dailyLimit));
-              setError('');
-              setEditing(true);
-            }}
-          >
-            {uk.crud.editLimit}
-          </CrudButton>
           <CrudDialog
             open={editing}
             onOpenChange={setEditing}
@@ -254,73 +296,7 @@ export function WhatsAppAccounts({
               )}
             </form>
           </CrudDialog>
-          <p className="text-sm text-muted-foreground">
-            {uk.whatsapp.repairWebhookHint}
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              variant="outline"
-              disabled={pending || !configured}
-              onClick={() =>
-                void mutate('POST', {
-                  action: 'repair-webhook',
-                  id: account.id,
-                })
-              }
-            >
-              {uk.whatsapp.repairWebhook}
-            </Button>
-            {['failed', 'stopped'].includes(account.status) && (
-              <Button
-                disabled={pending || !configured}
-                onClick={() =>
-                  void mutate('POST', { action: 'restart', id: account.id })
-                }
-              >
-                {uk.whatsapp.restart}
-              </Button>
-            )}
-            <RowActions
-              disabled={pending}
-              actions={[
-                ...healthJournalAction(
-                  health.find((item) => item.accountId === account.id),
-                  setHealthJournal,
-                ),
-                ...(account.status === 'active' || healthPaused
-                  ? [
-                      {
-                        kind:
-                          account.desiredEnabled && !healthPaused
-                            ? ('disable' as const)
-                            : ('enable' as const),
-                        label:
-                          account.desiredEnabled && !healthPaused
-                            ? uk.email.disable
-                            : uk.email.enable,
-                        onSelect: () =>
-                          void mutate('PATCH', {
-                            id: account.id,
-                            enabled: healthPaused || !account.desiredEnabled,
-                          }),
-                      },
-                    ]
-                  : []),
-                ...(account.status !== 'stopped'
-                  ? [
-                      {
-                        kind: 'disconnect' as const,
-                        label: uk.whatsapp.disconnect,
-                        danger: true,
-                        onSelect: () =>
-                          void mutate('DELETE', { id: account.id }),
-                      },
-                    ]
-                  : []),
-              ]}
-            />
-          </div>
-        </section>
+        </article>
       ) : (
         <>
           <p>{uk.whatsapp.empty}</p>
