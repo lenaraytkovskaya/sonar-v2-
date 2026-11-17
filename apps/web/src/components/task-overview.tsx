@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import type { WorkerHealth } from '@sonar/core';
 import {
   createContext,
   useContext,
@@ -51,6 +52,7 @@ function useTaskPolling() {
     counts: Count[];
     sentToday: number;
     unreadCount: number;
+    workerHealth: WorkerHealth | null;
   }>({
     tasks: [],
     batches: [],
@@ -58,6 +60,7 @@ function useTaskPolling() {
     counts: [],
     sentToday: 0,
     unreadCount: 0,
+    workerHealth: null,
   });
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -94,6 +97,26 @@ export function useTasks() {
   const context = useContext(TasksContext);
   if (!context) throw Error('TasksProvider missing');
   return context;
+}
+export function WorkerStatus() {
+  const { workerHealth } = useTasks();
+  if (!workerHealth || workerHealth.worker) return null;
+  const time = workerHealth.heartbeatAt
+    ? new Date(workerHealth.heartbeatAt).toLocaleTimeString('uk-UA', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+  return (
+    <div
+      role="alert"
+      className="shrink-0 border-b border-err/20 bg-err-bg px-4 py-3 text-sm text-err md:px-6"
+    >
+      {time
+        ? uk.tasks.workerStopped.replace('{time}', time)
+        : uk.tasks.workerMissing}
+    </div>
+  );
 }
 export function FailureBadge({ inbox = false }: { inbox?: boolean }) {
   const { failures, unreadCount } = useTasks();

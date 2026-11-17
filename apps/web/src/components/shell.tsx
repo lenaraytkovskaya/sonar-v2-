@@ -19,7 +19,11 @@ import {
   LogOut,
   ChevronDown,
 } from 'lucide-react';
-import { FailureBadge, TasksProvider } from '@/components/task-overview';
+import {
+  FailureBadge,
+  TasksProvider,
+  WorkerStatus,
+} from '@/components/task-overview';
 import { uk } from '@/i18n/uk';
 import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
@@ -245,6 +249,7 @@ export function Shell({
                 </Dropdown.Portal>
               </Dropdown.Root>
             </header>
+            <WorkerStatus />
             <main
               id="content"
               tabIndex={-1}

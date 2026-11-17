@@ -30,7 +30,9 @@ export async function GET(request: Request) {
   const { rows: unread } = await sonarPool.query(
     "select count(*)::int as count from messages where direction='in' and read_at is null",
   );
+  const { readWorkerHealth } = await import('@sonar/db/tasks');
   return Response.json({
+    workerHealth: await readWorkerHealth(),
     tasks: rows,
     counts,
     failures,

@@ -351,6 +351,13 @@
       "when": 1794800049000,
       "tag": "0049_form_reply_match",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794910000000,
+      "tag": "0050_worker_heartbeat",
+      "breakpoints": true
     }
   ]
 }

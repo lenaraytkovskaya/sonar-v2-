@@ -1,4 +1,4 @@
-import { prozorroCode } from '@sonar/core';
+import { prozorroCode, workerHealth, type WorkerHeartbeat } from '@sonar/core';
 import { enqueueCompanyScores } from './scoring.js';
 import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
@@ -998,4 +998,27 @@ export async function enqueueBatchEnrichment(
     companies: rows.length,
   });
   return rows.length;
+}
+
+export async function recordWorkerHeartbeat(
+  startedAt: string,
+  version: string,
+) {
+  await sonarPool.query(
+    `insert into settings(key,value) values('worker.heartbeat_at',jsonb_build_object('at',clock_timestamp(),'startedAt',$1::text,'version',$2::text))
+     on conflict(key) do update set value=excluded.value,updated_at=clock_timestamp()`,
+    [startedAt, version],
+  );
+}
+
+export async function readWorkerHealth(now = new Date()) {
+  const { rows } = await sonarPool.query<{ key: string; value: unknown }>(
+    "select key,value from settings where key in ('worker.heartbeat_at','worker.stale_seconds')",
+  );
+  const values = Object.fromEntries(rows.map(({ key, value }) => [key, value]));
+  return workerHealth(
+    values['worker.heartbeat_at'] as WorkerHeartbeat | undefined,
+    Number(values['worker.stale_seconds'] ?? 180),
+    now,
+  );
 }
