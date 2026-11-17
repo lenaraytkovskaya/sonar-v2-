@@ -42,3 +42,4 @@ export * from './prozorro-company.js';
 export * from './form-replies.js';
 
 export * from './worker-health.js';
+export * from './viber.js';

@@ -19,6 +19,7 @@ import {
 } from './social-send.js';
 import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
+import { registerViberTasks } from './viber.js';
 import { registerAnalysisTasks } from './analysis.js';
 import { registerDraftTasks } from './drafts.js';
 import { registerScoringTasks } from './scoring.js';
@@ -66,6 +67,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerEmailTasks();
+  await registerViberTasks();
   await registerFormReplyTasks();
   await registerInboundTasks();
   await registerSocialInboxTasks(createSocialInboxAdapter(socialPageTimeout));

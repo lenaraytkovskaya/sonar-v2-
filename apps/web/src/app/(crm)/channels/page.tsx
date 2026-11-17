@@ -10,6 +10,7 @@ export default async function Page() {
   const { accountHealth } = await import('@sonar/db/account-health');
   const { listTelegramAccounts } = await import('@sonar/db/telegram');
   const { listWhatsAppAccounts } = await import('@sonar/db/whatsapp');
+  const { listViberAccounts } = await import('@sonar/db/viber');
   const {
     listSocialAccounts,
     getSocialProxyCount,
@@ -22,6 +23,7 @@ export default async function Page() {
     formDelivery,
     telegram,
     whatsapp,
+    viber,
     social,
     accountProxyIndex,
     health,
@@ -31,6 +33,7 @@ export default async function Page() {
     getFormDeliverySettings(),
     listTelegramAccounts(),
     listWhatsAppAccounts(),
+    listViberAccounts(),
     listSocialAccounts(user?.id),
     Promise.all([
       getSocialAccountProxyIndex('facebook'),
@@ -68,6 +71,7 @@ export default async function Page() {
           health,
           configured: !!(process.env.WAHA_URL && process.env.WAHA_API_KEY),
         }}
+        viber={{ accounts: viber, health }}
       />
     </>
   );

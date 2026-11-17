@@ -4,6 +4,7 @@ export const outreachChannels = [
   'email',
   'telegram',
   'whatsapp',
+  'viber',
   'form',
   'social',
 ] as const;
@@ -17,16 +18,27 @@ export function selectOutreachContacts<
   return contacts
     .filter(
       (contact) =>
-        outreachChannels.includes(contact.kind as OutreachChannel) &&
+        (outreachChannels.includes(contact.kind as OutreachChannel) ||
+          contact.kind === 'phone') &&
         (contact.kind === 'social' ||
-          channels[contact.kind === 'form' ? 'forms' : contact.kind] === true),
+          (contact.kind === 'phone'
+            ? channels.viber === true
+            : channels[contact.kind === 'form' ? 'forms' : contact.kind] ===
+              true)),
     )
     .sort((a, b) => b.rank - a.rank || a.id.localeCompare(b.id))
     .flatMap((contact) => {
       const key = `${contact.kind}:${contact.normalized.trim().toLowerCase()}`;
       if (!contact.normalized.trim() || seen.has(key)) return [];
       seen.add(key);
-      return [{ ...contact, channel: contact.kind as OutreachChannel }];
+      return [
+        {
+          ...contact,
+          channel: (contact.kind === 'phone'
+            ? 'viber'
+            : contact.kind) as OutreachChannel,
+        },
+      ];
     })
     .slice(0, 3);
 }
@@ -69,6 +81,7 @@ export function parseOutreachDraft(
   if (
     (channel === 'telegram' ||
       channel === 'whatsapp' ||
+      channel === 'viber' ||
       channel === 'social') &&
     draft.body.length > shortMaxLength
   )

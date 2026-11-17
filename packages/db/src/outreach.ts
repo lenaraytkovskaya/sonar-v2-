@@ -75,7 +75,7 @@ const invalid = (reason: string): never => {
   throw new EmailValidationError(reason);
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
-const automatic = ['email', 'telegram', 'whatsapp'];
+const automatic = ['email', 'telegram', 'whatsapp', 'viber'];
 const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
@@ -489,8 +489,12 @@ export async function saveOutreachDraft(
       row.score !== null &&
       row.score >= row.min_score &&
       !!account;
-    if (channel === 'whatsapp' && !account)
-      invalid('Підключіть активний акаунт WhatsApp.');
+    if ((channel === 'whatsapp' || channel === 'viber') && !account)
+      invalid(
+        channel === 'viber'
+          ? 'Підключіть Viber Desktop.'
+          : 'Підключіть активний акаунт WhatsApp.',
+      );
     const status = canAuto ? 'queued' : 'draft';
     const conversation =
       channel === 'whatsapp'

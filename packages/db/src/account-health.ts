@@ -119,6 +119,7 @@ function sessionCanResume(channel: string, settings: Record<string, unknown>) {
       settings.sessionStatus !== 'invalid'
     );
   if (channel === 'whatsapp') return settings.providerStatus === 'WORKING';
+  if (channel === 'viber') return false;
   return channel === 'email';
 }
 
@@ -283,7 +284,7 @@ export async function accountHealth(
     (select count(*)::int from messages m,bounds b where m.account_id=a.id and m.direction='out' and m.status='failed' and m.created_at>=b.start and m.created_at<=b.finish) as failed,
     (select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'kind',e.kind,'reasonUk',e.reason_uk,'details',e.details,'createdAt',e.created_at) order by e.created_at desc,e.id),'[]')
       from account_health_events e where e.account_id=a.id and e.created_at>=$2::timestamptz-make_interval(days=>$4::int) and e.created_at<=$2::timestamptz) as events
-    from channel_accounts a where a.channel in ('email','telegram','whatsapp','facebook','instagram','linkedin') and ($1='all' or a.id::text=$1) order by a.channel,a.name,a.id`,
+    from channel_accounts a where a.channel in ('email','telegram','whatsapp','viber','facebook','instagram','linkedin') and ($1='all' or a.id::text=$1) order by a.channel,a.name,a.id`,
     [accountId, now.toISOString(), config.summary_days, config.retention_days],
   );
   const summaryStart =

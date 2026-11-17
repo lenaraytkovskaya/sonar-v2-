@@ -76,6 +76,8 @@ services:
     environment:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:-}
+      VIBER_BRIDGE_URL: http://viber:3000
+      VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
       RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
@@ -105,6 +107,8 @@ services:
     environment:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY:-}
+      VIBER_BRIDGE_URL: http://viber:3000
+      VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET (at least 32 characters)}
@@ -120,6 +124,17 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
     stop_grace_period: 30s
+  viber:
+    build:
+      context: ..
+      dockerfile: docker/viber.Dockerfile
+    platform: linux/amd64
+    environment:
+      VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
+    volumes:
+      - viber:/data
+    shm_size: 256mb
+    restart: unless-stopped
   waha:
     image: devlikeapro/waha:noweb-2026.10.1
     platform: linux/amd64
@@ -137,3 +152,4 @@ volumes:
     external: true
     name: sonar-server_postgres
   waha:
+  viber:

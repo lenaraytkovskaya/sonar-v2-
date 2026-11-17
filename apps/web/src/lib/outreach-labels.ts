@@ -39,6 +39,7 @@ export const channelLabel = (channel: string, value = '') => {
         form: uk.forms.title,
         telegram: uk.telegram.title,
         whatsapp: uk.whatsapp.title,
+        viber: uk.viber.title,
         social: uk.outreach.social,
         call: uk.outreach.call,
         phone: uk.outreach.call,

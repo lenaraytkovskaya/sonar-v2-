@@ -106,7 +106,7 @@ export type OverviewMetrics = {
     number
   >;
   channels: {
-    channel: 'email' | 'telegram' | 'whatsapp' | 'form';
+    channel: 'email' | 'telegram' | 'whatsapp' | 'viber' | 'form';
     today: number;
     last7Days: number;
   }[];
@@ -145,7 +145,7 @@ export async function overviewMetrics(
       'doNotContact',count(*) filter(where status='do_not_contact' or exists(select 1 from do_not_contact d where d.company_id=stages.id or (d.kind='company' and d.value_normalized=stages.id::text)))),
     'channels',(select jsonb_agg(jsonb_build_object('channel',channel,'today',today,'last7Days',last7days) order by channel) from (
       select ch.channel,count(m.id) filter(where m.sent_at>=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as today,count(m.id) as last7days
-      from (values ('email'),('telegram'),('whatsapp'),('form')) ch(channel) left join scoped_messages m on m.channel=ch.channel and m.direction='out' and m.sent_at>=now()-interval '7 days' and m.sent_at<=now() group by ch.channel) channels),
+      from (values ('email'),('telegram'),('whatsapp'),('viber'),('form')) ch(channel) left join scoped_messages m on m.channel=ch.channel and m.direction='out' and m.sent_at>=now()-interval '7 days' and m.sent_at<=now() group by ch.channel) channels),
     'failedTasks24h',(select count(*) from attributed_tasks t where t.status='failed' and coalesce(t.finished_at,t.created_at)>=now()-interval '24 hours'
       and ($1::uuid is null or t.campaign_id=$1::text or (t.campaign_id is null and ((t.subject_type='campaign' and t.subject_id=$1::text) or (t.subject_type='company' and exists(select 1 from scoped c where c.id::text=t.subject_id))))))
   ) as metrics from stages`,
