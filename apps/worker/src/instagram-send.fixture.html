@@ -53,7 +53,7 @@
   else {
     const openConversation = (event) => {
       event.preventDefault();
-      window.fixtureEvent('open');
+      window.fixtureEvent(f.directConversation ? 'direct-open' : 'open');
       if (f.noDialog) return;
       const open = () => {
         history.pushState({}, '', '/direct/t/fixture-thread/');
@@ -321,6 +321,10 @@
       else open();
     };
     main.querySelector('button, a').onclick = openConversation;
+    if (f.directConversation) {
+      history.replaceState({}, '', '/direct/t/fixture-thread/');
+      openConversation({ preventDefault() {} });
+    }
     if (f.overflow) {
       // Screenshot-supported structure; accessible labels/roles are assumptions.
       // The profile has Follow only; the username's options open a body portal.

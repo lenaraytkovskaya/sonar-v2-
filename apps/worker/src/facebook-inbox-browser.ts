@@ -41,7 +41,7 @@ export async function readFacebookThread(
   maxMessages = 100,
 ) {
   return page.evaluate(
-    ({ ownId, logSelector }) => {
+    ({ ownId, logSelector, maxMessages }) => {
       const visible = (node: Element) =>
         node.getClientRects().length > 0 &&
         getComputedStyle(node).visibility === 'visible' &&
@@ -205,8 +205,96 @@ export async function readFacebookThread(
       }
       return result();
     },
-    { ownId, logSelector },
+    { ownId, logSelector, maxMessages },
   );
+}
+
+/** Reads only visible request-list previews; it never follows a thread link. */
+export async function readFacebookRequestPreviews(page: Page) {
+  return page.evaluate(() => {
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility === 'visible' &&
+      !node.closest('[hidden],[aria-hidden="true"],[inert]');
+    const messages: SocialInboxMessage[] = [];
+    const skipped: string[] = [];
+    if (
+      location.origin !== 'https://www.facebook.com' ||
+      !/^\/messages\/requests\/?$/.test(location.pathname)
+    )
+      return { messages, skipped: ['requests_list_unverified'] };
+    const links = Array.from(
+      document.querySelectorAll<HTMLAnchorElement>(
+        'a[href^="/messages/t/"],a[href^="/messages/e2ee/t/"]',
+      ),
+    ).filter(visible);
+    const seen = new Set<string>();
+    for (const link of links) {
+      const url = new URL(link.href);
+      const threadId = /^\/messages\/(?:e2ee\/)?t\/(\d+)\/?$/.exec(
+        url.pathname,
+      )?.[1];
+      if (!threadId || seen.has(threadId)) continue;
+      seen.add(threadId);
+      const row =
+        link.closest('article,[role="row"],[role="listitem"],li') ??
+        link.parentElement ??
+        link;
+      const preview = row.cloneNode(true) as HTMLElement;
+      preview
+        .querySelectorAll('button,[role="button"]')
+        .forEach((node) => node.remove());
+      preview.querySelectorAll('a[href^="/"]').forEach((node) => {
+        if (
+          node !== link &&
+          /^\/\d+\/?$/.test(new URL((node as HTMLAnchorElement).href).pathname)
+        )
+          node.remove();
+      });
+      const text = (preview.textContent ?? link.textContent ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const profileIds = Array.from(row?.querySelectorAll('a[href]') ?? [])
+        .filter(visible)
+        .map((node) => {
+          try {
+            const profile = new URL(
+              (node as HTMLAnchorElement).href,
+              location.href,
+            );
+            return profile.origin === location.origin
+              ? (/^\/(\d+)\/?$/.exec(profile.pathname)?.[1] ?? null)
+              : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((id): id is string => Boolean(id));
+      const peerId = [...new Set(profileIds)];
+      if (!text || peerId.length !== 1) {
+        skipped.push('request_preview_identity_unverified');
+        continue;
+      }
+      const peerProfile = `https://www.facebook.com/${peerId[0]}/`;
+      messages.push({
+        externalMessageId: `preview:${threadId}`,
+        threadId,
+        threadUrl: `https://www.facebook.com${url.pathname}`,
+        direction: 'in',
+        senderProfile: peerProfile,
+        peerProfile,
+        body: text.slice(0, 2000),
+        occurredAt: null,
+        providerTimestamp: 'request-preview-only',
+        observedAt: new Date().toISOString(),
+        incomplete: true,
+        incompleteReasonUk: 'Запит не відкрито, щоб не позначати прочитаним.',
+      });
+    }
+    if (!links.length) skipped.push('requests_empty_or_unverified');
+    if (links.length) skipped.push('requests_preview_only');
+    return { messages, skipped };
+  });
 }
 
 /** Only the non-destructive restore dismissal observed by root on 2026-11-15. */
@@ -305,8 +393,14 @@ export async function captureFacebookInbox(
 ) {
   const skipped = new Set([
     'pagination_unverified',
-    'requests_and_archived_unverified',
+    'archived_folder_unverified',
   ]);
+  const folderCursors: Record<string, unknown> =
+    resumeAnchor?.folders !== null &&
+    typeof resumeAnchor?.folders === 'object' &&
+    !Array.isArray(resumeAnchor.folders)
+      ? { ...(resumeAnchor.folders as Record<string, unknown>) }
+      : {};
   const deadline = Date.now() + timeoutMs;
   let navigationHttpStatus: number | null = null;
   let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
@@ -423,11 +517,26 @@ export async function captureFacebookInbox(
       skipped.add('history_unavailable');
     }
     read.skipped.forEach((reason) => skipped.add(reason));
+    folderCursors.chats = ordered[(index + 1) % ordered.length];
     await persist({
       messages: read.messages,
       resumeAnchor: {
         threadUrl: url,
         nextThreadUrl: ordered[(index + 1) % ordered.length],
+        folders: { ...folderCursors },
+      },
+    });
+  }
+  if (Date.now() < deadline) {
+    await navigate(`${origin}/messages/requests/`, deadline);
+    const previews = await readFacebookRequestPreviews(page);
+    previews.skipped.forEach((reason) => skipped.add(reason));
+    folderCursors.requests = previews.messages.at(-1)?.threadId ?? null;
+    await persist({
+      messages: previews.messages,
+      resumeAnchor: {
+        nextThreadUrl: ordered[0] ?? null,
+        folders: { ...folderCursors },
       },
     });
   }

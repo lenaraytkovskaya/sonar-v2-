@@ -103,6 +103,7 @@ export async function captureInstagramInbox(
     string,
     { lastMessageAt?: string; lastMessageIds?: string[] }
   > = {},
+  folderCursors: Record<string, string | null> = {},
 ) {
   const capture = emptyCapture();
   let navigationHttpStatus: number | null = null;
@@ -142,7 +143,7 @@ export async function captureInstagramInbox(
   const seen = new Map<string, string>();
   const threads = new Map<string, InstagramInboxPage['threads'][number]>();
   const threadMessageCounts = new Map<string, number>();
-  let scope = 'inbox';
+  let scope: 'primary' | 'general' | 'requests' = 'primary';
   const deadline = Date.now() + timeoutMs;
   const onResponse = (response: Response) => {
     const url = new URL(response.url());
@@ -174,7 +175,7 @@ export async function captureInstagramInbox(
     // Unread-count and other ancillary queries share the mailbox envelope but
     // select no actor/messages. Only captured full query selections are eligible.
     const expectedQuery =
-      responseScope === `${origin}/direct/requests/`
+      responseScope === 'requests'
         ? 'PolarisDirectMessageRequestQuery'
         : 'PolarisDirectInboxQuery';
     let stage: SocialSessionCheckDiagnostic['stage'] = 'http';
@@ -200,22 +201,38 @@ export async function captureInstagramInbox(
           invalid = true;
           return;
         }
-        if (responseScope === `${origin}/direct/requests/`) {
-          if (!mailboxId || !parseInstagramRequests(body, mailboxId)) {
-            skipped.add('requests_shape_unsupported');
+        if (responseScope === 'requests') {
+          if (mailboxId && parseInstagramRequests(body, mailboxId)) {
+            capture.parsed = Math.min(capture.parsed + 1, 2);
+            await checkSession('capture_auth');
+            capture.verified = Math.min(capture.verified + 1, 2);
+            requestsCovered = true;
+            folderCursors.requests = null;
+            state.inbox = { more: false, cursor: null };
+            revision++;
+            stage = 'persist';
+            await persistBatch({
+              messages: [],
+              resumeAnchor: {
+                folders: { ...folderCursors },
+                activeFolder: 'requests',
+              },
+            });
+            capture.persisted = Math.min(capture.persisted + 1, 2);
             return;
           }
-          capture.parsed = Math.min(capture.parsed + 1, 2);
-          await checkSession('capture_auth');
-          capture.verified = Math.min(capture.verified + 1, 2);
-          requestsCovered = true;
-          revision++;
-          stage = 'persist';
-          await persistBatch({ messages: [], resumeAnchor: null });
-          capture.persisted = Math.min(capture.persisted + 1, 2);
-          return;
         }
-        const parsed = parseInstagramInbox(body, new Date().toISOString());
+        const expectedFolder =
+          responseScope === 'general'
+            ? 'GENERAL'
+            : responseScope === 'requests'
+              ? 'REQUESTS'
+              : 'PRIMARY';
+        const parsed = parseInstagramInbox(
+          body,
+          new Date().toISOString(),
+          expectedFolder,
+        );
         if (!parsed) return;
         capture.parsed = Math.min(capture.parsed + 1, 2);
         await checkSession('capture_auth');
@@ -297,13 +314,13 @@ export async function captureInstagramInbox(
         mailboxId ??= parsed.mailboxId;
         seenMailbox = true;
         revision++;
-        if (responseScope === 'inbox') state.inbox = parsed.inbox;
+        state.inbox = parsed.inbox;
         // Continuation request variables have not been captured/verified. A later
         // terminal page cannot prove that any intervening provider page was seen.
         unprovenChain ||=
           parsed.inbox?.more === true ||
           parsed.threads.some((thread) => thread.page?.more === true);
-        if (!parsed.inbox) {
+        if (!parsed.inbox && responseScope !== 'requests') {
           invalid = true;
           skipped.add('missing_pagination');
         }
@@ -339,8 +356,16 @@ export async function captureInstagramInbox(
           threadMessageCounts.set(message.threadId, count + 1);
         }
         // Serialize and commit each captured chunk before any further UI action.
+        if (parsed.inbox) folderCursors[responseScope] = parsed.inbox.cursor;
+        if (responseScope === 'requests') requestsCovered = true;
         stage = 'persist';
-        await persistBatch({ messages, resumeAnchor: null });
+        await persistBatch({
+          messages,
+          resumeAnchor: {
+            folders: { ...folderCursors },
+            activeFolder: responseScope,
+          },
+        });
         capture.persisted = Math.min(capture.persisted + 1, 2);
       })
       .catch(async (error) => {
@@ -367,7 +392,7 @@ export async function captureInstagramInbox(
     return revision > previous;
   };
   const navigate = async (url: string) => {
-    scope = url === `${origin}/direct/inbox/` ? 'inbox' : url;
+    scope = url === `${origin}/direct/requests/` ? 'requests' : 'primary';
     let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
     try {
       navigationHttpStatus = null;
@@ -433,15 +458,65 @@ export async function captureInstagramInbox(
       if (!(await waitForCapture(before))) break;
     }
     await drain();
-    if (
-      seenMailbox &&
-      !invalid &&
-      skipped.size === 0 &&
-      Date.now() < deadline
-    ) {
+    if (seenMailbox && !invalid && Date.now() < deadline) {
+      const generalTabs = page
+        .getByRole('tab', { name: /^(General|Загальні)$/i })
+        .or(page.getByRole('button', { name: /^(General|Загальні)$/i }));
+      if ((await generalTabs.count()) === 1) {
+        scope = 'general';
+        const before = revision;
+        await generalTabs.click({
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+        if (!(await waitForCapture(before)))
+          skipped.add('general_folder_unverified');
+        while (
+          seenMailbox &&
+          !invalid &&
+          state.inbox?.more &&
+          Date.now() < deadline
+        ) {
+          await checkSession('auth');
+          const container = page.locator(inboxContainer);
+          if ((await container.count()) !== 1) {
+            invalid = true;
+            break;
+          }
+          const previous = revision;
+          await container.evaluate((element) => {
+            element.scrollTo({
+              top: element.scrollHeight,
+              behavior: 'instant',
+            });
+            element.dispatchEvent(new Event('scroll', { bubbles: true }));
+          });
+          if (!(await waitForCapture(previous))) break;
+        }
+      } else skipped.add('general_folder_unsupported');
+    }
+    if (seenMailbox && !invalid && Date.now() < deadline) {
       const before = revision;
       await navigate(`${origin}/direct/requests/`);
       await waitForCapture(before);
+      while (
+        requestsCovered &&
+        !invalid &&
+        state.inbox?.more &&
+        Date.now() < deadline
+      ) {
+        await checkSession('auth');
+        const container = page.locator(inboxContainer);
+        if ((await container.count()) !== 1) {
+          invalid = true;
+          break;
+        }
+        const previous = revision;
+        await container.evaluate((element) => {
+          element.scrollTo({ top: element.scrollHeight, behavior: 'instant' });
+          element.dispatchEvent(new Event('scroll', { bubbles: true }));
+        });
+        if (!(await waitForCapture(previous))) break;
+      }
     }
     await checkSession('auth');
     detach();
@@ -449,9 +524,6 @@ export async function captureInstagramInbox(
     if (!seenMailbox) skipped.add('no_verified_mailbox');
     if (unprovenChain) skipped.add('pagination_chain_unverified');
     if (!requestsCovered) skipped.add('requests_and_spam_unverified');
-    // No observed General fixture or reliable account capability evidence exists.
-    // PRIMARY and empty Requests/spam cannot advance an account-wide watermark.
-    skipped.add('general_folder_unsupported');
     return {
       complete: false,
       reason: 'unsupported_dom' as const,
@@ -555,6 +627,10 @@ export function createSocialInboxAdapter(
           (checkpoint.threadCursors ?? {}) as Record<
             string,
             { lastMessageAt?: string; lastMessageIds?: string[] }
+          >,
+          (checkpoint.resumeAnchor?.folders ?? {}) as Record<
+            string,
+            string | null
           >,
         ),
       );

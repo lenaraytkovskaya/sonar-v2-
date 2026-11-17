@@ -58,7 +58,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         if (options.navigationFailure) return route.abort('failed');
         if (
           url.hostname === 'www.instagram.com' &&
-          url.pathname === '/fixture_company/'
+          (url.pathname === '/fixture_company/' ||
+            url.pathname === '/direct/t/fixture-thread/')
         )
           return route.fulfill({
             status: options.rateLimit ? 429 : 200,
@@ -68,8 +69,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               : html,
           });
         if (url.hostname !== 'ig.me') return route.abort('blockedbyclient');
+        if (options.deepLinkSuccess)
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/html',
+            body: '<script>location.href="https://www.instagram.com/direct/t/fixture-thread/"</script>',
+          });
         return route.fulfill({
-          status: 200,
+          status: 404,
           contentType: 'text/html',
           body: '<p>Deep link cannot open this chat</p>',
         });
@@ -137,7 +144,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
       const send = () =>
         adapter.send(
-          { id: 'fixture', channel: 'instagram', settings: {} },
+          {
+            id: 'fixture',
+            channel: 'instagram',
+            settings: options.knownThreadId
+              ? { providerThreadId: options.knownThreadId }
+              : {},
+          },
           { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
           Number(options.timeoutMs ?? 250),
           'https://instagram.com/fixture_company/',
@@ -171,7 +184,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await expect(f.send()).resolves.toBe(
             'https://www.instagram.com/direct/t/fixture-thread/',
           );
-          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.requests).toEqual([
+            'ig.me/m/fixture_company',
+            'www.instagram.com/fixture_company/',
+          ]);
           expect(f.events).toEqual(['open', 'mark', 'send']);
           expect(f.inputs).toEqual([
             'textarea' in options ? 'textarea' : 'textbox',
@@ -182,13 +198,51 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it('follows ig.me into a verified direct thread before sending', async () => {
+      const f = await fixture({
+        deepLinkSuccess: true,
+        directConversation: true,
+      });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.requests).toEqual([
+          'ig.me/m/fixture_company',
+          'www.instagram.com/direct/t/fixture-thread/',
+        ]);
+        expect(f.events).toEqual(['direct-open', 'mark', 'send']);
+      } finally {
+        await f.close();
+      }
+    });
+    it('opens a known Instagram thread directly before trying ig.me', async () => {
+      const f = await fixture({
+        knownThreadId: 'fixture-thread',
+        directConversation: true,
+      });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.requests).toEqual([
+          'www.instagram.com/direct/t/fixture-thread/',
+        ]);
+        expect(f.events).toEqual(['direct-open', 'mark', 'send']);
+      } finally {
+        await f.close();
+      }
+    });
     it('fills the observed unnamed Lexical textbox while excluding header/sidebar editors', async () => {
       const f = await fixture({ lexical: true, lexicalDecoys: true });
       try {
         await expect(f.send()).resolves.toBe(
           'https://www.instagram.com/direct/t/fixture-thread/',
         );
-        expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        expect(f.requests).toEqual([
+          'ig.me/m/fixture_company',
+          'www.instagram.com/fixture_company/',
+        ]);
         expect(f.inputs).toEqual(['textbox']);
         expect(f.events).toEqual(['open', 'mark', 'send']);
         expect(f.mark).toHaveBeenCalledOnce();
@@ -238,7 +292,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await expect(f.send()).resolves.toBe(
             'https://www.instagram.com/direct/t/fixture-thread/',
           );
-          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.requests).toEqual([
+            'ig.me/m/fixture_company',
+            'www.instagram.com/fixture_company/',
+          ]);
           expect(f.inputs).toEqual(['textbox']);
           expect(f.events).toEqual(['open', 'mark', 'send']);
           expect(f.mark).toHaveBeenCalledOnce();
@@ -366,7 +423,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         ]);
         expect(f.inputs).toEqual(['textbox']);
         expect(f.mark).toHaveBeenCalledOnce();
-        expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+        expect(f.requests).toEqual([
+          'ig.me/m/fixture_company',
+          'www.instagram.com/fixture_company/',
+        ]);
       } finally {
         await f.close();
       }
@@ -449,9 +509,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(f.mark).not.toHaveBeenCalled();
         expect(f.inputs).toEqual([]);
         expect(f.events).toEqual([]);
-        expect(f.requests).toEqual(
-          Array(2).fill('www.instagram.com/fixture_company/'),
-        );
+        expect(f.requests).toEqual([
+          'www.instagram.com/fixture_company/',
+          'ig.me/m/fixture_company',
+          'www.instagram.com/fixture_company/',
+        ]);
       } finally {
         await f.close();
       }
@@ -768,7 +830,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'textarea' in options ? 'textarea' : 'textbox',
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
-          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.requests).toEqual([
+            'ig.me/m/fixture_company',
+            'www.instagram.com/fixture_company/',
+          ]);
         } finally {
           await f.close();
         }
@@ -849,7 +914,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'mark',
             'send',
           ]);
-          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.requests).toEqual([
+            'ig.me/m/fixture_company',
+            'www.instagram.com/fixture_company/',
+          ]);
         } finally {
           await f.close();
         }
@@ -903,7 +971,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           });
           expect(f.mark).toHaveBeenCalledOnce();
           expect(f.events).toEqual(['open', 'mark', 'send']);
-          expect(f.requests).toEqual(['www.instagram.com/fixture_company/']);
+          expect(f.requests).toEqual([
+            'ig.me/m/fixture_company',
+            'www.instagram.com/fixture_company/',
+          ]);
         } finally {
           await f.close();
         }

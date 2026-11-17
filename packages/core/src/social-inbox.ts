@@ -31,6 +31,8 @@ export type SocialInboxMessage = {
   providerOrder?: number;
   observedAt: string;
   threadUrl?: string;
+  incomplete?: boolean;
+  incompleteReasonUk?: string;
 };
 export type SocialInboxBatch = {
   messages: SocialInboxMessage[];
@@ -113,6 +115,10 @@ export function validateSocialInboxMessage(
         message.providerOrder < 0)) ||
     !['in', 'out'].includes(message.direction) ||
     typeof message.body !== 'string' ||
+    (message.incomplete === true &&
+      (typeof message.incompleteReasonUk !== 'string' ||
+        !message.incompleteReasonUk.trim() ||
+        message.incompleteReasonUk.length > 1000)) ||
     message.body.length > 100000 ||
     (message.occurredAt === null &&
       !(

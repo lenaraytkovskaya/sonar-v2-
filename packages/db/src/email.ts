@@ -923,7 +923,7 @@ export async function sendEmailMessage(
     const {
       rows: [m],
     } = await c.query(
-      `select m.*,v.company_id,v.campaign_id,case when m.source='reply' then 'manual' else a.send_mode end as send_mode,coalesce(a.channels,jsonb_build_object(m.channel,true)) as channels,coalesce(a.status,'active') as campaign_status,a.country_code from messages m join conversations v on v.id=m.conversation_id left join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
+      `select m.*,v.company_id,v.campaign_id,v.provider_thread_id,case when m.source='reply' then 'manual' else a.send_mode end as send_mode,coalesce(a.channels,jsonb_build_object(m.channel,true)) as channels,coalesce(a.status,'active') as campaign_status,a.country_code from messages m join conversations v on v.id=m.conversation_id left join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
       [messageId],
     );
     const finish = async (outcome: TaskOutcome, reason?: string) => {
@@ -1411,6 +1411,25 @@ export async function sendEmailMessage(
             ],
           );
         }
+        const instagramThreadId =
+          channel === 'social' && account.channel === 'instagram'
+            ? /^https:\/\/www\.instagram\.com\/direct\/t\/([A-Za-z0-9._:-]{1,200})\/?(?:[?#].*)?$/.exec(
+                providerId,
+              )?.[1]
+            : undefined;
+        const threadId = identity?.threadId ?? instagramThreadId;
+        if (channel === 'social' && threadId) {
+          await tx.query(
+            `update conversations v set account_id=coalesce(v.account_id,$3),provider_thread_id=$2
+            where v.id=$1 and v.channel='social' and (v.account_id is null or v.account_id=$3)
+              and v.provider_thread_id is null and not exists(
+                select 1 from conversations other
+                where other.channel='social' and other.account_id=$3
+                  and other.provider_thread_id=$2
+              )`,
+            [m.conversation_id, threadId, account.id],
+          );
+        }
         await tx.query(
           "update companies set status='contacted',updated_at=now() where id=$1 and status in ('new','enriching','ready')",
           [m.company_id],
@@ -1447,6 +1466,7 @@ export async function sendEmailMessage(
                 ...account.settings,
                 countryCode: m.country_code,
                 network: account.channel,
+                providerThreadId: m.provider_thread_id ?? undefined,
               },
               ...(channel === 'social'
                 ? {

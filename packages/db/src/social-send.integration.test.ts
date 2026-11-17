@@ -193,6 +193,27 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
       expect(stored.reasonUk).toBe(
         network === 'facebook' ? facebookDispatchReason : null,
       );
+      if (network === 'instagram') {
+        expect(
+          (
+            await sonarPool.query(
+              'select provider_thread_id from conversations where id=$1',
+              [conversationId],
+            )
+          ).rows[0].provider_thread_id,
+        ).toBe('123');
+        await reset();
+        const nextReply = await create();
+        const knownThreadSender = vi.fn(async (_request, a) => {
+          expect(a?.settings.providerThreadId).toBe('123');
+          await a!.beforeSend!();
+          return 'https://www.instagram.com/direct/t/123/';
+        });
+        expect(await send(nextReply.id, knownThreadSender)).toMatchObject({
+          status: 'done',
+        });
+        expect(knownThreadSender).toHaveBeenCalledOnce();
+      }
       if (network === 'facebook') {
         expect(stored.providerId).toBe(`https://www.facebook.com/sonar_test/`);
         expect(await send(first.id, sender)).toMatchObject({

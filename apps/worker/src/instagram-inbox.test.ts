@@ -33,6 +33,10 @@ const unreadFixture = () =>
       'utf8',
     ),
   );
+const folderTabsFixture = readFileSync(
+  new URL('./instagram-inbox-folders.fixture.html', import.meta.url),
+  'utf8',
+);
 const requestsFixture = () =>
   JSON.parse(
     readFileSync(
@@ -40,6 +44,13 @@ const requestsFixture = () =>
       'utf8',
     ),
   );
+const requestPreviewFixture = () => {
+  const value = fixture();
+  const requestThread = thread(value);
+  requestThread.folder = 'REQUESTS';
+  requestThread.slide_messages.edges[0].node.igd_snippet = 'Preview only';
+  return value;
+};
 const observedAt = '2026-11-14T12:00:00.000Z';
 const fixture = () =>
   JSON.parse(
@@ -65,6 +76,17 @@ const opaqueFixture = () => {
   const edges = thread(value).slide_messages.edges;
   edges[0].node.id = opaqueIds.incoming;
   edges[1].node.id = opaqueIds.outgoing;
+  return value;
+};
+const generalFixture = () => {
+  const value = opaqueFixture();
+  const current = thread(value);
+  current.folder = 'GENERAL';
+  current.slide_messages.edges.forEach(
+    (edge: { node: { id: string } }, i: number) => {
+      edge.node.id = String(900000000000020 + i);
+    },
+  );
   return value;
 };
 const emptyFixture = () => {
@@ -132,6 +154,21 @@ it('preserves observed opaque provider message IDs alongside numeric IDs', () =>
       validateSocialInboxMessage('instagram', message),
     ).not.toThrow(),
   );
+});
+it('reads General and request snippets as separate folder data and marks requests incomplete', () => {
+  const general = parseInstagramInbox(generalFixture(), observedAt, 'GENERAL');
+  expect(general?.messages).toHaveLength(5);
+  expect(general?.skipped).toEqual([]);
+  const request = fixture();
+  const requestThread = thread(request);
+  requestThread.folder = 'REQUESTS';
+  requestThread.slide_messages.edges[0].node.igd_snippet = 'Preview only';
+  const parsed = parseInstagramInbox(request, observedAt, 'REQUESTS');
+  expect(parsed?.messages[0]).toMatchObject({
+    body: 'Preview only',
+    incomplete: true,
+    incompleteReasonUk: 'Запит не відкрито, щоб не позначати прочитаним.',
+  });
 });
 it('rejects malformed, control-containing and oversized message IDs', () => {
   const invalid: unknown[] = [
@@ -298,6 +335,11 @@ function browser(
   const requestBodies = new Map<unknown, string>();
   const responseStatuses = new Map<unknown, number>();
   const readJson = vi.fn(async (value: unknown) => value);
+  const emptyRoleLocator = {
+    count: async () => 0,
+    click: vi.fn(async () => {}),
+    or: () => ({ count: async () => 0, click: vi.fn(async () => {}) }),
+  };
   const emit = (values: unknown[]) =>
     values.forEach((value) =>
       listener?.({
@@ -342,6 +384,7 @@ function browser(
       await new Promise((resolve) => setTimeout(resolve, 2));
     },
     getByText: vi.fn(() => ({ filter: () => ({ count: async () => 0 }) })),
+    getByRole: vi.fn(() => emptyRoleLocator),
     locator: vi.fn((selector: string) => ({
       filter: () => ({
         count: async () => (selector.startsWith('a[href^="/direct/"]') ? 1 : 0),
@@ -409,7 +452,10 @@ it('ignores the observed unread-count envelope before importing a request-correl
   });
   expect(f.readJson).not.toHaveBeenCalledWith(unread);
   expect(f.batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
-  expect(f.batches.every((batch) => batch.resumeAnchor === null)).toBe(true);
+  expect(f.batches.at(-1)?.resumeAnchor).toMatchObject({
+    folders: { primary: '900000000000018', requests: null },
+    activeFolder: 'requests',
+  });
 });
 it.each([
   '',
@@ -1113,7 +1159,7 @@ it('refuses to open a context when authorized ds_user_id is missing', async () =
 });
 
 it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
-  'correlates real offline browser POST responses without treating unread counts as inbox actors',
+  'reads offline Instagram folders and request previews without opening a request',
   async () => {
     const { chromium } = await import('playwright');
     const instance = await chromium.launch({
@@ -1124,6 +1170,7 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     try {
       const context = await instance.newContext({ serviceWorkers: 'block' });
       const queries: string[] = [];
+      const navigations: string[] = [];
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
         if (url.origin !== 'https://www.instagram.com')
@@ -1132,13 +1179,19 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           const name = new URLSearchParams(
             route.request().postData() ?? '',
           ).get('fb_api_req_friendly_name');
+          const requestData = new URLSearchParams(
+            route.request().postData() ?? '',
+          );
+          const folder = requestData.get('folder');
           const body =
             name === 'useIGDSystemFolderUnreadThreadCountQuery'
               ? unreadFixture()
               : name === 'PolarisDirectInboxQuery'
-                ? opaqueFixture()
+                ? folder === 'GENERAL'
+                  ? generalFixture()
+                  : opaqueFixture()
                 : name === 'PolarisDirectMessageRequestQuery'
-                  ? requestsFixture()
+                  ? requestPreviewFixture()
                   : null;
           if (!body) return route.abort('blockedbyclient');
           queries.push(name!);
@@ -1148,6 +1201,7 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             body: JSON.stringify(body),
           });
         }
+        navigations.push(url.pathname);
         if (!['/direct/inbox/', '/direct/requests/'].includes(url.pathname))
           return route.abort('blockedbyclient');
         const names =
@@ -1160,7 +1214,7 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         return route.fulfill({
           status: 200,
           contentType: 'text/html',
-          body: `<nav><a href="/direct/inbox/">Inbox</a></nav><script>(async () => {for (const name of ${JSON.stringify(names)}) await fetch('/api/graphql', {method:'POST', body: new URLSearchParams({fb_api_req_friendly_name:name})});})()</script>`,
+          body: `<nav><a href="/direct/inbox/">Inbox</a></nav>${url.pathname === '/direct/inbox/' ? folderTabsFixture : ''}<script>(async () => {for (const name of ${JSON.stringify(names)}) await fetch('/api/graphql', {method:'POST', body: new URLSearchParams({fb_api_req_friendly_name:name,folder:'PRIMARY'})});const tab=document.querySelector('[role=tab]:nth-of-type(2)');if(tab)tab.onclick=()=>fetch('/api/graphql',{method:'POST',body:new URLSearchParams({fb_api_req_friendly_name:'PolarisDirectInboxQuery',folder:'GENERAL'})});})()</script>`,
         });
       });
       const page = await context.newPage();
@@ -1177,17 +1231,31 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       expect(queries).toEqual([
         'useIGDSystemFolderUnreadThreadCountQuery',
         'PolarisDirectInboxQuery',
+        'PolarisDirectInboxQuery',
         'PolarisDirectMessageRequestQuery',
       ]);
       expect(result).toMatchObject({
         complete: false,
-        skipped: ['general_folder_unsupported', 'unsupported_query_ignored'],
+        skipped: ['unsupported_query_ignored'],
       });
-      expect(batches.map((batch) => batch.messages.length)).toEqual([5, 0]);
+      expect(batches.map((batch) => batch.messages.length)).toEqual([5, 5, 1]);
       expect(batches[0]?.messages[0]?.externalMessageId).toBe(
         opaqueIds.incoming,
       );
-      expect(batches.every((batch) => batch.resumeAnchor === null)).toBe(true);
+      expect(batches.at(-1)?.messages[0]).toMatchObject({
+        body: 'Preview only',
+        incomplete: true,
+        incompleteReasonUk: 'Запит не відкрито, щоб не позначати прочитаним.',
+      });
+      expect(navigations).toEqual(['/direct/inbox/', '/direct/requests/']);
+      expect(batches.at(-1)?.resumeAnchor).toMatchObject({
+        folders: {
+          primary: '900000000000018',
+          general: '900000000000018',
+          requests: '900000000000018',
+        },
+        activeFolder: 'requests',
+      });
     } finally {
       await instance.close();
     }

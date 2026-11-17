@@ -287,6 +287,39 @@ async function instagramComposer(page: Page, dialog: Locator) {
   }
   return matchingCandidate ? named.or(matchingCandidate) : named;
 }
+async function tryInstagramDirectChat(
+  page: Page,
+  url: string,
+  handle: string,
+  timeoutMs: number,
+  assertSession: () => Promise<void>,
+) {
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: timeoutMs,
+    });
+    if (new URL(page.url()).hostname.endsWith('instagram.com'))
+      await assertSession();
+    if (response && response.status() >= 400) return false;
+    await page.waitForURL(
+      /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
+      { timeout: timeoutMs },
+    );
+    await assertSession();
+    const dialog = await instagramDialog(page, handle, 'initial');
+    const composer = await instagramComposer(page, dialog);
+    return (
+      (await composer.count()) === 1 &&
+      (await composer.isEditable()) &&
+      (await composer.isEnabled())
+    );
+  } catch {
+    if (new URL(page.url()).hostname.endsWith('instagram.com'))
+      await assertSession();
+    return false;
+  }
+}
 async function instagramArticleConfirmation(dialog: Locator, body: string) {
   return dialog.evaluateHandle((container, body) => {
     const articleSelector = '[role="article"][aria-roledescription="message"]';
@@ -461,6 +494,7 @@ async function sendInstagram(
   timeoutMs: number,
   body: string,
   beforeSend: () => Promise<void>,
+  providerThreadId?: string,
 ) {
   let stage: SendStage = 'navigation';
   let attempted = false;
@@ -502,354 +536,381 @@ async function sendInstagram(
     stage = previous;
   };
   try {
-    const response = await page.goto(target.canonicalUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-    });
-    if (response && response.status() >= 400)
-      throw stagedFailure(
-        stage,
-        response.status() === 429 ? 'http_429' : 'http_error',
-        response.status() === 429
-          ? 'rate_limit'
-          : [401, 403].includes(response.status())
-            ? 'session_invalid'
-            : 'unavailable',
+    const directUrls: string[] = [];
+    if (providerThreadId && /^[A-Za-z0-9._:-]{1,200}$/.test(providerThreadId))
+      directUrls.push(
+        `https://www.instagram.com/direct/t/${encodeURIComponent(providerThreadId)}/`,
       );
-    await assertSession();
-    stage = 'profile';
-    if (
-      socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
-      target.canonicalUrl.toLowerCase()
-    )
-      throw stagedFailure(stage, 'mismatch');
-    const name = new RegExp(
-      `^${target.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-      'i',
-    );
-    const profile = page
-      .locator('main header, [role="main"] header')
-      .filter({ has: page.getByRole('heading', { name }) });
-    await profile.waitFor({ state: 'visible' });
-    stage = 'messagebutton';
-    const directAction = page
-      .getByRole('button', { name: messageLabel })
-      .or(page.getByRole('link', { name: messageLabel }))
-      .filter({ visible: true });
-    const optionsAction = page
-      .getByRole('button', { name: profileOptionsLabel })
-      .filter({ visible: true });
-    await profile
-      .filter({ has: directAction.or(optionsAction) })
-      .waitFor({ state: 'visible' });
-    const direct = profile.locator(directAction);
-    if (await direct.count()) await direct.click();
-    else {
-      const options = profile.locator(optionsAction);
-      if ((await options.count()) !== 1)
-        throw await messageButtonFailure('options_count', page, options);
-      // Pin the verified trigger and snapshot identities BEFORE the click. A
-      // visible menu is never eligible, even if its contents are replaced later.
-      const trigger = await options.elementHandle();
-      const profileNode = await profile.elementHandle();
-      if (!trigger || !profileNode) throw stagedFailure(stage, 'unconfirmed');
-      const snapshot = await trigger.evaluateHandle((node) => {
-        const selector = '[role="menu"], [role="dialog"], [role="alertdialog"]';
-        const visible = (element: Element) => {
-          const rect = element.getBoundingClientRect();
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            getComputedStyle(element).visibility !== 'hidden'
-          );
-        };
-        const existing = Array.from(document.querySelectorAll(selector));
-        const baseline = existing.filter(visible);
-        const role = node.getAttribute('aria-haspopup');
-        const expected = role === 'true' ? 'menu' : role;
-        const controls = node.getAttribute('aria-controls');
-        // Keep only semantics in page memory, never serialized DOM. CSS classes,
-        // inline styling and decorative wrappers may change during interaction.
-        const semantic = (element: Element) => {
-          const text = (value: string | null) =>
-            value?.replace(/\s+/g, ' ').trim();
-          return JSON.stringify([
-            element.tagName,
-            element.id,
-            element.getAttribute('role'),
-            element.getAttribute('href'),
-            text(element.textContent),
-            [
-              element,
-              ...Array.from(
-                element.querySelectorAll(
-                  '[role], [aria-label], [aria-labelledby], [aria-hidden], a[href]',
-                ),
-              ),
-            ].map((label) => [
-              label.getAttribute('role'),
-              label.getAttribute('href'),
-              label.getAttribute('aria-hidden'),
-              label.getAttribute('aria-label'),
-              label
-                .getAttribute('aria-labelledby')
-                ?.split(/\s+/)
-                .map((id) => {
-                  const referenced = document.getElementById(id);
-                  return [
-                    id,
-                    text(referenced?.textContent ?? null),
-                    referenced?.getAttribute('aria-label'),
-                  ];
-                }),
-            ]),
-          ]);
-        };
-        const baselineSemantics = baseline.map(semantic);
-        let openedPopup: Element | undefined;
-        let changeCause: PopupChangeCause | undefined;
-        const initial: PopupFailureBranch | null = baseline.some(
-          (old) =>
-            old.getAttribute('role') !== 'menu' ||
-            old.getAttribute('aria-modal') === 'true' ||
-            old.contains(node),
+    directUrls.push(`https://ig.me/m/${encodeURIComponent(target.handle)}`);
+    let openedDirectChat = false;
+    for (const url of directUrls) {
+      if (
+        await tryInstagramDirectChat(
+          page,
+          url,
+          target.handle,
+          timeoutMs,
+          assertSession,
         )
-          ? 'preexisting_popup'
-          : node.getAttribute('aria-expanded') !== 'false' ||
-              !['menu', 'dialog'].includes(expected ?? '') ||
-              (controls !== null && (!controls || /\s/.test(controls)))
-            ? 'options_state'
-            : null;
-        const candidates = () =>
-          Array.from(document.querySelectorAll(selector)).filter(
-            (element) => visible(element) && !baseline.includes(element),
-          );
-        const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
-          if (initial) return initial;
-          for (const [index, old] of baseline.entries()) {
-            const cause = !old.isConnected
-              ? 'baseline_detached'
-              : !visible(old)
-                ? 'baseline_hidden'
-                : semantic(old) !== baselineSemantics[index]
-                  ? 'baseline_semantics'
-                  : undefined;
-            if (cause) {
-              changeCause = cause;
+      ) {
+        openedDirectChat = true;
+        break;
+      }
+    }
+    if (!openedDirectChat) {
+      const response = await page.goto(target.canonicalUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+      });
+      if (response && response.status() >= 400)
+        throw stagedFailure(
+          stage,
+          response.status() === 429 ? 'http_429' : 'http_error',
+          response.status() === 429
+            ? 'rate_limit'
+            : [401, 403].includes(response.status())
+              ? 'session_invalid'
+              : 'unavailable',
+        );
+      await assertSession();
+      stage = 'profile';
+      if (
+        socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+        target.canonicalUrl.toLowerCase()
+      )
+        throw stagedFailure(stage, 'mismatch');
+      const name = new RegExp(
+        `^${target.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'i',
+      );
+      const profile = page
+        .locator('main header, [role="main"] header')
+        .filter({ has: page.getByRole('heading', { name }) });
+      await profile.waitFor({ state: 'visible' });
+      stage = 'messagebutton';
+      const directAction = page
+        .getByRole('button', { name: messageLabel })
+        .or(page.getByRole('link', { name: messageLabel }))
+        .filter({ visible: true });
+      const optionsAction = page
+        .getByRole('button', { name: profileOptionsLabel })
+        .filter({ visible: true });
+      await profile
+        .filter({ has: directAction.or(optionsAction) })
+        .waitFor({ state: 'visible' });
+      const direct = profile.locator(directAction);
+      if (await direct.count()) await direct.click();
+      else {
+        const options = profile.locator(optionsAction);
+        if ((await options.count()) !== 1)
+          throw await messageButtonFailure('options_count', page, options);
+        // Pin the verified trigger and snapshot identities BEFORE the click. A
+        // visible menu is never eligible, even if its contents are replaced later.
+        const trigger = await options.elementHandle();
+        const profileNode = await profile.elementHandle();
+        if (!trigger || !profileNode) throw stagedFailure(stage, 'unconfirmed');
+        const snapshot = await trigger.evaluateHandle((node) => {
+          const selector =
+            '[role="menu"], [role="dialog"], [role="alertdialog"]';
+          const visible = (element: Element) => {
+            const rect = element.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              getComputedStyle(element).visibility !== 'hidden'
+            );
+          };
+          const existing = Array.from(document.querySelectorAll(selector));
+          const baseline = existing.filter(visible);
+          const role = node.getAttribute('aria-haspopup');
+          const expected = role === 'true' ? 'menu' : role;
+          const controls = node.getAttribute('aria-controls');
+          // Keep only semantics in page memory, never serialized DOM. CSS classes,
+          // inline styling and decorative wrappers may change during interaction.
+          const semantic = (element: Element) => {
+            const text = (value: string | null) =>
+              value?.replace(/\s+/g, ' ').trim();
+            return JSON.stringify([
+              element.tagName,
+              element.id,
+              element.getAttribute('role'),
+              element.getAttribute('href'),
+              text(element.textContent),
+              [
+                element,
+                ...Array.from(
+                  element.querySelectorAll(
+                    '[role], [aria-label], [aria-labelledby], [aria-hidden], a[href]',
+                  ),
+                ),
+              ].map((label) => [
+                label.getAttribute('role'),
+                label.getAttribute('href'),
+                label.getAttribute('aria-hidden'),
+                label.getAttribute('aria-label'),
+                label
+                  .getAttribute('aria-labelledby')
+                  ?.split(/\s+/)
+                  .map((id) => {
+                    const referenced = document.getElementById(id);
+                    return [
+                      id,
+                      text(referenced?.textContent ?? null),
+                      referenced?.getAttribute('aria-label'),
+                    ];
+                  }),
+              ]),
+            ]);
+          };
+          const baselineSemantics = baseline.map(semantic);
+          let openedPopup: Element | undefined;
+          let changeCause: PopupChangeCause | undefined;
+          const initial: PopupFailureBranch | null = baseline.some(
+            (old) =>
+              old.getAttribute('role') !== 'menu' ||
+              old.getAttribute('aria-modal') === 'true' ||
+              old.contains(node),
+          )
+            ? 'preexisting_popup'
+            : node.getAttribute('aria-expanded') !== 'false' ||
+                !['menu', 'dialog'].includes(expected ?? '') ||
+                (controls !== null && (!controls || /\s/.test(controls)))
+              ? 'options_state'
+              : null;
+          const candidates = () =>
+            Array.from(document.querySelectorAll(selector)).filter(
+              (element) => visible(element) && !baseline.includes(element),
+            );
+          const inspect = (): PopupFailureBranch | 'pending' | 'ready' => {
+            if (initial) return initial;
+            for (const [index, old] of baseline.entries()) {
+              const cause = !old.isConnected
+                ? 'baseline_detached'
+                : !visible(old)
+                  ? 'baseline_hidden'
+                  : semantic(old) !== baselineSemantics[index]
+                    ? 'baseline_semantics'
+                    : undefined;
+              if (cause) {
+                changeCause = cause;
+                return 'popup_changed';
+              }
+            }
+            if (
+              !node.isConnected ||
+              node.getAttribute('aria-haspopup') !== role ||
+              node.getAttribute('aria-controls') !== controls
+            )
+              return 'popup_association';
+            const opened = candidates();
+            if (opened.length > 1) return 'popup_ambiguous';
+            if (
+              !opened.length ||
+              node.getAttribute('aria-expanded') === 'false'
+            )
+              return 'pending';
+            if (node.getAttribute('aria-expanded') !== 'true')
+              return 'popup_association';
+            const popup = opened[0]!;
+            if (
+              popup.getAttribute('role') !== expected ||
+              popup.contains(node) ||
+              (existing.includes(popup) && controls === null) ||
+              (controls !== null &&
+                (popup.id !== controls ||
+                  Array.from(document.querySelectorAll('[id]')).filter(
+                    (element) => element.id === controls,
+                  ).length !== 1))
+            )
+              return 'popup_association';
+            if (openedPopup && openedPopup !== popup) {
+              changeCause = 'popup_identity';
               return 'popup_changed';
             }
-          }
-          if (
-            !node.isConnected ||
-            node.getAttribute('aria-haspopup') !== role ||
-            node.getAttribute('aria-controls') !== controls
-          )
-            return 'popup_association';
-          const opened = candidates();
-          if (opened.length > 1) return 'popup_ambiguous';
-          if (!opened.length || node.getAttribute('aria-expanded') === 'false')
-            return 'pending';
-          if (node.getAttribute('aria-expanded') !== 'true')
-            return 'popup_association';
-          const popup = opened[0]!;
-          if (
-            popup.getAttribute('role') !== expected ||
-            popup.contains(node) ||
-            (existing.includes(popup) && controls === null) ||
-            (controls !== null &&
-              (popup.id !== controls ||
-                Array.from(document.querySelectorAll('[id]')).filter(
-                  (element) => element.id === controls,
-                ).length !== 1))
-          )
-            return 'popup_association';
-          if (openedPopup && openedPopup !== popup) {
-            changeCause = 'popup_identity';
-            return 'popup_changed';
-          }
-          openedPopup = popup;
-          return 'ready';
-        };
-        let blocked = false;
-        let actionValid = () => true;
-        let removeGuard = () => {};
-        const guardAction = (popup: Element, action: Element) => {
-          const id = popup.id;
-          const parent = action.parentElement;
-          const approved = semantic(action);
-          actionValid = () =>
-            inspect() === 'ready' &&
-            candidates()[0] === popup &&
-            popup.id === id &&
-            popup.contains(action) &&
-            action.parentElement === parent &&
-            visible(action) &&
-            !action.matches(':disabled') &&
-            action.closest(
-              '[aria-disabled="true"], [aria-hidden="true"], [inert]',
-            ) === null &&
-            semantic(action) === approved;
-          const guard = (event: Event) => {
-            const onAction = event.composedPath().includes(action);
-            if (event.currentTarget === window && !onAction) return;
-            blocked ||=
-              !onAction ||
-              !actionValid() ||
-              (event instanceof MouseEvent &&
-                !action.contains(
-                  document.elementFromPoint(event.clientX, event.clientY),
-                ));
-            if (blocked) {
-              event.preventDefault();
-              event.stopImmediatePropagation();
-            }
+            openedPopup = popup;
+            return 'ready';
           };
-          const events = [
-            'pointerdown',
-            'mousedown',
-            'pointerup',
-            'mouseup',
-            'click',
-          ];
-          // The popup capture boundary runs AFTER document capture (including
-          // React handlers), before target/bubble handlers. Window alone is too
-          // early. Keep it as well to catch an action moved outside the popup.
-          // This is a UI consistency guard, not a sandbox: third-party JS can
-          // still change behavior inside its own later/final event handlers.
-          for (const boundary of [window, popup])
-            for (const event of events)
-              boundary.addEventListener(event, guard, {
-                capture: true,
-                passive: false,
-              });
-          removeGuard = () => {
+          let blocked = false;
+          let actionValid = () => true;
+          let removeGuard = () => {};
+          const guardAction = (popup: Element, action: Element) => {
+            const id = popup.id;
+            const parent = action.parentElement;
+            const approved = semantic(action);
+            actionValid = () =>
+              inspect() === 'ready' &&
+              candidates()[0] === popup &&
+              popup.id === id &&
+              popup.contains(action) &&
+              action.parentElement === parent &&
+              visible(action) &&
+              !action.matches(':disabled') &&
+              action.closest(
+                '[aria-disabled="true"], [aria-hidden="true"], [inert]',
+              ) === null &&
+              semantic(action) === approved;
+            const guard = (event: Event) => {
+              const onAction = event.composedPath().includes(action);
+              if (event.currentTarget === window && !onAction) return;
+              blocked ||=
+                !onAction ||
+                !actionValid() ||
+                (event instanceof MouseEvent &&
+                  !action.contains(
+                    document.elementFromPoint(event.clientX, event.clientY),
+                  ));
+              if (blocked) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+              }
+            };
+            const events = [
+              'pointerdown',
+              'mousedown',
+              'pointerup',
+              'mouseup',
+              'click',
+            ];
+            // The popup capture boundary runs AFTER document capture (including
+            // React handlers), before target/bubble handlers. Window alone is too
+            // early. Keep it as well to catch an action moved outside the popup.
+            // This is a UI consistency guard, not a sandbox: third-party JS can
+            // still change behavior inside its own later/final event handlers.
             for (const boundary of [window, popup])
               for (const event of events)
-                boundary.removeEventListener(event, guard, true);
+                boundary.addEventListener(event, guard, {
+                  capture: true,
+                  passive: false,
+                });
+            removeGuard = () => {
+              for (const boundary of [window, popup])
+                for (const event of events)
+                  boundary.removeEventListener(event, guard, true);
+            };
           };
-        };
-        return {
-          initial,
-          inspect,
-          candidates,
-          guardAction,
-          wasBlocked: () => blocked,
-          actionValid: () => actionValid(),
-          changeCause: () => changeCause,
-          cleanup: () => removeGuard(),
-        };
-      });
-      try {
-        const initial = await snapshot.evaluate((state) => state.initial);
-        if (initial) throw await messageButtonFailure(initial, page, options);
-        await trigger.click();
+          return {
+            initial,
+            inspect,
+            candidates,
+            guardAction,
+            wasBlocked: () => blocked,
+            actionValid: () => actionValid(),
+            changeCause: () => changeCause,
+            cleanup: () => removeGuard(),
+          };
+        });
         try {
-          await page.waitForFunction(
-            (state) => state.inspect() !== 'pending',
-            snapshot,
+          const initial = await snapshot.evaluate((state) => state.initial);
+          if (initial) throw await messageButtonFailure(initial, page, options);
+          await trigger.click();
+          try {
+            await page.waitForFunction(
+              (state) => state.inspect() !== 'pending',
+              snapshot,
+            );
+          } catch {
+            throw await messageButtonFailure('popup_missing', page, options);
+          }
+          await assertSession();
+          if (
+            socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+              target.canonicalUrl.toLowerCase() ||
+            !(await profile.evaluate(
+              (node, original) => node === original,
+              profileNode,
+            )) ||
+            (await profile.locator(optionsAction).count()) !== 1 ||
+            !(await options.evaluate(
+              (node, original) => node === original,
+              trigger,
+            ))
+          )
+            throw stagedFailure(stage, 'mismatch');
+          const assertPopup = async () => {
+            const status = await snapshot.evaluate((state) => state.inspect());
+            if (status !== 'ready')
+              throw await messageButtonFailure(
+                status === 'pending' ? 'popup_missing' : status,
+                page,
+                options,
+                status === 'popup_changed'
+                  ? await snapshot.evaluate((state) => state.changeCause())
+                  : undefined,
+              );
+          };
+          await assertPopup();
+          const popup = await snapshot.evaluateHandle(
+            (state) => state.candidates()[0]!,
           );
-        } catch {
-          throw await messageButtonFailure('popup_missing', page, options);
-        }
-        await assertSession();
-        if (
-          socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
-            target.canonicalUrl.toLowerCase() ||
-          !(await profile.evaluate(
-            (node, original) => node === original,
-            profileNode,
-          )) ||
-          (await profile.locator(optionsAction).count()) !== 1 ||
-          !(await options.evaluate(
-            (node, original) => node === original,
-            trigger,
-          ))
-        )
-          throw stagedFailure(stage, 'mismatch');
-        const assertPopup = async () => {
-          const status = await snapshot.evaluate((state) => state.inspect());
-          if (status !== 'ready')
+          // Pin identities here; the dispatch guard below also checks provenance
+          // after Playwright's actionability wait and document capture handlers.
+          const actions = page
+            .getByRole('menuitem', { name: menuMessageLabel })
+            .or(page.getByRole('button', { name: menuMessageLabel }))
+            .or(page.getByRole('link', { name: menuMessageLabel }))
+            .filter({ visible: true });
+          const handles = await actions.elementHandles();
+          const matching = [];
+          for (const action of handles) {
+            if (
+              await popup.evaluate(
+                (node, action) => node.contains(action),
+                action,
+              )
+            )
+              matching.push(action);
+          }
+          if (matching.length !== 1)
+            throw await messageButtonFailure('popup_action', page, options);
+          await assertPopup();
+          if (
+            !(await actions.evaluateAll(
+              (nodes, { state, popup, action }) => {
+                const pinned = nodes.find((node) => node === action);
+                if (
+                  state.inspect() !== 'ready' ||
+                  state.candidates()[0] !== popup ||
+                  nodes.filter((node) => popup.contains(node)).length !== 1 ||
+                  !popup.contains(action) ||
+                  !pinned
+                )
+                  return false;
+                state.guardAction(popup, pinned);
+                return true;
+              },
+              { state: snapshot, popup, action: matching[0]! },
+            ))
+          )
             throw await messageButtonFailure(
-              status === 'pending' ? 'popup_missing' : status,
+              'popup_changed',
               page,
               options,
-              status === 'popup_changed'
-                ? await snapshot.evaluate((state) => state.changeCause())
-                : undefined,
+              'action_selection',
             );
-        };
-        await assertPopup();
-        const popup = await snapshot.evaluateHandle(
-          (state) => state.candidates()[0]!,
-        );
-        // Pin identities here; the dispatch guard below also checks provenance
-        // after Playwright's actionability wait and document capture handlers.
-        const actions = page
-          .getByRole('menuitem', { name: menuMessageLabel })
-          .or(page.getByRole('button', { name: menuMessageLabel }))
-          .or(page.getByRole('link', { name: menuMessageLabel }))
-          .filter({ visible: true });
-        const handles = await actions.elementHandles();
-        const matching = [];
-        for (const action of handles) {
+          let clickError: unknown;
+          try {
+            await matching[0]!.click();
+          } catch (error) {
+            clickError = error;
+          }
           if (
-            await popup.evaluate(
-              (node, action) => node.contains(action),
-              action,
+            await snapshot.evaluate(
+              (state, failed) =>
+                state.wasBlocked() || (failed && !state.actionValid()),
+              Boolean(clickError),
             )
           )
-            matching.push(action);
+            throw await messageButtonFailure(
+              'popup_changed',
+              page,
+              options,
+              'dispatch_guard',
+            );
+          if (clickError) throw clickError;
+        } finally {
+          await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
+          await snapshot.dispose();
         }
-        if (matching.length !== 1)
-          throw await messageButtonFailure('popup_action', page, options);
-        await assertPopup();
-        if (
-          !(await actions.evaluateAll(
-            (nodes, { state, popup, action }) => {
-              const pinned = nodes.find((node) => node === action);
-              if (
-                state.inspect() !== 'ready' ||
-                state.candidates()[0] !== popup ||
-                nodes.filter((node) => popup.contains(node)).length !== 1 ||
-                !popup.contains(action) ||
-                !pinned
-              )
-                return false;
-              state.guardAction(popup, pinned);
-              return true;
-            },
-            { state: snapshot, popup, action: matching[0]! },
-          ))
-        )
-          throw await messageButtonFailure(
-            'popup_changed',
-            page,
-            options,
-            'action_selection',
-          );
-        let clickError: unknown;
-        try {
-          await matching[0]!.click();
-        } catch (error) {
-          clickError = error;
-        }
-        if (
-          await snapshot.evaluate(
-            (state, failed) =>
-              state.wasBlocked() || (failed && !state.actionValid()),
-            Boolean(clickError),
-          )
-        )
-          throw await messageButtonFailure(
-            'popup_changed',
-            page,
-            options,
-            'dispatch_guard',
-          );
-        if (clickError) throw clickError;
-      } finally {
-        await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
-        await snapshot.dispose();
       }
     }
     await assertSession();
@@ -1745,6 +1806,10 @@ export function createSocialSendBrowser(
       body: string,
       beforeSend: () => Promise<void>,
     ) {
+      const providerThreadId =
+        typeof account.settings.providerThreadId === 'string'
+          ? account.settings.providerThreadId
+          : undefined;
       const target = socialTarget(to);
       if (
         !target ||
@@ -1763,7 +1828,14 @@ export function createSocialSendBrowser(
           timeoutMs,
           async (page) => {
             if (account.channel === 'instagram')
-              return sendInstagram(page, target, timeoutMs, body, beforeSend);
+              return sendInstagram(
+                page,
+                target,
+                timeoutMs,
+                body,
+                beforeSend,
+                providerThreadId,
+              );
             if (account.channel === 'facebook')
               return sendFacebook(
                 page,
