@@ -19,6 +19,7 @@ export type HealthEvent = {
   reasonUk: string;
   details: Record<string, unknown>;
   createdAt: string;
+  failureShotKind?: 'check' | 'keepalive' | 'inbox' | 'send';
 };
 export type HealthConfig = {
   pause_hours: number;

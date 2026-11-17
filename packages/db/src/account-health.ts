@@ -253,6 +253,7 @@ export type AccountHealthSummary = {
   averageSessionHours: number | null;
   lastAlarmAt: string | null;
   events: HealthEvent[];
+  failureShotKinds: ('check' | 'keepalive' | 'inbox' | 'send')[];
 };
 
 export async function accountHealth(
@@ -289,10 +290,34 @@ export async function accountHealth(
     Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) -
     (config.summary_days - 1) * 86_400_000;
   return rows.map((row) => {
-    const events = (row.events as HealthEvent[]).map((event) => ({
-      ...event,
-      createdAt: new Date(event.createdAt).toISOString(),
-    }));
+    const shots = (row.settings.failureShots ?? {}) as Record<
+      string,
+      { at?: string }
+    >;
+    const failureShotKinds = Object.keys(shots).filter(
+      (kind): kind is 'check' | 'keepalive' | 'inbox' | 'send' =>
+        ['check', 'keepalive', 'inbox', 'send'].includes(kind),
+    );
+    const events = (row.events as HealthEvent[]).map((event) => {
+      const createdAt = new Date(event.createdAt).toISOString();
+      const failureShotKind = failureShotKinds
+        .filter(
+          (kind) =>
+            shots[kind]?.at &&
+            Math.abs(Date.parse(shots[kind]!.at!) - Date.parse(createdAt)) <
+              15 * 60_000,
+        )
+        .sort(
+          (a, b) =>
+            Math.abs(Date.parse(shots[a]!.at!) - Date.parse(createdAt)) -
+            Math.abs(Date.parse(shots[b]!.at!) - Date.parse(createdAt)),
+        )[0];
+      return {
+        ...event,
+        createdAt,
+        ...(failureShotKind ? { failureShotKind } : {}),
+      };
+    });
     const eventsByKind: Partial<Record<HealthEventKind, number>> = {};
     for (const event of events)
       if (Date.parse(event.createdAt) >= summaryStart)
@@ -317,6 +342,7 @@ export async function accountHealth(
         config,
         now,
       }),
+      failureShotKinds,
       pauseUntil:
         row.settings.healthAutoPaused === true
           ? (row.settings.healthPauseUntil ?? null)

@@ -858,6 +858,8 @@ it('delegates account, pinned session and configured timeout to the shared brows
     account.session,
     12345,
     expect.any(Function),
+    false,
+    { kind: 'inbox', stage: expect.any(Function) },
   );
 });
 

@@ -871,6 +871,10 @@ export type SendAccount = {
     state: SocialStorageState,
     device?: SocialDevice,
   ) => Promise<void>;
+  persistFailureShot?: (
+    kind: 'check' | 'keepalive' | 'inbox' | 'send',
+    shot: { at: string; path: string; stage: string; jpeg: string },
+  ) => Promise<void>;
 };
 export type ChannelSender = (
   request: EmailRequest,
@@ -1472,6 +1476,7 @@ export async function sendEmailMessage(
                 ? {
                     persistStorageState: socialSession!.persistStorageState,
                     persistDevice: socialSession!.persistDevice,
+                    persistFailureShot: socialSession!.persistFailureShot,
                     beforeSend: async () => {
                       const result = await c.query(
                         'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',

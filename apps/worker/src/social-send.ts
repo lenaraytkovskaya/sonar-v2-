@@ -67,6 +67,7 @@ export async function runSocialSend(
             ...resolveSocialSession(sessionAccount),
             persistStorageState: account.persistStorageState,
             persistDevice: account.persistDevice,
+            persistFailureShot: account.persistFailureShot,
           },
           await timeout(),
           request.to,
