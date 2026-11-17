@@ -1,6 +1,7 @@
 import {
   nextSendTime,
   normalizePhone,
+  sharedFormContactsFromValues,
   type SharedFormContact,
   type SendHours,
 } from '@sonar/core';
@@ -566,12 +567,17 @@ export type FormInboxMessage = {
 export async function listFormMessages(
   options: { status?: FormInboxStatus } = {},
 ): Promise<FormInboxMessage[]> {
-  const { rows } = await sonarPool.query<FormInboxMessage>(
+  const { rows } = await sonarPool.query<
+    Omit<FormInboxMessage, 'sharedContacts'> & {
+      savedSharedContacts: SharedFormContact[] | null;
+    }
+  >(
     `select m.id,v.company_id as "companyId",co.name as "companyName",v.id as "conversationId",m.to_value as url,
       coalesce(m.request_snapshot->>'body',m.body) as body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.reason_uk as "reasonUk",
       coalesce(m.request_snapshot->>'name','') as "senderName",coalesce(m.request_snapshot->>'email','') as "senderEmail",coalesce(m.request_snapshot->>'phone','') as "senderPhone",
       coalesce(m.request_snapshot->>'whatsapp','') as "senderWhatsapp",coalesce(m.request_snapshot->>'telegram','') as "senderTelegram",coalesce(m.request_snapshot->>'senderWebsite','') as "senderWebsite",
-      coalesce(m.request_snapshot->'sharedContacts','[]'::jsonb) as "sharedContacts",(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",
+      m.request_snapshot->'sharedContacts' as "savedSharedContacts",
+      (m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",
       coalesce(replies.items,'[]'::jsonb) as "replyConversations",coalesce(replies.n,0)::int as replies
      from messages m join conversations v on v.id=m.conversation_id join companies co on co.id=v.company_id
      left join lateral (
@@ -582,7 +588,18 @@ export async function listFormMessages(
      where m.channel='form' and m.direction='out' and ($1::text is null or ($1='replied' and replies.n>0) or ($1<>'replied' and m.status=$1)) order by m.created_at desc,m.id desc`,
     [options.status ?? null],
   );
-  return rows;
+  return rows.map((row) => ({
+    ...row,
+    sharedContacts: sharedFormContactsFromValues(
+      {
+        email: row.senderEmail,
+        phone: row.senderPhone,
+        whatsapp: row.senderWhatsapp,
+        telegram: row.senderTelegram,
+      },
+      row.savedSharedContacts,
+    ),
+  }));
 }
 export async function listManualFormMessages() {
   return listFormMessages({ status: 'awaiting_manual' });
