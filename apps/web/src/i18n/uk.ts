@@ -220,6 +220,7 @@ export const uk = {
       social: 'Сторінка компанії в соцмережі',
       registry: 'Відомий код ЄДРПОУ / РНОКПП',
     },
+    changeLink: 'Змінити посилання',
     hints: {
       website:
         'Вставте URL або домен, наприклад example.com. Аналіз почнеться після збереження.',
@@ -871,6 +872,8 @@ export const uk = {
     contactTab: 'Звʼязатися',
     name: 'Компанія',
     city: 'Місто',
+    address: 'Адреса',
+    hours: 'Години роботи',
     type: 'Тип',
     rating: 'Рейтинг',
     website: 'Сайт',

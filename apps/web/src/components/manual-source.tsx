@@ -15,6 +15,7 @@ import { Button } from './ui/button';
 import { LocalTime } from './local-time';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { FriendlyError } from './friendly-error';
+import { RowActions } from './ui/row-actions';
 
 type Result = Awaited<ReturnType<typeof getManualSource>>;
 function sourceError(error: unknown) {
@@ -35,10 +36,12 @@ export function ManualSource({
   companyId,
   source,
   current = null,
+  menuAction = false,
 }: {
   companyId: string;
   source: ManualSourceInput['source'];
   current?: string | null;
+  menuAction?: boolean;
 }) {
   const router = useRouter(),
     id = useId(),
@@ -174,13 +177,26 @@ export function ManualSource({
   };
   return (
     <div className="space-y-3 border-t border-border pt-3 text-sm">
-      <CrudButton
-        action={replacement ? 'edit' : 'add'}
-        disabled={pending}
-        onClick={() => setOpen(true)}
-      >
-        {title}
-      </CrudButton>
+      {menuAction ? (
+        <RowActions
+          disabled={pending}
+          actions={[
+            {
+              kind: 'edit',
+              label: uk.manualSource.changeLink,
+              onSelect: () => setOpen(true),
+            },
+          ]}
+        />
+      ) : (
+        <CrudButton
+          action={replacement ? 'edit' : 'add'}
+          disabled={pending}
+          onClick={() => setOpen(true)}
+        >
+          {title}
+        </CrudButton>
+      )}
       <CrudDialog
         open={open}
         onOpenChange={setOpen}

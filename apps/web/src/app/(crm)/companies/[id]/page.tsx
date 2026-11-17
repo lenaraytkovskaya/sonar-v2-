@@ -21,6 +21,7 @@ import { ScanSummary, Score } from '@/components/shared';
 import { cn } from '@/lib/utils';
 import { ChannelIcon } from '@/components/channel-icon';
 import { WhatsAppRetry } from '@/components/whatsapp-retry';
+import { DetailList } from '@/components/ui/layout';
 
 const kindOrder = [
   'email',
@@ -204,6 +205,14 @@ export default async function Page({
     (f) => f.kind === 'manual_source' && f.value?.source === 'googleMaps',
   );
   const map = normalizeWebsite(c.google_maps_uri)?.website;
+  const googleFact = facts.find(
+    (f) =>
+      f.kind === 'google_place' &&
+      f.source_url === c.google_maps_uri &&
+      (!f.expires_at || new Date(f.expires_at) > new Date()),
+  );
+  const google = googleFact?.value;
+  const googlePhone = contacts.find((contact) => contact.kind === 'phone');
   const website = normalizeWebsite(c.website ?? undefined);
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
   // A click on a contact opens its dialog: the inbox when one exists, otherwise the contact tab.
@@ -485,55 +494,72 @@ export default async function Page({
                 <Section
                   title={uk.company.googleData}
                   action={
-                    map && (
-                      <a
-                        className="inline-flex items-center gap-1 text-xs text-accent"
-                        href={map}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <MapPin aria-hidden="true" className="size-3.5" />
-                        {uk.company.maps}
-                      </a>
-                    )
+                    <div className="flex items-center gap-2">
+                      {map && (
+                        <a
+                          className="inline-flex min-h-11 items-center gap-1 text-sm text-accent"
+                          href={map}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <MapPin aria-hidden="true" className="size-4" />
+                          {uk.company.maps}
+                        </a>
+                      )}
+                    </div>
                   }
                 >
                   <ManualSource
                     companyId={id}
                     source="googleMaps"
                     current={c.google_maps_uri}
+                    menuAction
                   />
-                  {facts
-                    .filter(
-                      (f) =>
-                        f.kind === 'google_place' &&
-                        f.source_url === c.google_maps_uri &&
-                        (!f.expires_at || new Date(f.expires_at) > new Date()),
-                    )
-                    .slice(0, 1)
-                    .map((f) => (
-                      <div key={f.id} className="space-y-1 text-sm">
-                        <p className="font-medium">
-                          {uk.manualSource.collected}
-                        </p>
-                        <p>{f.value.displayName?.text}</p>
-                        <p>{f.value.formattedAddress}</p>
-                        <p>
-                          {f.value.rating ?? '—'} ·{' '}
-                          {f.value.userRatingCount ?? 0} {uk.company.reviews}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {uk.company.sources.google} ·{' '}
-                          <LocalTime value={f.found_at} />
-                        </p>
-                      </div>
-                    ))}
+                  <DetailList
+                    items={[
+                      {
+                        label: uk.company.address,
+                        value:
+                          google?.formattedAddress ?? c.address ?? uk.company.noData,
+                      },
+                      {
+                        label: uk.company.rating,
+                        value: google?.rating ?? c.rating ?? '—',
+                      },
+                      {
+                        label: uk.company.reviews,
+                        value: google?.userRatingCount ?? c.ratings_count ?? '—',
+                      },
+                      {
+                        label: uk.company.type,
+                        value: google?.primaryType ?? c.primary_type ?? '—',
+                      },
+                      {
+                        label: uk.company.phone,
+                        value: google?.nationalPhoneNumber ?? googlePhone?.value ?? '—',
+                      },
+                      {
+                        label: uk.company.website,
+                        value: google?.websiteUri ?? c.website ?? '—',
+                      },
+                      {
+                        label: uk.company.hours,
+                        value: google?.regularOpeningHours?.weekdayDescriptions?.join('; ') ?? '—',
+                        hidden: !google?.regularOpeningHours?.weekdayDescriptions?.length,
+                      },
+                    ]}
+                  />
+                  {googleFact && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.manualSource.collected}: {uk.company.sources.google} ·{' '}
+                      <LocalTime value={googleFact.found_at} />
+                    </p>
+                  )}
                   {manualMaps && (
                     <p className="text-xs text-muted-foreground">
                       {uk.manualSource.originalGoogle}
                     </p>
                   )}
-                  <p className="text-sm">{c.address ?? uk.company.noData}</p>
                   <p className="text-sm text-muted-foreground">
                     {uk.google.businessStatus[
                       c.business_status as keyof typeof uk.google.businessStatus
