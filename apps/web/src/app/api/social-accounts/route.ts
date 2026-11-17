@@ -167,6 +167,19 @@ async function handle(request: Request, method: string) {
       )
         return invalid();
       await db.setSocialInboxPolling(data.id, data.enabled, user.id);
+    } else if (method === 'POST' && data?.action === 'updateDevice') {
+      if (
+        !validId(data.id) ||
+        !data.ownerBrowser ||
+        typeof data.ownerBrowser !== 'object' ||
+        Array.isArray(data.ownerBrowser) ||
+        JSON.stringify(data.ownerBrowser).length > 10_000 ||
+        Object.keys(data).some(
+          (key) => !['action', 'id', 'ownerBrowser'].includes(key),
+        )
+      )
+        return invalid();
+      await db.updateSocialDevice(data.id, data.ownerBrowser, user.id);
     } else if (method === 'POST' && data?.action === 'syncInbox') {
       if (
         !validId(data.id) ||
@@ -198,6 +211,7 @@ async function handle(request: Request, method: string) {
               'keepaliveEnabled',
               'storageStateJson',
               'cookiesJson',
+              'ownerBrowser',
             ].includes(key),
         ) ||
         (data.id !== undefined && !validId(data.id)) ||
@@ -221,7 +235,12 @@ async function handle(request: Request, method: string) {
             data.storageStateJson.length > 200000)) ||
         (data.cookiesJson !== undefined &&
           (typeof data.cookiesJson !== 'string' ||
-            data.cookiesJson.length > 200000))
+            data.cookiesJson.length > 200000)) ||
+        (data.ownerBrowser !== undefined &&
+          (!data.ownerBrowser ||
+            typeof data.ownerBrowser !== 'object' ||
+            Array.isArray(data.ownerBrowser) ||
+            JSON.stringify(data.ownerBrowser).length > 10_000))
       )
         return invalid();
       await db.saveSocialAccount(
@@ -243,6 +262,9 @@ async function handle(request: Request, method: string) {
           ...(data.cookiesJson === undefined
             ? {}
             : { cookiesJson: data.cookiesJson }),
+          ...(data.ownerBrowser === undefined
+            ? {}
+            : { ownerBrowser: data.ownerBrowser }),
         },
         user.id,
       );
@@ -270,6 +292,8 @@ async function handle(request: Request, method: string) {
       proxyIndex: account.proxyIndex,
       hasOwnProxy: account.hasOwnProxy,
       keepaliveEnabled: account.keepaliveEnabled,
+      device: account.device,
+      deviceSource: account.deviceSource,
       sessionLostEventId: account.sessionLostEventId,
       sessionLostReasonUk: account.sessionLostReasonUk,
       ownerName: account.ownerName,

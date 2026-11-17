@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
-import { socialSessionCheckReasons } from '@sonar/core/social-session';
+import {
+  resolveSocialSession,
+  socialSessionCheckReasons,
+} from '@sonar/core/social-session';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
   'stores social cookies privately, enforces ownership and pauses a changed pinned proxy',
@@ -32,6 +35,21 @@ it.skipIf(!enabled)(
         [actor, `${actor}@example.test`, other, `${other}@example.test`],
       );
       for (const network of ['instagram', 'facebook', 'linkedin'] as const) {
+        const ownerBrowser = {
+          userAgent:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/157.0.0.0 Safari/537.36',
+          userAgentData: {
+            brands: [{ brand: 'Google Chrome', version: '157' }],
+            platform: 'Windows',
+            mobile: false,
+          },
+          screen: { width: 2560, height: 1313 },
+          viewport: { width: 2560, height: 1313 },
+          devicePixelRatio: 1,
+          timeZone: 'Europe/Kyiv',
+          language: 'uk-UA',
+          languages: ['uk-UA', 'uk'],
+        };
         const cookiesJson = JSON.stringify([
           {
             name: 'session',
@@ -46,6 +64,7 @@ it.skipIf(!enabled)(
             name: `${network} test`,
             dailyLimit: 20,
             cookiesJson,
+            ownerBrowser,
             proxyIndex: 0,
           },
           actor,
@@ -73,6 +92,42 @@ it.skipIf(!enabled)(
         expect(stored.settings.storageStateEncrypted).not.toContain(
           'private-social-cookie',
         );
+        expect(stored.settings).toMatchObject({
+          deviceSource: 'owner_browser',
+          device: {
+            userAgent: ownerBrowser.userAgent,
+            viewport: { width: 1920, height: 984 },
+            screen: ownerBrowser.screen,
+          },
+        });
+        expect(
+          resolveSocialSession(
+            { channel: network, settings: stored.settings },
+            process.env.AUTH_SECRET!,
+            process.env.SOCIAL_PROXY_URLS!,
+          ).device,
+        ).toEqual(stored.settings.device);
+        const originalStorage = stored.settings.storageStateEncrypted;
+        await accounts.updateSocialDevice(
+          saved.id,
+          {
+            ...ownerBrowser,
+            viewport: { width: 1440, height: 900 },
+          },
+          actor,
+        );
+        const {
+          rows: [updated],
+        } = await sonarPool.query(
+          'select settings from channel_accounts where id=$1',
+          [saved.id],
+        );
+        expect(updated.settings.device.viewport).toEqual({
+          width: 1440,
+          height: 900,
+        });
+        expect(updated.settings.deviceSource).toBe('owner_browser');
+        expect(updated.settings.storageStateEncrypted).toBe(originalStorage);
         await expect(
           accounts.updateSocialAccount(saved.id, { dailyLimit: 5 }, other),
         ).rejects.toThrow('Акаунт соцмережі не знайдено.');

@@ -12,6 +12,7 @@ const {
   code,
   remove,
   createWithCredentials,
+  updateDevice,
 } = vi.hoisted(() => ({
   session: vi.fn(),
   list: vi.fn(),
@@ -25,6 +26,7 @@ const {
   code: vi.fn(),
   remove: vi.fn(),
   createWithCredentials: vi.fn(),
+  updateDevice: vi.fn(),
 }));
 vi.mock('./auth', () => ({ getSession: session }));
 vi.mock('@/lib/api-access', () => import('./api-access'));
@@ -35,6 +37,7 @@ vi.mock('@sonar/db/social-accounts', () => ({
   listSocialSessionNotices: listNotices,
   saveSocialAccount: save,
   updateSocialAccount: update,
+  updateSocialDevice: updateDevice,
   checkSocialSession: check,
   syncSocialInbox: sync,
   saveSocialCredentials: credentials,
@@ -218,6 +221,36 @@ it('queues only the server-authorized account action and returns its existing ta
     created: false,
   });
   expect(save).not.toHaveBeenCalled();
+});
+
+it('updates the owner browser device without accepting extra action fields', async () => {
+  const ownerBrowser = {
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/157.0.0.0 Safari/537.36',
+    screen: { width: 2560, height: 1313 },
+    viewport: { width: 1440, height: 900 },
+    devicePixelRatio: 1,
+    timeZone: 'Europe/Kyiv',
+    language: 'uk-UA',
+    languages: ['uk-UA'],
+  };
+  expect(
+    (await POST(request({ action: 'updateDevice', id, ownerBrowser }))).status,
+  ).toBe(200);
+  expect(updateDevice).toHaveBeenCalledWith(id, ownerBrowser, 'actor');
+  expect(
+    (
+      await POST(
+        request({
+          action: 'updateDevice',
+          id,
+          ownerBrowser,
+          cookiesJson: '[]',
+        }),
+      )
+    ).status,
+  ).toBe(400);
+  expect(updateDevice).toHaveBeenCalledOnce();
 });
 it('rejects unauthenticated, cross-origin and client-supplied manual privilege fields before enqueue', async () => {
   session.mockResolvedValue({});

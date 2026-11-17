@@ -305,6 +305,9 @@ export const uk = {
     addMethod: 'Спосіб додавання акаунта',
     loginAndPassword: 'Логін і пароль',
     cookiesTab: 'Cookies',
+    updateDevice: 'Оновити пристрій з цього браузера',
+    ownerBrowserDevice: (details: string) =>
+      `Пристрій: як у вашому браузері (${details})`,
     edit: 'Редагувати акаунт',
     removeConfirm: (name: string) =>
       `Видалити акаунт «${name}»? Збережена сесія, логін, пароль і ключ 2FA будуть видалені. Листування з компаніями залишиться.`,
