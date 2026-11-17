@@ -646,6 +646,7 @@ export const uk = {
   },
   forms: {
     contactDetails: 'Контактні дані',
+    formUrl: 'Сторінка форми',
     contactHint: 'Контакти, які Sonar залишає у формах компаній.',
     contactLabels: {
       name: 'Ім’я / компанія',

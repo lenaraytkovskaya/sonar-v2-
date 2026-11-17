@@ -215,7 +215,8 @@ export function FormInbox({
                   },
                   {
                     label: uk.forms.contactLabels.name,
-                    value: selected.senderName || '—',
+                    value: selected.senderName,
+                    hidden: !selected.senderName,
                   },
                   {
                     label: uk.forms.contactLabels.email,
@@ -238,6 +239,15 @@ export function FormInbox({
                     hidden: !selected.sharedContacts.includes('telegram'),
                   },
                   {
+                    label: uk.forms.contactLabels.website,
+                    value: selected.senderWebsite,
+                    hidden: !selected.senderWebsite,
+                  },
+                  {
+                    label: uk.forms.formUrl,
+                    value: selected.url,
+                  },
+                  {
                     label: uk.forms.sharedContacts,
                     value:
                       selected.sharedContacts
@@ -254,9 +264,11 @@ export function FormInbox({
                       ? uk.forms.manualBody
                       : uk.forms.messaging}
                 </h3>
-                <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">
-                  {selected.body}
-                </p>
+                <div className="flex justify-end">
+                  <p className="max-w-[90%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md border border-accent/30 bg-accent/15 px-3 py-2 text-sm shadow-sm [overflow-wrap:anywhere] sm:max-w-[80%]">
+                    {selected.body}
+                  </p>
+                </div>
               </section>
               {selected.reasonUk && <Callout>{selected.reasonUk}</Callout>}
               <div className="grid gap-3 sm:grid-cols-2">
@@ -272,15 +284,17 @@ export function FormInbox({
                       href={`/api/form-messages/${selected.id}/screenshots/${phase}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="min-w-0 space-y-2 text-xs text-accent"
+                      className="min-w-0 overflow-hidden rounded-lg border border-border bg-raised text-xs text-accent hover:bg-chip"
                     >
-                      <span>{uk.forms[phase]}</span>
                       <img
                         src={`/api/form-messages/${selected.id}/screenshots/${phase}`}
                         alt={uk.forms[phase]}
                         loading="lazy"
-                        className="max-h-56 w-full rounded-lg border border-border object-contain"
+                        className="h-32 w-full object-cover object-top"
                       />
+                      <span className="block px-3 py-2 font-medium">
+                        {uk.forms[phase]}
+                      </span>
                     </a>
                   ))}
               </div>
