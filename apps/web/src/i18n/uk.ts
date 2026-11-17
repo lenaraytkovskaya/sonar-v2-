@@ -691,6 +691,11 @@ export const uk = {
   },
   forms: {
     contactDetails: 'Контактні дані',
+    sendingTitle: 'Відправка форм',
+    dailyLimit: 'Ліміт форм на день',
+    sentToday: (sent: number, limit: number) =>
+      `Сьогодні надіслано: ${sent} / ${limit}`,
+    sendingHint: 'Надіслані форми — у «Вхідні» → «Форми»',
     formUrl: 'Сторінка форми',
     contactHint: 'Контакти, які Sonar залишає у формах компаній.',
     contactLabels: {

@@ -12,6 +12,7 @@ import {
   isContactBlocked,
   sameFormDomain,
   transaction,
+  ensureFormAccount,
   validFormUrl,
 } from './email.js';
 import { logActivity, type TaskOutcome } from './tasks.js';
@@ -60,9 +61,25 @@ async function loadContactDetails(
 export async function getContactDetails(): Promise<ContactDetails> {
   return loadContactDetails(sonarPool);
 }
+export async function getFormDeliverySettings(): Promise<{
+  dailyLimit: number;
+  sentToday: number;
+}> {
+  const {
+    rows: [row],
+  } = await sonarPool.query(
+    `select coalesce((select daily_limit from channel_accounts where channel='form' order by created_at,id limit 1), (select (value #>> '{}')::int from settings where key='send.form_company_daily_limit'), 1) as "dailyLimit",
+      (select count(*)::int from messages where channel='form' and direction='out' and sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"`,
+  );
+  return {
+    dailyLimit: Number(row.dailyLimit),
+    sentToday: Number(row.sentToday),
+  };
+}
 export async function saveContactDetails(
   input: ContactDetails,
   userId: string,
+  dailyLimit?: number,
 ): Promise<void> {
   const values = Object.fromEntries(
     contactFields.map((key) => [
@@ -77,6 +94,13 @@ export async function saveContactDetails(
     Object.values(values).some((v) => v.length > 2000)
   )
     throw new EmailValidationError('Перевірте ім’я, email та адресу сайту.');
+  if (
+    dailyLimit !== undefined &&
+    (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 100000)
+  )
+    throw new EmailValidationError(
+      'Ліміт має бути цілим числом від 1 до 100000.',
+    );
   for (const key of ['phone', 'whatsapp'] as const) {
     if (!values[key]) continue;
     const phone = values[key].startsWith('+') && normalizePhone(values[key]);
@@ -87,6 +111,13 @@ export async function saveContactDetails(
     values[key] = phone;
   }
   await transaction(async (c) => {
+    if (dailyLimit !== undefined) {
+      await ensureFormAccount(c);
+      await c.query(
+        "update channel_accounts set daily_limit=$1 where channel='form'",
+        [dailyLimit],
+      );
+    }
     for (const key of contactFields)
       await c.query(
         'insert into settings(key,value) values($1,$2::jsonb) on conflict(key) do update set value=excluded.value',
@@ -175,6 +206,21 @@ export async function sendFormMessage(
         'message_missing',
         'Повідомлення форми не знайдено.',
       );
+    if (!identity.account_id) {
+      await c.query('begin');
+      try {
+        const ensured = await ensureFormAccount(c);
+        await c.query(
+          'update messages set account_id=$2 where id=$1 and account_id is null',
+          [messageId, ensured.id],
+        );
+        await c.query('commit');
+        identity.account_id = ensured.id;
+      } catch (error) {
+        await c.query('rollback');
+        throw error;
+      }
+    }
     await c.query(
       "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
       [identity.account_id],
@@ -262,7 +308,7 @@ export async function sendFormMessage(
         [accountId],
       );
       if (active?.status !== 'active')
-        return stop('paused', 'account_disabled', 'Акаунт форм вимкнено.');
+        return stop('paused', 'account_disabled', 'Надсилання форм вимкнено.');
       const {
         rows: [contact],
       } = await c.query(

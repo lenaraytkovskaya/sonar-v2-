@@ -15,6 +15,17 @@ describe('URL tab state', () => {
       expected,
     );
   });
+  it('routes legacy forms tabs to contact details', () => {
+    const channelTabs = ['contact-details', 'email', 'facebook', 'telegram'];
+    expect(
+      selectedTab(
+        new URLSearchParams('tab=forms'),
+        'tab',
+        channelTabs,
+        'contact-details',
+      ),
+    ).toBe('contact-details');
+  });
   it('changes only its own parameter, retaining duplicate filters and the hash', () => {
     const href =
       'http://localhost/companies/id?campaignId=campaign&filter=a&filter=b&tab=website#details';

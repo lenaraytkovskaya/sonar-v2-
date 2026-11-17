@@ -15,6 +15,9 @@ export async function POST(request: Request) {
   ] as const;
   if (
     !data ||
+    !Number.isInteger(data.dailyLimit) ||
+    data.dailyLimit < 1 ||
+    data.dailyLimit > 100000 ||
     !keys.every(
       (key) => typeof data[key] === 'string' && data[key].length <= 500,
     )
@@ -28,6 +31,7 @@ export async function POST(request: Request) {
         string
       >,
       user.id,
+      data.dailyLimit,
     );
     return { ok: true };
   });

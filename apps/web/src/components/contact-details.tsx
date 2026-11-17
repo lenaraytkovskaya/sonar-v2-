@@ -7,8 +7,15 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Section } from './ui/layout';
 
-export function ContactDetails({ initial }: { initial: Details }) {
+export function ContactDetails({
+  initial,
+  formDelivery,
+}: {
+  initial: Details;
+  formDelivery: { dailyLimit: number; sentToday: number };
+}) {
   const [details, setDetails] = useState(initial);
+  const [dailyLimit, setDailyLimit] = useState(String(formDelivery.dailyLimit));
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState('');
   return (
@@ -24,7 +31,10 @@ export function ContactDetails({ initial }: { initial: Details }) {
             const response = await fetch('/api/contact-details', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(details),
+              body: JSON.stringify({
+                ...details,
+                dailyLimit: Number(dailyLimit),
+              }),
             });
             const result = await response.json();
             if (!response.ok) throw Error(result.error ?? uk.email.error);
@@ -69,6 +79,33 @@ export function ContactDetails({ initial }: { initial: Details }) {
             </div>
           ),
         )}
+        <div className="space-y-3 border-t border-border pt-5 sm:col-span-2">
+          <h3 className="text-sm font-semibold">{uk.forms.sendingTitle}</h3>
+          <p className="text-sm text-muted-foreground">
+            {uk.forms.sentToday(
+              formDelivery.sentToday,
+              Number(dailyLimit) || formDelivery.dailyLimit,
+            )}
+          </p>
+          <label
+            htmlFor="form-daily-limit"
+            className="block text-sm font-medium"
+          >
+            {uk.forms.dailyLimit}
+          </label>
+          <Input
+            id="form-daily-limit"
+            type="number"
+            min={1}
+            max={100000}
+            step={1}
+            value={dailyLimit}
+            onChange={(event) => setDailyLimit(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            {uk.forms.sendingHint}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
           <Button disabled={pending}>
             {pending ? uk.ai.pending : uk.forms.save}

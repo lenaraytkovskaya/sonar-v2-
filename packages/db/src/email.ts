@@ -480,7 +480,7 @@ type MessageInput = {
   channel?: 'email' | 'form' | 'telegram' | 'whatsapp';
   companyId: string;
   campaignId: string;
-  accountId: string;
+  accountId?: string;
   toAddress: string;
   subject?: string;
   body: string;
@@ -554,7 +554,14 @@ export async function createCompanyMessage(
             : 'Вкажіть коректний email, тему та текст повідомлення.',
     );
   return transaction(async (c) => {
-    if (channel === 'whatsapp') await lockWhatsAppIdentity(c, input.accountId);
+    const accountId =
+      channel === 'form'
+        ? (input.accountId ?? (await ensureFormAccount(c)).id)
+        : input.accountId;
+    const resolvedAccountId =
+      accountId ?? invalid('Оберіть активний акаунт каналу.');
+    if (channel === 'whatsapp')
+      await lockWhatsAppIdentity(c, resolvedAccountId);
     const {
       rows: [prior],
     } = await c.query(
@@ -566,7 +573,7 @@ export async function createCompanyMessage(
         prior.channel !== channel ||
         prior.company_id !== input.companyId ||
         prior.campaign_id !== input.campaignId ||
-        prior.account_id !== input.accountId ||
+        prior.account_id !== resolvedAccountId ||
         prior.to_value !== to ||
         prior.subject !== subject ||
         prior.body !== body
@@ -593,7 +600,7 @@ export async function createCompanyMessage(
       rows: [account],
     } = await c.query(
       "select id from channel_accounts where id=$1 and status='active' and channel=$2 for share",
-      [input.accountId, channel],
+      [resolvedAccountId, channel],
     );
     if (!account) invalid('Оберіть активний акаунт каналу.');
     const contact =
@@ -624,7 +631,7 @@ export async function createCompanyMessage(
     const conversation =
       channel === 'whatsapp'
         ? (
-            await whatsappConversation(c, input.accountId, to, undefined, {
+            await whatsappConversation(c, resolvedAccountId, to, undefined, {
               companyId: input.companyId,
               campaignId: input.campaignId,
               contactId: contact.id,
@@ -646,7 +653,7 @@ export async function createCompanyMessage(
       `insert into messages(conversation_id,account_id,to_value,subject,body,status,idempotency_key,created_by,channel) values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(idempotency_key) do update set idempotency_key=messages.idempotency_key returning *`,
       [
         conversation.id,
-        input.accountId,
+        resolvedAccountId,
         to,
         subject,
         body,
@@ -669,7 +676,7 @@ export async function createCompanyMessage(
     if (
       message.to_value !== undefined &&
       (message.conversation_id !== conversation.id ||
-        message.account_id !== input.accountId ||
+        message.account_id !== resolvedAccountId ||
         message.to_value !== to ||
         message.subject !== subject ||
         message.body !== body)
@@ -683,7 +690,7 @@ export async function submitMessage(messageId: string, userId: string) {
     const {
       rows: [message],
     } = await c.query(
-      `select m.id,m.status,m.channel,m.to_value,v.company_id,a.send_mode,a.channels from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
+      `select m.id,m.status,m.channel,m.to_value,m.account_id,v.company_id,a.send_mode,a.channels from messages m join conversations v on v.id=m.conversation_id join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
       [messageId],
     );
     if (!message || message.status !== 'draft') return false;
@@ -695,9 +702,13 @@ export async function submitMessage(messageId: string, userId: string) {
     )
       invalid('Канал вимкнено або компанія у списку «Не контактувати».');
     const status = messageStatusForMode(message.send_mode, true);
+    const accountId =
+      status === 'queued' && message.channel === 'form' && !message.account_id
+        ? (await ensureFormAccount(c)).id
+        : message.account_id;
     await c.query(
-      'update messages set status=$2,created_by=coalesce(created_by,$3) where id=$1',
-      [messageId, status, userId],
+      'update messages set status=$2,created_by=coalesce(created_by,$3),account_id=$4 where id=$1',
+      [messageId, status, userId, accountId],
     );
     if (status === 'queued')
       await queueMessage(c, messageId, message.company_id);
@@ -717,7 +728,7 @@ export async function approveMessage(messageId: string, userId: string) {
     const {
       rows: [message],
     } = await c.query(
-      `update messages set status='queued',approved_by=$2,approved_at=now(),reason_uk=null where id=$1 and status='awaiting_approval' returning id,conversation_id,to_value`,
+      `update messages set status='queued',approved_by=$2,approved_at=now(),reason_uk=null where id=$1 and status='awaiting_approval' returning id,conversation_id,to_value,channel,account_id`,
       [messageId, userId],
     );
     if (!message) return false;
@@ -728,6 +739,13 @@ export async function approveMessage(messageId: string, userId: string) {
     ]);
     if (await isContactBlocked(c, conversation.company_id, message.to_value))
       invalid('Компанія або адреса у списку «Не контактувати».');
+    if (message.channel === 'form' && !message.account_id) {
+      const account = await ensureFormAccount(c);
+      await c.query('update messages set account_id=$2 where id=$1', [
+        message.id,
+        account.id,
+      ]);
+    }
     await queueMessage(c, message.id, conversation.company_id);
     await logActivity(
       'message.approved',
@@ -1866,6 +1884,42 @@ export async function listFormAccounts(): Promise<FormAccount[]> {
     )
   ).rows;
 }
+
+/** Must be called inside a transaction; form sending has one internal account. */
+export async function ensureFormAccount(
+  c: Pick<PoolClient, 'query'>,
+): Promise<{ id: string }> {
+  await c.query(
+    "select pg_advisory_xact_lock(hashtextextended('form-account:singleton',0))",
+  );
+  const {
+    rows: [existing],
+  } = await c.query(
+    "select id from channel_accounts where channel='form' order by created_at,id limit 1 for update",
+  );
+  if (existing) return { id: String(existing.id) };
+
+  const {
+    rows: [setting],
+  } = await c.query(
+    "select value #>> '{}' as value from settings where key='send.form_company_daily_limit'",
+  );
+  const configuredLimit = Number(setting?.value);
+  const dailyLimit =
+    Number.isSafeInteger(configuredLimit) &&
+    configuredLimit > 0 &&
+    configuredLimit <= 100000
+      ? configuredLimit
+      : 1;
+  const {
+    rows: [created],
+  } = await c.query(
+    "insert into channel_accounts(channel,name,address,daily_limit) values('form','Form sending','',$1) returning id",
+    [dailyLimit],
+  );
+  return { id: String(created.id) };
+}
+
 function formAccountValues(input: FormAccountInput) {
   const name = input.name?.trim();
   if (
