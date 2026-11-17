@@ -138,8 +138,19 @@ async function messageButtonFailure(
   error.message = error.reasonUk;
   return error;
 }
-const composerLabel =
-  /^(?:message|повідомлення|сообщение|написати повідомлення|напишіть повідомлення|написать сообщение)(?:…|\.{3})?$/i;
+const composerPlaceholderLabels = [
+  'message',
+  'повідомлення',
+  'сообщение',
+  'написати повідомлення',
+  'напишіть повідомлення',
+  'написать сообщение',
+  'напишите сообщение',
+];
+const composerLabel = new RegExp(
+  `^(?:${composerPlaceholderLabels.join('|')})(?:…|\\.{3})?$`,
+  'i',
+);
 const conversationHeaderElements =
   'header, [role="banner"], div[data-pagelet="IGDInboxHeaderOffMsys"]';
 // Count nested semantic headers/pagelets once, retaining all their recipient links.
@@ -176,22 +187,48 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
   // Ancestor headers, sidebar links and hidden recipients cannot identify a chat.
   const boundaries =
     ':is([role="dialog"], main, [role="main"]):visible:not(:is(aside, nav, [role="complementary"], [role="navigation"]) *)';
+  const profileLinkSelector = `a:visible:is([href="/${handle}/" i], [href="https://www.instagram.com/${handle}/" i], [href="https://instagram.com/${handle}/" i])`;
   const containers = page
     .locator(boundaries)
     .filter({ hasNot: page.locator(boundaries) });
-  const recipient = page
-    .locator(conversationHeaders)
-    .locator(
-      `a:visible:is([href="/${handle}/" i], [href="https://www.instagram.com/${handle}/" i], [href="https://instagram.com/${handle}/" i])`,
-    );
-  const matching = containers.filter({ has: recipient });
-  if ((await matching.count()) > 1)
-    throw stagedFailure('dialog', 'unconfirmed');
-  await matching.waitFor({ state: 'visible' });
   if ((await containers.count()) !== 1)
     throw stagedFailure('dialog', 'unconfirmed');
   const dialog = containers;
-  const headers = dialog.locator(conversationHeaders);
+  const semanticHeaders = dialog.locator(conversationHeaders);
+  const recipient = dialog.locator(profileLinkSelector);
+  let headers: Locator;
+  if ((await semanticHeaders.count()) > 0) {
+    if ((await semanticHeaders.count()) !== 1)
+      throw stagedFailure('dialog', 'unconfirmed');
+    headers = semanticHeaders;
+  } else {
+    const eligibleRecipients: Locator[] = [];
+    for (let index = 0; index < (await recipient.count()); index++) {
+      const candidate = recipient.nth(index);
+      const insideExcludedArea = await candidate.evaluate((element) =>
+        Boolean(
+          element.closest(
+            'aside, nav, [role="complementary"], [role="navigation"], [data-pagelet]',
+          ),
+        ),
+      );
+      if (!insideExcludedArea) eligibleRecipients.push(candidate);
+    }
+    if (eligibleRecipients.length === 0)
+      throw stagedFailure('dialog', 'timeout');
+    if (eligibleRecipients.length !== 1)
+      throw stagedFailure('dialog', 'unconfirmed');
+    // Some 2026 inbox layouts render the recipient link in a plain container.
+    // The link itself must still identify the exact recipient in the confirmed chat.
+    headers = eligibleRecipients[0]!.locator('xpath=ancestor::div[1]');
+    if (
+      await headers.evaluate(
+        (element) =>
+          element.matches('main, [role="main"], [role="dialog"]'),
+      )
+    )
+      throw stagedFailure('dialog', 'unconfirmed');
+  }
   if ((await headers.count()) !== 1)
     throw stagedFailure('dialog', 'unconfirmed');
   const links = await headers
@@ -212,6 +249,8 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
       if (profile.handle !== handle) mismatchedProfiles++;
     }
   }
+  if (recognizedProfiles === 0 || recognizedProfiles === mismatchedProfiles)
+    throw stagedFailure('dialog', 'timeout');
   if (mismatchedProfiles)
     throw dialogMismatch(phase, {
       visibleAnchors: links.length,
@@ -220,25 +259,34 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
     });
   return dialog;
 }
-function instagramComposer(page: Page, dialog: Locator) {
-  return dialog
+async function instagramComposer(page: Page, dialog: Locator) {
+  const outsideNavigation = page.locator(
+    `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
+  );
+  const named = dialog
     .getByRole('textbox', { name: composerLabel })
     .or(dialog.getByPlaceholder(composerLabel))
-    .or(
-      dialog
-        .getByRole('textbox')
-        .and(
-          dialog.locator(
-            '[contenteditable="true"][aria-placeholder="Message..." i]:not([aria-readonly="true"])',
-          ),
-        ),
+    .filter({ visible: true })
+    .and(outsideNavigation);
+  const candidates = dialog
+    .locator(
+      '[contenteditable="true"][role="textbox"][aria-placeholder]:not([aria-readonly="true"])',
     )
     .filter({ visible: true })
-    .and(
-      page.locator(
-        `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
-      ),
-    );
+    .and(outsideNavigation);
+  let matchingCandidate: Locator | undefined;
+  for (let index = 0; index < (await candidates.count()); index++) {
+    const candidate = candidates.nth(index);
+    if (
+      composerLabel.test(
+        (await candidate.getAttribute('aria-placeholder')) ?? '',
+      )
+    )
+      matchingCandidate = matchingCandidate
+        ? matchingCandidate.or(candidate)
+        : candidate;
+  }
+  return matchingCandidate ? named.or(matchingCandidate) : named;
 }
 async function instagramArticleConfirmation(dialog: Locator, body: string) {
   return dialog.evaluateHandle((container, body) => {
@@ -811,7 +859,9 @@ async function sendInstagram(
     const dialogUrl = page.url();
     let dialogNode = await dialog.elementHandle();
     stage = 'composer';
-    let composerNode = await instagramComposer(page, dialog).elementHandle();
+    let composerNode = await (
+      await instagramComposer(page, dialog)
+    ).elementHandle();
     if (!composerNode) throw stagedFailure(stage, 'unconfirmed');
     await composerNode.fill(body);
     const verifyDialog = async (phase: Exclude<DialogPhase, 'initial'>) => {
@@ -836,9 +886,8 @@ async function sendInstagram(
           originalUrl: dialogUrl,
           currentUrl,
         });
-      const currentComposer = await instagramComposer(
-        page,
-        current,
+      const currentComposer = await (
+        await instagramComposer(page, current)
       ).elementHandle();
       if (!currentComposer) throw stagedFailure('composer', 'unconfirmed');
       const sameComposer = await currentComposer.evaluate(

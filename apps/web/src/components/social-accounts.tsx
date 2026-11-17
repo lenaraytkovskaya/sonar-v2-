@@ -310,7 +310,7 @@ export function SocialAccounts({
                             },
                           ]
                         : []),
-                      ...(account.network === 'facebook'
+                      ...(['instagram', 'facebook'].includes(account.network)
                         ? [
                             {
                               kind: 'poll' as const,
@@ -415,9 +415,19 @@ export function SocialAccounts({
                     hidden: !account.nextSendAt,
                   },
                   {
-                    label: uk.socialAccounts.syncImported,
-                    value: account.inboxSyncCreated,
-                    hidden: account.inboxSyncCreated === null,
+                    label: uk.socialAccounts.inboxLastCheck,
+                    value: account.inboxSyncCheckedAt ? (
+                      <span>
+                        <LocalTime value={account.inboxSyncCheckedAt} />
+                        {account.inboxSyncCreated !== null &&
+                          ` · ${uk.socialAccounts.syncImported} ${account.inboxSyncCreated}`}
+                      </span>
+                    ) : (
+                      '—'
+                    ),
+                    hidden: !['instagram', 'facebook'].includes(
+                      account.network,
+                    ),
                   },
                 ]}
               />
@@ -435,6 +445,9 @@ export function SocialAccounts({
               )}
               {account.reasonUk && (
                 <Callout tone="err">{account.reasonUk}</Callout>
+              )}
+              {account.inboxSyncErrorUk && (
+                <Callout tone="err">{account.inboxSyncErrorUk}</Callout>
               )}
               {account.inboxSyncComplete === false && (
                 <p className="flex items-center gap-1 text-xs text-muted-foreground">

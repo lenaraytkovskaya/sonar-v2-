@@ -35,7 +35,11 @@ async function diagnose(
 }
 
 /** Only the observed English DOM contract. No transport replay or generated IDs. */
-export async function readFacebookThread(page: Page, ownId: string) {
+export async function readFacebookThread(
+  page: Page,
+  ownId: string,
+  maxMessages = 100,
+) {
   return page.evaluate(
     ({ ownId, logSelector }) => {
       const visible = (node: Element) =>
@@ -123,7 +127,7 @@ export async function readFacebookThread(page: Page, ownId: string) {
       const observedAt = new Date().toISOString();
       const nodes = all(log, '[aria-roledescription="message"]');
       if (!nodes.length) skipped.push('no_message_nodes');
-      for (const [providerOrder, node] of nodes.entries()) {
+      for (const [providerOrder, node] of nodes.slice(-maxMessages).entries()) {
         const id = node.getAttribute('data-message-id');
         if (!id || !/^\d+@msgr\.\d+$/.test(id)) {
           skipped.push('message_id_unverified');
@@ -295,6 +299,9 @@ export async function captureFacebookInbox(
   assertSession = (budgetMs = timeoutMs) =>
     assertSocialSession(page, 'facebook', budgetMs),
   resumeAnchor: Record<string, unknown> | null = null,
+  maxThreads = 50,
+  maxMessages = 100,
+  threadCursors: Record<string, { lastMessageId?: string }> = {},
 ) {
   const skipped = new Set([
     'pagination_unverified',
@@ -364,12 +371,16 @@ export async function captureFacebookInbox(
     ),
   ]);
   if (!urls.length) skipped.add('no_visible_threads');
+  if (urls.length > maxThreads) skipped.add('thread_limit_reached');
+  const limitedUrls = urls.slice(0, maxThreads);
   const next =
     typeof resumeAnchor?.nextThreadUrl === 'string'
-      ? urls.indexOf(resumeAnchor.nextThreadUrl)
+      ? limitedUrls.indexOf(resumeAnchor.nextThreadUrl)
       : -1;
   const ordered =
-    next > 0 ? [...urls.slice(next), ...urls.slice(0, next)] : urls;
+    next > 0
+      ? [...limitedUrls.slice(next), ...limitedUrls.slice(0, next)]
+      : limitedUrls;
   for (const [index, url] of ordered.entries()) {
     if (Date.now() >= deadline) {
       skipped.add('time_limit');
@@ -390,7 +401,18 @@ export async function captureFacebookInbox(
         .locator(`${logSelector} [aria-roledescription="message"]`)
         .first()
         .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
-      read = await readFacebookThread(page, ownId);
+      read = await readFacebookThread(page, ownId, maxMessages);
+      const threadId = read.messages[0]?.threadId;
+      const previousId = threadId
+        ? threadCursors[threadId]?.lastMessageId
+        : undefined;
+      const previousIndex = previousId
+        ? read.messages.findIndex(
+            (message) => message.externalMessageId === previousId,
+          )
+        : -1;
+      if (previousIndex >= 0)
+        read.messages = read.messages.slice(previousIndex + 1);
       stage = 'capture_auth';
       await observed(() => assertSession(Math.max(1, end - Date.now())));
     } catch (error) {

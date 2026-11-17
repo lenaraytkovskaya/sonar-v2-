@@ -2,6 +2,7 @@ import type {
   SocialInboxBatch,
   SocialInboxCheckpoint,
 } from '@sonar/core/social-inbox';
+import { nextSocialInboxPollAt } from '@sonar/core/social-inbox-schedule';
 import {
   resolveSocialSession,
   safeSocialSessionDiagnostic,
@@ -66,6 +67,7 @@ export async function runSocialInboxSync(
     };
   const c = await sonarPool.connect();
   let locked = false;
+  let manual = false;
   const pending: { writing: Promise<unknown> | null } = { writing: null };
   let accepting = true;
   try {
@@ -102,7 +104,6 @@ export async function runSocialInboxSync(
         reasonCode: 'social_account_inactive',
         reasonUk: 'Увімкніть акаунт із підтвердженою сесією.',
       };
-    let manual = false;
     if (taskId) {
       const {
         rows: [receipt],
@@ -129,7 +130,7 @@ export async function runSocialInboxSync(
         };
     }
     const { rows: settings } = await c.query(
-      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
+      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.max_threads','social.inbox.max_messages','social.inbox.quiet_hours','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
@@ -148,11 +149,17 @@ export async function runSocialInboxSync(
     const session = await prepareSocialSession(c, account);
     const poll = Number(config['social.inbox.poll_seconds']);
     const limit = Number(config['social.inbox.daily_limit']);
+    const maxThreads = Number(config['social.inbox.max_threads']);
+    const maxMessages = Number(config['social.inbox.max_messages']);
     if (
       !Number.isSafeInteger(poll) ||
       poll < 1 ||
       !Number.isSafeInteger(limit) ||
-      limit < 1
+      limit < 1 ||
+      !Number.isSafeInteger(maxThreads) ||
+      maxThreads < 1 ||
+      !Number.isSafeInteger(maxMessages) ||
+      maxMessages < 1
     )
       return {
         status: 'paused',
@@ -160,10 +167,26 @@ export async function runSocialInboxSync(
         reasonUk:
           'Налаштуйте інтервал та окремий денний ліміт синхронізації соцмереж.',
       };
+    const quietHours = String(config['social.inbox.quiet_hours']);
+    let nextPollAt: string;
+    try {
+      nextPollAt = nextSocialInboxPollAt(now, poll, quietHours).toISOString();
+    } catch {
+      return {
+        status: 'paused',
+        reasonCode: 'social_inbox_settings_invalid',
+        reasonUk: 'Перевірте інтервал та тихі години опитування вхідних.',
+      };
+    }
     await c.query('begin');
     const runAt = await reserveSocialAction(c, account.id, 'sync', now, limit);
     await c.query('commit');
-    if (runAt)
+    if (runAt) {
+      if (!manual)
+        await c.query(
+          "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('nextPollAt',$2::text)) where id=$1",
+          [account.id, runAt.toISOString()],
+        );
       return {
         status: 'deferred',
         runAt,
@@ -171,12 +194,12 @@ export async function runSocialInboxSync(
         reasonUk:
           'Синхронізація після спільної паузи або окремого денного ліміту.',
       };
+    }
     const checkpoint = {
       ...emptySocialCheckpoint(),
       ...(account.settings.inboxSync as Partial<SocialInboxCheckpoint>),
     } as SocialInboxCheckpoint;
     checkpoint.cycleStartedAt ??= now.toISOString();
-    const nextPollAt = new Date(now.getTime() + poll * 1000).toISOString();
     await c.query(
       "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',$2::jsonb) where id=$1",
       [
@@ -192,7 +215,15 @@ export async function runSocialInboxSync(
     let created = 0;
     const conflicts: string[] = [];
     const result = await adapter.sync(
-      { ...account, session },
+      {
+        ...account,
+        session,
+        settings: {
+          ...account.settings,
+          inboxMaxThreads: maxThreads,
+          inboxMaxMessages: maxMessages,
+        },
+      },
       checkpoint,
       async (batch) => {
         if (!accepting || pending.writing)
@@ -207,6 +238,34 @@ export async function runSocialInboxSync(
           const saved = await save;
           created += saved.created;
           conflicts.push(...saved.conflicts);
+          for (const message of batch.messages) {
+            const cursor = ((checkpoint.threadCursors ??= {})[
+              message.threadId
+            ] ??= {});
+            if (message.occurredAt) {
+              if (
+                !cursor.lastMessageAt ||
+                Date.parse(message.occurredAt) >
+                  Date.parse(cursor.lastMessageAt)
+              ) {
+                cursor.lastMessageAt = message.occurredAt;
+                cursor.lastMessageIds = [message.externalMessageId];
+              } else if (message.occurredAt === cursor.lastMessageAt) {
+                cursor.lastMessageIds = [
+                  ...new Set([
+                    ...(cursor.lastMessageIds ?? []),
+                    message.externalMessageId,
+                  ]),
+                ].slice(-100);
+              }
+            } else {
+              cursor.lastMessageId = message.externalMessageId;
+            }
+          }
+          await c.query(
+            "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('threadCursors',$2::jsonb)) where id=$1",
+            [account.id, JSON.stringify(checkpoint.threadCursors ?? {})],
+          );
         } finally {
           pending.writing = null;
         }
@@ -222,6 +281,8 @@ export async function runSocialInboxSync(
         account.id,
         JSON.stringify({
           ...(!manual ? { nextPollAt } : {}),
+          checkedAt: now.toISOString(),
+          errorUk: null,
           complete,
           created,
           reason: result.reason ?? null,
@@ -276,6 +337,22 @@ export async function runSocialInboxSync(
           now,
           taskId ? `inbox:${taskId}` : undefined,
         );
+      if (
+        !manual &&
+        (error.code === 'session_invalid' ||
+          error.code === 'rate_limit' ||
+          (error instanceof SocialSessionCheckError &&
+            ['captcha', 'checkpoint', 'login_required'].includes(error.reason)))
+      ) {
+        await c.query(
+          "update channel_accounts set settings=settings||jsonb_build_object('inboxPollingEnabled',false,'inboxSync',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('checkedAt',$2::text,'errorUk',$3::text)) where id=$1 and channel in ('instagram','facebook')",
+          [
+            input.accountId,
+            now.toISOString(),
+            socialSessionCheckReasons[reason],
+          ],
+        );
+      }
       return {
         status: 'paused',
         reasonCode: `social_inbox_${reason}`,

@@ -4,6 +4,19 @@ export type SocialInboxCheckpoint = {
   watermark: string | null;
   resumeAnchor: Record<string, unknown> | null;
   cycleStartedAt: string | null;
+  threadCursors?: Record<
+    string,
+    {
+      lastMessageAt?: string;
+      lastMessageIds?: string[];
+      lastMessageId?: string;
+    }
+  >;
+};
+export type SocialInboxThreadCursor = {
+  lastMessageAt?: string;
+  lastMessageIds?: string[];
+  lastMessageId?: string;
 };
 export type SocialInboxMessage = {
   externalMessageId: string;
@@ -23,6 +36,20 @@ export type SocialInboxBatch = {
   messages: SocialInboxMessage[];
   resumeAnchor: Record<string, unknown> | null;
 };
+
+export function isNewSocialInboxMessage(
+  message: SocialInboxMessage,
+  cursor: SocialInboxThreadCursor | undefined,
+) {
+  if (!cursor?.lastMessageAt || !message.occurredAt) return true;
+  const messageAt = Date.parse(message.occurredAt);
+  const cursorAt = Date.parse(cursor.lastMessageAt);
+  return (
+    messageAt > cursorAt ||
+    (messageAt === cursorAt &&
+      !cursor.lastMessageIds?.includes(message.externalMessageId))
+  );
+}
 
 /** Canonical identity only, never display names, generated DOM IDs or message text. */
 export function canonicalSocialPeer(network: SocialNetwork, raw: string) {

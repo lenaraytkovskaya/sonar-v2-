@@ -24,6 +24,10 @@
       "types": "./dist/social-inbox.d.ts",
       "default": "./dist/social-inbox.js"
     },
+    "./social-inbox-schedule": {
+      "types": "./dist/social-inbox-schedule.d.ts",
+      "default": "./dist/social-inbox-schedule.js"
+    },
     "./social-login": {
       "types": "./dist/social-login.d.ts",
       "default": "./dist/social-login.js"

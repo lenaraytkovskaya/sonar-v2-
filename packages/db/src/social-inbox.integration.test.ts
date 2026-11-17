@@ -50,7 +50,7 @@ const checkpoint = async () =>
   ).rows[0].settings.inboxSync;
 const resetGate = () =>
   db.sonarPool.query(
-    "update channel_accounts set settings=(settings-'socialAction'-'healthPauseUntil')||'{\"healthAutoPaused\":false,\"reasonUk\":null}'::jsonb,status='active' where id=$1",
+    "update channel_accounts set settings=(settings-'socialAction'-'healthPauseUntil')||'{\"healthAutoPaused\":false,\"reasonUk\":null,\"inboxPollingEnabled\":true}'::jsonb,status='active' where id=$1",
     [account],
   );
 beforeAll(async () => {
@@ -412,7 +412,7 @@ it.skipIf(!enabled)(
         id,
       ]);
       await db.sonarPool.query(
-        "update settings set value='true' where key='social.inbox.enabled'",
+        "update settings set value='true' where key in ('social.inbox.enabled','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
       );
     }
   },
@@ -1024,6 +1024,9 @@ it.skipIf(!enabled)(
     );
     expect(first.status).toBe('failed');
     expect((await checkpoint()).watermark).toBeNull();
+    expect(
+      (await checkpoint()).threadCursors[message('partial').threadId],
+    ).toMatchObject({ lastMessageAt: message('partial').occurredAt });
     await resetGate();
     const partial = await worker.runSocialInboxSync(
       { accountId: account },
@@ -1104,6 +1107,14 @@ it.skipIf(!enabled)(
       'cookies_invalid',
     ] as const) {
       await resetGate();
+      expect(
+        (
+          await db.sonarPool.query(
+            "select settings->>'inboxPollingEnabled' as polling,(select value from settings where key='social.inbox.enabled') as global,(select value from settings where key='social.inbox.facebook.enabled') as facebook from channel_accounts where id=$1",
+            [account],
+          )
+        ).rows[0],
+      ).toEqual({ polling: 'true', global: true, facebook: true });
       await db.sonarPool.query(
         'update channel_accounts set settings=settings||\'{"sessionStatus":"valid"}\'::jsonb where id=$1',
         [account],
@@ -1133,6 +1144,7 @@ it.skipIf(!enabled)(
         status: 'paused',
         settings: {
           sessionStatus: reason === 'rate_limit' ? 'unconfirmed' : 'invalid',
+          inboxPollingEnabled: false,
         },
       });
     }
@@ -1217,7 +1229,10 @@ it.skipIf(!enabled)(
         [account],
       )
     ).rows[0];
-    expect(job.start_after).toEqual(new Date(now.getTime() + 180000));
+    const nextPollAt = Date.parse((await checkpoint()).nextPollAt);
+    expect(nextPollAt - now.getTime()).toBeGreaterThanOrEqual(126000);
+    expect(nextPollAt - now.getTime()).toBeLessThanOrEqual(234000);
+    expect(job.start_after).toEqual(new Date(nextPollAt));
     const old = (
       await db.sonarPool.query(
         "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status='queued'",
