@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { TextModel, GoogleProfile } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card } from './shared';
@@ -45,6 +45,7 @@ function SettingsEditor<T>({
   pending?: boolean;
   valid?: (value: T) => boolean;
 }) {
+  const formId = useId();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState('');
@@ -69,8 +70,14 @@ function SettingsEditor<T>({
         title={title}
         draft={draft}
         pending={pending}
+        actions={
+          <Button type="submit" form={formId} disabled={pending}>
+            {uk.ai.apply}
+          </Button>
+        }
       >
         <form
+          id={formId}
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
@@ -98,7 +105,6 @@ function SettingsEditor<T>({
           <p className="text-sm text-muted-foreground">
             {uk.crud.saveSettings}
           </p>
-          <Button>{uk.ai.apply}</Button>
         </form>
       </CrudDialog>
     </div>
@@ -468,8 +474,18 @@ export function SettingsPanel() {
             title={uk.crud.editProfile}
             pending={pending || !loaded}
             draft={profilePrice}
+            actions={
+              <Button
+                type="submit"
+                form="google-profile-price"
+                disabled={pending || !loaded}
+              >
+                {uk.ai.apply}
+              </Button>
+            }
           >
             <form
+              id="google-profile-price"
               className="space-y-4"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -497,7 +513,6 @@ export function SettingsPanel() {
               <p className="text-sm text-muted-foreground">
                 {uk.crud.saveSettings}
               </p>
-              <Button>{uk.ai.apply}</Button>
             </form>
           </CrudDialog>
           <SettingsEditor

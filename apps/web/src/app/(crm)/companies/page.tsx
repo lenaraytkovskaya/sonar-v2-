@@ -1,14 +1,14 @@
 import { CompanyList } from '@/components/company-list';
-import { validId } from '@/lib/api-access';
+import { companyFiltersSchema } from '@sonar/core';
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ campaignId?: string }>;
+  searchParams: Promise<{ q?: string; campaignId?: string; status?: string }>;
 }) {
-  const { campaignId } = await searchParams;
-  return (
-    <CompanyList
-      initialCampaignId={validId(campaignId) ? campaignId : undefined}
-    />
-  );
+  const query = await searchParams;
+  const parsed = companyFiltersSchema.safeParse(query);
+  const initialFilters = parsed.success
+    ? parsed.data
+    : companyFiltersSchema.parse({});
+  return <CompanyList initialFilters={initialFilters} />;
 }

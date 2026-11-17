@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { registerFormReplyTasks } from './form-replies.js';
 import {
   reconcileAccountHealthPauses,
@@ -35,8 +36,32 @@ import {
   enqueueTask,
   TaskFailure,
   closeTaskQueue,
+  recordWorkerHeartbeat,
 } from '@sonar/db/tasks';
 let stopping = false;
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+const startedAt = new Date().toISOString();
+const version = (() => {
+  try {
+    return readFileSync(
+      new URL('../app-version', import.meta.url),
+      'utf8',
+    ).trim();
+  } catch {
+    try {
+      return String(
+        JSON.parse(
+          readFileSync(
+            new URL('../../../package.json', import.meta.url),
+            'utf8',
+          ),
+        ).version ?? 'dev',
+      );
+    } catch {
+      return 'dev';
+    }
+  }
+})();
 const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
@@ -88,12 +113,19 @@ const started = (async () => {
   });
   await boss.schedule('sonar.registry.schedule', '0 * * * *');
   await enqueue();
+  await recordWorkerHeartbeat(startedAt, version);
+  heartbeatTimer = setInterval(() => {
+    void recordWorkerHeartbeat(startedAt, version).catch((error) => {
+      console.error('worker heartbeat failed', error);
+    });
+  }, 60000);
   console.log('worker started');
 })();
 async function stop() {
   if (stopping) return;
   stopping = true;
   await started.catch(() => {});
+  clearInterval(heartbeatTimer);
   await closeTelegramClients();
   await closeTaskQueue();
   await closeSocialBrowser();

@@ -57,8 +57,14 @@ export function ManualEntry({
         title={title}
         pending={pending}
         draft={values}
+        actions={
+          <Button type="submit" form="manual-company-entry" disabled={pending}>
+            {pending ? uk.ai.pending : title}
+          </Button>
+        }
       >
         <form
+          id="manual-company-entry"
           className="space-y-4"
           onSubmit={async (event) => {
             event.preventDefault();
@@ -199,7 +205,6 @@ export function ManualEntry({
               {error}
             </p>
           )}
-          <Button disabled={pending}>{pending ? uk.ai.pending : title}</Button>
         </form>
       </CrudDialog>
     </div>

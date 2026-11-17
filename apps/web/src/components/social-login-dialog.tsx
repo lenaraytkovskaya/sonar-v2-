@@ -56,6 +56,18 @@ export function SocialLoginDialog({
       }}
       title={`${uk.socialAccounts.credentialLogin} · ${account.name}`}
       pending={pending}
+      actions={
+        <Button
+          type="submit"
+          form={`social-login-form-${account.id}`}
+          className="min-h-11"
+          disabled={pending || (challenge && expired)}
+        >
+          {challenge
+            ? uk.socialAccounts.submitCode
+            : uk.socialAccounts.saveAndLogin}
+        </Button>
+      }
       draft={{
         login: !!login,
         password: !!password,
@@ -77,6 +89,7 @@ export function SocialLoginDialog({
       )}
       {challenge && (
         <form
+          id={`social-login-form-${account.id}`}
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
@@ -110,13 +123,11 @@ export function SocialLoginDialog({
           {expired && (
             <p className="text-sm text-wait">{uk.socialAccounts.codeExpired}</p>
           )}
-          <Button className="min-h-11" disabled={pending || expired}>
-            {uk.socialAccounts.submitCode}
-          </Button>
         </form>
       )}
       {!challenge && (
         <form
+          id={`social-login-form-${account.id}`}
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
@@ -218,9 +229,6 @@ export function SocialLoginDialog({
               {visible
                 ? uk.socialAccounts.hideSecrets
                 : uk.socialAccounts.showSecrets}
-            </Button>
-            <Button className="min-h-11" disabled={pending}>
-              {uk.socialAccounts.saveAndLogin}
             </Button>
           </div>
         </form>

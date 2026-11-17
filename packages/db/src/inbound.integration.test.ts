@@ -257,6 +257,16 @@ it.skipIf(!enabled)(
       randomUUID(),
     );
     expect(draft.status).toBe('draft');
+    await expect(
+      inbound.queueConversationReply(
+        {
+          conversationId: first.conversationId,
+          body: 'Hello {company}',
+          requestId: randomUUID(),
+        },
+        userId,
+      ),
+    ).rejects.toThrow('У тексті є заглушка');
     const history = await inbound.getConversationHistory(first.conversationId);
     expect(history.messages.some((m) => m.id === draft.id)).toBe(false);
     const original = (

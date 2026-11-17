@@ -19,13 +19,18 @@ import {
   LogOut,
   ChevronDown,
 } from 'lucide-react';
-import { FailureBadge, TasksProvider } from '@/components/task-overview';
+import {
+  FailureBadge,
+  TasksProvider,
+  WorkerStatus,
+} from '@/components/task-overview';
 import { uk } from '@/i18n/uk';
 import { logout } from '@/app/login/actions';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { MessageNotifier } from './message-notifier';
 import { SocialSessionNotices } from './social-session-notices';
+import { BuildVersion } from './build-version';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
@@ -151,6 +156,7 @@ export function Shell({
           </Link>
           {navigation}
           <ThemeSelect />
+          <BuildVersion />
         </aside>
         {/* Inset panel (shadcn sidebar-inset): the page sits on a raised sheet beside the sidebar. */}
         <div
@@ -202,6 +208,7 @@ export function Shell({
                       </Dialog.Description>
                       {navigation}
                       <ThemeSelect />
+                      <BuildVersion />
                     </Dialog.Content>
                   </Dialog.Portal>
                 </Dialog.Root>
@@ -242,6 +249,7 @@ export function Shell({
                 </Dropdown.Portal>
               </Dropdown.Root>
             </header>
+            <WorkerStatus />
             <main
               id="content"
               tabIndex={-1}

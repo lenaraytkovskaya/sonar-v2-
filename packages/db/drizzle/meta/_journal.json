@@ -351,6 +351,27 @@
       "when": 1794800049000,
       "tag": "0049_form_reply_match",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794910000000,
+      "tag": "0050_worker_heartbeat",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1794910001000,
+      "tag": "0051_failure_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1794910002000,
+      "tag": "0052_draft_sender",
+      "breakpoints": true
     }
   ]
 }

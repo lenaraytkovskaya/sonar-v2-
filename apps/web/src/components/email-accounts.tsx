@@ -235,8 +235,14 @@ export function EmailAccounts({
         title={uk.email.add}
         pending={pending}
         draft={form}
+        actions={
+          <Button type="submit" form="email-account-create" disabled={pending}>
+            {pending ? uk.ai.pending : uk.email.add}
+          </Button>
+        }
       >
         <form
+          id="email-account-create"
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(event) => {
             event.preventDefault();
@@ -280,9 +286,7 @@ export function EmailAccounts({
               />
             </div>
           ))}
-          <Button disabled={pending}>
-            {pending ? uk.ai.pending : uk.email.add}
-          </Button>
+
           {error && (
             <p role="alert" className="text-err sm:col-span-2">
               {error}

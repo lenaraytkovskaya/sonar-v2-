@@ -9,7 +9,7 @@ export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
 import { assertFacebookBinding } from './social-inbox.js';
 import { canonicalSocialPeer } from '@sonar/core/social-inbox';
-import { selectOutreachContacts } from '@sonar/core';
+import { findMessagePlaceholder, selectOutreachContacts } from '@sonar/core';
 import { sonarPool } from './index.js';
 import {
   EmailValidationError,
@@ -386,11 +386,17 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
     [`outreach:${taskId}`],
   );
   const { rows: settings } = await sonarPool.query(
-    "select key,value from settings where key like 'draft.%' or key in ('company.about','ai.models','ai.model.cheap','ai.reasoning')",
+    "select key,value from settings where key like 'draft.%' or key in ('company.about','contact.name','ai.models','ai.model.cheap','ai.reasoning')",
   );
   const config = Object.fromEntries(settings.map((r) => [r.key, r.value]));
   const snapshot = {
     existingMessageId: existing[0]?.id,
+    sender: {
+      name:
+        typeof config['contact.name'] === 'string'
+          ? config['contact.name'].trim()
+          : '',
+    },
     channel: eligible.channel,
     contact,
     analysis: row.analysis,
@@ -474,6 +480,7 @@ export async function saveOutreachDraft(
       await lockWhatsAppIdentity(c, account.id);
     await assertAllowed(c, input.companyId, row.normalized);
     const canAuto =
+      !findMessagePlaceholder(`${draft.subject}\n${draft.body}`) &&
       automatic.includes(channel) &&
       row.send_mode === 'auto' &&
       row.status === 'active' &&
@@ -606,6 +613,16 @@ async function lockedMessage(
   await assertAllowed(c, message.company_id, message.to_value);
   return message;
 }
+function assertNoPlaceholder(message: { subject?: string; body: string }) {
+  const placeholder = findMessagePlaceholder(
+    `${message.subject ?? ''}\n${message.body}`,
+  );
+  if (placeholder)
+    invalid(
+      `У тексті є заглушка «${placeholder}» — замініть її перед надсиланням.`,
+    );
+}
+
 type ExpectedDraft = { subject: string; body: string };
 function assertDraftSnapshot(message: ExpectedDraft, expected?: ExpectedDraft) {
   if (
@@ -687,6 +704,7 @@ async function submitOutreachDraft(
     )
       return { id: messageId, status: String(message.status) };
     assertDraftSnapshot(message, expected);
+    assertNoPlaceholder(message);
     if (approve && message.status !== 'awaiting_approval')
       invalid('Спочатку передайте чернетку на одобрення.');
     if (
@@ -760,6 +778,7 @@ export async function markOutreachManualSent(
       invalid('Ручне підтвердження доступне для форм та соцмереж.');
     if (message.status === 'sent') return { id: messageId, status: 'sent' };
     assertDraftSnapshot(message, expected);
+    assertNoPlaceholder(message);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна позначити надісланим.');
     await c.query(

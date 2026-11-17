@@ -4,8 +4,14 @@ RUN corepack enable && corepack prepare pnpm@10.34.9 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 COPY . .
-RUN pnpm install --offline --frozen-lockfile && pnpm build
+ARG GIT_SHA=dev
+RUN pnpm install --offline --frozen-lockfile && \
+    NEXT_PUBLIC_APP_VERSION="$(node -p "require('./package.json').version")" \
+    NEXT_PUBLIC_BUILD_SHA="$GIT_SHA" \
+    NEXT_PUBLIC_BUILD_DATE="$(date -u +%Y-%m-%d)" \
+    pnpm build
 RUN pnpm --filter @sonar/worker deploy --legacy --prod /worker
+RUN node -e "require('fs').writeFileSync('/worker/app-version', require('./package.json').version)"
 
 FROM node:22-slim AS web
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseOutreachDraft } from './outreach.js';
+import { findMessagePlaceholder, parseOutreachDraft } from './outreach.js';
 
 it('requires an email subject and preserves the company language', () => {
   expect(
@@ -63,4 +63,28 @@ it('selects top three distinct enabled contacts by rank, with social drafts avai
     'f',
     'g',
   ]);
+});
+
+it.each([
+  "[ім'я]",
+  '[Имя]',
+  '[name]',
+  '{company}',
+  '{{sender_name}}',
+  '[Назва компанії]',
+])('finds an unresolved placeholder in %s', (placeholder) => {
+  expect(findMessagePlaceholder(`Hello ${placeholder}!`)).not.toBeNull();
+});
+it('returns the exact first placeholder and allows ordinary punctuation and numeric references', () => {
+  expect(findMessagePlaceholder("Мене звати [ім'я], пишу від {company}.")).toBe(
+    "[ім'я]",
+  );
+  for (const text of [
+    'Мене звати Олена (Sonar).',
+    'Джерело [1].',
+    'Hello!',
+    '[] {}',
+    '[unclosed',
+  ])
+    expect(findMessagePlaceholder(text)).toBeNull();
 });

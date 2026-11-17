@@ -212,8 +212,18 @@ export function WhatsAppAccounts({
             title={uk.crud.editLimit}
             pending={pending}
             draft={limit}
+            actions={
+              <Button
+                type="submit"
+                form={`whatsapp-limit-form-${account.id}`}
+                disabled={pending}
+              >
+                {uk.forms.save}
+              </Button>
+            }
           >
             <form
+              id={`whatsapp-limit-form-${account.id}`}
               className="flex flex-wrap items-end gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -236,9 +246,6 @@ export function WhatsAppAccounts({
                   onChange={(event) => setLimit(event.target.value)}
                 />
               </div>
-              <Button variant="outline" disabled={pending}>
-                {uk.forms.save}
-              </Button>
               {error && (
                 <p role="alert" className="text-err">
                   {error}
@@ -331,8 +338,19 @@ export function WhatsAppAccounts({
             title={uk.whatsapp.connect}
             pending={pending}
             draft={{ name, limit }}
+            actions={
+              <Button
+                type="submit"
+                form="whatsapp-account-connect"
+                className="sm:col-span-2"
+                disabled={pending || !configured}
+              >
+                {pending ? uk.ai.pending : uk.whatsapp.connect}
+              </Button>
+            }
           >
             <form
+              id="whatsapp-account-connect"
               className="grid gap-4 sm:grid-cols-2"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -366,12 +384,6 @@ export function WhatsAppAccounts({
                   onChange={(event) => setLimit(event.target.value)}
                 />
               </div>
-              <Button
-                className="sm:col-span-2"
-                disabled={pending || !configured}
-              >
-                {pending ? uk.ai.pending : uk.whatsapp.connect}
-              </Button>
               {error && (
                 <p role="alert" className="text-err sm:col-span-2">
                   {error}

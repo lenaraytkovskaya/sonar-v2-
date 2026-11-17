@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import type { WorkerHealth } from '@sonar/core';
 import {
   createContext,
   useContext,
@@ -48,16 +49,20 @@ function useTaskPolling() {
     batches: Batch[];
     tasks: Task[];
     failures: Task[];
+    olderFailures: Task[];
     counts: Count[];
     sentToday: number;
     unreadCount: number;
+    workerHealth: WorkerHealth | null;
   }>({
     tasks: [],
     batches: [],
     failures: [],
+    olderFailures: [],
     counts: [],
     sentToday: 0,
     unreadCount: 0,
+    workerHealth: null,
   });
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -95,6 +100,26 @@ export function useTasks() {
   if (!context) throw Error('TasksProvider missing');
   return context;
 }
+export function WorkerStatus() {
+  const { workerHealth } = useTasks();
+  if (!workerHealth || workerHealth.worker) return null;
+  const time = workerHealth.heartbeatAt
+    ? new Date(workerHealth.heartbeatAt).toLocaleTimeString('uk-UA', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+  return (
+    <div
+      role="alert"
+      className="shrink-0 border-b border-err/20 bg-err-bg px-4 py-3 text-sm text-err md:px-6"
+    >
+      {time
+        ? uk.tasks.workerStopped.replace('{time}', time)
+        : uk.tasks.workerMissing}
+    </div>
+  );
+}
 export function FailureBadge({ inbox = false }: { inbox?: boolean }) {
   const { failures, unreadCount } = useTasks();
   const count = inbox ? unreadCount : failures.length;
@@ -108,7 +133,8 @@ export function FailureBadge({ inbox = false }: { inbox?: boolean }) {
   ) : null;
 }
 export function TaskOverview() {
-  const { tasks, failures, counts, error, batches, sentToday } = useTasks();
+  const { tasks, failures, olderFailures, counts, error, batches, sentToday } =
+    useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState<string | null>(null);
@@ -166,6 +192,86 @@ export function TaskOverview() {
       setPending(null);
     }
   };
+  const renderFailures = (items: Task[]) => (
+    <ul className="divide-y divide-border">
+      {items.map((task) => (
+        <li
+          key={task.id}
+          className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0"
+        >
+          <div className="min-w-0 flex-1 break-words">
+            <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              {name(task.type)}
+              <StatusText status={task.status} />
+            </p>
+            <p
+              className={
+                task.status === 'paused'
+                  ? 'mt-0.5 text-sm text-wait'
+                  : 'mt-0.5 text-sm text-err'
+              }
+            >
+              {task.reason_uk}
+              <span className="text-muted-foreground">
+                {' '}
+                · {uk.tasks.repetitions}: {task.repetitions}
+              </span>
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              disabled={pending === task.id}
+              onClick={() => void retry(task.id, 'dismiss')}
+            >
+              {uk.tasks.dismiss}
+            </Button>
+            {task.result?.billingPending ? (
+              reconciling === task.id ? (
+                <>
+                  <Button
+                    variant="outline"
+                    disabled={pending === task.id}
+                    onClick={() => void retry(task.id, 'reconcile', true)}
+                  >
+                    {uk.tasks.charged}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={pending === task.id}
+                    onClick={() => void retry(task.id, 'reconcile', false)}
+                  >
+                    {uk.tasks.notCharged}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={() => setReconciling(task.id)}
+                >
+                  {uk.tasks.reconcile}
+                </Button>
+              )
+            ) : task.type === 'social.request' ? null : task.type.startsWith(
+                'whatsapp.account.',
+              ) ? (
+              <Button asChild variant="outline">
+                <Link href="/channels">{uk.pages.channels.title}</Link>
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                disabled={pending === task.id}
+                onClick={() => void retry(task.id)}
+              >
+                {uk.tasks.retry}
+              </Button>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <div className="space-y-6">
       {(error || retryError) && <Callout tone="err">{uk.tasks.error}</Callout>}
@@ -173,88 +279,14 @@ export function TaskOverview() {
         title={uk.tasks.failures}
         description={failures.length ? undefined : uk.tasks.noFailures}
       >
-        {failures.length > 0 && (
-          <ul className="divide-y divide-border">
-            {failures.map((task) => (
-              <li
-                key={task.id}
-                className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0"
-              >
-                <div className="min-w-0 flex-1 break-words">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    {name(task.type)}
-                    <StatusText status={task.status} />
-                  </p>
-                  <p
-                    className={
-                      task.status === 'paused'
-                        ? 'mt-0.5 text-sm text-wait'
-                        : 'mt-0.5 text-sm text-err'
-                    }
-                  >
-                    {task.reason_uk}
-                    <span className="text-muted-foreground">
-                      {' '}
-                      · {uk.tasks.repetitions}: {task.repetitions}
-                    </span>
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  <Button
-                    variant="ghost"
-                    disabled={pending === task.id}
-                    onClick={() => void retry(task.id, 'dismiss')}
-                  >
-                    {uk.tasks.dismiss}
-                  </Button>
-                  {task.result?.billingPending ? (
-                    reconciling === task.id ? (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={pending === task.id}
-                          onClick={() => void retry(task.id, 'reconcile', true)}
-                        >
-                          {uk.tasks.charged}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          disabled={pending === task.id}
-                          onClick={() =>
-                            void retry(task.id, 'reconcile', false)
-                          }
-                        >
-                          {uk.tasks.notCharged}
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        onClick={() => setReconciling(task.id)}
-                      >
-                        {uk.tasks.reconcile}
-                      </Button>
-                    )
-                  ) : task.type ===
-                    'social.request' ? null : task.type.startsWith(
-                      'whatsapp.account.',
-                    ) ? (
-                    <Button asChild variant="outline">
-                      <Link href="/channels">{uk.pages.channels.title}</Link>
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      disabled={pending === task.id}
-                      onClick={() => void retry(task.id)}
-                    >
-                      {uk.tasks.retry}
-                    </Button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+        {failures.length > 0 && renderFailures(failures)}
+        {olderFailures.length > 0 && (
+          <details className="mt-4 border-t border-border pt-3">
+            <summary className="cursor-pointer text-sm text-muted-foreground">
+              {uk.tasks.older} ({olderFailures.length})
+            </summary>
+            <div className="mt-3">{renderFailures(olderFailures)}</div>
+          </details>
         )}
       </Section>
       {batches.length > 0 && (

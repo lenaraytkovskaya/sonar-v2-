@@ -14,15 +14,9 @@ export async function GET(request: Request) {
   const { rows: counts } = await sonarPool.query(
     'select type,status,count(*)::int as count from tasks group by type,status',
   );
-  const { rows: failures } = await sonarPool.query(`
-    select * from (
-      select distinct on (type,case when result->>'billingPending'='true' then id end) id,type,status,reason_uk,result,created_at,
-        count(*) over (partition by type)::int as repetitions
-      from tasks where status in ('failed','paused') and dismissed_at is null
-        -- A later successful run of the same job on the same subject resolves the failure.
-        and not exists(select 1 from tasks d where d.type=tasks.type and d.subject_id is not distinct from tasks.subject_id and d.status='done' and d.created_at>tasks.created_at)
-      order by type,case when result->>'billingPending'='true' then id end,created_at desc,id desc
-    ) latest order by created_at desc`);
+  const { overviewFailures, readWorkerHealth } =
+    await import('@sonar/db/tasks');
+  const { failures, olderFailures } = await overviewFailures();
   const { rows: batches } = await sonarPool.query(
     `select b.id,b.size,b.status,b.found_new,b.found_known,b.requests,b.cost_usd,b.reason_uk,b.fixture,c.name as campaign_name,(select count(*)::int from campaign_companies cc where cc.batch_id=b.id) as companies,(select count(*)::int from campaign_companies cc join companies co on co.id=cc.company_id where cc.batch_id=b.id and co.status='enriching') as enriching,(select count(*)::int from campaign_companies cc join companies co on co.id=cc.company_id where cc.batch_id=b.id and co.status not in ('new','enriching')) as enriched from batches b join campaigns c on c.id=b.campaign_id order by b.started_at desc nulls last,b.number desc limit 20`,
   );
@@ -31,9 +25,11 @@ export async function GET(request: Request) {
     "select count(*)::int as count from messages where direction='in' and read_at is null",
   );
   return Response.json({
+    workerHealth: await readWorkerHealth(),
     tasks: rows,
     counts,
     failures,
+    olderFailures,
     batches,
     sentToday: await countSentToday(),
     unreadCount: unread[0].count,

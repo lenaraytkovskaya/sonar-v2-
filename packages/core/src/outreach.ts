@@ -60,3 +60,12 @@ export function parseOutreachDraft(
     body: draft.body,
   };
 }
+
+/** Return the first unresolved square/curly placeholder, ignoring numeric references. */
+export function findMessagePlaceholder(text: string): string | null {
+  return (
+    text.match(
+      /\[[^[\]\r\n]*[\p{L}_][^[\]\r\n]*\]|\{[^{}\r\n]*[\p{L}_][^{}\r\n]*\}/u,
+    )?.[0] ?? null
+  );
+}

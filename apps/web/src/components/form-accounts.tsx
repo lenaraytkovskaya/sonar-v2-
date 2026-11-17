@@ -109,8 +109,14 @@ export function FormAccounts({ accounts }: { accounts: Account[] }) {
           title={editing ? uk.forms.edit : uk.email.add}
           pending={pending}
           draft={form}
+          actions={
+            <Button type="submit" form="form-account-save" disabled={pending}>
+              {pending ? uk.ai.pending : uk.forms.save}
+            </Button>
+          }
         >
           <form
+            id="form-account-save"
             className="grid gap-4 md:grid-cols-2"
             onSubmit={(event) => {
               event.preventDefault();
@@ -149,11 +155,7 @@ export function FormAccounts({ accounts }: { accounts: Account[] }) {
                 />
               </div>
             ))}
-            <div className="flex gap-3 md:col-span-2">
-              <Button disabled={pending}>
-                {pending ? uk.ai.pending : uk.forms.save}
-              </Button>
-            </div>
+
             {error && (
               <p role="alert" className="text-err md:col-span-2">
                 {error}

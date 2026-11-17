@@ -160,6 +160,14 @@ it.skipIf(!enabled)(
       expect(chat.messages).toHaveLength(3);
       await outreach.editOutreachDraft(
         saved[0]!.id,
+        { subject: 'Edited', body: "Мене звати [ім'я]" },
+        userId,
+      );
+      await expect(
+        outreach.sendOutreachDraft(saved[0]!.id, userId),
+      ).rejects.toThrow('У тексті є заглушка');
+      await outreach.editOutreachDraft(
+        saved[0]!.id,
         { subject: 'Edited', body: 'Reviewed by a person' },
         userId,
       );
@@ -174,6 +182,19 @@ it.skipIf(!enabled)(
           )
         ).rows[0].n,
       ).toBe(0);
+      await outreach.editOutreachDraft(
+        saved[0]!.id,
+        { subject: '{company}', body: 'Reviewed by a person' },
+        userId,
+      );
+      await expect(
+        outreach.approveOutreachDraft(saved[0]!.id, userId),
+      ).rejects.toThrow('У тексті є заглушка');
+      await outreach.editOutreachDraft(
+        saved[0]!.id,
+        { subject: 'Edited', body: 'Reviewed by a person' },
+        userId,
+      );
       expect(
         (await outreach.approveOutreachDraft(saved[0]!.id, userId)).status,
       ).toBe('queued');

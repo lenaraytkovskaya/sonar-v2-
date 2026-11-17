@@ -33,7 +33,7 @@ services:
       postgres: { condition: service_healthy }
     restart: unless-stopped
   migrate:
-    build: { context: .., dockerfile: docker/Dockerfile, target: build }
+    build: { context: .., dockerfile: docker/Dockerfile, target: build, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
     command: [pnpm, db:migrate]
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
@@ -43,7 +43,7 @@ services:
     restart: 'no'
   cli:
     profiles: [tools]
-    build: { context: .., dockerfile: docker/Dockerfile, target: build }
+    build: { context: .., dockerfile: docker/Dockerfile, target: build, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
@@ -52,7 +52,12 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
   web:
-    build: { context: .., dockerfile: docker/Dockerfile, target: web }
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     volumes:
       # Private proxy list (host:port:user:password per line), never in git or images.
       - ${SOCIAL_PROXY_HOST_FILE:-../iproyal-proxies.txt}:/run/secrets/social-proxies.txt:ro
@@ -73,7 +78,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
   worker:
-    build: { context: .., dockerfile: docker/Dockerfile, target: worker }
+    build: { context: .., dockerfile: docker/Dockerfile, target: worker, args: { GIT_SHA: "${GIT_SHA:-dev}" } }
     volumes:
       # Free-space check only: same filesystem as the data, without the repo root (.env).
       - ./:/host-disk:ro

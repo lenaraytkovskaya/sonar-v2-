@@ -20,9 +20,9 @@ function params(filters: CompanyFilters) {
   );
 }
 export function CompanyList({
-  initialCampaignId,
+  initialFilters = {},
 }: {
-  initialCampaignId?: string;
+  initialFilters?: CompanyFilters;
 }) {
   const { active: status, select: selectStatus } = useUrlTab(
     ['', ...Object.keys(uk.company.statuses)],
@@ -30,11 +30,12 @@ export function CompanyList({
     'status',
   );
   const [draft, setDraft] = useState<CompanyFilters>({
-      campaignId: initialCampaignId,
+      ...initialFilters,
       status: (status as CompanyFilters['status']) || undefined,
     }),
     [appliedFilters, setFilters] = useState<CompanyFilters>({
-      campaignId: initialCampaignId,
+      q: initialFilters.q,
+      campaignId: initialFilters.campaignId,
     }),
     [pagination, setPagination] = useState({ status, page: 1 }),
     [data, setData] = useState<{
@@ -122,6 +123,13 @@ export function CompanyList({
   };
   const apply = (f: CompanyFilters) => {
     const next = companyFiltersSchema.parse(f);
+    const url = new URL(window.location.href);
+    for (const key of ['q', 'campaignId', 'status'] as const) {
+      const value = next[key];
+      if (value) url.searchParams.set(key, String(value));
+      else url.searchParams.delete(key);
+    }
+    window.history.replaceState(null, '', url);
     startTransition(() => {
       selectStatus(next.status ?? '');
       setFilters((previous) => {
@@ -147,7 +155,7 @@ export function CompanyList({
         actions={
           <ManualEntry
             campaigns={campaigns}
-            initialCampaignId={initialCampaignId}
+            initialCampaignId={initialFilters.campaignId}
           />
         }
       />

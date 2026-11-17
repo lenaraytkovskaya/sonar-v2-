@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Copy } from 'lucide-react';
+import { findMessagePlaceholder } from '@sonar/core';
 import { cn } from '@/lib/utils';
 import { normalizedDraft, sameDraft } from '@/lib/draft-state';
 import type { getConversationChat } from '@sonar/db/inbound';
@@ -15,6 +16,7 @@ import { Draft } from './company-email';
 import { AiAssist } from './ai-assist';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Callout } from './ui/layout';
 import { FormReplyMatch } from './form-reply-match';
 import { ChannelIcon } from './channel-icon';
 type Message = NonNullable<
@@ -37,6 +39,10 @@ export function ConversationChat({
   const [subject, setSubject] = useState(
     [...initial.messages].reverse().find((m) => m.subject)?.subject ?? '',
   );
+  const placeholder =
+    data.conversation?.channel === 'call'
+      ? null
+      : findMessagePlaceholder(`${subject}\n${body}`);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState('');
   const [task, setTask] = useState<Task | null>(null);
@@ -292,7 +298,7 @@ export function ConversationChat({
     // Only when a different draft appears.
   }, [pendingDraftId, draftLoaded]);
   const sendDraft = async () => {
-    if (!pendingDraft) return;
+    if (!pendingDraft || placeholder) return;
     const base = normalizedDraft({
       subject: pendingDraft.subject ?? '',
       body: pendingDraft.body,
@@ -577,6 +583,9 @@ export function ConversationChat({
                 'max-h-[calc(var(--inbox-height,100dvh)*0.12)] min-h-10 resize-none p-2',
             )}
           />
+          {placeholder && (
+            <Callout tone="err">{uk.outreach.placeholder(placeholder)}</Callout>
+          )}
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <AiAssist floating text={body} onApply={setBody} />
@@ -584,6 +593,7 @@ export function ConversationChat({
             <Button
               disabled={
                 pending ||
+                !!placeholder ||
                 !body.trim() ||
                 (conversation.channel === 'email' && !subject.trim())
               }
