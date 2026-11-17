@@ -369,6 +369,44 @@ it.skipIf(!enabled)(
           ])
         ).rows[0].found_new,
       ).toBe(1);
+      const malformed = await createBatch(
+        await campaign(),
+        null,
+        randomUUID(),
+        false,
+        false,
+      );
+      const malformedSearch = vi.fn(async () => '{invalid json');
+      expect(await runGoogleBatch(malformed.id, malformedSearch)).toMatchObject(
+        {
+          status: 'paused',
+          reasonCode: 'google_response_invalid',
+        },
+      );
+      const noSecondCharge = vi.fn(async () => {
+        throw Error('Saved response should be replayed');
+      });
+      expect(await runGoogleBatch(malformed.id, noSecondCharge)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'google_response_invalid',
+      });
+      expect(malformedSearch).toHaveBeenCalledTimes(1);
+      expect(noSecondCharge).not.toHaveBeenCalled();
+      expect(
+        (
+          await sonarPool.query(
+            'select count(*)::int as n from spend_events s join tasks t on t.id=s.task_id where t.batch_id=$1',
+            [malformed.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(
+        (
+          await sonarPool.query('select reason_uk from batches where id=$1', [
+            malformed.id,
+          ])
+        ).rows[0].reason_uk,
+      ).toContain('Відповідь Google отримано й оплачено');
       const missingCampaign = await campaign();
       const missing = await createBatch(
         missingCampaign,

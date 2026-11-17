@@ -1,5 +1,6 @@
 import {
   createGoogleClient,
+  createGoogleClientRaw,
   normalizePhone,
   normalizeWebsite,
   googlePageSchema,
@@ -37,7 +38,7 @@ import {
 type Search = (
   input: GoogleSearch,
   profile: GoogleProfile,
-) => Promise<GooglePage>;
+) => Promise<GooglePage | string>;
 // A batch lock excludes duplicate deliveries; monetary locks are only held during reservations.
 export async function runGoogleBatch(
   batchId: string,
@@ -73,8 +74,12 @@ export async function runGoogleBatch(
       return { status: 'done', result: { batchId } };
     if (initial.fixture && !search)
       throw Error('Fixture requires an explicit stub');
+    const injectedSearch = Boolean(search);
     const canSearch = Boolean(search || process.env.GOOGLE_PLACES_API_KEY);
     search ??= createGoogleClient(process.env.GOOGLE_PLACES_API_KEY ?? '');
+    const rawSearch = createGoogleClientRaw(
+      process.env.GOOGLE_PLACES_API_KEY ?? '',
+    );
     const config = initial.config as BatchConfig;
     const pairs = config.queries.flatMap((query) =>
       config.cities.map((city) => ({ query, city })),
@@ -182,17 +187,20 @@ export async function runGoogleBatch(
         if (buffered) {
           page = { places: state!.buffer };
         } else if (batch.fixture) {
+          const fixtureResult = await search(
+            {
+              textQuery: `${pair.query} ${pair.city}`,
+              languageCode: config.language_code,
+              regionCode: config.country_code,
+              pageSize: 20,
+              ...(cursor.token ? { pageToken: cursor.token } : {}),
+            },
+            config.profile,
+          );
           page = googlePageSchema.parse(
-            await search(
-              {
-                textQuery: `${pair.query} ${pair.city}`,
-                languageCode: config.language_code,
-                regionCode: config.country_code,
-                pageSize: 20,
-                ...(cursor.token ? { pageToken: cursor.token } : {}),
-              },
-              config.profile,
-            ),
+            typeof fixtureResult === 'string'
+              ? JSON.parse(fixtureResult)
+              : fixtureResult,
           );
         } else {
           const response = await runBudgetedRequest(
@@ -204,20 +212,24 @@ export async function runGoogleBatch(
                 "with marked as (update tasks set attempts=attempts+1,status='running',started_at=now() where id=$1 returning batch_id) update batches set requests=requests+1 where id in(select batch_id from marked)",
                 [task.id],
               );
-              const data = await search!(
-                {
-                  textQuery: `${pair.query} ${pair.city}`,
-                  languageCode: config.language_code,
-                  regionCode: config.country_code,
-                  pageSize: 20,
-                  ...(cursor.token ? { pageToken: cursor.token } : {}),
-                },
-                config.profile,
-              );
+              const input = {
+                textQuery: `${pair.query} ${pair.city}`,
+                languageCode: config.language_code,
+                regionCode: config.country_code,
+                pageSize: 20 as const,
+                ...(cursor.token ? { pageToken: cursor.token } : {}),
+              };
+              const searchResult = injectedSearch
+                ? await search!(input, config.profile)
+                : await rawSearch(input, config.profile);
+              const rawText =
+                typeof searchResult === 'string'
+                  ? searchResult
+                  : JSON.stringify(searchResult);
               return {
                 id: task.id,
                 model: config.profile.sku,
-                text: JSON.stringify(data),
+                text: rawText,
                 units: 1,
                 costUsd: config.profile.priceUsd,
                 costBasis: 'estimated_tariff',
@@ -274,16 +286,22 @@ export async function runGoogleBatch(
             error.message,
           );
         }
+        const {
+          rows: [receipt],
+        } = await client.query('select 1 from spend_events where task_id=$1', [
+          task.id,
+        ]);
+        const parseFailure = Boolean(receipt);
+        const reason = parseFailure
+          ? 'Відповідь Google отримано й оплачено, але не вдалося її обробити. Повтор використає збережену відповідь.'
+          : 'Запит Google не завершено. Перед повтором звірте можливі витрати.';
         await client.query(
           "update tasks set status='paused',reason_uk=$2,finished_at=now() where id=$1",
-          [
-            task.id,
-            'Запит Google не завершено. Перед повтором звірте можливі витрати.',
-          ],
+          [task.id, reason],
         );
         return await pause(
-          'google_request_failed',
-          'Запит Google не завершено. Перед повтором звірте можливі витрати.',
+          parseFailure ? 'google_response_invalid' : 'google_request_failed',
+          reason,
         );
       }
       await recordGooglePage(client, batchId, async (tx) => {

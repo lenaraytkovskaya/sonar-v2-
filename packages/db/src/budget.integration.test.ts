@@ -185,16 +185,43 @@ it.skipIf(!enabled)(
         "update settings set value='2' where key='budget.monthly_usd'",
       );
       const uncertainId = await id();
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await expect(
         runBudgetedRequest('openrouter', 0.1, uncertainId, async () => {
-          throw Error('timeout');
+          throw Error(
+            `timeout https://provider.test/path?token=secret\n${'x'.repeat(300)}`,
+          );
         }),
       ).rejects.toThrow('невідомий');
+      const uncertainResult = (
+        await sonarPool.query('select result,type from tasks where id=$1', [
+          uncertainId,
+        ])
+      ).rows[0];
+      expect(uncertainResult.result.uncertainCause).toHaveLength(200);
+      expect(uncertainResult.result.uncertainCause).toMatch(
+        /^timeout https:\/\/provider\.test\/path x+$/,
+      );
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0]?.[0])).toContain(
+        '[paid-request] uncertain ',
+      );
+      expect(String(log.mock.calls[0]?.[0])).toContain(
+        '"taskType":"ai.assist"',
+      );
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('token=secret');
+      log.mockRestore();
       const duplicate = vi.fn(paid);
       await expect(
         runBudgetedRequest('openrouter', 0.1, uncertainId, duplicate),
       ).rejects.toThrow('невідомий');
       expect(duplicate).not.toHaveBeenCalled();
+      const replayLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await expect(
+        runBudgetedRequest('openrouter', 0.1, uncertainId, duplicate),
+      ).rejects.toThrow('невідомий');
+      expect(replayLog).toHaveBeenCalledTimes(1);
+      replayLog.mockRestore();
       await sonarPool.query(
         "update settings set value=$1 where key='budget.monthly_usd'",
         [JSON.stringify(Number(baseline.cost) + 0.5)],
