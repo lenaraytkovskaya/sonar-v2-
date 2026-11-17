@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { uk } from '@/i18n/uk';
+import { uk } from '../i18n/uk';
 
 describe('task labels', () => {
   it('provides a human-readable label for every worker task type', () => {

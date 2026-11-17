@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { uk } from '@/i18n/uk';
+import { uk } from '../i18n/uk';
 import { presentError } from './error-display';
 
 describe('presentError', () => {

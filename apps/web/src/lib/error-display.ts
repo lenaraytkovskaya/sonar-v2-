@@ -1,4 +1,4 @@
-import { uk } from '@/i18n/uk';
+import { uk } from '../i18n/uk';
 
 export function presentError(reason: string) {
   if (/\[messagebutton\/unconfirmed\]/i.test(reason))
