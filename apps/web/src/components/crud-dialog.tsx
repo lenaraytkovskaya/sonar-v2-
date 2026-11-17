@@ -34,6 +34,7 @@ export function CrudDialog({
   pending = false,
   draft,
   children,
+  actions,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -41,6 +42,7 @@ export function CrudDialog({
   pending?: boolean;
   draft: unknown;
   children: ReactNode;
+  actions?: ReactNode;
 }) {
   const currentDraft = JSON.stringify(draft);
   const latest = useRef(currentDraft);
@@ -124,15 +126,19 @@ export function CrudDialog({
               {children}
             </fieldset>
           </div>
-          <div className="flex shrink-0 justify-end border-t border-border p-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border p-4">
             <Button
               type="button"
               variant="outline"
+              className="shrink-0"
               disabled={pending}
               onClick={close}
             >
               {uk.ai.cancel}
             </Button>
+            <div className="flex min-w-0 flex-wrap justify-end gap-2">
+              {actions}
+            </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

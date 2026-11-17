@@ -186,8 +186,23 @@ export function ManualSource({
         title={title}
         pending={pending}
         draft={{ value, network, reviewed }}
+        actions={
+          <Button
+            type="submit"
+            form={id + '-form'}
+            disabled={
+              pending ||
+              !value.trim() ||
+              (!!replacement && reviewed !== current)
+            }
+            className="min-h-11 whitespace-normal"
+          >
+            {pending ? uk.tasks.status.queued : uk.manualSource.submit}
+          </Button>
+        }
       >
         <form
+          id={id + '-form'}
           className="space-y-2"
           onSubmit={(event) => {
             event.preventDefault();
@@ -252,17 +267,6 @@ export function ManualSource({
               </span>
             </label>
           )}
-          <Button
-            type="submit"
-            disabled={
-              pending ||
-              !value.trim() ||
-              (!!replacement && reviewed !== current)
-            }
-            className="min-h-11 w-full whitespace-normal sm:w-auto"
-          >
-            {pending ? uk.tasks.status.queued : uk.manualSource.submit}
-          </Button>
         </form>
         <AiAssist text={value} onApply={edit} />
         {error && (

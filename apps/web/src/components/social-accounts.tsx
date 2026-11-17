@@ -477,8 +477,20 @@ export function SocialAccounts({
           totpSecret,
           addMode,
         }}
+        actions={
+          <Button
+            type="submit"
+            form={`social-account-form-${network}`}
+            disabled={pending || proxyIndex === ''}
+          >
+            {!editing && addMode === 'credentials'
+              ? uk.socialAccounts.saveAndLogin
+              : uk.forms.save}
+          </Button>
+        }
       >
         <form
+          id={`social-account-form-${network}`}
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
@@ -735,13 +747,7 @@ export function SocialAccounts({
               </Button>
             </div>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={pending || proxyIndex === ''}>
-              {!editing && addMode === 'credentials'
-                ? uk.socialAccounts.saveAndLogin
-                : uk.forms.save}
-            </Button>
-          </div>
+
           {notice && (
             <p role="status" className="text-sm">
               {notice}

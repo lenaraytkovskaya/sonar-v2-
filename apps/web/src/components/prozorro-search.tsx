@@ -97,6 +97,14 @@ export function ProzorroSearch({
             title={uk.crud.addCode}
             pending={pending}
             draft={code}
+            actions={
+              <Button
+                disabled={pending || !!active || !prozorroCode(code)}
+                onClick={() => void search(code)}
+              >
+                {uk.prozorro.saveCodeSearch}
+              </Button>
+            }
           >
             <div className="space-y-2">
               <label className="block space-y-1">
@@ -115,13 +123,6 @@ export function ProzorroSearch({
                 {uk.prozorro.manualCodeHint}
               </p>
               <AiAssist text={code} onApply={setCode} />
-              <Button
-                variant="outline"
-                disabled={pending || !!active || !prozorroCode(code)}
-                onClick={() => void search(code)}
-              >
-                {uk.prozorro.saveCodeSearch}
-              </Button>
               {message && (
                 <p role="status" className="text-sm">
                   {message}

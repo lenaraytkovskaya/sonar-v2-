@@ -180,8 +180,18 @@ export function TelegramAccounts({
                 title={`${uk.crud.editLimit}: ${account.name}`}
                 pending={pending}
                 draft={limits[account.id]}
+                actions={
+                  <Button
+                    type="submit"
+                    form={`telegram-limit-form-${account.id}`}
+                    disabled={pending}
+                  >
+                    {uk.forms.save}
+                  </Button>
+                }
               >
                 <form
+                  id={`telegram-limit-form-${account.id}`}
                   className="flex flex-wrap items-end gap-3"
                   onSubmit={(event) => {
                     event.preventDefault();
@@ -213,9 +223,6 @@ export function TelegramAccounts({
                       }
                     />
                   </div>
-                  <Button variant="outline" disabled={pending}>
-                    {uk.forms.save}
-                  </Button>
                   {error && (
                     <p role="alert" className="text-err">
                       {error}
@@ -290,8 +297,49 @@ export function TelegramAccounts({
         title={uk.telegram.connect}
         pending={pending}
         draft={{ form, login, qr: qr?.id, secret }}
+        actions={
+          <div className="flex flex-wrap justify-end gap-2">
+            {!login && !qr && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || !configured}
+                onClick={startQr}
+              >
+                {uk.telegram.connectQr}
+              </Button>
+            )}
+            {(login || qr) && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={() => {
+                  void mutate('DELETE', { id: (login ?? qr)!.id });
+                  setSecret('');
+                }}
+              >
+                {uk.crud.cancelConnection}
+              </Button>
+            )}
+            {!qr && (
+              <Button
+                type="submit"
+                form="telegram-account-connect"
+                disabled={pending || !configured}
+              >
+                {pending
+                  ? uk.ai.pending
+                  : login
+                    ? uk.telegram.confirm
+                    : uk.telegram.connect}
+              </Button>
+            )}
+          </div>
+        }
       >
         <form
+          id="telegram-account-connect"
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(event) => {
             event.preventDefault();
@@ -383,40 +431,6 @@ export function TelegramAccounts({
               </div>
             ))
           )}
-          <div className="flex gap-3 sm:col-span-2">
-            {!qr && (
-              <Button disabled={pending || !configured}>
-                {pending
-                  ? uk.ai.pending
-                  : login
-                    ? uk.telegram.confirm
-                    : uk.telegram.connect}
-              </Button>
-            )}
-            {!login && !qr && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || !configured}
-                onClick={startQr}
-              >
-                {uk.telegram.connectQr}
-              </Button>
-            )}
-            {(login || qr) && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => {
-                  void mutate('DELETE', { id: (login ?? qr)!.id });
-                  setSecret('');
-                }}
-              >
-                {uk.crud.cancelConnection}
-              </Button>
-            )}
-          </div>
           {error && (
             <p role="alert" className="text-err sm:col-span-2">
               {error}

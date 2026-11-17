@@ -373,6 +373,14 @@ export function CampaignPanel({
         title={id ? uk.crud.editCampaign : uk.campaign.create}
         pending={pending}
         draft={{ form, description }}
+        actions={
+          <Button
+            disabled={pending || !campaignSchema.safeParse(form).success}
+            onClick={() => void act('save')}
+          >
+            {uk.ai.save}
+          </Button>
+        }
       >
         <div className="min-w-0 space-y-5">
           <label className="block">
@@ -639,12 +647,7 @@ export function CampaignPanel({
           </p>
           <div className="flex flex-wrap gap-3">
             <Button
-              disabled={pending || !campaignSchema.safeParse(form).success}
-              onClick={() => void act('save')}
-            >
-              {uk.ai.save}
-            </Button>
-            <Button
+              variant="outline"
               disabled={
                 pending ||
                 exhausted ||
