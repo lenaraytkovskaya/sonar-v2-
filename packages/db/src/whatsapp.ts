@@ -1,3 +1,4 @@
+import { recordHealthEvent, enableAccountHealth } from './account-health.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import {
@@ -146,21 +147,62 @@ async function external(
   const status = failure ? 'failed' : statusOf(session?.status ?? 'STOPPED'),
     reasonUk = failure?.reasonUk ?? reasonOf(status);
   const settings = {
+    ...account.settings,
     session: 'default',
     enabled: account.settings.enabled !== false,
     providerStatus: failure ? 'FAILED' : (session?.status ?? 'STOPPED'),
     providerName: session?.name ?? account.settings.providerName,
-    reasonUk,
+    reasonUk:
+      account.settings.healthAutoPaused === true
+        ? account.settings.reasonUk
+        : reasonUk,
   };
   await c.query(
     'update channel_accounts set status=$2,address=$3,settings=$4 where id=$1',
     [
       account.id,
-      status === 'active' && !settings.enabled ? 'disabled' : status,
+      status === 'active' && !settings.enabled
+        ? 'disabled'
+        : settings.healthAutoPaused === true
+          ? settings.enabled === false || account.status === 'disabled'
+            ? 'disabled'
+            : 'paused'
+          : status,
       session?.phone ?? (operation === 'logout' ? 'default' : account.address),
       JSON.stringify(settings),
     ],
   );
+  if (operation !== 'logout') {
+    const changed = settings.providerStatus !== account.settings.providerStatus;
+    if (failure && (operation !== 'refresh' || failure.code === 'rate_limit'))
+      await recordHealthEvent(
+        c,
+        account.id,
+        failure.code === 'rate_limit' ? 'rate_limited' : 'relogin_failed',
+        failure.reasonUk,
+        { eventKey: `lifecycle:${id}` },
+      );
+    else if (status === 'active' && changed)
+      await recordHealthEvent(
+        c,
+        account.id,
+        'relogin_ok',
+        'Сесію WhatsApp підключено.',
+        { eventKey: `lifecycle:${id}` },
+      );
+    else if (
+      changed &&
+      ['failed', 'stopped', 'qr'].includes(status) &&
+      account.settings.providerStatus === 'WORKING'
+    )
+      await recordHealthEvent(
+        c,
+        account.id,
+        'session_lost',
+        reasonUk ?? 'Сесію WhatsApp втрачено. Підключіть акаунт повторно.',
+        { eventKey: `lifecycle:${id}` },
+      );
+  }
   // Status polling is recorded only when something changed, so the task log stays readable.
   if (
     operation === 'refresh' &&
@@ -303,6 +345,8 @@ export async function updateWhatsAppAccount(
         JSON.stringify(settings),
       ],
     );
+    if (input.enabled === true && account.settings.healthAutoPaused === true)
+      await enableAccountHealth(c, id);
     await logActivity(
       'whatsapp.account.updated',
       'channel_account',

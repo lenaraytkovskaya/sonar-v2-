@@ -87,6 +87,10 @@
     "./social-action": {
       "types": "./dist/social-action.d.ts",
       "default": "./dist/social-action.js"
+    },
+    "./account-health": {
+      "types": "./dist/account-health.d.ts",
+      "default": "./dist/account-health.js"
     }
   },
   "files": [

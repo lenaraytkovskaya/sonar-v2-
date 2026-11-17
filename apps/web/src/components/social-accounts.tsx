@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { listSocialAccounts } from '@sonar/db/social-accounts';
 import { uk } from '@/i18n/uk';
 import { StatusBadge } from './shared';
@@ -12,6 +13,13 @@ import { LocalTime } from './local-time';
 import { SocialLoginDialog } from './social-login-dialog';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
+import {
+  HealthBadge,
+  HealthDetails,
+  HealthJournal,
+  healthJournalAction,
+  type AccountHealth,
+} from './account-health';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
 /** "Проксі 7 · sol.ua-proxy.net": the number stays, the host makes it recognisable. */
@@ -23,6 +31,7 @@ const selectClass =
   'min-h-11 w-full rounded-lg border border-border bg-surface px-3';
 export function SocialAccounts({
   accounts,
+  health = [],
   network,
   active,
   proxyCount,
@@ -30,13 +39,18 @@ export function SocialAccounts({
   accountProxyIndexes,
 }: {
   accounts: Account[];
+  health?: AccountHealth[];
   network: Account['network'];
   active: boolean;
   proxyCount: number;
   proxyLabels?: string[];
   accountProxyIndexes: Record<Account['network'], number | null>;
 }) {
+  const router = useRouter();
   const accountProxyIndex = accountProxyIndexes[network];
+  const [healthJournal, setHealthJournal] = useState<AccountHealth | null>(
+    null,
+  );
   const [ownProxy, setOwnProxy] = useState('');
   const [keepaliveEnabled, setKeepaliveEnabled] = useState(true);
   const [current, setCurrent] = useState(accounts);
@@ -93,6 +107,7 @@ export function SocialAccounts({
       const result = await response.json();
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
+      router.refresh();
       setNotice(
         method === 'DELETE'
           ? uk.socialAccounts.removed
@@ -194,12 +209,19 @@ export function SocialAccounts({
               className="space-y-4 rounded-lg border border-border p-4"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-chip">
                     <ChannelIcon channel={account.network} />
                   </span>
-                  <div className="min-w-0">
-                    <h3 className="truncate font-semibold">{account.name}</h3>
+                  <div className="min-w-0 max-w-full">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="truncate font-semibold">{account.name}</h3>
+                      <HealthBadge
+                        health={health.find(
+                          (item) => item.accountId === account.id,
+                        )}
+                      />
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       {uk.email.owner}: {account.ownerName}
                     </p>
@@ -258,6 +280,10 @@ export function SocialAccounts({
                   <RowActions
                     disabled={pending}
                     actions={[
+                      ...healthJournalAction(
+                        health.find((item) => item.accountId === account.id),
+                        setHealthJournal,
+                      ),
                       ...(account.hasCredentials
                         ? [
                             {
@@ -331,7 +357,10 @@ export function SocialAccounts({
                           ? uk.email.disable
                           : uk.email.enable,
                         disabled:
-                          !account.enabled && account.sessionStatus !== 'valid',
+                          !account.enabled &&
+                          account.sessionStatus !== 'valid' &&
+                          !health.find((item) => item.accountId === account.id)
+                            ?.pauseUntil,
                         onSelect: () =>
                           void mutate('PATCH', {
                             id: account.id,
@@ -353,6 +382,9 @@ export function SocialAccounts({
                   />
                 </div>
               </div>
+              <HealthDetails
+                health={health.find((item) => item.accountId === account.id)}
+              />
               <DetailList
                 items={[
                   {
@@ -421,6 +453,13 @@ export function SocialAccounts({
           );
         })}
       </div>
+      <HealthJournal
+        health={
+          health.find((item) => item.accountId === healthJournal?.accountId) ??
+          healthJournal
+        }
+        onClose={() => setHealthJournal(null)}
+      />
       <CrudDialog
         open={open}
         onOpenChange={setOpen}

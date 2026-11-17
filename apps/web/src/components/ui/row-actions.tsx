@@ -15,6 +15,7 @@ import {
   KeyRound,
   Inbox,
   Radio,
+  History,
 } from 'lucide-react';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
@@ -35,6 +36,7 @@ const icons = {
   login: KeyRound,
   sync: Inbox,
   poll: Radio,
+  journal: History,
 };
 export type RowAction = {
   kind: keyof typeof icons;

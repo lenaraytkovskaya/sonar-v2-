@@ -301,13 +301,25 @@ it.skipIf(!enabled)(
           throw new TelegramSendError('flood_wait', 'Пауза Telegram', true, 60);
         });
       expect(await send(wait.id, flood)).toMatchObject({
-        status: 'deferred',
-        runAt: new Date(now.getTime() + 60000),
+        status: 'paused',
+        reasonCode: 'account_health_paused',
       });
-      expect(await send(wait.id, sender)).toMatchObject({ status: 'deferred' });
+      expect(await send(wait.id, sender)).toMatchObject({
+        status: 'paused',
+        reasonCode: 'account_health_paused',
+      });
       expect(
         await send(wait.id, sender, new Date(now.getTime() + 60000)),
-      ).toMatchObject({ status: 'done' });
+      ).toMatchObject({
+        status: 'paused',
+        reasonCode: 'account_health_paused',
+      });
+      await telegram.updateTelegramAccount(
+        ids.account,
+        { enabled: true },
+        ids.user,
+      );
+      expect(await send(wait.id, sender)).toMatchObject({ status: 'done' });
       await db.sonarPool.query(
         'update channel_accounts set next_send_at=null where id=$1',
         [ids.account],
@@ -335,52 +347,53 @@ it.skipIf(!enabled)(
       });
       expect(await send(resolveFlood.id, resolveFloodSender)).toMatchObject({
         status: 'paused',
-        reasonCode: 'resolve_phone_flood_wait',
-        reasonUk: 'Telegram обмежив пошук за номером, повторіть через 2 хв.',
-        result: {
-          operation: 'contacts.ResolvePhone',
-          providerCode: 'FLOOD_WAIT_120',
-          retryAt: new Date(now.getTime() + 120000).toISOString(),
-        },
+        reasonCode: 'account_health_paused',
+        reasonUk: expect.stringContaining(
+          'Telegram обмежив пошук за номером, повторіть через 2 хв.',
+        ),
       });
+      const pausedAccount = (
+        await db.sonarPool.query(
+          'select status,settings from channel_accounts where id=$1',
+          [ids.account],
+        )
+      ).rows[0];
+      expect(pausedAccount.status).toBe('paused');
+      expect(pausedAccount.settings.healthAutoPaused).toBe(true);
+      // The earlier FLOOD_WAIT makes this a repeated alarm within seven days.
+      expect(Date.parse(pausedAccount.settings.healthPauseUntil)).toBe(
+        now.getTime() + 48 * 60 * 60 * 1000,
+      );
       expect(
         (
           await db.sonarPool.query(
-            'select status,reason_uk,scheduled_at from messages where id=$1',
+            'select status,reason_uk from messages where id=$1',
             [resolveFlood.id],
           )
         ).rows[0],
       ).toMatchObject({
-        status: 'failed',
-        reason_uk: 'Telegram обмежив пошук за номером, повторіть через 2 хв.',
-        scheduled_at: new Date(now.getTime() + 120000),
+        status: 'queued',
+        reason_uk: 'Telegram обмежив частоту. Повтор після паузи акаунта.',
       });
-      expect(
-        (
-          await db.sonarPool.query(
-            'select next_send_at from channel_accounts where id=$1',
-            [ids.account],
-          )
-        ).rows[0].next_send_at,
-      ).toEqual(new Date(now.getTime() + 120000));
-      expect(
-        await send(
-          resolveFlood.id,
-          resolveFloodSender,
-          new Date(now.getTime() + 60000),
-        ),
-      ).toMatchObject({
-        status: 'deferred',
-        runAt: new Date(now.getTime() + 120000),
-      });
-      expect(resolveFloodSender).toHaveBeenCalledTimes(1);
       expect(
         await send(
           resolveFlood.id,
           resolveFloodSender,
           new Date(now.getTime() + 120000),
         ),
-      ).toMatchObject({ status: 'done' });
+      ).toMatchObject({
+        status: 'paused',
+        reasonCode: 'account_health_paused',
+      });
+      expect(resolveFloodSender).toHaveBeenCalledTimes(1);
+      await telegram.updateTelegramAccount(
+        ids.account,
+        { enabled: true },
+        ids.user,
+      );
+      expect(await send(resolveFlood.id, resolveFloodSender)).toMatchObject({
+        status: 'done',
+      });
       expect(resolveFloodSender).toHaveBeenCalledTimes(2);
       await db.sonarPool.query(
         'update channel_accounts set next_send_at=null where id=$1',
@@ -416,8 +429,14 @@ it.skipIf(!enabled)(
       );
       const uncertainRetry = await create();
       expect(await send(uncertainRetry.id, flood)).toMatchObject({
-        status: 'deferred',
+        status: 'paused',
+        reasonCode: 'account_health_paused',
       });
+      await telegram.updateTelegramAccount(
+        ids.account,
+        { enabled: true },
+        ids.user,
+      );
       const retrySender = vi.fn(async () => {
         expect(
           (
@@ -489,6 +508,22 @@ it.skipIf(!enabled)(
           )
         ).rows[0].next_send_at,
       ).toEqual(new Date(now.getTime() + 90000));
+      expect(
+        (
+          await db.sonarPool.query(
+            'select status,settings from channel_accounts where id=$1',
+            [ids.account],
+          )
+        ).rows[0],
+      ).toMatchObject({
+        status: 'paused',
+        settings: { healthAutoPaused: true },
+      });
+      await telegram.updateTelegramAccount(
+        ids.account,
+        { enabled: true },
+        ids.user,
+      );
       await db.sonarPool.query(
         'update channel_accounts set next_send_at=null where id=$1',
         [ids.account],

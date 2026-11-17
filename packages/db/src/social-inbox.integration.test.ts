@@ -50,7 +50,7 @@ const checkpoint = async () =>
   ).rows[0].settings.inboxSync;
 const resetGate = () =>
   db.sonarPool.query(
-    "update channel_accounts set settings=settings-'socialAction',status='active' where id=$1",
+    "update channel_accounts set settings=(settings-'socialAction'-'healthPauseUntil')||'{\"healthAutoPaused\":false,\"reasonUk\":null}'::jsonb,status='active' where id=$1",
     [account],
   );
 beforeAll(async () => {

@@ -330,6 +330,13 @@
       "when": 1794800006000,
       "tag": "0046_social_account_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1794800007000,
+      "tag": "0047_account_health",
+      "breakpoints": true
     }
   ]
 }

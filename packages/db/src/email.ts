@@ -1,3 +1,4 @@
+import { recordHealthEvent, enableAccountHealth } from './account-health.js';
 import { messageHistoryOrder } from './message-history.js';
 import {
   lockWhatsAppIdentity,
@@ -166,11 +167,16 @@ export async function setEmailAccountEnabled(
   userId: string,
 ) {
   return transaction(async (c) => {
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('channel-account:'||$1::text,0))",
+      [id],
+    );
     const { rowCount } = await c.query(
       "update channel_accounts set status=$2 where id=$1 and channel='email'",
       [id, enabled ? 'active' : 'disabled'],
     );
     if (!rowCount) invalid('Акаунт не знайдено.');
+    if (enabled) await enableAccountHealth(c, id);
     await logActivity(
       enabled ? 'email.account.enabled' : 'email.account.disabled',
       'channel_account',
@@ -865,6 +871,20 @@ export async function sendEmailMessage(
         ),
         'Компанія або адреса у списку «Не контактувати».',
       );
+    const {
+      rows: [healthGate],
+    } = await c.query('select settings from channel_accounts where id=$1', [
+      m.account_id,
+    ]);
+    if (healthGate?.settings.healthAutoPaused === true)
+      return finish(
+        terminal(
+          'paused',
+          'account_health_paused',
+          healthGate.settings.reasonUk ??
+            'Надсилання призупинено через стан акаунта.',
+        ),
+      );
     if (channel === 'social') {
       if (m.first_attempt_at)
         return finish(
@@ -1018,6 +1038,18 @@ export async function sendEmailMessage(
           process.env.AUTH_SECRET,
         );
       } catch {
+        await c.query(
+          "update channel_accounts set settings=jsonb_set(settings,'{sessionStatus}','\"invalid\"'::jsonb) where id=$1",
+          [account.id],
+        );
+        await recordHealthEvent(
+          c,
+          account.id,
+          'session_lost',
+          'Сесія Telegram недійсна. Підключіть акаунт повторно.',
+          { eventKey: `session:send:${taskId}` },
+          now,
+        );
         return finish(
           terminal(
             'paused',
@@ -1331,6 +1363,112 @@ export async function sendEmailMessage(
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
       return await recordDelivery(providerId);
     } catch (error) {
+      // A post-send contact cleanup error still carries a durable delivery receipt.
+      if (
+        error instanceof TelegramSendError &&
+        typeof error.providerMessageId === 'string'
+      ) {
+        if (
+          typeof error.accountRetryAfterSeconds === 'number' &&
+          error.accountRetryAfterSeconds > 0
+        )
+          await recordHealthEvent(
+            c,
+            account.id,
+            'rate_limited',
+            'Telegram обмежив частоту запитів після надсилання. Акаунт призупинено.',
+            { eventKey: `cleanup:${taskId}` },
+            now,
+          );
+      } else {
+        // Persist health before provider-specific retry handling can reschedule this task.
+        const healthReason =
+          error instanceof SocialSendError ||
+          error instanceof TelegramSendError ||
+          error instanceof WhatsAppSendError
+            ? error.reasonUk
+            : 'Не вдалося надіслати повідомлення через акаунт.';
+        const socialReason =
+          channel === 'social' ? socialSessionCheckReason(error) : null;
+        const kind =
+          socialReason === 'captcha' ||
+          socialReason === 'checkpoint' ||
+          socialReason === 'action_blocked'
+            ? socialReason
+            : (error instanceof SocialSendError &&
+                  error.code === 'rate_limit') ||
+                (error instanceof WhatsAppSendError &&
+                  error.code === 'rate_limit') ||
+                (error instanceof TelegramSendError &&
+                  /flood_wait/i.test(error.code)) ||
+                (error instanceof EmailSendError && error.code === 'resend_429')
+              ? 'rate_limited'
+              : (error instanceof SocialSendError &&
+                    error.code === 'session_invalid') ||
+                  (error instanceof WhatsAppSendError &&
+                    error.sessionInactive) ||
+                  (error instanceof TelegramSendError &&
+                    error.code === 'session_expired')
+                ? 'session_lost'
+                : 'send_failed';
+        if (kind === 'session_lost' && channel === 'telegram')
+          await c.query(
+            "update channel_accounts set settings=jsonb_set(settings,'{sessionStatus}','\"invalid\"'::jsonb) where id=$1",
+            [account.id],
+          );
+        if (kind === 'session_lost' && channel === 'whatsapp')
+          await c.query(
+            "update channel_accounts set settings=jsonb_set(settings,'{providerStatus}','\"FAILED\"'::jsonb) where id=$1",
+            [account.id],
+          );
+        await recordHealthEvent(
+          c,
+          account.id,
+          kind,
+          healthReason,
+          {
+            eventKey: `${kind === 'session_lost' ? 'session' : kind}:send:${taskId}`,
+            taskId,
+          },
+          now,
+        );
+        const {
+          rows: [healthAccount],
+        } = await c.query('select settings from channel_accounts where id=$1', [
+          account.id,
+        ]);
+        if (healthAccount?.settings.healthAutoPaused === true) {
+          if (
+            channel === 'social' &&
+            error instanceof SocialSendError &&
+            error.code === 'session_invalid'
+          )
+            await pauseSocialFetchSession(
+              c,
+              account.id,
+              socialReason ?? 'login_required',
+              now,
+              `send:${taskId}`,
+            );
+          await c.query(
+            "update messages set status='queued',reason_uk=$2 where id=$1",
+            [
+              messageId,
+              channel === 'whatsapp' && kind === 'rate_limited'
+                ? whatsappRetry
+                : channel === 'telegram' && kind === 'rate_limited'
+                  ? telegramFloodRetry
+                  : healthReason,
+            ],
+          );
+          return terminal(
+            'paused',
+            'account_health_paused',
+            healthAccount.settings.reasonUk ??
+              'Надсилання призупинено через стан акаунта.',
+          );
+        }
+      }
       if (channel === 'social') {
         const reason =
           error instanceof SocialSendError
@@ -1338,14 +1476,15 @@ export async function sendEmailMessage(
             : 'Перевірте чат вручну';
         const code =
           error instanceof SocialSendError ? error.code : 'delivery_uncertain';
+        if (code === 'session_invalid')
+          await pauseSocialFetchSession(
+            c,
+            account.id,
+            socialSessionCheckReason(error, 'login_required'),
+            now,
+            `send:${taskId}`,
+          );
         await transaction(async (tx) => {
-          if (code === 'session_invalid')
-            await pauseSocialFetchSession(
-              tx,
-              account.id,
-              socialSessionCheckReason(error, 'login_required'),
-              now,
-            );
           if (code === 'rate_limit')
             await tx.query(
               "update channel_accounts set status='paused',settings=settings || jsonb_build_object('reasonUk',$2::text) where id=$1",

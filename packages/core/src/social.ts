@@ -5,6 +5,13 @@ import {
 } from 'libphonenumber-js/max';
 import { normalizePhone } from './index.js';
 
+// Match only fixed restriction phrases; callers retain the code, never page text.
+export const socialActionBlockedPattern =
+  /try again later|action blocked|we restrict certain activity|you can['’]t send messages|попробуйте позже|спробуйте пізніше|дію заблоковано|обмежуємо певні дії/i;
+export function detectSocialActionBlocked(text: string): boolean {
+  return socialActionBlockedPattern.test(text);
+}
+
 export type SocialNetwork = 'facebook' | 'instagram' | 'linkedin';
 export interface SocialTarget {
   network: SocialNetwork;
@@ -1378,7 +1385,13 @@ export function detectSocialBlock(
   url: string,
   status: number,
   target?: SocialTarget,
-): 'captcha' | 'login_wall' | 'forbidden' | 'rate_limit' | null {
+):
+  | 'captcha'
+  | 'login_wall'
+  | 'forbidden'
+  | 'rate_limit'
+  | 'action_blocked'
+  | null {
   if (status === 429) return 'rate_limit';
   if (status === 403) return 'forbidden';
   const $ = load(html);
@@ -1400,6 +1413,7 @@ export function detectSocialBlock(
     )
   )
     return 'captcha';
+  if (detectSocialActionBlocked(visible)) return 'action_blocked';
   if (
     /too many requests|please wait a few minutes before you try again/i.test(
       visible,

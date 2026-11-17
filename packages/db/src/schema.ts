@@ -424,6 +424,36 @@ export const channelAccounts = pgTable(
     ),
   ],
 );
+export const accountHealthEvents = pgTable(
+  'account_health_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    reasonUk: text('reason_uk').notNull(),
+    details: jsonb('details').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('account_health_events_account_created').on(
+      t.accountId,
+      t.createdAt.desc(),
+    ),
+    uniqueIndex('account_health_events_event_key').on(
+      t.accountId,
+      t.kind,
+      sql`(${t.details}->>'eventKey')`,
+    ),
+    check(
+      'account_health_event_kind',
+      sql`${t.kind} in ('relogin_ok','relogin_failed','session_lost','code_requested','captcha','checkpoint','action_blocked','rate_limited','send_failed','auto_paused','auto_resumed')`,
+    ),
+  ],
+);
 export const doNotContact = pgTable(
   'do_not_contact',
   {

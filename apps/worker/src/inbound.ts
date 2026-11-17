@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { recordHealthEvent } from '@sonar/db/account-health';
 import {
   receivedEmailContent,
   parseInboundCategory,
@@ -5,6 +7,7 @@ import {
 } from '@sonar/core';
 import {
   telegramAdapter,
+  TelegramSendError,
   decryptTelegramSession,
   type TelegramIncoming,
 } from '@sonar/core/telegram';
@@ -251,7 +254,45 @@ export async function syncTelegramListeners(
           );
         },
       );
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof TelegramSendError &&
+        (error.code === 'session_expired' || /flood_wait/i.test(error.code))
+      ) {
+        const c = await sonarPool.connect();
+        try {
+          await c.query('begin');
+          await c.query(
+            "select pg_advisory_xact_lock(hashtextextended('channel-account:'||$1::text,0))",
+            [account.id],
+          );
+          const current =
+            error.code === 'session_expired'
+              ? await c.query(
+                  "update channel_accounts set settings=jsonb_set(settings,'{sessionStatus}','\"invalid\"'::jsonb) where id=$1 and settings->>'sessionEncrypted'=$2 returning id",
+                  [account.id, account.settings.sessionEncrypted],
+                )
+              : { rowCount: 1 };
+          if (current.rowCount)
+            await recordHealthEvent(
+              c,
+              account.id,
+              error.code === 'session_expired'
+                ? 'session_lost'
+                : 'rate_limited',
+              error.reasonUk,
+              {
+                eventKey: `listener:${createHash('sha256').update(account.settings.sessionEncrypted).digest('hex')}:${error.code}`,
+              },
+            );
+          await c.query('commit');
+        } catch (healthError) {
+          await c.query('rollback');
+          throw healthError;
+        } finally {
+          c.release();
+        }
+      }
       failures.push(account.id);
     }
   }

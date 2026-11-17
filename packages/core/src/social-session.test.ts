@@ -1,3 +1,7 @@
+import {
+  detectSocialActionBlocked,
+  SocialSessionCheckError,
+} from './social-session.js';
 import { describe, expect, it } from 'vitest';
 import {
   encryptSocialCookies,
@@ -533,4 +537,26 @@ it('generates a desktop fingerprint from the actual browser version and preserve
       proxyUrls,
     ).device,
   ).toEqual(device);
+});
+
+describe('account action restrictions', () => {
+  it.each([
+    'Try again later',
+    'Action blocked',
+    'We restrict certain activity',
+    "You can't send messages",
+    'Попробуйте позже',
+    'Спробуйте пізніше',
+    'Дію заблоковано',
+    'Ми обмежуємо певні дії',
+  ])('recognizes a fixed restriction in %s', (text) => {
+    expect(detectSocialActionBlocked(text)).toBe(true);
+    expect(new SocialSessionCheckError('action_blocked')).toMatchObject({
+      code: 'session_invalid',
+      reason: 'action_blocked',
+    });
+  });
+  it('does not treat ordinary messages as restrictions', () => {
+    expect(detectSocialActionBlocked('Your message was sent')).toBe(false);
+  });
 });

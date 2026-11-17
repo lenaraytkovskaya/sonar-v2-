@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { EmailAccount } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
@@ -9,10 +9,26 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
+import {
+  HealthBadge,
+  HealthDetails,
+  HealthJournal,
+  healthJournalAction,
+  type AccountHealth,
+} from './account-health';
 
-export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
+export function EmailAccounts({
+  accounts,
+  health = [],
+}: {
+  accounts: EmailAccount[];
+  health?: AccountHealth[];
+}) {
   const router = useRouter(),
     busy = useRef(false);
+  const [healthJournal, setHealthJournal] = useState<AccountHealth | null>(
+    null,
+  );
   const [open, setOpen] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState('');
@@ -104,9 +120,9 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
       </div>
       {!accounts.length && <p>{uk.email.empty}</p>}
       {!!accounts.length && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-muted-foreground">
+        <div className="min-w-0">
+          <table className="block w-full text-left text-sm md:table">
+            <thead className="hidden text-xs text-muted-foreground md:table-header-group">
               <tr>
                 {[
                   uk.email.name,
@@ -122,55 +138,97 @@ export function EmailAccounts({ accounts }: { accounts: EmailAccount[] }) {
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block md:table-row-group">
               {accounts.map((account) => (
-                <tr key={account.id} className="border-t border-border">
-                  <td className="p-3">{account.name}</td>
-                  <td className="p-3">{account.fromAddress}</td>
-                  <td className="p-3">{account.ownerName ?? '—'}</td>
-                  <td className="p-3">
-                    {account.sentToday} / {account.dailyLimit}
-                  </td>
-                  <td className="p-3">
-                    {account.nextSendAt
-                      ? new Date(account.nextSendAt).toLocaleString('uk-UA')
-                      : '—'}
-                  </td>
-                  <td className="p-3">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <StatusBadge
-                        status={account.enabled ? 'active' : 'disabled'}
-                      >
-                        {account.enabled ? uk.email.enabled : uk.email.disabled}
-                      </StatusBadge>
-                      <RowActions
-                        disabled={pending}
-                        actions={[
-                          {
-                            kind: account.enabled ? 'disable' : 'enable',
-                            label: account.enabled
-                              ? uk.email.disable
-                              : uk.email.enable,
-                            onSelect: () =>
-                              void toggle(account.id, !account.enabled),
-                          },
-                          {
-                            kind: 'delete',
-                            label: uk.email.remove,
-                            danger: true,
-                            confirm: `${uk.email.removeConfirm} ${account.fromAddress}?`,
-                            onSelect: () => void remove(account.id),
-                          },
-                        ]}
+                <Fragment key={account.id}>
+                  <tr className="grid border-t border-border py-3 md:table-row md:py-0">
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {account.name}
+                        <HealthBadge
+                          health={health.find(
+                            (item) => item.accountId === account.id,
+                          )}
+                        />
+                      </div>
+                    </td>
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      {account.fromAddress}
+                    </td>
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      {account.ownerName ?? '—'}
+                    </td>
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      {account.sentToday} / {account.dailyLimit}
+                    </td>
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      {account.nextSendAt
+                        ? new Date(account.nextSendAt).toLocaleString('uk-UA')
+                        : '—'}
+                    </td>
+                    <td className="min-w-0 break-words py-2 md:p-3">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <StatusBadge
+                          status={account.enabled ? 'active' : 'disabled'}
+                        >
+                          {account.enabled
+                            ? uk.email.enabled
+                            : uk.email.disabled}
+                        </StatusBadge>
+                        <RowActions
+                          disabled={pending}
+                          actions={[
+                            ...healthJournalAction(
+                              health.find(
+                                (item) => item.accountId === account.id,
+                              ),
+                              setHealthJournal,
+                            ),
+                            {
+                              kind: account.enabled ? 'disable' : 'enable',
+                              label: account.enabled
+                                ? uk.email.disable
+                                : uk.email.enable,
+                              onSelect: () =>
+                                void toggle(account.id, !account.enabled),
+                            },
+                            {
+                              kind: 'delete',
+                              label: uk.email.remove,
+                              danger: true,
+                              confirm: `${uk.email.removeConfirm} ${account.fromAddress}?`,
+                              onSelect: () => void remove(account.id),
+                            },
+                          ]}
+                        />
+                      </span>
+                    </td>
+                  </tr>
+                  <tr className="block md:table-row">
+                    <td
+                      colSpan={6}
+                      className="block pb-4 md:table-cell md:px-3"
+                    >
+                      <HealthDetails
+                        health={health.find(
+                          (item) => item.accountId === account.id,
+                        )}
                       />
-                    </span>
-                  </td>
-                </tr>
+                    </td>
+                  </tr>
+                </Fragment>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      <HealthJournal
+        health={
+          health.find((item) => item.accountId === healthJournal?.accountId) ??
+          healthJournal
+        }
+        onClose={() => setHealthJournal(null)}
+      />
       <CrudDialog
         open={open}
         onOpenChange={setOpen}

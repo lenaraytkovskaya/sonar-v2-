@@ -109,6 +109,18 @@ export async function enqueueTask(
   startAfter?: Date,
 ) {
   const save = async (client: PoolClient) => {
+    // Lock the account row before task rows, matching health event updates.
+    const healthAccount =
+      type === 'message.send'
+        ? (
+            await client.query(
+              `select a.settings from channel_accounts a where a.id::text=$1::jsonb->>'accountId'
+      or exists(select 1 from messages m where m.account_id=a.id and m.id::text=coalesce($1::jsonb->>'messageId',
+        (select payload->>'messageId' from tasks where idempotency_key=$2))) for share of a`,
+              [JSON.stringify(payload), key],
+            )
+          ).rows[0]
+        : undefined;
     const { rows } = await client.query(
       'insert into tasks(type,idempotency_key,payload) values($1,$2,$3) on conflict(idempotency_key) do nothing returning id',
       [type, key, payload],
@@ -127,10 +139,21 @@ export async function enqueueTask(
     }
     if (!id && type === 'message.send') {
       const { rows: resumed } = await client.query(
-        "update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null where idempotency_key=$1 and type='message.send' and status in ('paused','skipped') and exists(select 1 from messages m where m.id=(tasks.payload->>'messageId')::uuid and m.status='queued') returning id",
+        "update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null where idempotency_key=$1 and type='message.send' and status in ('paused','skipped') and exists(select 1 from messages m where m.id=(tasks.payload->>'messageId')::uuid and m.status='queued' and not exists(select 1 from channel_accounts a where a.id=m.account_id and a.settings->>'healthAutoPaused'='true')) returning id",
         [key],
       );
       id = resumed[0]?.id;
+    }
+    if (id && healthAccount?.settings.healthAutoPaused === true) {
+      await client.query(
+        "update tasks set status='paused',reason_code='account_health_paused',reason_uk=$2,finished_at=now() where id=$1",
+        [
+          id,
+          healthAccount.settings.reasonUk ??
+            'Надсилання призупинено через стан акаунта.',
+        ],
+      );
+      return id;
     }
     if (id) await dispatch(client, id, type, startAfter);
     return id ?? null;
@@ -633,7 +656,7 @@ export async function runTask(
     reason_code=$4, reason_uk=$5,
     attempts=attempts+case when $2::text='running' then 1 else 0 end,
     started_at=case when $2::text='running' then now() else started_at end,
-    finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1`,
+    finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1 and not (type='message.send' and status='paused' and reason_code='account_health_paused' and $2::text<>'paused')`,
             [task.id, status, result ?? null, code ?? null, reason ?? null],
           );
           if (['done', 'skipped', 'failed', 'paused'].includes(status))

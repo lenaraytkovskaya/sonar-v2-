@@ -189,7 +189,9 @@ it.skipIf(!enabled)(
                 ? 'invalid'
                 : 'unconfirmed',
               sessionCheckReason: reason,
-              reasonUk: socialSessionCheckReasons[reason],
+              reasonUk: expect.stringContaining(
+                socialSessionCheckReasons[reason],
+              ),
             });
             expect(
               (
@@ -199,9 +201,37 @@ it.skipIf(!enabled)(
                 )
               ).rows[0].settings.storageStateEncrypted,
             ).toBe(stored.settings.storageStateEncrypted);
-            await expect(
-              accounts.updateSocialAccount(saved.id, { enabled: true }, actor),
-            ).rejects.toThrow('Спочатку перевірте сесію');
+            if (
+              [
+                'captcha',
+                'checkpoint',
+                'action_blocked',
+                'rate_limit',
+              ].includes(reason)
+            ) {
+              await expect(
+                accounts.updateSocialAccount(
+                  saved.id,
+                  { enabled: true },
+                  actor,
+                ),
+              ).resolves.toBe(true);
+              expect(
+                (
+                  await sonarPool.query(
+                    'select settings from channel_accounts where id=$1',
+                    [saved.id],
+                  )
+                ).rows[0].settings.healthAutoPaused,
+              ).toBe(false);
+            } else
+              await expect(
+                accounts.updateSocialAccount(
+                  saved.id,
+                  { enabled: true },
+                  actor,
+                ),
+              ).rejects.toThrow('Спочатку перевірте сесію');
           }
           const unsafe = await checkSession(saved.id, async () => {
             throw Error('https://user:secret@proxy.test/?cookies=secret');

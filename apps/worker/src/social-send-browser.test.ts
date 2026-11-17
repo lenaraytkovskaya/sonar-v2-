@@ -20,6 +20,7 @@ const session = {
 function fixture(
   options: {
     checkpoint?: boolean;
+    actionBlocked?: string;
     confirm?: boolean;
     personalFacebook?: boolean;
     postCheckpoint?: boolean;
@@ -34,7 +35,14 @@ function fixture(
   });
   const exact = vi.fn((value: string | RegExp) => ({
     exact: true,
-    filter: () => ({ count: async () => 0 }),
+    filter: () => ({
+      count: async () =>
+        options.actionBlocked &&
+        value instanceof RegExp &&
+        value.test(options.actionBlocked)
+          ? 1
+          : 0,
+    }),
     count: async () =>
       value instanceof RegExp &&
       value.test('Page transparency') &&
@@ -410,3 +418,26 @@ it('retains the successful operation result if a post-dispatch state save fails'
   expect(result).toBe('confirmed-provider-id');
   await f.adapter.close();
 });
+
+it.each(['Action blocked', 'Попробуйте позже', 'Дію заблоковано'])(
+  'stops sending and reading on a visible account restriction: %s',
+  async (text) => {
+    const f = fixture({ actionBlocked: text });
+    const beforeSend = vi.fn();
+    await expect(f.adapter.check(account, session, 1000)).rejects.toMatchObject(
+      { reason: 'action_blocked' },
+    );
+    await expect(
+      f.adapter.send(
+        account,
+        session,
+        1000,
+        'https://instagram.com/company/',
+        'Hello',
+        beforeSend,
+      ),
+    ).rejects.toMatchObject({ reason: 'action_blocked' });
+    expect(beforeSend).not.toHaveBeenCalled();
+    expect(f.events).toEqual([]);
+  },
+);

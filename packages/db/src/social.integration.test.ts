@@ -361,12 +361,16 @@ it.skipIf(!enabled)(
         'select status,settings from channel_accounts where id=$1',
         [accountId],
       );
-      expect(account.status).toBe('active');
+      expect(account.status).toBe('paused');
       expect(account.settings).toMatchObject({
         sessionStatus: 'valid',
         sessionFetch: { count: 1 },
+        healthAutoPaused: true,
       });
-      expect(account.settings.reasonUk).toBeNull();
+      expect(account.settings.reasonUk).toContain(reasonUk);
+      expect(Date.parse(account.settings.healthPauseUntil)).toBeGreaterThan(
+        before,
+      );
       const {
         rows: [runtime],
       } = await sonarPool.query(

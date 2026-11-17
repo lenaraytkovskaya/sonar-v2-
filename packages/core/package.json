@@ -27,6 +27,10 @@
     "./social-login": {
       "types": "./dist/social-login.d.ts",
       "default": "./dist/social-login.js"
+    },
+    "./account-health": {
+      "types": "./dist/account-health.d.ts",
+      "default": "./dist/account-health.js"
     }
   },
   "files": [

@@ -10,17 +10,29 @@ import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RevealValue } from './ui/reveal-value';
 import { RowActions } from './ui/row-actions';
+import {
+  HealthBadge,
+  HealthDetails,
+  HealthJournal,
+  healthJournalAction,
+  type AccountHealth,
+} from './account-health';
 
 type Account = Awaited<ReturnType<typeof listTelegramAccounts>>[number];
 export function TelegramAccounts({
   accounts,
+  health = [],
   configured,
 }: {
   accounts: Account[];
+  health?: AccountHealth[];
   configured: boolean;
 }) {
   const router = useRouter(),
     busy = useRef(false);
+  const [healthJournal, setHealthJournal] = useState<AccountHealth | null>(
+    null,
+  );
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [limits, setLimits] = useState<Record<string, string>>({});
@@ -100,6 +112,13 @@ export function TelegramAccounts({
   };
   return (
     <Card className="space-y-4 p-5">
+      <HealthJournal
+        health={
+          health.find((item) => item.accountId === healthJournal?.accountId) ??
+          healthJournal
+        }
+        onClose={() => setHealthJournal(null)}
+      />
       <h2 className="border-b border-border pb-4 font-heading text-base font-semibold">
         {uk.telegram.accounts}
       </h2>
@@ -112,7 +131,11 @@ export function TelegramAccounts({
         >
           <div className="min-w-0 space-y-1 break-words">
             <p className="font-medium">
-              {account.name} ·{' '}
+              {account.name}{' '}
+              <HealthBadge
+                health={health.find((item) => item.accountId === account.id)}
+              />{' '}
+              ·{' '}
               <RevealValue
                 value={account.address}
                 masked={account.addressMasked}
@@ -206,6 +229,10 @@ export function TelegramAccounts({
             <RowActions
               disabled={pending}
               actions={[
+                ...healthJournalAction(
+                  health.find((item) => item.accountId === account.id),
+                  setHealthJournal,
+                ),
                 {
                   kind: account.enabled ? 'disable' : 'enable',
                   label: account.enabled ? uk.email.disable : uk.email.enable,
@@ -228,6 +255,10 @@ export function TelegramAccounts({
             <RowActions
               disabled={pending}
               actions={[
+                ...healthJournalAction(
+                  health.find((item) => item.accountId === account.id),
+                  setHealthJournal,
+                ),
                 {
                   kind: 'delete',
                   label: uk.email.remove,
@@ -239,6 +270,9 @@ export function TelegramAccounts({
               ]}
             />
           )}
+          <HealthDetails
+            health={health.find((item) => item.accountId === account.id)}
+          />
         </section>
       ))}
       <CrudButton
