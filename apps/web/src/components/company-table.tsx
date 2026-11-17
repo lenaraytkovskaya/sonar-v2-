@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Network, Store } from 'lucide-react';
 import { uk } from '@/i18n/uk';
+import { googleTypeLabel } from '@/lib/google-type';
 import { ChannelIcon } from './channel-icon';
 import { CompanyStatus, Score } from './shared';
 import type { CompanyCardRow } from './company-card';
@@ -52,7 +53,13 @@ export function CompanyTable({
                   {c.name}
                 </Link>
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {[c.city, c.primary_type].filter(Boolean).join(' · ') || '—'}
+                  {[
+                    c.city,
+                    c.primary_type_display_name ??
+                      googleTypeLabel(c.primary_type),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '—'}
                 </p>
                 {(c.chain_size > 1 || c.platform) && (
                   <p className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">

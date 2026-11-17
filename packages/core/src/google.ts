@@ -8,6 +8,7 @@ const baseFields = [
   'places.location',
   'places.types',
   'places.primaryType',
+  'places.primaryTypeDisplayName',
   'places.businessStatus',
   'places.googleMapsUri',
   'nextPageToken',
@@ -83,6 +84,10 @@ const googlePlaceSchema = z.object({
     .catch(undefined),
   types: z.array(z.string()).optional().catch(undefined),
   primaryType: z.string().optional().catch(undefined),
+  primaryTypeDisplayName: z
+    .object({ text: z.string(), languageCode: z.string().optional() })
+    .optional()
+    .catch(undefined),
   businessStatus: z.string().optional().catch(undefined),
   googleMapsUri: z.string().optional().catch(undefined),
   websiteUri: z.string().optional().catch(undefined),

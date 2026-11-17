@@ -24,6 +24,9 @@ export interface SocialProfile {
   address?: string | null;
   rating?: string | null;
   reviewsCount?: number | null;
+  priceRange?: string | null;
+  openingHours?: string | null;
+  canMessage?: boolean | null;
   name: string | null;
   category: string | null;
   description: string | null;
@@ -214,6 +217,49 @@ function count(value: unknown): number | null {
     ) * multiplier;
   return Number.isSafeInteger(result) && result >= 0 ? result : null;
 }
+function labeledCount(
+  value: string | null | undefined,
+  labels: string,
+): number | null {
+  if (!value) return null;
+  const number = String.raw`([\d][\d\s,.'’]*(?:k|m|b|тис\.?|тыс\.?|млн\.?)?)`;
+  const after = new RegExp(`${number}\\s*(?:${labels})`, 'iu').exec(value)?.[1];
+  const before = new RegExp(`(?:${labels})\\s*[:·-]?\\s*${number}`, 'iu').exec(
+    value,
+  )?.[1];
+  return count(after ?? before);
+}
+function profileDescription(value: string | null, network: SocialNetwork) {
+  if (!value) return null;
+  if (network === 'instagram') {
+    if (/^\s*\d[\d\s,.'’]*(?:k|m|тис\.?|млн\.?)?\s+followers\b/iu.test(value))
+      return null;
+    const withoutCounters = value
+      .replace(
+        /^\s*\d[\d\s,.'’]*(?:k|m|тис\.?|млн\.?)?\s+(?:followers|following|posts|підписник\p{L}*|підписк\p{L}*|допис\p{L}*|публікац\p{L}*)\s*,?\s*/iu,
+        '',
+      )
+      .replace(/^\s*-\s*/, '')
+      .replace(
+        /^\s*(?:see|перегляньте) instagram (?:photos|публікації).*$/iu,
+        '',
+      )
+      .trim();
+    return withoutCounters &&
+      !/^(?:followers|following|posts)\b/iu.test(withoutCounters)
+      ? withoutCounters
+      : null;
+  }
+  return (
+    value
+      .replace(
+        /(?:[·|,]\s*)?\d[\d\s,.'’]*(?:k|m|тис\.?|тыс\.?|млн\.?)?\s+(?:followers|читач\p{L}*|підписник\p{L}*|подписчик\p{L}*)/giu,
+        '',
+      )
+      .replace(/\s+[·|,]\s*$/u, '')
+      .trim() || null
+  );
+}
 function machineDate(value: unknown): string | null {
   let milliseconds: number;
   if (typeof value === 'number' && Number.isSafeInteger(value))
@@ -339,6 +385,9 @@ export function parseSocialProfile(
     address: null,
     rating: null,
     reviewsCount: null,
+    priceRange: null,
+    openingHours: null,
+    canMessage: null,
     name: null,
     category: null,
     description: null,
@@ -492,6 +541,18 @@ export function parseSocialProfile(
       node.about,
       object(node.summary).text,
     );
+    result.priceRange ??= first(
+      node.priceRange,
+      node.price_range,
+      node.price_range_text,
+    );
+    const openingHours = node.openingHours ?? node.opening_hours ?? node.hours;
+    result.openingHours ??=
+      typeof openingHours === 'string'
+        ? text(openingHours)
+        : Array.isArray(openingHours)
+          ? openingHours.map(text).filter(Boolean).join('; ') || null
+          : null;
     result.website ??=
       externalUrl(
         node.external_url ??
@@ -715,22 +776,19 @@ export function parseSocialProfile(
         .replace(/\s*[|·–-]\s*(?:Facebook|Instagram|LinkedIn).*$/i, ''),
       $('main h1,[role="main"] h1').first().text(),
     );
-    result.description ??= first(description);
+    result.description ??= profileDescription(
+      first(description),
+      target.network,
+    );
     for (const [field, label] of [
       [
         'followers',
-        'followers|підписників|підписники|читачів|подписчиков|подписчики|obserwujących|abonnés|seguidores',
+        'followers|підписник\\p{L}*|читач\\p{L}*|подписчик\\p{L}*|obserwujących|abonnés|seguidores',
       ],
       ['followingCount', 'following|підписки|подписки'],
       ['postsCount', 'posts|дописів|публікацій|публикаций'],
     ] as const) {
-      const value = description?.match(
-        new RegExp(
-          `([\\d][\\d\\s,.'’]*(?:k|m|b|тис\\.?|тыс\\.?|млн\\.?)?)\\s+(?:${label})`,
-          'iu',
-        ),
-      )?.[1];
-      result[field] ??= count(value);
+      result[field] ??= labeledCount(description, label);
     }
     const area = $('main,[role="main"]').length
       ? $('main,[role="main"]').first().clone()
@@ -1097,6 +1155,19 @@ export function parseSocialProfile(
               line.match(/^(?:Page|Сторінка|Страница)\s*·\s*(.+)/iu)?.[1],
           )
           .find(Boolean) ?? null;
+      result.address ??=
+        profileLines
+          .map(
+            (line) =>
+              line.match(
+                /^(?:address|адреса|місце|location)\s*[:·-]\s*(.+)$/iu,
+              )?.[1],
+          )
+          .find(Boolean) ?? null;
+      result.followers ??= labeledCount(
+        profileLines.join(' '),
+        'followers|читач\\p{L}*|підписник\\p{L}*|подписчик\\p{L}*',
+      );
       const ratingLine = profileLines.find((line) =>
         /recommend|рекоменду|rating|оцінка|рейтинг/iu.test(line),
       );
@@ -1104,6 +1175,14 @@ export function parseSocialProfile(
         ratingLine?.match(
           /\d+(?:[.,]\d+)?\s*%\s*(?:recommend|рекоменду\p{L}*)/iu,
         )?.[0] ??
+        ratingLine
+          ?.match(
+            /(?:recommend(?:ed|ations)?|рекоменду\p{L}*)\s*[:·-]?\s*\d+(?:[.,]\d+)?\s*%/iu,
+          )?.[0]
+          ?.replace(
+            /^(?:recommend(?:ed|ations)?|рекоменду\p{L}*)\s*[:·-]?\s*/iu,
+            '',
+          ) ??
         ratingLine
           ?.match(/(?:rating|оцінка|рейтинг)\s*[:·]?\s*(\d(?:[.,]\d+)?)/iu)?.[1]
           ?.replace(',', '.') ??
@@ -1113,7 +1192,22 @@ export function parseSocialProfile(
           /(\d[\d\s,.]*\s*(?:тис\.?|тыс\.?|k)?)\s*(?:reviews|відгук\p{L}*|отзыв\p{L}*)/iu,
         )?.[1],
       );
+      result.reviewsCount ??= labeledCount(
+        ratingLine,
+        'reviews|відгук\\p{L}*|отзыв\\p{L}*',
+      );
       result.description ??= first(details.find('p').first().text());
+      result.priceRange ??=
+        profileLines
+          .find((line) => /₴|\${1,4}/u.test(line))
+          ?.match(/₴{1,4}|\${1,4}/u)?.[0] ?? null;
+      result.openingHours ??=
+        profileLines.find((line) =>
+          /(?:hours|години роботи|час роботи|відчинено|зачинено)/iu.test(line),
+        ) ?? null;
+      result.canMessage ??= /(?:повідомлення|message)/iu.test(
+        profileLines.join(' '),
+      );
     }
     if (target.network === 'instagram' && header.length) {
       const biography = header.clone();
@@ -1197,15 +1291,9 @@ export function parseSocialProfile(
       ['followingCount', 'following|підписки|подписки'],
       ['postsCount', 'posts|дописів|публікацій|публикаций'],
     ] as const) {
-      const value = (
-        target.network === 'facebook' ? profileLines.join(' ') : header.text()
-      ).match(
-        new RegExp(
-          `(\\d[\\d\\s,.'’]*(?:k|m|b|тис\\.?|тыс\\.?|млн\\.?)?)\\s+(?:${labels})`,
-          'iu',
-        ),
-      )?.[1];
-      result[field] ??= count(value);
+      const counterText =
+        target.network === 'facebook' ? profileLines.join(' ') : header.text();
+      result[field] ??= labeledCount(counterText, labels);
     }
     details
       .find('a[href^="tel:"]')
