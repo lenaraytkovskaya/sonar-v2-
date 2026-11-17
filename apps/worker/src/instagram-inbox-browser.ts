@@ -13,6 +13,7 @@ import {
   assertSocialSession,
   instagramSessionMarkers,
   socialSendBrowser,
+  captureFailureShot,
 } from './social-send-browser.js';
 import {
   SocialInboxAdapterError,
@@ -572,8 +573,8 @@ export function createSocialInboxAdapter(
         )
           throw new SocialSessionCheckError('unknown_auth');
         const timeoutMs = await timeout();
-        return browser.withPage(account, account.session, timeoutMs, (page) =>
-          captureFacebookInbox(
+        return browser.withPage(account, account.session, timeoutMs, async (page) => {
+          const result = await captureFacebookInbox(
             page,
             actors[0]!.value,
             timeoutMs,
@@ -586,8 +587,11 @@ export function createSocialInboxAdapter(
               string,
               { lastMessageId?: string }
             >,
-          ),
-        );
+          );
+          if (!result.complete || result.reason)
+            await captureFailureShot(page, account.session, 'inbox', 'sync');
+          return result;
+        }, false, { kind: 'inbox', stage: () => 'sync' });
       }
       if (account.channel !== 'instagram')
         throw new SocialInboxAdapterError(
@@ -615,8 +619,8 @@ export function createSocialInboxAdapter(
           emptyCapture(),
         );
       const expectedViewerId = actorCookies[0]!.value;
-      return browser.withPage(account, account.session, timeoutMs, (page) =>
-        captureInstagramInbox(
+      return browser.withPage(account, account.session, timeoutMs, async (page) => {
+        const result = await captureInstagramInbox(
           page,
           timeoutMs,
           persistBatch,
@@ -632,8 +636,11 @@ export function createSocialInboxAdapter(
             string,
             string | null
           >,
-        ),
-      );
+        );
+        if (!result.complete || result.reason)
+          await captureFailureShot(page, account.session, 'inbox', 'sync');
+        return result;
+      }, false, { kind: 'inbox', stage: () => 'sync' });
     },
   };
 }

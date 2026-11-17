@@ -28,8 +28,36 @@ export type SocialBrowserSession = {
   proxy: ReturnType<typeof socialProxies>[number];
 } & Pick<
   ResolvedSocialSession,
-  'storageState' | 'device' | 'persistStorageState' | 'persistDevice'
+  'storageState' | 'device' | 'persistStorageState' | 'persistDevice' | 'persistFailureShot'
 >;
+export type FailureShotKind = 'check' | 'keepalive' | 'inbox' | 'send';
+export async function captureFailureShot(
+  page: Page,
+  session: SocialBrowserSession,
+  kind: FailureShotKind,
+  stage: string,
+) {
+  if (!session.persistFailureShot || typeof page.screenshot !== 'function') return;
+  try {
+    const path = new URL(page.url()).pathname.slice(0, 500);
+    for (const quality of [55, 35, 20]) {
+      const bytes = await page.screenshot({
+        type: 'jpeg',
+        quality,
+        timeout: 5000,
+      });
+      if (bytes.byteLength <= 3 * 1024 * 1024) {
+        await session.persistFailureShot(kind, {
+          at: new Date().toISOString(),
+          path,
+          stage: stage.slice(0, 80),
+          jpeg: bytes.toString('base64'),
+        });
+        return;
+      }
+    }
+  } catch { /* Diagnostic failures must not replace the operation result. */ }
+}
 const home = (network: SocialNetwork) => `https://www.${network}.com/`;
 const messageLabel =
   /^(?:message|send message|повідомлення|надіслати повідомлення|сообщение|отправить сообщение)$/i;
@@ -1640,6 +1668,7 @@ export function createSocialSendBrowser(
     timeoutMs: number,
     fn: (page: Page) => Promise<T>,
     preserveResult = false,
+    failure?: { kind: FailureShotKind; stage?: () => string },
   ) {
     return serialized(account.id, async () => {
       const key = JSON.stringify([
@@ -1702,6 +1731,15 @@ export function createSocialSendBrowser(
           else await save();
         }
         return result;
+      } catch (error) {
+        if (failure)
+          await captureFailureShot(
+            page,
+            session,
+            failure.kind,
+            failure.stage?.() ?? 'operation',
+          );
+        throw error;
       } finally {
         await page.close().catch(() => {});
       }
@@ -1715,8 +1753,8 @@ export function createSocialSendBrowser(
       timeoutMs: number,
     ) {
       try {
+        let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
         return await withPage(account, session, timeoutMs, async (page) => {
-          let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
           let status: number | null = null;
           try {
             const response = await page.goto(home(account.channel), {
@@ -1764,7 +1802,7 @@ export function createSocialSendBrowser(
             }
             throw error;
           }
-        });
+        }, false, { kind: 'check', stage: () => stage });
       } catch (error) {
         if (error instanceof SocialSessionCheckError) throw error;
         throw new SocialSessionCheckError(
@@ -1778,6 +1816,7 @@ export function createSocialSendBrowser(
       timeoutMs: number,
       pauseMs: number,
     ) {
+      let stage = 'navigation';
       return withPage(account, session, timeoutMs, async (page) => {
         const url =
           account.channel === 'linkedin'
@@ -1787,16 +1826,18 @@ export function createSocialSendBrowser(
           waitUntil: 'domcontentloaded',
           timeout: timeoutMs,
         });
+        stage = 'http';
         if (response?.status() === 429)
           throw new SocialSessionCheckError('rate_limit');
         if (response?.status() === 407)
           throw new SocialSessionCheckError('proxy');
         await assertSocialSession(page, account.channel);
+        stage = 'wait';
         if (!response || response.status() < 200 || response.status() >= 300)
           throw new SocialSessionCheckError('network');
         await page.waitForTimeout(pauseMs);
         await assertSocialSession(page, account.channel);
-      });
+      }, false, { kind: 'keepalive', stage: () => stage });
     },
     async send(
       account: SocialSessionAccount,
@@ -1894,6 +1935,7 @@ export function createSocialSendBrowser(
             return confirmedDialogUrl(page, account.channel);
           },
           true,
+          { kind: 'send', stage: () => 'send' },
         );
       } catch (error) {
         if (account.channel === 'instagram') {

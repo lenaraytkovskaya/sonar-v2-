@@ -175,6 +175,19 @@ export function HealthJournal({
                 <p>
                   <FriendlyError reason={event.reasonUk} />
                 </p>
+                {event.failureShotKind &&
+                  health.channel !== 'email' &&
+                  health.channel !== 'telegram' &&
+                  health.channel !== 'whatsapp' && (
+                    <a
+                      className="inline-block underline"
+                      target="_blank"
+                      rel="noreferrer"
+                      href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(health.accountId)}&kind=${event.failureShotKind}`}
+                    >
+                      {uk.socialAccounts.failureShot}
+                    </a>
+                )}
               </li>
             ))}
           </ol>

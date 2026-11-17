@@ -929,6 +929,10 @@ export type ResolvedSocialSession = {
     device?: SocialDevice,
   ) => Promise<void>;
   persistDevice?: (device: SocialDevice) => Promise<void>;
+  persistFailureShot?: (
+    kind: 'check' | 'keepalive' | 'inbox' | 'send',
+    shot: { at: string; path: string; stage: string; jpeg: string },
+  ) => Promise<void>;
 };
 export function resolveSocialSession(
   account: { channel: SocialNetwork; settings: Record<string, unknown> },

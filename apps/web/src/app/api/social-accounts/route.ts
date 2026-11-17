@@ -303,6 +303,7 @@ async function handle(request: Request, method: string) {
       inboxSyncCreated: account.inboxSyncCreated,
       inboxSyncCheckedAt: account.inboxSyncCheckedAt,
       inboxSyncErrorUk: account.inboxSyncErrorUk,
+      failureShotKinds: account.failureShotKinds,
       hasCredentials: account.hasCredentials,
       hasTotpSecret: account.hasTotpSecret,
       loginBlocked: account.loginBlocked,

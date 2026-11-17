@@ -71,6 +71,7 @@ export interface SocialAccount {
   inboxSyncCreated: number | null;
   inboxSyncCheckedAt: string | null;
   inboxSyncErrorUk: string | null;
+  failureShotKinds: string[];
 }
 export interface SocialSessionAccount {
   id: string;
@@ -153,6 +154,15 @@ export async function prepareSocialSession(
     ) => {
       await persistSocialStorageState(c, account.id, state, device);
       if (device) account.settings.device = device;
+    },
+    persistFailureShot: async (
+      kind: 'check' | 'keepalive' | 'inbox' | 'send',
+      shot: { at: string; path: string; stage: string; jpeg: string },
+    ) => {
+      await c.query(
+        "update channel_accounts set settings=jsonb_set(settings,'{failureShots}',coalesce(settings->'failureShots','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb)) where id=$1",
+        [account.id, kind, JSON.stringify(shot)],
+      );
     },
   };
 }
@@ -476,9 +486,10 @@ export async function listSocialAccounts(
     (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
     a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
     a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
+    coalesce(array(select key from jsonb_each(coalesce(a.settings->'failureShots','{}'::jsonb)) shot(key,value) order by (value->>'at')::timestamptz desc),array[]::text[]) as "failureShotKinds",
     a.settings->'device' as device,a.settings->>'deviceSource' as "deviceSource",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
-    from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
+    from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') and ($1::uuid is null or a.owner_id=$1::uuid) order by a.name,a.id`,
     [userId ?? null],
   );
   return rows;
