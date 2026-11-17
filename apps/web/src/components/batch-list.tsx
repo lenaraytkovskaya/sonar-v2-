@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useTasks } from './task-overview';
 import { Button } from './ui/button';
+import { FriendlyError } from './friendly-error';
 import { uk } from '@/i18n/uk';
 function EnrichButton({ batchId }: { batchId: string }) {
   const [state, setState] = useState<'idle' | 'pending' | 'done' | 'error'>(
@@ -104,7 +105,7 @@ export function BatchList({ campaignId }: { campaignId: string }) {
                 <td className="p-2">#{b.number}</td>
                 <td className="p-2">
                   {uk.tasks.status[b.status]}
-                  {b.reason_uk && <p>{b.reason_uk}</p>}
+                  {b.reason_uk && <p><FriendlyError reason={b.reason_uk} /></p>}
                   {b.fixture && <p>{uk.google.fixture}</p>}
                 </td>
                 <td className="p-2">{b.found_new + b.found_known}</td>

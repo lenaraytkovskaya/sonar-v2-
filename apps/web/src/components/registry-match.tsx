@@ -5,6 +5,7 @@ import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import type { RegistryEntity } from '@sonar/core';
+import { FriendlyError } from './friendly-error';
 export function RegistryMatch({
   companyId,
   candidates = [],
@@ -97,7 +98,7 @@ export function RegistryMatch({
       {task && !active && (
         <p className="text-sm text-muted-foreground">
           {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && ` · ${task.reason_uk}`}
+          {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
         </p>
       )}
       {error && (

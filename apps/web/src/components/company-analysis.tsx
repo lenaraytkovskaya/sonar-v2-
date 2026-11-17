@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { AnalysisResult } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
+import { FriendlyError } from './friendly-error';
 type Task = {
   id: string;
   status: string;
@@ -86,7 +87,7 @@ export function CompanyAnalysis({
       {task && (
         <p className="text-sm text-muted-foreground">
           {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && ` · ${task.reason_uk}`}
+          {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
         </p>
       )}
       {result ? (

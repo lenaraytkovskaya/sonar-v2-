@@ -14,6 +14,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { FriendlyError } from './friendly-error';
 
 type Result = Awaited<ReturnType<typeof getManualSource>>;
 function sourceError(error: unknown) {
@@ -300,7 +301,7 @@ export function ManualSource({
               <div key={task.id}>
                 <p>
                   {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-                  {task.reason_uk ? ` · ${task.reason_uk}` : ''}
+                  {task.reason_uk ? <> · <FriendlyError reason={task.reason_uk} /></> : ''}
                 </p>
                 {task.status === 'done' && (
                   <p className="text-xs text-muted-foreground">

@@ -12,6 +12,7 @@ import { uk } from '@/i18n/uk';
 import { Callout, Section } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, type ScanResult } from './shared';
+import { FriendlyError } from './friendly-error';
 type Task = {
   id: string;
   type: string;
@@ -187,7 +188,7 @@ export function TaskOverview() {
                   : 'mt-0.5 text-sm text-err'
               }
             >
-              {task.reason_uk}
+              <FriendlyError reason={task.reason_uk ?? uk.tasks.unknown} />
               <span className="text-muted-foreground">
                 {' '}
                 · {uk.tasks.repetitions}: {task.repetitions}
@@ -303,7 +304,7 @@ export function TaskOverview() {
                 )}
                 {batch.reason_uk && (
                   <p className="text-xs text-muted-foreground">
-                    {batch.reason_uk}
+                    <FriendlyError reason={batch.reason_uk} />
                   </p>
                 )}
               </li>
@@ -366,7 +367,7 @@ export function TaskOverview() {
                   )}
                   {task.reason_uk && (
                     <span className="block text-xs text-muted-foreground">
-                      {task.reason_uk}
+                      <FriendlyError reason={task.reason_uk} />
                     </span>
                   )}
                   {task.type === 'site.scan' && (

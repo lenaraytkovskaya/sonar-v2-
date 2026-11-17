@@ -10,6 +10,7 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RevealValue } from './ui/reveal-value';
+import { FriendlyError } from './friendly-error';
 import { RowActions } from './ui/row-actions';
 import {
   HealthBadge,
@@ -173,7 +174,7 @@ export function WhatsAppAccounts({
                 {new Date(account.nextSendAt).toLocaleString('uk-UA')}
               </p>
             )}
-            {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
+            {account.reasonUk && <p className="text-err"><FriendlyError reason={account.reasonUk} /></p>}
           </div>
           <HealthDetails
             health={health.find((item) => item.accountId === account.id)}

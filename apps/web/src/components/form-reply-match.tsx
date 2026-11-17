@@ -5,6 +5,7 @@ import type { getFormReplyMatch } from '@sonar/db/form-replies';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { useInboxPolling } from './use-inbox-polling';
+import { FriendlyError } from './friendly-error';
 
 type Match = Awaited<ReturnType<typeof getFormReplyMatch>>;
 export function FormReplyMatch({
@@ -85,7 +86,7 @@ export function FormReplyMatch({
         </p>
       )}
       {match.reasonUk && (
-        <p className="text-xs text-muted-foreground">{match.reasonUk}</p>
+        <p className="text-xs text-muted-foreground"><FriendlyError reason={match.reasonUk} /></p>
       )}
       {match.confidence != null && (
         <p className="text-xs text-muted-foreground">

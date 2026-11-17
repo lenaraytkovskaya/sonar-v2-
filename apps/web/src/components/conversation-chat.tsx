@@ -19,6 +19,7 @@ import { Input } from './ui/input';
 import { Callout } from './ui/layout';
 import { FormReplyMatch } from './form-reply-match';
 import { ChannelIcon } from './channel-icon';
+import { FriendlyError } from './friendly-error';
 type Message = NonNullable<
   Awaited<ReturnType<typeof getConversationChat>>
 >['messages'][number];
@@ -506,7 +507,7 @@ export function ConversationChat({
           {task && (
             <p>
               {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-              {task.reason_uk && ` · ${task.reason_uk}`}
+              {task.reason_uk && <> · <FriendlyError reason={task.reason_uk} /></>}
             </p>
           )}
           {notice && <p>{notice}</p>}

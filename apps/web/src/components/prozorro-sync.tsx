@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
 import { Card } from './shared';
 import { Button } from './ui/button';
+import { FriendlyError } from './friendly-error';
 type Progress = {
   documents: number;
   rows: number;
@@ -132,9 +133,9 @@ export function ProzorroSync({ embedded = false }: { embedded?: boolean }) {
                     : '—'}
                 </p>
                 {data['prozorro.full_sync.enabled'] === false ? (
-                  <p>{progress?.reasonUk ?? uk.prozorro.paused}</p>
+                  <p>{progress?.reasonUk ? <FriendlyError reason={progress.reasonUk} /> : uk.prozorro.paused}</p>
                 ) : (
-                  progress?.reasonUk && <p>{progress.reasonUk}</p>
+                  progress?.reasonUk && <p><FriendlyError reason={progress.reasonUk} /></p>
                 )}
               </section>
             );

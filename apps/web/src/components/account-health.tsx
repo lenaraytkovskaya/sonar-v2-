@@ -5,6 +5,7 @@ import { StatusBadge } from './shared';
 import { DetailList, InfoTip, Section } from './ui/layout';
 import { CrudDialog } from './crud-dialog';
 import { LocalTime } from './local-time';
+import { FriendlyError } from './friendly-error';
 import type { RowAction } from './ui/row-actions';
 
 export type AccountHealth = Awaited<ReturnType<typeof accountHealth>>[number];
@@ -156,7 +157,7 @@ export function HealthJournal({
                     <LocalTime value={event.createdAt} />
                   </span>
                 </div>
-                <p>{event.reasonUk}</p>
+                <p><FriendlyError reason={event.reasonUk} /></p>
               </li>
             ))}
           </ol>
