@@ -139,31 +139,7 @@ export function TaskOverview() {
   const [pending, setPending] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState<string | null>(null);
   const name = (type: string) =>
-    ({
-      'system.registry_ping': uk.tasks.registry,
-      'registry.match': uk.company.registry,
-      'registry.phones.sync': uk.registry.sync,
-      'prozorro.sync': uk.prozorro.title,
-      'prozorro.lookup': uk.prozorro.title,
-      'prozorro.company': uk.prozorro.title,
-      'ai.models': uk.tasks.aiModels,
-      'ai.assist': uk.tasks.aiAssist,
-      'ai.drafts': uk.outreach.generate,
-      'ai.inbound': uk.inbound.classify,
-      'ai.reply': uk.inbound.suggest,
-      'email.receive': uk.inbound.received,
-      'whatsapp.receive': uk.inbound.received,
-      'google.batch': uk.google.title,
-      'google.request': uk.google.title,
-      'google.company': uk.google.title,
-      'google.resolve': uk.google.title,
-      'site.scan': uk.scanner.title,
-      'social.fetch': uk.social.title,
-      'social.request': uk.social.title,
-      'company.score': uk.company.score,
-      'company.analyze': uk.analysis.title,
-      'message.send': uk.email.title,
-    })[type] ?? type;
+    (uk.tasks.names as Record<string, string>)[type] ?? uk.tasks.unknown;
   const active = [
     ...new Set(
       counts
