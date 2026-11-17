@@ -369,8 +369,27 @@ export function SettingsPanel({ section }: { section?: string }) {
                       defaultOnlyCheap={false}
                     />
                   ) : (
-                    (models.find((model) => model.id === strong)?.name ??
-                    (strong || uk.ai.choose))
+                    models.find((model) => model.id === strong)?.name ??
+                    (strong ? (
+                      strong
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-3">
+                        <span className="text-muted-foreground">
+                          {uk.ai.notSelected}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            baseline.current = structuredClone(values);
+                            setMessage('');
+                            setEditing(true);
+                          }}
+                        >
+                          {uk.ai.choose}
+                        </Button>
+                      </span>
+                    ))
                   )}
                 </SettingRow>
                 <SettingRow
