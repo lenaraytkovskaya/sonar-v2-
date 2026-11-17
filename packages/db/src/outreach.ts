@@ -96,7 +96,7 @@ export async function getInbox(
   const [conversations, campaigns] = await Promise.all([
     sonarPool.query<OutreachConversation>(
       `${conversationSelect}
-      where ($1::uuid is null or v.campaign_id=$1) and ($2::text is null or v.channel=$2)
+      where (v.channel<>'form' or $7::uuid is not null) and ($1::uuid is null or v.campaign_id=$1) and ($2::text is null or v.channel=$2)
       and ($3::text is null or m.status=$3) and ($4::text is null or co.name ilike '%'||$4||'%' or coalesce(ct.value,v.peer_value,m.to_value) ilike '%'||$4||'%')
       and ($5::boolean is null or exists(select 1 from messages where conversation_id=v.id and needs_human)=$5)
       and ($6::boolean is null or exists(select 1 from messages where conversation_id=v.id and direction='in' and read_at is null)=$6)

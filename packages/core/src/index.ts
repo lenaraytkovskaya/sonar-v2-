@@ -4,7 +4,7 @@ import {
 } from 'libphonenumber-js/max';
 export function normalizePhone(
   raw: string,
-  defaultCountry: CountryCode,
+  defaultCountry?: CountryCode,
 ): string | null {
   const phone = parsePhoneNumberFromString(raw, {
     defaultCountry,
@@ -26,6 +26,7 @@ export * from './registry.js';
 export * from './scoring.js';
 export * from './analysis.js';
 export * from './email.js';
+export * from './form-contacts.js';
 export * from './manual.js';
 export * from './manual-source.js';
 export * from './prozorro.js';
@@ -37,3 +38,5 @@ export * from './inbound.js';
 export * from './social.js';
 
 export * from './prozorro-company.js';
+
+export * from './form-replies.js';

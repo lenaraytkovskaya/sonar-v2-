@@ -6,7 +6,7 @@ export default async function Page() {
   const user = (await getSession()).user;
   const { listEmailAccounts, listFormAccounts } =
     await import('@sonar/db/email');
-  const { listManualFormMessages } = await import('@sonar/db/forms');
+  const { getContactDetails } = await import('@sonar/db/forms');
   const { accountHealth } = await import('@sonar/db/account-health');
   const { listTelegramAccounts } = await import('@sonar/db/telegram');
   const { listWhatsAppAccounts } = await import('@sonar/db/whatsapp');
@@ -19,7 +19,7 @@ export default async function Page() {
   const [
     email,
     forms,
-    manual,
+    contactDetails,
     telegram,
     whatsapp,
     social,
@@ -28,7 +28,7 @@ export default async function Page() {
   ] = await Promise.all([
     listEmailAccounts(),
     listFormAccounts(),
-    listManualFormMessages(),
+    getContactDetails(),
     listTelegramAccounts(),
     listWhatsAppAccounts(),
     listSocialAccounts(user?.id),
@@ -62,7 +62,8 @@ export default async function Page() {
             process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH
           ),
         }}
-        forms={{ accounts: forms, manual }}
+        contactDetails={{ initial: contactDetails }}
+        forms={{ accounts: forms }}
         whatsapp={{
           accounts: whatsapp,
           health,

@@ -27,7 +27,12 @@ beforeAll(async () => {
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
-  for (const queue of ['ai.inbound', 'ai.reply', 'message.send'])
+  for (const queue of [
+    'form.reply.match',
+    'ai.inbound',
+    'ai.reply',
+    'message.send',
+  ])
     await admin.createQueue(queue);
   await db.sonarPool.query(
     "insert into users(id,email,name,password_hash) values($1,$2,'Inbound test','stub')",
@@ -385,7 +390,7 @@ afterAll(async () => {
   );
   const ids = conversations.map((r) => r.id);
   await db.sonarPool.query(
-    "delete from tasks where type in ('ai.inbound','ai.reply','message.send') and (payload->>'messageId' in(select id::text from messages where conversation_id=any($1::uuid[])) or payload->>'conversationId'=any($2::text[]))",
+    "delete from tasks where type in ('form.reply.match','ai.inbound','ai.reply','message.send') and (payload->>'messageId' in(select id::text from messages where conversation_id=any($1::uuid[])) or payload->>'conversationId'=any($2::text[]))",
     [ids, ids],
   );
   await db.sonarPool.query(

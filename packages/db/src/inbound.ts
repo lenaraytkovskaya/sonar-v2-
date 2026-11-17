@@ -1,3 +1,4 @@
+import { enqueueFormReplyMatch } from './form-replies.js';
 import { messageHistoryOrder } from './message-history.js';
 import { createHash } from 'node:crypto';
 import { socialTarget } from '@sonar/core';
@@ -191,6 +192,13 @@ export async function recordInbound(input: InboundInput) {
         input.externalMessageId ?? null,
       ],
     );
+    if (!conversation.company_id)
+      await enqueueFormReplyMatch(
+        c,
+        conversation.id,
+        message.id,
+        input.senderPhone,
+      );
     await enqueueTask(
       'ai.inbound',
       `ai.inbound:${message.id}`,

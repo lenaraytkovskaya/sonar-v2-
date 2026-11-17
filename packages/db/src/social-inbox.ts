@@ -1,3 +1,4 @@
+import { enqueueFormReplyMatch } from './form-replies.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { SocialNetwork } from '@sonar/core';
@@ -504,6 +505,8 @@ export async function persistSocialInboxBatch(
       );
       created++;
       observe(conversation.id, inserted.id, message);
+      if (message.direction === 'in' && !conversation.company_id)
+        await enqueueFormReplyMatch(c, conversation.id, inserted.id);
       if (message.direction === 'in')
         await enqueueTask(
           'ai.inbound',

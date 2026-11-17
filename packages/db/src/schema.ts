@@ -492,6 +492,7 @@ export const conversations = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     providerThreadId: text('provider_thread_id'),
+    formReplyMatch: jsonb('form_reply_match'),
     status: text('status').notNull().default('open'),
     channel: text('channel').notNull().default('email'),
     createdAt: timestamp('created_at', { withTimezone: true })

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 const enabled = process.env.RUN_DB_TESTS === '1';
 let db: typeof import('./index.js'),
   email: typeof import('./email.js'),
@@ -16,6 +17,51 @@ beforeAll(async () => {
   await boss.createQueue('message.send');
 });
 it.skipIf(!enabled)(
+  'upgrades legacy form identity deterministically without replacing shared contacts',
+  async () => {
+    const c = await db.sonarPool.connect();
+    await c.query('begin');
+    try {
+      await c.query("delete from settings where key like 'contact.%'");
+      await c.query(
+        `insert into settings(key,value) values('contact.name','"Existing owner"'),('contact.email','""'),('contact.phone','"  "')`,
+      );
+      await c.query(`insert into channel_accounts(channel,name,address,daily_limit,settings,created_at) values
+      ('form','older','older@example.invalid',1,'{"senderName":"Old owner","senderPhone":"+380501234567"}','1900-01-01'),
+      ('form','newer','newer@example.invalid',1,'{"senderName":"New owner","senderPhone":"+380671234567"}','1901-01-01')`);
+      const sql = await readFile(
+        new URL('../drizzle/0048_contact_details.sql', import.meta.url),
+        'utf8',
+      );
+      await c.query(sql);
+      await c.query(sql);
+      const values = Object.fromEntries(
+        (
+          await c.query(
+            "select key,value from settings where key like 'contact.%'",
+          )
+        ).rows.map((r) => [r.key, r.value]),
+      );
+      expect(values).toMatchObject({
+        'contact.name': 'Existing owner',
+        'contact.email': 'older@example.invalid',
+        'contact.phone': '+380501234567',
+        'contact.telegram': '',
+      });
+      expect(
+        (
+          await c.query(
+            "select address,settings from channel_accounts where name='older'",
+          )
+        ).rows[0],
+      ).toEqual({ address: '', settings: {} });
+    } finally {
+      await c.query('rollback');
+      c.release();
+    }
+  },
+);
+it.skipIf(!enabled)(
   'forms durably claim clicks, serialize concurrent attempts, enforce limits, DNC, domains and modes, persist evidence and audit manual completion',
   async () => {
     const ids = {
@@ -31,6 +77,12 @@ it.skipIf(!enabled)(
       'send.min_gap_seconds',
       'send.max_gap_seconds',
       'send.form_company_daily_limit',
+      'contact.name',
+      'contact.email',
+      'contact.phone',
+      'contact.whatsapp',
+      'contact.telegram',
+      'contact.website',
     ];
     const original = (
       await db.sonarPool.query(
@@ -48,9 +100,6 @@ it.skipIf(!enabled)(
       const a = await email.createFormAccount(
         {
           name: 'Form test',
-          fromAddress: 'sender@example.invalid',
-          senderName: 'Test Sender',
-          senderPhone: '+380501234567',
           dailyLimit: 100,
         },
         ids.user,
@@ -93,6 +142,10 @@ it.skipIf(!enabled)(
         _request: import('./forms.js').FormRequest,
         controls: import('./forms.js').FormControls,
       ) => {
+        await controls.onFilled({
+          body: _request.body,
+          sharedContacts: ['email', 'phone', 'telegram'],
+        });
         await controls.saveScreenshot('before', Buffer.from('before'));
         await controls.beforeSubmit();
         await controls.saveScreenshot('after', Buffer.from('after'));
@@ -134,32 +187,60 @@ it.skipIf(!enabled)(
         [ids.company],
       );
       account = await createAccount();
-      const editableAccount = {
-        name: 'Form test',
-        fromAddress: 'sender@example.invalid',
-        senderName: 'Test Sender',
-        senderPhone: '',
-        dailyLimit: 100,
-      };
-      expect(
-        await email.updateFormAccount(account, editableAccount, ids.user),
-      ).toBe(true);
-      expect(
-        (await email.listFormAccounts()).find((a) => a.id === account)
-          ?.senderPhone,
-      ).toBe('');
-      await expect(
-        email.updateFormAccount(
-          account,
-          { ...editableAccount, senderPhone: '0501234567' },
-          ids.user,
-        ),
-      ).rejects.toThrow('міжнародним');
-      await email.updateFormAccount(
-        account,
-        { ...editableAccount, senderPhone: '+380501234567' },
+      const fallback = (
+        await db.sonarPool.query(
+          "insert into channel_accounts(channel,name,address,daily_limit,settings,created_at) values('email','Default email','default@example.invalid',1,'{}','1800-01-01'),('whatsapp','Connected WhatsApp','+380671234567',1,'{\"providerStatus\":\"WORKING\"}','1800-01-01') returning id",
+        )
+      ).rows;
+      accounts.push(...fallback.map((a) => a.id));
+      await set('contact.email', '');
+      await set('contact.whatsapp', '');
+      expect(await forms.getContactDetails()).toMatchObject({
+        email: 'default@example.invalid',
+        whatsapp: '+380671234567',
+      });
+      await forms.saveContactDetails(
+        {
+          name: 'Test Sender',
+          email: 'sender@example.invalid',
+          phone: '+380501234567',
+          whatsapp: '',
+          telegram: '@sonar_team',
+          website: 'https://sender.example.invalid',
+        },
         ids.user,
       );
+      expect(await forms.getContactDetails()).toMatchObject({
+        name: 'Test Sender',
+        phone: '+380501234567',
+      });
+      expect(
+        await email.updateFormAccount(
+          account,
+          { name: 'Form test', dailyLimit: 100 },
+          ids.user,
+        ),
+      ).toBe(true);
+      const stored = (
+        await db.sonarPool.query(
+          'select address,settings from channel_accounts where id=$1',
+          [account],
+        )
+      ).rows[0];
+      expect(stored).toEqual({ address: '', settings: {} });
+      await expect(
+        forms.saveContactDetails(
+          {
+            name: 'Test Sender',
+            email: 'sender@example.invalid',
+            phone: '0501234567',
+            whatsapp: '',
+            telegram: '',
+            website: '',
+          },
+          ids.user,
+        ),
+      ).rejects.toThrow('міжнародними');
       const inputKey = randomUUID(),
         one = await create({ idempotencyKey: inputKey });
       expect((await create({ idempotencyKey: inputKey })).id).toBe(one.id);
@@ -174,6 +255,38 @@ it.skipIf(!enabled)(
         phone: '+380501234567',
         captcha: 'none',
       });
+      expect(
+        (await forms.listFormMessages({ status: 'sent' })).find(
+          (m) => m.id === one.id,
+        )?.sharedContacts,
+      ).toEqual(['email', 'phone', 'telegram']);
+      const reply = (
+        await db.sonarPool.query(
+          "insert into conversations(company_id,campaign_id,account_id,channel,peer_value,form_reply_match) values($1,$2,$3,'email','reply@example.invalid',$4) returning id",
+          [
+            ids.company,
+            ids.campaign,
+            fallback[0].id,
+            { state: 'bound', formMessageId: one.id },
+          ],
+        )
+      ).rows[0];
+      for (const [index, body] of ['First reply', 'Second reply'].entries())
+        await db.sonarPool.query(
+          "insert into messages(conversation_id,direction,source,channel,to_value,subject,body,status,idempotency_key,created_at) values($1,'in','inbound','email','default@example.invalid','',$2,'delivered',$3,$4)",
+          [
+            reply.id,
+            body,
+            randomUUID(),
+            new Date(now.getTime() + index * 1000),
+          ],
+        );
+      const replied = (
+        await forms.listFormMessages({ status: 'replied' })
+      ).find((m) => m.id === one.id);
+      expect(replied?.replies).toBe(2);
+      expect(replied?.replyConversations).toHaveLength(1);
+      expect(replied?.replyConversations[0]?.lastMessage).toBe('Second reply');
       expect(await forms.getFormScreenshot(one.id, 'before')).toEqual(
         Buffer.from('before'),
       );
@@ -260,14 +373,26 @@ it.skipIf(!enabled)(
         [account],
       );
       expect(
-        await send(captcha.id, async () => ({
-          status: 'awaiting_manual',
-          reasonUk: 'Потрібна капча',
-        })),
+        await send(captcha.id, async (request, controls) => {
+          await controls.onFilled({
+            body: `${request.body}\n\nЗв’язатися: телефон ${request.phone}, Telegram ${request.telegram}`,
+            sharedContacts: ['email', 'phone', 'telegram'],
+          });
+          return { status: 'awaiting_manual', reasonUk: 'Потрібна капча' };
+        }),
       ).toMatchObject({ status: 'paused' });
       expect(
         (await forms.listManualFormMessages()).some((m) => m.id === captcha.id),
       ).toBe(true);
+      await set('contact.name', 'Changed after attempt');
+      const manualSnapshot = (await forms.listManualFormMessages()).find(
+        (m) => m.id === captcha.id,
+      );
+      expect(manualSnapshot).toMatchObject({
+        senderName: 'Test Sender',
+        sharedContacts: ['email', 'phone', 'telegram'],
+        body: 'Stub only\n\nЗв’язатися: телефон +380501234567, Telegram @sonar_team',
+      });
       expect(await send(captcha.id, sender)).toMatchObject({
         status: 'paused',
       });
@@ -301,6 +426,32 @@ it.skipIf(!enabled)(
       );
       const approval = await create();
       expect(approval.status).toBe('awaiting_approval');
+      const { getInbox } = await import('./outreach.js');
+      const { getConversationChat } = await import('./inbound.js');
+      const {
+        rows: [approvalMessage],
+      } = await db.sonarPool.query<{ conversationId: string }>(
+        'select conversation_id as "conversationId" from messages where id=$1',
+        [approval.id],
+      );
+      const conversationId = approvalMessage!.conversationId;
+      expect(
+        (await getInbox({ campaignId: ids.campaign })).conversations,
+      ).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ channel: 'form' })]),
+      );
+      expect((await getInbox({ conversationId })).conversations).toEqual([
+        expect.objectContaining({ id: conversationId, channel: 'form' }),
+      ]);
+      expect(await getConversationChat(conversationId)).toMatchObject({
+        conversation: { id: conversationId, channel: 'form' },
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            id: approval.id,
+            status: 'awaiting_approval',
+          }),
+        ]),
+      });
       expect(await send(approval.id, sender)).toMatchObject({
         status: 'skipped',
       });

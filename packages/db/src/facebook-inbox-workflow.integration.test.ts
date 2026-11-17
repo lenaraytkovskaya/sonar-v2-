@@ -106,7 +106,12 @@ beforeAll(async () => {
     [JSON.stringify({ start: 0, end: 24, days: [0, 1, 2, 3, 4, 5, 6] })],
   );
   await tasks.boss.start();
-  for (const name of ['ai.inbound', 'ai.reply', 'message.send'])
+  for (const name of [
+    'form.reply.match',
+    'ai.inbound',
+    'ai.reply',
+    'message.send',
+  ])
     await tasks.boss.createQueue(name);
 });
 it.skipIf(!enabled)(

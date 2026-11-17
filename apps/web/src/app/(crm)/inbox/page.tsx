@@ -1,11 +1,14 @@
 import { redirect } from 'next/navigation';
 import { validId } from '@/lib/api-access';
 import { inboxFilters } from '@/lib/inbox-filters';
+import { FormInbox } from '@/components/form-inbox';
 import { Inbox } from '@/components/inbox';
 export default async function Page({
   searchParams,
 }: {
   searchParams: Promise<{
+    tab?: string;
+    form?: string;
     campaignId?: string;
     channel?: string;
     status?: string;
@@ -25,6 +28,17 @@ export default async function Page({
     ).catch(() => null);
     if (conversationId) redirect(`/inbox?conversation=${conversationId}`);
   }
+  if (query.tab === 'forms' || query.channel === 'form') {
+    const { listFormMessages } = await import('@sonar/db/forms');
+    const forms = await listFormMessages();
+    return (
+      <FormInbox
+        initial={forms}
+        selectedId={validId(query.form) ? query.form : forms[0]?.id}
+        explicitSelection={validId(query.form)}
+      />
+    );
+  }
   const filters = inboxFilters(query);
   const { getInbox } = await import('@sonar/db/outreach');
   const { getConversationChat } = await import('@sonar/db/inbound');
@@ -33,6 +47,15 @@ export default async function Page({
     ? query.conversation
     : inbox.conversations[0]?.id;
   const chat = selectedId ? await getConversationChat(selectedId) : null;
+  if (chat?.conversation?.channel === 'form') {
+    const { listFormMessages } = await import('@sonar/db/forms');
+    const message = (await listFormMessages()).find(
+      (row) => row.conversationId === selectedId,
+    );
+    redirect(
+      message ? `/inbox?tab=forms&form=${message.id}` : '/inbox?tab=forms',
+    );
+  }
   return (
     <Inbox
       initial={inbox}

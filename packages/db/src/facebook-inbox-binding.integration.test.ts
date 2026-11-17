@@ -84,6 +84,7 @@ beforeAll(async () => {
   tasks = await import('./tasks.js');
   await tasks.boss.start();
   await tasks.boss.createQueue('ai.inbound');
+  await tasks.boss.createQueue('form.reply.match');
 });
 const paths = ['known', 'new', 'bound'] as const;
 const histories = [
