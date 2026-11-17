@@ -486,10 +486,10 @@ export async function listSocialAccounts(
     (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
     a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
     a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
-    coalesce(array(select key from jsonb_each(coalesce(a.settings->'failureShots','{}'::jsonb)) shot(key,value) order by (value->>'at')::timestamptz desc),array[]::text[]) as "failureShotKinds",
+    case when $1::uuid is null or a.owner_id=$1::uuid then coalesce(array(select key from jsonb_each(coalesce(a.settings->'failureShots','{}'::jsonb)) shot(key,value) order by (value->>'at')::timestamptz desc),array[]::text[]) else array[]::text[] end as "failureShotKinds",
     a.settings->'device' as device,a.settings->>'deviceSource' as "deviceSource",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
-    from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') and ($1::uuid is null or a.owner_id=$1::uuid) order by a.name,a.id`,
+    from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
   );
   return rows;
