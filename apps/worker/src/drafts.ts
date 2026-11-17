@@ -72,10 +72,14 @@ export async function runOutreachDraft(
   const { config: _config, ...untrusted } = data;
   void _config;
   const messages = [
-    { role: 'system' as const, content: config['draft.prompt'] },
+    {
+      role: 'system' as const,
+      content: config['draft.prompt'],
+    },
     {
       role: 'user' as const,
       content: JSON.stringify({
+        sender: data.sender ?? { name: '' },
         untrusted_data: untrusted,
         requested_output: {
           channel: data.channel,

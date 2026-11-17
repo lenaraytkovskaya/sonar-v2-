@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { findMessagePlaceholder } from '@sonar/core';
 import type { getCompanyChat } from '@sonar/db/outreach';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
@@ -14,6 +15,7 @@ import {
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Callout } from './ui/layout';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
 import { useMessageDraft } from './use-message-draft';
@@ -154,6 +156,7 @@ export function Draft({
 }) {
   const draft = useMessageDraft(message);
   const { subject, body } = draft.state.value;
+  const placeholder = findMessagePlaceholder(`${subject}\n${body}`);
   const busy = useRef(false);
   const alive = useRef(true);
   const latest = useRef(draft);
@@ -181,7 +184,13 @@ export function Draft({
   const changed = !sameDraft(draft.state.value, draft.state.base);
   const showEditor = editable && !blocked;
   const proceed = async (action: string) => {
-    if (busy.current || pending || draft.conflict) return;
+    if (
+      busy.current ||
+      pending ||
+      draft.conflict ||
+      (action !== 'save' && placeholder)
+    )
+      return;
     busy.current = true;
     const submitted = normalizedDraft(draft.state.value);
     try {
@@ -311,6 +320,11 @@ export function Draft({
               className="w-full rounded-lg border border-border bg-surface p-3"
             />
             <AiAssist disabled={pending} text={body} onApply={setBody} />
+            {placeholder && (
+              <Callout tone="err">
+                {uk.outreach.placeholder(placeholder)}
+              </Callout>
+            )}
           </div>
           {manual && !onUseText && (
             <p className="text-xs text-muted-foreground">
@@ -340,7 +354,9 @@ export function Draft({
                   {uk.outreach.copy}
                 </Button>
                 <Button
-                  disabled={pending || draft.conflict || !body.trim()}
+                  disabled={
+                    pending || draft.conflict || !!placeholder || !body.trim()
+                  }
                   onClick={() =>
                     onUseText ? onUseText(body) : void proceed('manual')
                   }
@@ -355,6 +371,7 @@ export function Draft({
                 disabled={
                   pending ||
                   draft.conflict ||
+                  !!placeholder ||
                   !body.trim() ||
                   (message.channel === 'email' && !subject.trim())
                 }

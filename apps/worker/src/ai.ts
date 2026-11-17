@@ -33,7 +33,7 @@ export async function runAiAssist(
     };
   client ??= createOpenRouterClient(process.env.OPENROUTER_API_KEY ?? '');
   const { rows } = await sonarPool.query(
-    "select key,value from settings where key like 'ai.%' or key='company.about'",
+    "select key,value from settings where key like 'ai.%' or key in ('company.about','contact.name')",
   );
   const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   const model = (config['ai.models'] as TextModel[] | undefined)?.find(
@@ -65,7 +65,20 @@ export async function runAiAssist(
     {
       role: 'user' as const,
       content: conversationAction
-        ? JSON.stringify({ context, untrusted_data: input.text })
+        ? JSON.stringify({
+            context,
+            ...(input.action === 'reply'
+              ? {
+                  sender: {
+                    name:
+                      typeof config['contact.name'] === 'string'
+                        ? config['contact.name'].trim()
+                        : '',
+                  },
+                }
+              : {}),
+            untrusted_data: input.text,
+          })
         : `${instruction} ${input.instruction ?? ''}\nContext: ${context}\nText: ${input.text}`,
     },
   ];

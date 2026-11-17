@@ -1,7 +1,7 @@
 import { enqueueFormReplyMatch } from './form-replies.js';
 import { messageHistoryOrder } from './message-history.js';
 import { createHash } from 'node:crypto';
-import { socialTarget } from '@sonar/core';
+import { findMessagePlaceholder, socialTarget } from '@sonar/core';
 import { normalizeTelegramRecipient } from '@sonar/core/telegram';
 import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
 import { sonarPool } from './index.js';
@@ -635,6 +635,12 @@ async function reply(
     /[\r\n]/.test(draft.subject ?? '')
   )
     invalid('Вкажіть коректний текст відповіді.');
+  const placeholder =
+    queued && findMessagePlaceholder(`${draft.subject ?? ''}\n${draft.body}`);
+  if (placeholder)
+    invalid(
+      `У тексті є заглушка «${placeholder}» — замініть її перед надсиланням.`,
+    );
   return transaction(async (c) => {
     const v = await lockConversation(c, conversationId);
     conversationId = v.id;
