@@ -68,6 +68,7 @@ const googlePlaceSchema = z.object({
           .object({
             longText: z.string().optional(),
             shortText: z.string().optional(),
+            languageCode: z.string().optional(),
             types: z.array(z.string()).optional().default([]),
           })
           .safeParse(component);
@@ -111,6 +112,64 @@ export type GoogleSearch = {
   pageSize: 20;
   pageToken?: string;
 };
+// Match locality aliases against the campaign city without replacing a different city.
+export function googleCity(
+  components: GooglePage['places'][number]['addressComponents'],
+  campaignCity: string,
+  languageCode: string,
+): string {
+  const localities =
+    components?.filter((c) => c.types.includes('locality')) ?? [];
+  const locality =
+    localities.find(
+      (c) => c.languageCode?.split('-')[0] === languageCode.split('-')[0],
+    ) ?? localities[0];
+  const value = locality?.longText?.trim();
+  if (!value) return campaignCity;
+  const letters: Record<string, string> = {
+    а: 'a',
+    б: 'b',
+    в: 'v',
+    г: 'h',
+    ґ: 'g',
+    д: 'd',
+    е: 'e',
+    є: 'ie',
+    ж: 'zh',
+    з: 'z',
+    и: 'y',
+    і: 'i',
+    ї: 'i',
+    й: 'i',
+    к: 'k',
+    л: 'l',
+    м: 'm',
+    н: 'n',
+    о: 'o',
+    п: 'p',
+    р: 'r',
+    с: 's',
+    т: 't',
+    у: 'u',
+    ф: 'f',
+    х: 'kh',
+    ц: 'ts',
+    ч: 'ch',
+    ш: 'sh',
+    щ: 'shch',
+    ь: '',
+    ю: 'iu',
+    я: 'ia',
+  };
+  const key = (city: string) =>
+    city
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .replace(/[а-яіїєґ]/gu, (letter) => letters[letter] ?? letter)
+      .replace(/[^\p{L}\d]/gu, '');
+  return key(value) === key(campaignCity) ? campaignCity : value;
+}
 export function normalizeWebsite(
   raw: string | undefined,
 ): { website: string; domain: string } | null {

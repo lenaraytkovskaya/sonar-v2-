@@ -12,6 +12,7 @@ export type OutreachChannel = (typeof outreachChannels)[number];
 export function selectOutreachContacts<
   T extends { id: string; kind: string; normalized: string; rank: number },
 >(contacts: T[], channels: Record<string, boolean>) {
+  if (!Object.values(channels).some((enabled) => enabled === true)) return [];
   const seen = new Set<string>();
   return contacts
     .filter(
@@ -30,6 +31,15 @@ export function selectOutreachContacts<
     .slice(0, 3);
 }
 
+export class OutreachDraftError extends Error {
+  constructor(
+    readonly code:
+      'invalid_json' | 'invalid_shape' | 'email_subject' | 'short_length',
+  ) {
+    super(code);
+  }
+}
+
 export function parseOutreachDraft(
   text: string,
   channel: OutreachChannel,
@@ -39,22 +49,30 @@ export function parseOutreachDraft(
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '');
-  const draft = z
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new OutreachDraftError('invalid_json');
+  }
+  const parsed = z
     .object({
       subject: z.string().trim().max(998).optional(),
       body: z.string().trim().min(1).max(10000),
     })
     .strict()
-    .parse(JSON.parse(json));
+    .safeParse(value);
+  if (!parsed.success) throw new OutreachDraftError('invalid_shape');
+  const draft = parsed.data;
   if (channel === 'email' && (!draft.subject || /[\r\n]/.test(draft.subject)))
-    throw new Error('Email requires a single-line subject');
+    throw new OutreachDraftError('email_subject');
   if (
     (channel === 'telegram' ||
       channel === 'whatsapp' ||
       channel === 'social') &&
     draft.body.length > shortMaxLength
   )
-    throw new Error('Short draft exceeds configured length');
+    throw new OutreachDraftError('short_length');
   return {
     subject: channel === 'email' ? draft.subject! : '',
     body: draft.body,

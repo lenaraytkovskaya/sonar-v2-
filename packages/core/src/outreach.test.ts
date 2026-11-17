@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
-import { findMessagePlaceholder, parseOutreachDraft } from './outreach.js';
+import {
+  findMessagePlaceholder,
+  parseOutreachDraft,
+  selectOutreachContacts,
+} from './outreach.js';
 
 it('requires an email subject and preserves the company language', () => {
   expect(
@@ -87,4 +91,26 @@ it('returns the exact first placeholder and allows ordinary punctuation and nume
     '[unclosed',
   ])
     expect(findMessagePlaceholder(text)).toBeNull();
+});
+
+it('does not select social drafts when every campaign channel is disabled', () => {
+  expect(
+    selectOutreachContacts(
+      [
+        {
+          id: 'social',
+          kind: 'social',
+          normalized: 'https://instagram.com/company/',
+          rank: 50,
+        },
+        {
+          id: 'email',
+          kind: 'email',
+          normalized: 'company@example.org',
+          rank: 100,
+        },
+      ],
+      { email: false, telegram: false, whatsapp: false, forms: false },
+    ),
+  ).toEqual([]);
 });

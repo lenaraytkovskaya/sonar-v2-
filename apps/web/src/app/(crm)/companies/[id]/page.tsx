@@ -30,6 +30,7 @@ const kindOrder = [
   'whatsapp',
   'viber',
   'form',
+  'booking',
   'social',
   'website',
 ];
@@ -108,6 +109,28 @@ function contactHref(contact: {
   if (contact.kind === 'email') return 'mailto:' + contact.normalized;
   if (contact.kind === 'phone') return 'tel:' + contact.normalized;
   return normalizeWebsite(contact.value)?.website;
+}
+
+function formatOpeningHours(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value))
+    return value.map(formatOpeningHours).filter(Boolean).join('; ');
+  if (!value || typeof value !== 'object') return '';
+  const hours = value as Record<string, unknown>;
+  if (typeof hours.opens !== 'string' || typeof hours.closes !== 'string')
+    return '';
+  const days = [hours.dayOfWeek]
+    .flat()
+    .filter((day): day is string => typeof day === 'string')
+    .map((day) => {
+      const name = day.split('/').at(-1) ?? day;
+      return (
+        uk.company.weekdays[name as keyof typeof uk.company.weekdays] ?? name
+      );
+    });
+  return [days.join(', '), `${hours.opens}–${hours.closes}`]
+    .filter(Boolean)
+    .join(': ');
 }
 
 export default async function Page({
@@ -200,6 +223,11 @@ export default async function Page({
       Number(a.campaign_id === selectedCampaign),
   );
   const mainScore = orderedScores[0];
+  const mainAnalysis =
+    analyses.find(
+      (analysis) =>
+        analysis.campaign_id === (selectedCampaign ?? mainScore?.campaign_id),
+    ) ?? (!selectedCampaign ? analyses[0] : undefined);
   const manualMaps = facts.some(
     (f) => f.kind === 'manual_source' && f.value?.source === 'googleMaps',
   );
@@ -211,6 +239,16 @@ export default async function Page({
       (!f.expires_at || new Date(f.expires_at) > new Date()),
   );
   const google = googleFact?.value;
+  const openingHours =
+    google?.regularOpeningHours?.weekdayDescriptions?.join('; ') ||
+    formatOpeningHours(
+      facts.find(
+        (fact) =>
+          fact.kind === 'opening_hours' &&
+          fact.source === 'website' &&
+          (!fact.expires_at || new Date(fact.expires_at) > new Date()),
+      )?.value,
+    );
   const googlePhone = contacts.find((contact) => contact.kind === 'phone');
   const website = normalizeWebsite(c.website ?? undefined);
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
@@ -424,6 +462,23 @@ export default async function Page({
             <p className="text-sm text-muted-foreground">{uk.scoring.empty}</p>
           )}
         </Section>
+        <Section title={uk.company.fit}>
+          <Score
+            value={mainAnalysis?.result.fit ?? null}
+            label={uk.company.fit}
+          />
+          {mainAnalysis && (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {mainAnalysis.result.fit_reason}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {mainAnalysis.campaign_name} ·{' '}
+                <LocalTime value={mainAnalysis.created_at} />
+              </p>
+            </>
+          )}
+        </Section>
         <Section title={uk.scoring.top}>
           {mainScore ? (
             <ul className="space-y-1 text-sm">
@@ -549,13 +604,8 @@ export default async function Page({
                       },
                       {
                         label: uk.company.hours,
-                        value:
-                          google?.regularOpeningHours?.weekdayDescriptions?.join(
-                            '; ',
-                          ) ?? '—',
-                        hidden:
-                          !google?.regularOpeningHours?.weekdayDescriptions
-                            ?.length,
+                        value: openingHours || '—',
+                        hidden: !openingHours,
                       },
                     ]}
                   />
@@ -892,6 +942,7 @@ export default async function Page({
                         },
                         { key: 'social', kinds: ['social'] },
                         { key: 'forms', kinds: ['form'] },
+                        { key: 'booking', kinds: ['booking'] },
                         { key: 'websites', kinds: ['website'] },
                       ] as const
                     ).map(({ key, kinds }) => {

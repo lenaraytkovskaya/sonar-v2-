@@ -12,6 +12,7 @@ const channelOrder = [
   'whatsapp',
   'viber',
   'form',
+  'booking',
   'social',
 ] as const;
 
@@ -31,6 +32,7 @@ export function CompanyTable({
           <tr>
             <th className="px-4 py-3 font-medium">{t.tableName}</th>
             <th className="px-3 py-3 font-medium">{t.score}</th>
+            <th className="px-3 py-3 font-medium">{t.fit}</th>
             <th className="px-3 py-3 font-medium">{t.channels}</th>
             <th className="px-3 py-3 font-medium">{t.tableContact}</th>
             <th className="px-3 py-3 font-medium">{t.tableRating}</th>
@@ -74,6 +76,9 @@ export function CompanyTable({
               </td>
               <td className="px-3 py-3">
                 <Score value={c.score} compact />
+              </td>
+              <td className="px-3 py-3">
+                <Score value={c.fit} compact label={t.fit} />
               </td>
               <td className="px-3 py-3">
                 <span

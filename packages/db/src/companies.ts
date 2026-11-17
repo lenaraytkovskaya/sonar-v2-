@@ -62,6 +62,7 @@ export type CompanyRow = {
   primary_type: string | null;
   rating: string | null;
   score: number | null;
+  fit: number | null;
   website: string | null;
   domain: string | null;
   status: string;
@@ -112,10 +113,18 @@ export async function listCompanies(
     throw Error('Invalid pagination');
   const parsedFilters = companyFiltersSchema.parse(filters);
   const { sql, values, scoreSql } = companyWhere(parsedFilters);
-  const sort =
-    parsedFilters.sort ?? (parsedFilters.campaignId ? 'score' : 'newest');
-  const order = `${sort === 'score' ? 't.score desc nulls last,' : ''}t.created_at desc,t.id`;
-  const windowOrder = `${sort === 'score' ? scoreSql + ' desc nulls last,' : ''}c.created_at desc,c.id`;
+  const sort = parsedFilters.sort ?? 'quality';
+  const qualityOrder = 'fit_qualified desc nulls last,fit desc nulls last,';
+  const order = `${sort === 'quality' ? qualityOrder : ''}${sort !== 'newest' ? 'score desc nulls last,' : ''}created_at desc,id`;
+  const windowOrder = `${sort === 'quality' ? 'a.fit_qualified desc nulls last,a.fit desc nulls last,' : ''}${sort !== 'newest' ? scoreSql + ' desc nulls last,' : ''}c.created_at desc,c.id`;
+  const analysisJoin = `left join lateral (
+    select max(latest.fit) as fit,bool_or(latest.fit>=latest.min_score) as fit_qualified from (
+      select distinct on (analysis.campaign_id) (analysis.result->>'fit')::float8 as fit,campaign.min_score
+      from analyses analysis join campaigns campaign on campaign.id=analysis.campaign_id
+      where analysis.company_id=c.id${parsedFilters.campaignId ? ' and analysis.campaign_id=$1' : ''}
+      order by analysis.campaign_id,analysis.created_at desc,analysis.id desc
+    ) latest
+  ) a on true`;
   // Branches of one chain share the company's own domain; listings on platforms never group.
   const platform = platformSql;
   const chainKey = groupChains
@@ -128,7 +137,7 @@ export async function listCompanies(
     values,
   );
   const { rows } = await connection.query<CompanyRow>(
-    `select t.* from (select c.id,c.name,c.city,c.primary_type,c.rating,c.ratings_count,${scoreSql} as score,c.website,c.domain,c.status,c.created_at,
+    `select t.* from (select c.id,c.name,c.city,c.primary_type,c.rating,c.ratings_count,${scoreSql} as score,a.fit,a.fit_qualified,c.website,c.domain,c.status,c.created_at,
  ${platform} as platform,${chainKey} as chain_key,
  row_number() over (partition by ${chainKey} order by ${windowOrder}) as chain_rank,
  count(*) over (partition by ${chainKey})::int as chain_size,
@@ -137,7 +146,7 @@ export async function listCompanies(
  array(select distinct p.kind from contacts p where p.company_id=c.id) as channels,
  exists(select 1 from company_facts r where r.company_id=c.id and r.kind='registry_entity') as registry,
  coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'name',a.name) order by a.name) from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=c.id),'[]') as campaigns
- from companies c ${sql}) t where t.chain_rank=1 order by ${order.replace(/c\./g, 't.')} limit $${values.length + 1} offset $${values.length + 2}`,
+ from companies c ${analysisJoin} ${sql}) t where t.chain_rank=1 order by ${order} limit $${values.length + 1} offset $${values.length + 2}`,
     [...values, pageSize, (page - 1) * pageSize],
   );
   const chains = rows.filter((row) => row.chain_size > 1);

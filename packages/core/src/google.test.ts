@@ -3,6 +3,7 @@ import {
   createGoogleClient,
   createGoogleClientRaw,
   googlePageSchema,
+  googleCity,
   normalizeWebsite,
   profileSchema,
   profilesSchema,
@@ -51,7 +52,7 @@ it('keeps places when address components have missing or malformed fields', () =
   });
   expect(page.places).toHaveLength(1);
   expect(page.places[0]?.addressComponents).toEqual([
-    { longText: 'Kyiv', types: [] },
+    { longText: 'Kyiv', languageCode: 'uk', types: [] },
     { longText: 'Ukraine', shortText: 'UA', types: ['country'] },
   ]);
 });
@@ -116,4 +117,31 @@ it('keeps website in default contacts and prevents Enterprise fields in cheap pr
       .success,
   ).toBe(false);
   expect(profilesSchema.safeParse([profile, profile]).success).toBe(false);
+});
+
+it('normalizes locality aliases to the campaign language and keeps a different locality', () => {
+  const components = [
+    { longText: 'Dnipro', languageCode: 'en', types: ['locality'] },
+  ];
+  expect(googleCity(components, 'Дніпро', 'uk')).toBe('Дніпро');
+  expect(
+    googleCity([{ longText: 'Kyiv', types: ['locality'] }], 'Київ', 'uk'),
+  ).toBe('Київ');
+  expect(
+    googleCity([{ longText: 'Lviv', types: ['locality'] }], 'Львів', 'uk'),
+  ).toBe('Львів');
+  expect(
+    googleCity(
+      [
+        { longText: 'Paris', types: ['locality'] },
+        { longText: 'Париж', languageCode: 'uk', types: ['locality'] },
+      ],
+      'Дніпро',
+      'uk',
+    ),
+  ).toBe('Париж');
+  expect(
+    googleCity([{ longText: 'Potsdam', types: ['locality'] }], 'Berlin', 'de'),
+  ).toBe('Potsdam');
+  expect(googleCity(undefined, 'Warszawa', 'pl')).toBe('Warszawa');
 });

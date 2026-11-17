@@ -148,7 +148,7 @@ it.skipIf(!enabled)(
       });
       expect((await listCompanies({ q: prefix, minScore: 95 })).total).toBe(1);
       expect((await listCompanies({ q: prefix })).companies[0]?.id).toBe(
-        ids[26],
+        ids[0],
       );
       const detail = await getCompany(ids[0]!);
       expect(
@@ -170,6 +170,35 @@ it.skipIf(!enabled)(
         exported.push(row.id);
       expect(exported).toHaveLength(27);
       expect(new Set(exported).size).toBe(27);
+      await sonarPool.query(
+        "insert into analyses(company_id,campaign_id,version,model,cost_usd,result,created_at) values ($1,$5,'old','stub',0,'{\"fit\":100}','2026-01-01'),($1,$5,'new','stub',0,'{\"fit\":20}','2026-01-02'),($2,$5,'new','stub',0,'{\"fit\":60}','2026-01-02'),($3,$5,'new','stub',0,'{\"fit\":60}','2026-01-02'),($4,$5,'new','stub',0,'{\"fit\":80}','2026-01-02'),($1,$6,'new','stub',0,'{\"fit\":99}','2026-01-02')",
+        [...ids.slice(0, 4), campaignId, otherCampaignId],
+      );
+      const quality = await listCompanies({ campaignId }, 1, 100);
+      expect(
+        quality.companies
+          .slice(0, 4)
+          .map((row) => [row.id, row.fit, row.score]),
+      ).toEqual([
+        [ids[3], 80, 0],
+        ...tied.map((id) => [id, 60, 90]),
+        [ids[0], 20, 10],
+      ]);
+      expect((await listCompanies({ q: prefix })).companies[0]).toMatchObject({
+        id: ids[0],
+        fit: 99,
+      });
+      await sonarPool.query('update campaigns set min_score=100 where id=$1', [
+        otherCampaignId,
+      ]);
+      expect((await listCompanies({ q: prefix })).companies[0]).toMatchObject({
+        id: ids[3],
+        fit: 80,
+      });
+      expect(
+        (await listCompanies({ campaignId, sort: 'score' })).companies[0]
+          ?.score,
+      ).toBe(90);
       const {
         rows: [platforms],
       } = await sonarPool.query(
@@ -203,6 +232,10 @@ it.skipIf(!enabled)(
       await interrupted.next();
       await interrupted.return();
     } finally {
+      await sonarPool.query(
+        'delete from analyses where company_id=any($1::uuid[])',
+        [ids],
+      );
       await sonarPool.query(
         'delete from company_scores where company_id=any($1::uuid[])',
         [ids],

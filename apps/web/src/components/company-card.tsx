@@ -9,6 +9,7 @@ export type CompanyCardRow = {
   primary_type: string | null;
   rating: string | null;
   score: number | null;
+  fit: number | null;
   website: string | null;
   status: keyof typeof uk.company.statuses;
   created_at: string;
@@ -30,6 +31,7 @@ const channelOrder = [
   'whatsapp',
   'viber',
   'form',
+  'booking',
   'social',
 ] as const;
 export function CompanyCard({
@@ -66,7 +68,20 @@ export function CompanyCard({
             ) : null}
           </p>
         </div>
-        <Score value={c.score} compact />
+        <div className="flex gap-3">
+          <div>
+            <p className="mb-1 text-xs text-muted-foreground">
+              {uk.company.score}
+            </p>
+            <Score value={c.score} compact />
+          </div>
+          <div>
+            <p className="mb-1 text-xs text-muted-foreground">
+              {uk.company.fit}
+            </p>
+            <Score value={c.fit} compact label={uk.company.fit} />
+          </div>
+        </div>
       </div>
       <div className="flex flex-wrap gap-1" aria-label={uk.company.channels}>
         {channelOrder

@@ -85,6 +85,29 @@ it.skipIf(!enabled)(
           },
         ],
       );
+      await db.sonarPool.query(
+        'update campaigns set channels=\'{"email":false,"telegram":false,"whatsapp":false,"forms":false}\' where id=$1',
+        [campaignId],
+      );
+      expect(
+        await outreach.enqueueOutreachDrafts(
+          companyId,
+          campaignId,
+          analysis.id,
+        ),
+      ).toEqual([]);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as count from tasks where type='ai.drafts' and payload->>'campaignId'=$1",
+            [campaignId],
+          )
+        ).rows[0].count,
+      ).toBe(0);
+      await db.sonarPool.query(
+        'update campaigns set channels=\'{"email":true,"forms":true}\' where id=$1',
+        [campaignId],
+      );
       const first = await outreach.enqueueOutreachDrafts(
         companyId,
         campaignId,
