@@ -108,6 +108,36 @@ export async function recordInbound(input: InboundInput) {
           input.senderPhone,
         )
       ).conversation;
+      const companyId = conversation?.company_id;
+      if (companyId) {
+        const { rows: contacts } = await c.query(
+          `select ct.id,ct.normalized,coalesce((select a.country_code from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=co.id order by cc.added_at desc,a.id limit 1),co.country_code) as country_code from contacts ct join companies co on co.id=ct.company_id where ct.company_id=$1 and ct.kind in ('whatsapp','phone') and ct.meta ? 'whatsapp_unavailable' for update of ct`,
+          [companyId],
+        );
+        const matching = contacts.filter(
+          (contact) =>
+            normalizeWhatsAppRecipient(
+              contact.normalized,
+              contact.country_code,
+            ) === sender,
+        );
+        const cleared = await c.query(
+          "update contacts set meta=meta-'whatsapp_unavailable' where id=any($1::uuid[]) and meta ? 'whatsapp_unavailable' returning id",
+          [matching.map((contact) => contact.id)],
+        );
+        if (cleared.rowCount)
+          await logActivity(
+            'contact.whatsapp_rechecked',
+            'company',
+            companyId,
+            null,
+            {
+              contactIds: cleared.rows.map((contact) => contact.id),
+              source: 'inbound',
+            },
+            c,
+          );
+      }
     } else {
       const refs = [input.inReplyTo, ...(input.references ?? [])]
         .filter((r): r is string => !!r)
@@ -728,9 +758,9 @@ async function reply(
       last.account_id = account.id;
     } else if (v.channel === 'social' && !receivingMeta) last.account_id = null;
     const subject =
-      draft.subject?.trim() ||
-      last.subject ||
-      (v.channel === 'email' ? 'Re:' : '');
+      v.channel === 'email'
+        ? draft.subject?.trim() || last.subject || 'Re:'
+        : '';
     const {
       rows: [m],
     } = await c.query(

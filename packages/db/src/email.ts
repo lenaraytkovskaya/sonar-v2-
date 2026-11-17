@@ -62,6 +62,86 @@ export interface EmailAccount {
   nextSendAt: Date | null;
   ownerName: string | null;
 }
+
+export async function getLastResendEvent() {
+  const { rows } = await sonarPool.query(
+    "select value #>> '{}' as value from settings where key='email.resend.last_event'",
+  );
+  return rows[0]?.value ? new Date(rows[0].value as string) : null;
+}
+
+export async function recordResendEvent(
+  type: 'email.delivered' | 'email.bounced' | 'email.complained',
+  providerId: string,
+  occurredAt: Date,
+) {
+  return transaction(async (c) => {
+    const status = type === 'email.delivered' ? 'delivered' : 'failed';
+    const reason =
+      type === 'email.bounced'
+        ? 'Resend повідомив про недоставлення листа.'
+        : type === 'email.complained'
+          ? 'Отримано скаргу на лист у Resend.'
+          : null;
+    const { rowCount } = await c.query(
+      "update messages set status=$2,reason_uk=$3 where provider_id=$1 and channel='email' and direction='out' and status in ('sent','delivered','failed')",
+      [providerId, status, reason],
+    );
+    await c.query(
+      `insert into settings(key,value) values('email.resend.last_event',to_jsonb($1::text))
+       on conflict(key) do update set value=excluded.value,updated_at=now()`,
+      [occurredAt.toISOString()],
+    );
+    return rowCount ?? 0;
+  });
+}
+
+export async function retryWhatsAppContact(
+  companyId: string,
+  contactId: string,
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const { rows } = await c.query(
+      `select ct.id,ct.normalized,coalesce((select a.country_code from campaigns a join campaign_companies cc on cc.campaign_id=a.id where cc.company_id=co.id order by cc.added_at desc,a.id limit 1),co.country_code) as country_code from contacts ct join companies co on co.id=ct.company_id where ct.company_id=$1 and ct.id=$2 and ct.kind in ('phone','whatsapp') for update of ct`,
+      [companyId, contactId],
+    );
+    const selected = rows[0];
+    if (!selected) return false;
+    const normalized = normalizeWhatsAppRecipient(
+      selected.normalized,
+      selected.country_code,
+    );
+    if (!normalized) return false;
+    const { rows: contacts } = await c.query(
+      "select id,normalized,meta from contacts where company_id=$1 and kind in ('phone','whatsapp') and meta ? 'whatsapp_unavailable' for update",
+      [companyId],
+    );
+    const ids = contacts
+      .filter(
+        (contact) =>
+          normalizeWhatsAppRecipient(
+            contact.normalized,
+            selected.country_code,
+          ) === normalized,
+      )
+      .map((contact) => contact.id);
+    const { rowCount } = await c.query(
+      "update contacts set meta=meta-'whatsapp_unavailable' where id=any($1::uuid[])",
+      [ids],
+    );
+    if (rowCount)
+      await logActivity(
+        'contact.whatsapp_rechecked',
+        'company',
+        companyId,
+        userId,
+        { contactIds: ids, source: 'manual' },
+        c,
+      );
+    return Boolean(rowCount);
+  });
+}
 export interface EmailMessage {
   id: string;
   channel: 'email' | 'form' | 'telegram' | 'whatsapp';
@@ -252,6 +332,19 @@ async function whatsappContacts(
     (r) => normalizeWhatsAppRecipient(r.normalized, country) === to,
   );
 }
+function isWhatsAppUnavailable(
+  meta: Record<string, unknown>,
+  now = Date.now(),
+) {
+  const unavailable = meta.whatsapp_unavailable;
+  if (!unavailable || typeof unavailable !== 'object') return false;
+  const at =
+    'at' in unavailable && typeof unavailable.at === 'string'
+      ? unavailable.at
+      : '';
+  const markedAt = Date.parse(at);
+  return !Number.isFinite(markedAt) || markedAt > now - 30 * 86400000;
+}
 export async function isContactBlocked(
   c: Pick<PoolClient, 'query'>,
   companyId: string | null,
@@ -338,13 +431,13 @@ export async function getCompanyMessaging(companyId: string) {
     whatsappRecipients: [
       ...new Set(
         whatsappContacts
-          .filter((r) => !r.meta.whatsapp_unavailable)
+          .filter((r) => !isWhatsAppUnavailable(r.meta))
           .map((r) => normalizeWhatsAppRecipient(r.normalized, r.country_code))
           .filter((v): v is string => !!v),
       ),
     ],
     whatsappUnavailable: whatsappContacts
-      .filter((r) => r.meta.whatsapp_unavailable)
+      .filter((r) => isWhatsAppUnavailable(r.meta))
       .map((r) => ({
         value: String(r.normalized),
         reasonUk: String(r.meta.whatsapp_unavailable.reason_uk),
@@ -435,7 +528,7 @@ export async function createCompanyMessage(
           : channel === 'telegram'
             ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
             : input.toAddress?.trim(),
-    subject = input.subject?.trim() ?? '',
+    subject = channel === 'email' ? (input.subject?.trim() ?? '') : '',
     body = input.body?.trim();
   if (
     (channel === 'email'
@@ -507,7 +600,7 @@ export async function createCompanyMessage(
     const contact =
       channel === 'whatsapp'
         ? (await whatsappContacts(c, input.companyId, to, country)).find(
-            (r) => !r.meta.whatsapp_unavailable,
+            (r) => !isWhatsAppUnavailable(r.meta),
           )
         : channel === 'telegram'
           ? (await telegramContacts(c, input.companyId, to)).find(
@@ -911,10 +1004,17 @@ export async function sendEmailMessage(
         m.to_value,
         m.country_code,
       );
+      const unavailable = contacts.filter(
+        (contact) => contact.meta.whatsapp_unavailable,
+      );
+      const freshUnavailable = unavailable.filter((contact) => {
+        return isWhatsAppUnavailable(contact.meta, now.getTime());
+      });
       if (
         (m.source !== 'reply' && !contacts.length) ||
         (contacts.length > 0 &&
-          contacts.every((r) => r.meta.whatsapp_unavailable))
+          unavailable.length === contacts.length &&
+          freshUnavailable.length === contacts.length)
       )
         return finish(
           terminal(
@@ -1206,6 +1306,28 @@ export async function sendEmailMessage(
           }
         : {}),
     };
+    if (channel === 'whatsapp' && !m.first_attempt_at) {
+      const contacts = await whatsappContacts(
+        c,
+        m.company_id,
+        m.to_value,
+        m.country_code,
+      );
+      const unavailable = contacts.filter(
+        (contact) => contact.meta.whatsapp_unavailable,
+      );
+      if (
+        contacts.length > 0 &&
+        unavailable.length === contacts.length &&
+        unavailable.some(
+          (contact) => !isWhatsAppUnavailable(contact.meta, now.getTime()),
+        )
+      )
+        await c.query(
+          "update contacts set meta=jsonb_set(meta,'{whatsapp_unavailable,at}',to_jsonb($2::text)) where id=any($1::uuid[])",
+          [unavailable.map((contact) => contact.id), now.toISOString()],
+        );
+    }
     if (!m.first_attempt_at && channel !== 'social') {
       await c.query(
         "update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null,rfc_message_id=case when channel='email' then $4 else null end where id=$1",

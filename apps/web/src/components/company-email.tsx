@@ -76,7 +76,7 @@ export function MessageBubble({ message }: { message: Message }) {
           message.status === 'failed' && 'border-err/40',
         )}
       >
-        {message.subject && (
+        {message.channel === 'email' && message.subject && (
           <h3 className="text-sm font-semibold">{message.subject}</h3>
         )}
         <div className="text-sm">
@@ -382,7 +382,7 @@ export function Draft({
         </>
       ) : (
         <>
-          {message.subject && (
+          {message.channel === 'email' && message.subject && (
             <h3 className="font-semibold">{message.subject}</h3>
           )}
           <MessageBody body={message.body} channel={message.channel} />
