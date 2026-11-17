@@ -222,9 +222,8 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
     // The link itself must still identify the exact recipient in the confirmed chat.
     headers = eligibleRecipients[0]!.locator('xpath=ancestor::div[1]');
     if (
-      await headers.evaluate(
-        (element) =>
-          element.matches('main, [role="main"], [role="dialog"]'),
+      await headers.evaluate((element) =>
+        element.matches('main, [role="main"], [role="dialog"]'),
       )
     )
       throw stagedFailure('dialog', 'unconfirmed');

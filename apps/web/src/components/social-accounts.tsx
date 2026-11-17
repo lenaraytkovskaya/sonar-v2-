@@ -22,6 +22,68 @@ import {
 } from './account-health';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
+function ownerDeviceDescription(account: Account) {
+  const device = account.device;
+  if (account.deviceSource !== 'owner_browser' || !device) return;
+  const chrome = device.userAgent.match(/Chrome\/(\d+)/);
+  const platform = device.extraHTTPHeaders?.['sec-ch-ua-platform']?.replace(
+    /^"|"$/g,
+    '',
+  );
+  const operatingSystem =
+    platform ||
+    (/Windows/.test(device.userAgent)
+      ? 'Windows'
+      : /Android/.test(device.userAgent)
+        ? 'Android'
+        : /iPhone|iPad/.test(device.userAgent)
+          ? 'iOS'
+          : /Macintosh/.test(device.userAgent)
+            ? 'macOS'
+            : /Linux/.test(device.userAgent)
+              ? 'Linux'
+              : undefined);
+  const dimensions = device.screen ?? device.viewport;
+  return [
+    chrome ? `Chrome ${chrome[1]}` : undefined,
+    operatingSystem,
+    `${dimensions.width}×${dimensions.height}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+function ownerBrowserParameters() {
+  const userAgentData = (
+    navigator as Navigator & {
+      userAgentData?: {
+        brands: { brand: string; version: string }[];
+        platform: string;
+        mobile: boolean;
+      };
+    }
+  ).userAgentData;
+  return {
+    userAgent: navigator.userAgent,
+    ...(userAgentData
+      ? {
+          userAgentData: {
+            brands: userAgentData.brands.map(({ brand, version }) => ({
+              brand,
+              version,
+            })),
+            platform: userAgentData.platform,
+            mobile: userAgentData.mobile,
+          },
+        }
+      : {}),
+    screen: { width: window.screen.width, height: window.screen.height },
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    devicePixelRatio: window.devicePixelRatio,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    language: navigator.language,
+    languages: [...navigator.languages],
+  };
+}
 /** "Проксі 7 · sol.ua-proxy.net": the number stays, the host makes it recognisable. */
 function proxyName(index: number, labels: string[]) {
   const host = labels[index];
@@ -130,7 +192,9 @@ export function SocialAccounts({
                 : uk.socialAccounts.syncInboxExisting
               : method === 'POST' &&
                   'action' in fields &&
-                  fields.action === 'inboxPolling'
+                  ['inboxPolling', 'updateDevice'].includes(
+                    String(fields.action),
+                  )
                 ? uk.outreach.saved
                 : method === 'POST' && 'action' in fields
                   ? uk.socialAccounts.checkQueued
@@ -198,6 +262,7 @@ export function SocialAccounts({
         )}
         {networkAccounts.map((account) => {
           const needsLogin = account.sessionStatus === 'invalid';
+          const deviceDescription = ownerDeviceDescription(account);
           const statusKey = needsLogin
             ? 'needs_login'
             : account.enabled
@@ -330,6 +395,16 @@ export function SocialAccounts({
                           ]
                         : []),
                       {
+                        kind: 'score',
+                        label: uk.socialAccounts.updateDevice,
+                        onSelect: () =>
+                          void mutate('POST', {
+                            action: 'updateDevice',
+                            id: account.id,
+                            ownerBrowser: ownerBrowserParameters(),
+                          }),
+                      },
+                      {
                         kind: 'edit',
                         label: uk.socialAccounts.edit,
                         separator: true,
@@ -431,6 +506,13 @@ export function SocialAccounts({
                   },
                 ]}
               />
+              {deviceDescription && (
+                <Callout tone="run">
+                  <span className="text-xs">
+                    {uk.socialAccounts.ownerBrowserDevice(deviceDescription)}
+                  </span>
+                </Callout>
+              )}
               {account.loginBlocked && (
                 <Callout tone="err">{uk.socialAccounts.loginBlocked}</Callout>
               )}
@@ -532,6 +614,7 @@ export function SocialAccounts({
                   }
                 : {
                     ...accountFields,
+                    ownerBrowser: ownerBrowserParameters(),
                     ...(cookiesJson.trim()
                       ? { storageStateJson: cookiesJson }
                       : {}),

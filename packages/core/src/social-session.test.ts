@@ -8,6 +8,7 @@ import {
   encryptSocialStorageState,
   encryptSocialProxy,
   generateSocialDevice,
+  socialDeviceFromOwnerBrowser,
   normalizeSocialCookies,
   resolveSocialSession,
   SocialSendError,
@@ -537,6 +538,63 @@ it('generates a desktop fingerprint from the actual browser version and preserve
       proxyUrls,
     ).device,
   ).toEqual(device);
+});
+
+describe('owner browser device capture', () => {
+  const ownerBrowser = {
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+    userAgentData: {
+      brands: [
+        { brand: 'Chromium', version: '157' },
+        { brand: 'Google Chrome', version: '157' },
+      ],
+      platform: 'Windows',
+      mobile: false,
+    },
+    screen: { width: 2560, height: 1313 },
+    viewport: { width: 2560, height: 1200 },
+    devicePixelRatio: 1,
+    timeZone: 'Europe/Kyiv',
+    language: 'uk-UA',
+    languages: ['uk-UA', 'uk', 'en-US'],
+  };
+
+  it('converts the bounded browser inputs to a Playwright device and clips viewport proportionally', () => {
+    expect(socialDeviceFromOwnerBrowser(ownerBrowser)).toEqual({
+      userAgent: ownerBrowser.userAgent,
+      viewport: { width: 1920, height: 900 },
+      locale: 'uk-UA',
+      timezoneId: 'Europe/Kyiv',
+      deviceScaleFactor: 1,
+      screen: { width: 2560, height: 1313 },
+      extraHTTPHeaders: {
+        'sec-ch-ua': '"Chromium";v="157", "Google Chrome";v="157"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+      },
+    });
+  });
+
+  it.each([
+    { ...ownerBrowser, userAgent: '' },
+    { ...ownerBrowser, screen: { width: 0, height: 1313 } },
+    { ...ownerBrowser, viewport: { width: 2560, height: 20_000 } },
+    { ...ownerBrowser, devicePixelRatio: 10 },
+    { ...ownerBrowser, timeZone: 'not/a-zone' },
+    { ...ownerBrowser, language: 'bad locale' },
+    { ...ownerBrowser, unrequestedSignal: true },
+    {
+      ...ownerBrowser,
+      userAgentData: {
+        brands: [],
+        platform: 'Windows',
+        mobile: 'false',
+      },
+    },
+  ])('rejects malformed or extra captured fields', (value) => {
+    expect(() => socialDeviceFromOwnerBrowser(value)).toThrow();
+  });
 });
 
 describe('account action restrictions', () => {

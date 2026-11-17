@@ -13,6 +13,7 @@ import {
   encryptSocialStorageState,
   encryptSocialProxy,
   generateSocialDevice,
+  socialDeviceFromOwnerBrowser,
   type SocialStorageState,
   type SocialDevice,
   type SocialSessionProxy,
@@ -60,6 +61,8 @@ export interface SocialAccount {
   sessionLostAt: string | null;
   sessionLostReasonUk: string | null;
   keepaliveEnabled: boolean;
+  device: SocialDevice | null;
+  deviceSource: string | null;
   lastKeepaliveAt: string | null;
   nextKeepaliveAt: string | null;
   canSyncInbox: boolean;
@@ -473,6 +476,7 @@ export async function listSocialAccounts(
     (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
     a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
     a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
+    a.settings->'device' as device,a.settings->>'deviceSource' as "deviceSource",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
@@ -527,6 +531,15 @@ function encryptedCookies(raw: string, network: SocialNetwork) {
     throw error;
   }
 }
+function ownerBrowserDevice(raw: unknown): SocialDevice {
+  try {
+    return socialDeviceFromOwnerBrowser(raw);
+  } catch {
+    return invalid(
+      'Параметри браузера некоректні. Оновіть сторінку та повторіть.',
+    );
+  }
+}
 export async function saveSocialAccount(
   input: {
     id?: string;
@@ -534,6 +547,7 @@ export async function saveSocialAccount(
     name: string;
     cookiesJson?: string;
     storageStateJson?: string;
+    ownerBrowser?: unknown;
     ownProxy?: string | null;
     keepaliveEnabled?: boolean;
     proxyIndex?: number;
@@ -572,10 +586,23 @@ export async function saveSocialAccount(
       (existing.settings.proxyFingerprint !== pinned.proxyFingerprint ||
         existing.settings.proxyIndex !== pinned.proxyIndex);
     const replaced = !!stateJson || !existing || proxyChanged;
+    const ownerDevice =
+      input.ownerBrowser === undefined
+        ? undefined
+        : ownerBrowserDevice(input.ownerBrowser);
     const settings = {
       ...existing?.settings,
       ...pinned,
-      device: existing?.settings.device ?? generateSocialDevice(input.network),
+      device:
+        ownerDevice ??
+        existing?.settings.device ??
+        generateSocialDevice(input.network),
+      ...(ownerDevice
+        ? {
+            deviceSource: 'owner_browser',
+            deviceUpdatedAt: new Date().toISOString(),
+          }
+        : {}),
       ...(input.keepaliveEnabled !== undefined
         ? { keepaliveEnabled: input.keepaliveEnabled }
         : {}),
@@ -718,6 +745,7 @@ export async function updateSocialAccount(
     proxyIndex?: number;
     cookiesJson?: string;
     storageStateJson?: string;
+    ownerBrowser?: unknown;
     ownProxy?: string | null;
     keepaliveEnabled?: boolean;
   },
@@ -748,12 +776,23 @@ export async function updateSocialAccount(
       input.cookiesJson !== undefined ||
       input.storageStateJson !== undefined ||
       proxyChanged;
+    const ownerDevice =
+      input.ownerBrowser === undefined
+        ? undefined
+        : ownerBrowserDevice(input.ownerBrowser);
     const settings = {
       ...account.settings,
       ...(input.keepaliveEnabled !== undefined
         ? { keepaliveEnabled: input.keepaliveEnabled }
         : {}),
       ...pinned,
+      ...(ownerDevice
+        ? {
+            device: ownerDevice,
+            deviceSource: 'owner_browser',
+            deviceUpdatedAt: new Date().toISOString(),
+          }
+        : {}),
       ...(input.storageStateJson !== undefined ||
       input.cookiesJson !== undefined
         ? {
@@ -826,6 +865,36 @@ export async function updateSocialAccount(
       );
     await logActivity(
       'social.account.updated',
+      'channel_account',
+      id,
+      userId,
+      {},
+      c,
+    );
+    return true;
+  });
+}
+/** Update only the browser device identity; cookies and session health stay untouched. */
+export async function updateSocialDevice(
+  id: string,
+  ownerBrowser: unknown,
+  userId: string,
+) {
+  const device = ownerBrowserDevice(ownerBrowser);
+  return transaction(async (c) => {
+    const account = await lock(c, id, userId);
+    const settings = {
+      ...account.settings,
+      device,
+      deviceSource: 'owner_browser',
+      deviceUpdatedAt: new Date().toISOString(),
+    };
+    await c.query('update channel_accounts set settings=$2 where id=$1', [
+      id,
+      settings,
+    ]);
+    await logActivity(
+      'social.account.device_updated',
       'channel_account',
       id,
       userId,
