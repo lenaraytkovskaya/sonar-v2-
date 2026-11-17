@@ -637,6 +637,7 @@ export const uk = {
       'message.send': 'Повідомлення поставлено в чергу',
       'message.sent': 'Повідомлення надіслано',
       'message.dispatched': 'Відправлено, перевірте в чаті',
+      'contact.whatsapp_rechecked': 'Дозволено повторну перевірку WhatsApp',
       'form.manual_required': 'Форма потребує ручного завершення',
       'form.manually_sent': 'Форму позначено надісланою вручну',
     },
@@ -733,6 +734,7 @@ export const uk = {
     noSetup:
       'Додайте активний WhatsApp-акаунт, WhatsApp або телефон компанії та кампанію.',
     unavailable: 'WhatsApp недоступний',
+    retry: 'Перевірити WhatsApp ще раз',
     sendHint:
       'Повідомлення буде надіслано через чергу з урахуванням ліміту акаунта.',
     statuses: {
@@ -772,6 +774,8 @@ export const uk = {
     history: 'Історія повідомлень',
     noMessages: 'Повідомлень ще немає.',
     noSetup: 'Додайте активний email-акаунт, контакт email і кампанію.',
+    resendLastEvent: 'Остання подія Resend:',
+    resendNever: 'Остання подія Resend: ніколи',
     block: 'Не контактувати',
     blocked: 'Контактування з компанією заборонено.',
     sentToday: 'Надіслано сьогодні (UTC)',

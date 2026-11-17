@@ -17,6 +17,7 @@ export async function GET(request: Request) {
         'budget.monthly_usd',
         'company.about',
         'analysis.prompt',
+        'email.resend.last_event',
         'google.field_profiles',
         'retention.google_days',
         'registry.phones.progress',

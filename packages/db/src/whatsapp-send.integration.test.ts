@@ -295,6 +295,47 @@ it.skipIf(!enabled)(
         [ids.user],
       );
       await expect(create('+48500100201')).rejects.toThrow('Не контактувати');
+      await db.sonarPool.query(
+        'delete from do_not_contact where company_id=$1 or created_by=$2',
+        [ids.company, ids.user],
+      );
+      await db.sonarPool.query(
+        "update campaigns set send_mode='auto' where id=$1",
+        [ids.campaign],
+      );
+      const staleMarkAttempt = await create('+48500100201');
+      const freshMarkAttempt = await create('+48500100201');
+      await db.sonarPool.query(
+        "update contacts set meta=jsonb_set(meta,'{whatsapp_unavailable}',$2::jsonb) where company_id=$1 and normalized='+48500100201'",
+        [
+          ids.company,
+          JSON.stringify({
+            reason_uk: 'WhatsApp недоступний.',
+            at: now.toISOString(),
+          }),
+        ],
+      );
+      await reset();
+      const blockedRetry = vi.fn(async () => 'must-not-send');
+      expect(await send(freshMarkAttempt.id, blockedRetry)).toMatchObject({
+        status: 'skipped',
+        reasonCode: 'whatsapp_unavailable',
+      });
+      expect(blockedRetry).not.toHaveBeenCalled();
+      await db.sonarPool.query(
+        "update contacts set meta=jsonb_set(meta,'{whatsapp_unavailable,at}',$2::jsonb) where company_id=$1 and normalized='+48500100201'",
+        [
+          ids.company,
+          JSON.stringify(new Date(now.getTime() - 31 * 86400000).toISOString()),
+        ],
+      );
+      await reset();
+      const oneRetry = vi.fn(async () => 'provider-stale-mark-retry');
+      const staleRetryResult = await send(staleMarkAttempt.id, oneRetry);
+      expect(staleRetryResult).toMatchObject({
+        status: 'done',
+      });
+      expect(oneRetry).toHaveBeenCalledTimes(1);
       expect(
         (
           await db.sonarPool.query(

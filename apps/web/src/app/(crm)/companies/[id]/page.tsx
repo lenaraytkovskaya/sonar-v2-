@@ -20,6 +20,7 @@ import { LocalTime } from '@/components/local-time';
 import { ScanSummary, Score } from '@/components/shared';
 import { cn } from '@/lib/utils';
 import { ChannelIcon } from '@/components/channel-icon';
+import { WhatsAppRetry } from '@/components/whatsapp-retry';
 
 const kindOrder = [
   'email',
@@ -242,10 +243,12 @@ export default async function Page({
       {
         value: contact.meta?.telegram_unavailable,
         label: uk.telegram.unavailable,
+        key: 'telegram',
       },
       {
         value: contact.meta?.whatsapp_unavailable,
         label: uk.whatsapp.unavailable,
+        key: 'whatsapp',
       },
     ].filter((entry) => entry.value);
     return (
@@ -302,20 +305,32 @@ export default async function Page({
               ` · ${uk.prozorro.alsoInProzorro}`}
             {contact.meta?.note && ` · ${String(contact.meta.note)}`}
           </p>
-          {unavailable.map(({ value, label }) => (
-            <p
-              key={label}
-              className="mt-1 inline-block rounded-full bg-err-bg px-2 py-0.5 text-xs text-err"
-            >
-              {value &&
-              typeof value === 'object' &&
-              'reason_uk' in value &&
-              typeof value.reason_uk === 'string'
-                ? value.reason_uk.startsWith(label)
-                  ? value.reason_uk
-                  : `${label}: ${value.reason_uk}`
-                : label}
-            </p>
+          {unavailable.map(({ value, label, key }) => (
+            <div key={label} className="mt-1 flex items-center gap-1">
+              <p className="inline-block rounded-full bg-err-bg px-2 py-0.5 text-xs text-err">
+                {value &&
+                typeof value === 'object' &&
+                'reason_uk' in value &&
+                typeof value.reason_uk === 'string'
+                  ? value.reason_uk.startsWith(label)
+                    ? value.reason_uk
+                    : `${label}: ${value.reason_uk}`
+                  : label}
+                {key === 'whatsapp' &&
+                  value &&
+                  typeof value === 'object' &&
+                  'at' in value &&
+                  typeof value.at === 'string' && (
+                    <>
+                      {' '}
+                      · <LocalTime value={value.at} dateOnly />
+                    </>
+                  )}
+              </p>
+              {key === 'whatsapp' && value && (
+                <WhatsAppRetry companyId={id} contactId={contact.id} />
+              )}
+            </div>
           ))}
         </div>
         {contact.source === 'manual' && (
