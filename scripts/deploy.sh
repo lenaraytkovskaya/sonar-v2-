@@ -20,6 +20,7 @@ log() { echo "$(date -Is) $*" >> "$LOG"; }
 
 git merge -q --ff-only origin/main
 rev=$(git rev-parse --short HEAD)
+export GIT_SHA="$rev"
 log "deploying $rev"
 
 if "${COMPOSE[@]}" up --build -d --remove-orphans >> "$LOG" 2>&1; then

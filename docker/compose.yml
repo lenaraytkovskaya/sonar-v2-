@@ -52,7 +52,12 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
   web:
-    build: { context: .., dockerfile: docker/Dockerfile, target: web }
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     volumes:
       # Private proxy list (host:port:user:password per line), never in git or images.
       - ${SOCIAL_PROXY_HOST_FILE:-../iproyal-proxies.txt}:/run/secrets/social-proxies.txt:ro

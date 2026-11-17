@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { MessageNotifier } from './message-notifier';
 import { SocialSessionNotices } from './social-session-notices';
+import { BuildVersion } from './build-version';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
@@ -151,6 +152,7 @@ export function Shell({
           </Link>
           {navigation}
           <ThemeSelect />
+          <BuildVersion />
         </aside>
         {/* Inset panel (shadcn sidebar-inset): the page sits on a raised sheet beside the sidebar. */}
         <div
@@ -202,6 +204,7 @@ export function Shell({
                       </Dialog.Description>
                       {navigation}
                       <ThemeSelect />
+                      <BuildVersion />
                     </Dialog.Content>
                   </Dialog.Portal>
                 </Dialog.Root>
