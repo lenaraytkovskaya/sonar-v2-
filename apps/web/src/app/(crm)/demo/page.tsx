@@ -41,6 +41,7 @@ const companies: CompanyCardRow[] = (
   rating: (4.1 + index * 0.15).toFixed(1),
   ratings_count: 20 + index * 37,
   score,
+  fit: null,
   website: `https://example${index}.ua`,
   domain: `example${index}.ua`,
   status,

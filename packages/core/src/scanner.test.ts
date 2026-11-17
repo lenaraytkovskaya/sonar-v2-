@@ -23,6 +23,84 @@ const values = (name: string, kind: string) =>
     .map((contact) => contact.value);
 
 describe('website extraction from authored HTML fixtures', () => {
+  it('excludes website suppliers while retaining company footer contacts and uncertain codes', () => {
+    const result = page('16-data-quality');
+    expect(
+      result.contacts.filter((c) => c.kind === 'email').map((c) => c.value),
+    ).toEqual(['salon@garage.ua']);
+    expect(result.contacts.filter((c) => c.kind === 'phone')).toEqual([]);
+    expect(
+      result.contacts.some((c) =>
+        /black_labs|web.studio|vendor|designer|hostpro/.test(c.value),
+      ),
+    ).toBe(false);
+    expect(result.facts.filter((f) => /edrpou/.test(f.kind))).toEqual([
+      { kind: 'footer_edrpou', value: '12345678' },
+    ]);
+    expect(result.text).not.toMatch(/98765432|87654321|developer@/);
+  });
+  it('rejects social service URLs and deduplicates canonical profiles and messenger links', () => {
+    const contacts = page('16-data-quality').contacts;
+    expect(
+      contacts.filter((c) => c.kind === 'social').map((c) => c.value),
+    ).toEqual([
+      'https://www.instagram.com/salon/',
+      'https://www.youtube.com/@salon',
+    ]);
+    expect(contacts.filter((c) => c.kind === 'whatsapp')).toEqual([
+      {
+        kind: 'whatsapp',
+        value: 'https://wa.me/380673142758',
+        rank: 70,
+        meta: { phone: '+380673142758' },
+      },
+    ]);
+    expect(contacts.filter((c) => c.kind === 'telegram')).toEqual([
+      { kind: 'telegram', value: 'https://t.me/salon', rank: 70 },
+      {
+        kind: 'telegram',
+        value: 'https://t.me/salon_bot',
+        rank: 70,
+        meta: { bot: true },
+      },
+    ]);
+    expect(
+      contacts.filter((c) => c.kind === 'viber').map((c) => c.value),
+    ).toEqual(['https://invite.viber.com/?g2=A%2BB']);
+  });
+  it('keeps online booking links and public opening hours', () => {
+    expect(
+      extractSitePage('<p>Графік роботи: Пн–Пт 09:00–18:00</p>', context).facts,
+    ).toContainEqual({
+      kind: 'opening_hours',
+      value: ['Графік роботи: Пн–Пт 09:00–18:00'],
+    });
+    const result = page('16-data-quality');
+    expect(result.contacts.filter((c) => c.kind === 'booking')).toHaveLength(6);
+    expect(result.contacts.filter((c) => c.kind === 'booking')).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'booking',
+          value: 'https://booksy.com/uk-ua/123_salon',
+          rank: 80,
+          meta: { provider: 'booksy.com' },
+        },
+      ]),
+    );
+    expect(result.facts).toContainEqual({
+      kind: 'opening_hours',
+      value: ['Години роботи: Пн–Пт 09:00–18:00'],
+    });
+    expect(
+      extractSitePage(
+        '<script type="application/ld+json">{"@type":"LocalBusiness","openingHoursSpecification":[{"dayOfWeek":"Monday","opens":"09:00","closes":"18:00"}]}</script>',
+        context,
+      ).facts,
+    ).toContainEqual({
+      kind: 'opening_hours',
+      value: [{ dayOfWeek: 'Monday', opens: '09:00', closes: '18:00' }],
+    });
+  });
   it('extracts full FOP names and initials from visible website evidence', () => {
     expect(
       page('15-fop').facts.filter((fact) => fact.kind === 'fop_name'),
@@ -82,7 +160,6 @@ describe('website extraction from authored HTML fixtures', () => {
     expect(contacts.map((c) => c.kind)).toEqual([
       'telegram',
       'telegram',
-      'whatsapp',
       'whatsapp',
       'whatsapp',
       'viber',

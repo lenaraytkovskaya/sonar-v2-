@@ -14,9 +14,11 @@ export function scoreTone(value: number | null) {
 export function Score({
   value,
   compact = false,
+  label = uk.company.score,
 }: {
   value: number | null;
   compact?: boolean;
+  label?: string;
 }) {
   const tone = scoreTone(value);
   return value === null ? (
@@ -28,7 +30,7 @@ export function Score({
       </span>
       <div
         role="progressbar"
-        aria-label={uk.company.score}
+        aria-label={label}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={value}

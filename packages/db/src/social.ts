@@ -13,6 +13,7 @@ export type SocialPayload = {
   target: SocialTarget;
   requestVersion?: number;
   manual?: boolean;
+  anonymous?: boolean;
 };
 type SocialTask = {
   id: string;
@@ -88,6 +89,8 @@ export async function enqueueCompanySocial(
     for (const target of onlyTarget
       ? [onlyTarget]
       : await targets(client, companyId)) {
+      if (!userId && !['instagram', 'facebook'].includes(target.network))
+        continue;
       const key = `social.fetch:${target.network}:${target.handle}:${new Date().toISOString().slice(0, 10)}`;
       await client.query(
         'select pg_advisory_xact_lock(hashtextextended($1,0))',
@@ -137,6 +140,7 @@ export async function enqueueCompanySocial(
             target,
             requestVersion: 0,
             manual: !!userId,
+            anonymous: !userId,
           },
           client,
         );

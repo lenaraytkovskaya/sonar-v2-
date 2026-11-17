@@ -3,6 +3,7 @@ import {
   createGoogleClientRaw,
   normalizePhone,
   normalizeWebsite,
+  googleCity,
   googlePageSchema,
   BudgetExceeded,
   PaidHttpError,
@@ -317,9 +318,11 @@ export async function runGoogleBatch(
           consumed++;
           if (place.businessStatus === 'CLOSED_PERMANENTLY') continue;
           const site = normalizeWebsite(place.websiteUri);
-          const city =
-            place.addressComponents?.find((c) => c.types.includes('locality'))
-              ?.longText ?? pair.city;
+          const city = googleCity(
+            place.addressComponents,
+            pair.city,
+            config.language_code,
+          );
           const country =
             place.addressComponents?.find((c) => c.types.includes('country'))
               ?.shortText ?? config.country_code;

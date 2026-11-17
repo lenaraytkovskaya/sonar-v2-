@@ -58,7 +58,15 @@ it.skipIf(!enabled)(
         tasks: [],
         disabled: true,
       });
-      const first = await enqueueCompanySocial(companyIds[0]!, user.id);
+      await sonarPool.query(
+        "update settings set value='true' where key='social.enabled'",
+      );
+      await sonarPool.query(
+        "insert into contacts(company_id,kind,value,normalized,source) values($1,'social',$2,$2,'website')",
+        [companyIds[0], 'https://www.linkedin.com/company/sonar-test/'],
+      );
+      const first = await enqueueCompanySocial(companyIds[0]!, null);
+      expect(first.tasks).toHaveLength(1);
       const second = await enqueueCompanySocial(companyIds[1]!, user.id);
       expect(first.tasks[0]?.created).toBe(true);
       expect(second.tasks[0]?.id).toBe(first.tasks[0]?.id);
@@ -69,6 +77,11 @@ it.skipIf(!enabled)(
       } = await sonarPool.query('select payload from tasks where id=$1', [
         taskId,
       ]);
+      expect(task.payload).toMatchObject({
+        anonymous: true,
+        manual: false,
+        target: { network: 'instagram' },
+      });
       process.env.SOCIAL_PROXY_URLS =
         'http://reserved.example:8000,http://test:password@proxy.example:8000';
       expect(await runSocialFetch(task.payload, taskId, fetch)).toMatchObject({

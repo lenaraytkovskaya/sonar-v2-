@@ -146,6 +146,7 @@ export function createOpenRouterClient(
       messages: { role: 'system' | 'user'; content: string }[],
       maxTokens: number,
       reasoning: ReasoningConfig = { exclude: true },
+      outputSchema?: Record<string, unknown>,
     ): Promise<PaidResponse> {
       if (!model || !Number.isInteger(maxTokens) || maxTokens < 1)
         throw new OpenRouterError('invalid_response');
@@ -155,6 +156,19 @@ export function createOpenRouterClient(
         max_tokens: maxTokens,
         stream: false,
         reasoning,
+        ...(outputSchema
+          ? {
+              response_format: {
+                type: 'json_schema',
+                json_schema: {
+                  name: 'response',
+                  strict: true,
+                  schema: outputSchema,
+                },
+              },
+              provider: { require_parameters: true },
+            }
+          : {}),
       });
       // Retain only validated billing numbers, never provider content or keys.
       const usage = response.usage as Record<string, unknown> | undefined;

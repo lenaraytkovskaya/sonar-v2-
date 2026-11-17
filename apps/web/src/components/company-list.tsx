@@ -305,11 +305,12 @@ export function CompanyList({
               {uk.company.sort}
               <select
                 className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={draft.sort ?? (draft.campaignId ? 'score' : 'newest')}
+                value={draft.sort ?? 'quality'}
                 onChange={(e) =>
                   update('sort', e.target.value as CompanyFilters['sort'])
                 }
               >
+                <option value="quality">{uk.company.qualityDescending}</option>
                 <option value="score">{uk.company.scoreDescending}</option>
                 <option value="newest">{uk.company.newest}</option>
               </select>

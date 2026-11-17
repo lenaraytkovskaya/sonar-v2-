@@ -213,6 +213,7 @@ export const contactKind = pgEnum('contact_kind', [
   'whatsapp',
   'viber',
   'form',
+  'booking',
   'social',
   'website',
 ]);

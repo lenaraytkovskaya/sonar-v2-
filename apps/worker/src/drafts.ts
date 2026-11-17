@@ -4,6 +4,7 @@ import {
   PaidHttpError,
   createOpenRouterClient,
   parseOutreachDraft,
+  OutreachDraftError,
   type ReasoningConfig,
   type TextModel,
 } from '@sonar/core';
@@ -89,8 +90,23 @@ export async function runOutreachDraft(
       }),
     },
   ];
+  const outputSchema = {
+    type: 'object',
+    properties: {
+      subject:
+        data.channel === 'email'
+          ? { type: 'string' }
+          : { type: 'string', enum: [''] },
+      body: { type: 'string' },
+    },
+    required: ['subject', 'body'],
+    additionalProperties: false,
+  };
   const estimateFor = (tokens: number) =>
-    (Buffer.byteLength(JSON.stringify(messages)) + 100) * model.promptUsd +
+    (Buffer.byteLength(JSON.stringify(messages)) +
+      Buffer.byteLength(JSON.stringify(outputSchema)) +
+      100) *
+      model.promptUsd +
     tokens * model.completionUsd +
     model.requestUsd;
   const estimate = estimateFor(maxTokens);
@@ -108,7 +124,7 @@ export async function runOutreachDraft(
     let response: Awaited<ReturnType<typeof api.complete>>;
     try {
       response = await runBudgetedRequest('openrouter', estimate, taskId, () =>
-        api.complete(model.id, messages, maxTokens, reasoning),
+        api.complete(model.id, messages, maxTokens, reasoning, outputSchema),
       );
     } catch (error) {
       if (
@@ -131,14 +147,32 @@ export async function runOutreachDraft(
         'openrouter',
         retryEstimate,
         taskId,
-        () => api.complete(model.id, messages, retryTokens, reasoning),
+        () =>
+          api.complete(
+            model.id,
+            messages,
+            retryTokens,
+            reasoning,
+            outputSchema,
+          ),
         1,
       );
     }
     let draft;
     try {
       draft = parseOutreachDraft(response.text, data.channel, shortMaxLength);
-    } catch {
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          taskId,
+          model: model.id,
+          channel: data.channel,
+          draftValidation:
+            error instanceof OutreachDraftError ? error.code : 'unknown',
+          responseLength: response.text.length,
+          usage: response.usage,
+        }),
+      );
       throw new TaskFailure(
         'draft_schema_invalid',
         'ШІ повернув некоректну чернетку. Витрати збережено; повтор використовує ту саму відповідь.',

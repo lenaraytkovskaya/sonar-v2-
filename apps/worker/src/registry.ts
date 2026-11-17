@@ -12,6 +12,7 @@ import {
   registryFacts,
   registryTables,
   registryTerminated,
+  normalizeRegistryName,
   type RegistryEntity,
   type RegistryEntityType,
 } from '@sonar/core';
@@ -24,6 +25,108 @@ import {
   type TaskOutcome,
 } from '@sonar/db/tasks';
 type Query = Pick<typeof registryPool, 'query'>;
+
+const legalNameNoise = new Set([
+  'тов',
+  'тзов',
+  'приватне',
+  'підприємство',
+  'підприємства',
+  'компанія',
+  'компанії',
+  'україна',
+  'центр',
+  'центрів',
+  'сервіс',
+  'група',
+  'клініка',
+  'клиника',
+  'clinic',
+  'стоматологія',
+  'стоматологічна',
+  'салон',
+  'салони',
+  'beauty',
+  'dental',
+  'студія',
+  'studio',
+  'юридична',
+  'юридичні',
+  'адвокатське',
+  'адвокат',
+  'медичний',
+]);
+const cyrillic = {
+  а: 'a',
+  б: 'b',
+  в: 'v',
+  г: 'h',
+  ґ: 'g',
+  д: 'd',
+  е: 'e',
+  є: 'ye',
+  ж: 'zh',
+  з: 'z',
+  и: 'y',
+  і: 'i',
+  ї: 'yi',
+  й: 'y',
+  к: 'k',
+  л: 'l',
+  м: 'm',
+  н: 'n',
+  о: 'o',
+  п: 'p',
+  р: 'r',
+  с: 's',
+  т: 't',
+  у: 'u',
+  ф: 'f',
+  х: 'kh',
+  ц: 'ts',
+  ч: 'ch',
+  ш: 'sh',
+  щ: 'shch',
+  ь: '',
+  ю: 'yu',
+  я: 'ya',
+};
+
+export function registryFooterNameMatches(
+  companyName: string,
+  domain: string | null,
+  registryName: string | null,
+  shortName: string | null,
+) {
+  const tokens = (value: string) =>
+    normalizeRegistryName(value)
+      .replace(
+        /[а-яіїєґ]/gu,
+        (letter) => cyrillic[letter as keyof typeof cyrillic],
+      )
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .split(/\s+/u)
+      .filter((token) => token.length >= 4 && !legalNameNoise.has(token));
+  const companyTokens = tokens(companyName);
+  const registryTokens = [registryName, shortName]
+    .filter((value): value is string => Boolean(value))
+    .flatMap(tokens);
+  const common = companyTokens.some((token) => registryTokens.includes(token));
+  if (common) return true;
+  if (!domain) return false;
+  const domainName = domain
+    .replace(/^https?:\/\//i, '')
+    .split(/[/?#]/u, 1)[0]!
+    .replace(/^www\./i, '')
+    .split('.')
+    .filter(
+      (part) =>
+        !['com', 'org', 'net', 'ua', 'co', 'kiev', 'kyiv'].includes(part),
+    )
+    .join(' ');
+  const domainTokens = tokens(domainName);
+  return domainTokens.some((token) => registryTokens.includes(token));
+}
 
 // Read-only, indexed lookups only: edrpou btree indexes and (entity_type, entity_id) unique keys.
 export async function lookupRegistry(pool: typeof registryPool, code: string) {
@@ -96,7 +199,7 @@ export async function runRegistryMatch(
   const {
     rows: [company],
   } = await sonarPool.query(
-    'select c.id,c.country_code,(select ca.country_code from campaign_companies cc join campaigns ca on ca.id=cc.campaign_id where cc.company_id=c.id order by cc.added_at desc limit 1) as campaign_country from companies c where c.id=$1',
+    'select c.id,c.name,c.domain,c.country_code,(select ca.country_code from campaign_companies cc join campaigns ca on ca.id=cc.campaign_id where cc.company_id=c.id order by cc.added_at desc limit 1) as campaign_country from companies c where c.id=$1',
     [companyId],
   );
   if (!company)
@@ -120,6 +223,14 @@ export async function runRegistryMatch(
   );
   const evidenceCodes = registryCodes(evidence.map((row) => row.value));
   const codes = payload.manualCode ? [payload.manualCode] : evidenceCodes;
+  const { rows: footerEvidence } =
+    codes.length || payload.candidate
+      ? { rows: [] }
+      : await sonarPool.query(
+          "select value from company_facts where company_id=$1 and kind='footer_edrpou' and source='website' and (expires_at is null or expires_at>now()) order by found_at desc",
+          [companyId],
+        );
+  const footerCodes = registryCodes(footerEvidence.map((row) => row.value));
   if (payload.manualCode && !evidenceCodes.includes(payload.manualCode))
     return {
       status: 'skipped',
@@ -133,9 +244,19 @@ export async function runRegistryMatch(
       [companyId],
     );
     const currentCodes = registryCodes(currentEvidence.map((row) => row.value));
-    return (
+    const changedCodes =
       JSON.stringify([...currentCodes].sort()) !==
-      JSON.stringify([...evidenceCodes].sort())
+      JSON.stringify([...evidenceCodes].sort());
+    if (!footerCodes.length) return changedCodes;
+    const { rows: currentFooter } = await client.query(
+      "select value from company_facts where company_id=$1 and kind='footer_edrpou' and source='website' and (expires_at is null or expires_at>now())",
+      [companyId],
+    );
+    return (
+      changedCodes ||
+      JSON.stringify(
+        registryCodes(currentFooter.map((row) => row.value)).sort(),
+      ) !== JSON.stringify([...footerCodes].sort())
     );
   };
   let match: Awaited<ReturnType<typeof lookupRegistry>> = null;
@@ -160,7 +281,81 @@ export async function runRegistryMatch(
       match = await lookup(registryPool, code);
       if (match) break;
     }
-  } else {
+  } else if (footerCodes.length) {
+    const possible: NonNullable<Awaited<ReturnType<typeof lookupRegistry>>>[] =
+      [];
+    for (const code of footerCodes) {
+      const footerMatch = await lookup(registryPool, code);
+      if (!footerMatch) continue;
+      if (
+        registryFooterNameMatches(
+          company.name,
+          company.domain,
+          footerMatch.entity.name,
+          footerMatch.entity.short_name,
+        )
+      ) {
+        match = footerMatch;
+        method = 'footer_code_name';
+        break;
+      }
+      possible.push(footerMatch);
+    }
+    if (!match && possible.length) {
+      let reviewable = possible;
+      const client = await sonarPool.connect();
+      try {
+        await client.query('begin');
+        await client.query('select id from companies where id=$1 for update', [
+          companyId,
+        ]);
+        const { rows: choices } = await client.query(
+          "select 1 from company_facts where company_id=$1 and kind='registry_match_method' and value='\"confirmed\"'::jsonb",
+          [companyId],
+        );
+        if (!choices.length) {
+          await client.query(
+            "delete from company_facts where company_id=$1 and kind='registry_candidates'",
+            [companyId],
+          );
+          const { rows: rejected } = await client.query(
+            "select value from company_facts where company_id=$1 and kind='registry_rejected'",
+            [companyId],
+          );
+          const rejectedKeys = rejected.map(
+            (row) => `${row.value?.type}:${row.value?.id}`,
+          );
+          reviewable = possible.filter(
+            ({ entity }) =>
+              !rejectedKeys.includes(`${entity.entity_type}:${entity.id}`),
+          );
+          if (reviewable.length)
+            await client.query(
+              `insert into company_facts(company_id,kind,value,source)
+               values($1,'registry_candidates',$2::jsonb,'registry')`,
+              [
+                companyId,
+                JSON.stringify(reviewable.map(({ entity }) => entity)),
+              ],
+            );
+        }
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (reviewable.length)
+        return {
+          status: 'skipped',
+          reasonCode: 'registry_footer_candidate',
+          reasonUk:
+            'Можливий збіг у ЄДР. Потрібне підтвердження у картці компанії.',
+        };
+    }
+  }
+  if (!match && !payload.candidate && !codes.length) {
     const candidates = await alternatives(companyId);
     const active = candidates.filter(
       ({ entity }) =>

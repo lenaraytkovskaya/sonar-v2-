@@ -11,7 +11,14 @@ import { socialTarget } from './social.js';
 
 export interface SiteContact {
   kind:
-    'email' | 'phone' | 'telegram' | 'whatsapp' | 'viber' | 'social' | 'form';
+    | 'email'
+    | 'phone'
+    | 'telegram'
+    | 'whatsapp'
+    | 'viber'
+    | 'social'
+    | 'form'
+    | 'booking';
   value: string;
   rank: number;
   meta?: Record<string, unknown>;
@@ -36,6 +43,29 @@ const priorityPath =
   /contact|kontakt|контакт|about|про[-_ ]?нас|о[-_ ]?нас|rekvizyty|реквізит|impressum|privacy/iu;
 const filePath =
   /\.(?:pdf|jpe?g|png|gif|svg|webp|ico|avif|bmp|tiff?|mp[34]|webm|mov|avi|wav|ogg|zip|rar|7z|gz|tar|docx?|xlsx?|pptx?|css|js|xml|json|woff2?|ttf|eot)(?:$|\/)/i;
+const contractorText =
+  /(?:розроб(?:ка|лено|ник)[^.!?]{0,25}сайт|разработ[^.!?]{0,25}сайт|сайт[^.!?]{0,20}розроб|made\s+by|created\s+by|powered\s+by|website\s+(?:by|design)|design(?:ed)?\s+by|хост[іи]нг|hosting|дизайн\s*(?:сайту|сайта|[:—-]))/iu;
+const contractorDomains = new Set([
+  'ukraine.com.ua',
+  'hostpro.ua',
+  'mirohost.net',
+  'cityhost.ua',
+  'hosting.ua',
+  'tilda.cc',
+  'wix.com',
+  'weblium.com',
+  'webflow.com',
+  'wordpress.org',
+]);
+const bookingProviders = new Set([
+  'alteg',
+  'altegio',
+  'booksy',
+  'easyweek',
+  'dikidi',
+  'treatwell',
+  'yclients',
+]);
 const messengerKinds = new Set(['telegram', 'whatsapp', 'viber']);
 const domain = (hostname: string) =>
   getDomain(hostname, { allowPrivateDomains: true }) ?? hostname.toLowerCase();
@@ -206,33 +236,81 @@ export function linkedContact(
   raw: string,
   pageUrl: string,
 ): SiteContact | null {
+  raw = raw.replace(/&amp;/gi, '&');
   if (/^viber:\/\/(?:chat|add|pa|community|join)(?:[/?]|$)/i.test(raw))
-    return { kind: 'viber', value: raw, rank: 70 };
+    return { kind: 'viber', value: new URL(raw).href, rank: 70 };
   let url: URL;
   try {
     url = new URL(raw, pageUrl);
   } catch {
     return null;
   }
-  if (!['http:', 'https:'].includes(url.protocol)) return null;
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password
+  )
+    return null;
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
   const path = url.pathname.replace(/\/+$/, '');
+  if (contractorDomains.has(domain(host))) return null;
+  if (
+    bookingProviders.has(domain(host).split('.')[0]!) &&
+    (path || host !== domain(host))
+  ) {
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()])
+      if (/^(?:utm_|ref$|fbclid$|gclid$)/i.test(key))
+        url.searchParams.delete(key);
+    url.pathname = path;
+    return {
+      kind: 'booking',
+      value: url.href,
+      rank: 80,
+      meta: { provider: domain(host) },
+    };
+  }
   if (
     ['t.me', 'telegram.me'].includes(host) &&
     path &&
     !/^\/(?:share|iv|proxy|socks)(?:\/|$)/i.test(path)
-  )
-    return { kind: 'telegram', value: `https://t.me${path}`, rank: 70 };
+  ) {
+    const profile = path.replace(/^\/s\//i, '/').replace(/^\/@/, '/');
+    const handle = /^\/[a-z\d_]+$/i.test(profile)
+      ? profile.toLowerCase()
+      : profile;
+    return {
+      kind: 'telegram',
+      value: `https://t.me${handle}`,
+      rank: 70,
+      ...(/bot$/i.test(handle) ? { meta: { bot: true } } : {}),
+    };
+  }
   if (
     (host === 'wa.me' && /^\/(?:\d+|message\/[^/]+)$/.test(path)) ||
     (host === 'api.whatsapp.com' &&
       path === '/send' &&
       /^\+?\d+$/.test(url.searchParams.get('phone') ?? '')) ||
     (host === 'chat.whatsapp.com' && path.length > 1)
-  )
-    return { kind: 'whatsapp', value: url.href, rank: 70 };
-  if (host === 'invite.viber.com' && (path || url.searchParams.get('g2')))
+  ) {
+    const number =
+      host === 'wa.me' && /^\/\d+$/.test(path)
+        ? path.slice(1)
+        : url.searchParams.get('phone')?.replace(/^\+/, '');
+    return {
+      kind: 'whatsapp',
+      value: number ? `https://wa.me/${number}` : `https://${host}${path}`,
+      rank: 70,
+      ...(number ? { meta: { phone: `+${number}` } } : {}),
+    };
+  }
+  if (host === 'invite.viber.com' && (path || url.searchParams.get('g2'))) {
+    url.hash = '';
+    const group = url.searchParams.get('g2');
+    url.search = group ? new URLSearchParams({ g2: group }).toString() : '';
+    url.pathname = path || '/';
     return { kind: 'viber', value: url.href, rank: 70 };
+  }
   const social = socialTarget(url.href);
   if (social)
     return social.kind === 'unsupported'
@@ -278,6 +356,8 @@ export function linkedContact(
       : null;
   url.search = profileId ? `?id=${profileId}` : '';
   url.hash = '';
+  url.hostname = `www.${network}`;
+  url.pathname = path.toLowerCase();
   return {
     kind: 'social',
     value: url.href,
@@ -349,6 +429,51 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
   const $ = load(html);
   const contacts: SiteContact[] = [];
   const facts: SiteFact[] = [];
+  // Remove attribution blocks before all extraction paths, including visible text and JSON-LD.
+  $('a[href]').each((_, element) => {
+    try {
+      if (
+        contractorDomains.has(
+          domain(new URL($(element).attr('href')!, context.url).hostname),
+        )
+      )
+        $(element).remove();
+    } catch {
+      /* Ignore malformed links. */
+    }
+  });
+  $('a,span,small,p,div,li,section,footer')
+    .toArray()
+    .reverse()
+    .forEach((element) => {
+      const block = $(element);
+      const ownText = block.clone().children().remove().end().text();
+      if (
+        !contractorText.test(ownText) ||
+        !block.closest(
+          'footer,[role="contentinfo"],.footer,#footer,.copyright,.credits,[class*=developer],[class*=powered]',
+        ).length
+      )
+        return;
+      const parent = block.parent();
+      const scope =
+        !block.is('div,p,li,section,footer') &&
+        parent.is('div,p,li,small') &&
+        parent.text().length < 500
+          ? parent
+          : block;
+      if (scope.text().length < 1000) scope.remove();
+    });
+  const footerCodes = new Set<string>();
+  const outsideFooter = $.root().clone();
+  outsideFooter.find('footer,[role="contentinfo"],.footer,#footer').remove();
+  const outsideFooterText = outsideFooter.text();
+  $('footer,[role="contentinfo"],.footer,#footer').each((_, element) => {
+    for (const match of $(element)
+      .text()
+      .matchAll(/(?:ЄДРПОУ|ЕДРПОУ|код)\s*[:№#-]?\s*(\d{8})(?!\d)/giu))
+      footerCodes.add(match[1]!);
+  });
   const add = (contact: SiteContact) => {
     const existing = contacts.find(
       (c) => c.kind === contact.kind && c.value === contact.value,
@@ -395,7 +520,19 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
           ),
       )
     ) {
+      try {
+        if (
+          typeof node.url === 'string' &&
+          contractorDomains.has(domain(new URL(node.url).hostname))
+        )
+          return;
+      } catch {
+        /* Keep organizations without a valid URL. */
+      }
       schemas.push(node);
+      const openingHours = node.openingHoursSpecification ?? node.openingHours;
+      if (openingHours)
+        facts.push({ kind: 'opening_hours', value: openingHours });
       for (const email of [node.email].flat())
         if (typeof email === 'string') addEmail(email);
       for (const phone of [node.telephone].flat())
@@ -416,6 +553,30 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
     }
   });
   if (schemas.length) facts.push({ kind: 'schema_org', value: schemas });
+  if (!facts.some((fact) => fact.kind === 'opening_hours')) {
+    const hours = $(
+      '[itemprop="openingHours"],.opening-hours,.working-hours,[data-opening-hours]',
+    )
+      .map(
+        (_, element) => $(element).attr('content') ?? $(element).text().trim(),
+      )
+      .get()
+      .filter(Boolean);
+    if (!hours.length)
+      $('p,div,li,dd').each((_, element) => {
+        const value = $(element).text().replace(/\s+/g, ' ').trim();
+        if (
+          value.length < 240 &&
+          /(?:години|графік|режим)\s+роботи|(?:opening|working)\s+hours|godziny\s+otwarcia|öffnungszeiten/iu.test(
+            value,
+          ) &&
+          /\d{1,2}[:.]\d{2}/u.test(value)
+        )
+          hours.push(value);
+      });
+    if (hours.length)
+      facts.push({ kind: 'opening_hours', value: [...new Set(hours)] });
+  }
   const links: string[] = [];
   $('a[href]').each((_, element) => {
     const href = $(element).attr('href')!.trim();
@@ -533,7 +694,18 @@ export function extractSitePage(html: string, context: SiteContext): SitePage {
     ['ipn', /(?:ІПН|ИНН|РНОКПП)\s*[:№#-]?\s*(\d{10})(?!\d)/giu],
   ] as const)
     for (const match of text.matchAll(pattern))
-      facts.push({ kind, value: match[1] });
+      facts.push({
+        kind:
+          kind === 'edrpou' &&
+          footerCodes.has(match[1]!) &&
+          !new RegExp(
+            `(?:ЄДРПОУ|ЕДРПОУ|код)\\s*[:№#-]?\\s*${match[1]}(?!\\d)`,
+            'iu',
+          ).test(outsideFooterText)
+            ? 'footer_edrpou'
+            : kind,
+        value: match[1],
+      });
   const language =
     lang ||
     (/[іїєґ]/iu.test(text)

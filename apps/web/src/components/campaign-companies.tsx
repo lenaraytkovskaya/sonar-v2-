@@ -19,7 +19,7 @@ export function CampaignCompanies({ campaignId }: { campaignId: string }) {
     const controller = new AbortController();
     const params = new URLSearchParams({
       campaignId,
-      sort: 'score',
+      sort: 'quality',
       page: '1',
     });
     fetch('/api/companies?' + params, { signal: controller.signal })

@@ -188,16 +188,18 @@ export async function runSocialFetch(
     if (previous?.result?.billingPending)
       return paused('billing_uncertain', new BillingUncertain().message);
     if (!previous?.billed) {
-      const selected = await acquireSocialFetchSession(
-        client,
-        target.network,
-        number(
-          config,
-          `social.${target.network}.session_fetch_daily_limit`,
-          1,
-          100000,
-        ),
-      );
+      const selected = payload.anonymous
+        ? null
+        : await acquireSocialFetchSession(
+            client,
+            target.network,
+            number(
+              config,
+              `social.${target.network}.session_fetch_daily_limit`,
+              1,
+              100000,
+            ),
+          );
       session = selected && 'account' in selected ? selected : null;
       const anonymousLoginWall =
         runtime.blockCode === 'login_wall' ||
