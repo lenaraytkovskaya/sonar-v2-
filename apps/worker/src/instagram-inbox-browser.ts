@@ -573,25 +573,32 @@ export function createSocialInboxAdapter(
         )
           throw new SocialSessionCheckError('unknown_auth');
         const timeoutMs = await timeout();
-        return browser.withPage(account, account.session, timeoutMs, async (page) => {
-          const result = await captureFacebookInbox(
-            page,
-            actors[0]!.value,
-            timeoutMs,
-            persistBatch,
-            undefined,
-            checkpoint.resumeAnchor,
-            Number(account.settings.inboxMaxThreads) || 50,
-            Number(account.settings.inboxMaxMessages) || 100,
-            (checkpoint.threadCursors ?? {}) as Record<
-              string,
-              { lastMessageId?: string }
-            >,
-          );
-          if (!result.complete || result.reason)
-            await captureFailureShot(page, account.session, 'inbox', 'sync');
-          return result;
-        }, false, { kind: 'inbox', stage: () => 'sync' });
+        return browser.withPage(
+          account,
+          account.session,
+          timeoutMs,
+          async (page) => {
+            const result = await captureFacebookInbox(
+              page,
+              actors[0]!.value,
+              timeoutMs,
+              persistBatch,
+              undefined,
+              checkpoint.resumeAnchor,
+              Number(account.settings.inboxMaxThreads) || 50,
+              Number(account.settings.inboxMaxMessages) || 100,
+              (checkpoint.threadCursors ?? {}) as Record<
+                string,
+                { lastMessageId?: string }
+              >,
+            );
+            if (!result.complete || result.reason)
+              await captureFailureShot(page, account.session, 'inbox', 'sync');
+            return result;
+          },
+          false,
+          { kind: 'inbox', stage: () => 'sync' },
+        );
       }
       if (account.channel !== 'instagram')
         throw new SocialInboxAdapterError(
@@ -619,28 +626,35 @@ export function createSocialInboxAdapter(
           emptyCapture(),
         );
       const expectedViewerId = actorCookies[0]!.value;
-      return browser.withPage(account, account.session, timeoutMs, async (page) => {
-        const result = await captureInstagramInbox(
-          page,
-          timeoutMs,
-          persistBatch,
-          undefined,
-          expectedViewerId,
-          Number(account.settings.inboxMaxThreads) || 50,
-          Number(account.settings.inboxMaxMessages) || 100,
-          (checkpoint.threadCursors ?? {}) as Record<
-            string,
-            { lastMessageAt?: string; lastMessageIds?: string[] }
-          >,
-          (checkpoint.resumeAnchor?.folders ?? {}) as Record<
-            string,
-            string | null
-          >,
-        );
-        if (!result.complete || result.reason)
-          await captureFailureShot(page, account.session, 'inbox', 'sync');
-        return result;
-      }, false, { kind: 'inbox', stage: () => 'sync' });
+      return browser.withPage(
+        account,
+        account.session,
+        timeoutMs,
+        async (page) => {
+          const result = await captureInstagramInbox(
+            page,
+            timeoutMs,
+            persistBatch,
+            undefined,
+            expectedViewerId,
+            Number(account.settings.inboxMaxThreads) || 50,
+            Number(account.settings.inboxMaxMessages) || 100,
+            (checkpoint.threadCursors ?? {}) as Record<
+              string,
+              { lastMessageAt?: string; lastMessageIds?: string[] }
+            >,
+            (checkpoint.resumeAnchor?.folders ?? {}) as Record<
+              string,
+              string | null
+            >,
+          );
+          if (!result.complete || result.reason)
+            await captureFailureShot(page, account.session, 'inbox', 'sync');
+          return result;
+        },
+        false,
+        { kind: 'inbox', stage: () => 'sync' },
+      );
     },
   };
 }

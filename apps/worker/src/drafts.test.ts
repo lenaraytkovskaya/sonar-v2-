@@ -105,6 +105,17 @@ it('bills one contact draft and preserves company language and untrusted-data bo
   const messages = (
     api.complete.mock.calls[0] as unknown as [string, { content: string }[]]
   )[1];
+  expect((api.complete.mock.calls[0] as unknown as unknown[])[4]).toMatchObject(
+    {
+      type: 'object',
+      required: ['subject', 'body'],
+      additionalProperties: false,
+      properties: {
+        subject: { type: 'string' },
+        body: { type: 'string' },
+      },
+    },
+  );
   expect(messages[0]!.content).not.toContain('passwords');
   expect(messages[0]!.content).toContain(
     'Never output square-bracket or curly-brace placeholders',
@@ -284,4 +295,29 @@ it('can draft a goal-based introduction without company description or offer', a
     outreachGoal: source.outreachGoal,
   });
   expect(save).toHaveBeenCalledWith(input, draft, 'task');
+});
+
+it('diagnoses paid schema failures without logging the model response or retrying', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const api = client();
+  api.complete.mockResolvedValueOnce({
+    ...response,
+    text: 'private invalid content',
+  });
+  try {
+    await expect(runOutreachDraft(input, 'task', api)).rejects.toMatchObject({
+      code: 'draft_schema_invalid',
+    });
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
+      model: 'stub',
+      channel: 'email',
+      draftValidation: 'invalid_json',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(
+      'private invalid content',
+    );
+  } finally {
+    warn.mockRestore();
+  }
 });

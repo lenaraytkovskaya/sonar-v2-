@@ -29,7 +29,10 @@ it('stores the failure metadata and a capped JPEG without query parameters', asy
 
 it('retries at lower JPEG quality and never stores images above 3 MB', async () => {
   const persistFailureShot = vi.fn(async () => {});
-  const page = pageWith([Buffer.alloc(3 * 1024 * 1024 + 1), Buffer.from('small')]);
+  const page = pageWith([
+    Buffer.alloc(3 * 1024 * 1024 + 1),
+    Buffer.from('small'),
+  ]);
   await captureFailureShot(
     page as never,
     { persistFailureShot } as never,

@@ -187,7 +187,7 @@ export function HealthJournal({
                     >
                       {uk.socialAccounts.failureShot}
                     </a>
-                )}
+                  )}
               </li>
             ))}
           </ol>

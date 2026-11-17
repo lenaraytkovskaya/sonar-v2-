@@ -22,6 +22,7 @@ export interface ScoringContact {
     | 'whatsapp'
     | 'viber'
     | 'form'
+    | 'booking'
     | 'social'
     | 'website';
   value: string;
@@ -116,6 +117,25 @@ export function emailPreference(email: string): number {
     : 0;
 }
 
+function socialPreference(contact: ScoringContact): number {
+  try {
+    const host = new URL(contact.normalized).hostname.toLowerCase();
+    return (
+      [
+        'instagram.com',
+        'facebook.com',
+        'linkedin.com',
+        'tiktok.com',
+        'youtube.com',
+        'youtu.be',
+      ].findIndex((domain) => host === domain || host.endsWith('.' + domain)) +
+        1 || 99
+    );
+  } catch {
+    return 99;
+  }
+}
+
 function mobile(contact: ScoringContact): number {
   if (contact.kind !== 'phone') return 0;
   const type = parsePhoneNumberFromString(contact.normalized)?.getType();
@@ -156,7 +176,10 @@ export function scoreCompany(
     phone: ordered.find((contact) => contact.kind === 'phone') ?? null,
     messenger: ordered.find((contact) => messengers.has(contact.kind)) ?? null,
     form: ordered.find((contact) => contact.kind === 'form') ?? null,
-    social: ordered.find((contact) => contact.kind === 'social') ?? null,
+    social:
+      ordered
+        .filter((contact) => contact.kind === 'social')
+        .sort((a, b) => socialPreference(a) - socialPreference(b))[0] ?? null,
   };
   const values: Record<ScoringFeature, number> = {
     website: Number(

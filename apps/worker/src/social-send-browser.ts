@@ -28,7 +28,11 @@ export type SocialBrowserSession = {
   proxy: ReturnType<typeof socialProxies>[number];
 } & Pick<
   ResolvedSocialSession,
-  'storageState' | 'device' | 'persistStorageState' | 'persistDevice' | 'persistFailureShot'
+  | 'storageState'
+  | 'device'
+  | 'persistStorageState'
+  | 'persistDevice'
+  | 'persistFailureShot'
 >;
 export type FailureShotKind = 'check' | 'keepalive' | 'inbox' | 'send';
 export async function captureFailureShot(
@@ -37,7 +41,8 @@ export async function captureFailureShot(
   kind: FailureShotKind,
   stage: string,
 ) {
-  if (!session.persistFailureShot || typeof page.screenshot !== 'function') return;
+  if (!session.persistFailureShot || typeof page.screenshot !== 'function')
+    return;
   try {
     const path = new URL(page.url()).pathname.slice(0, 500);
     for (const quality of [55, 35, 20]) {
@@ -56,7 +61,9 @@ export async function captureFailureShot(
         return;
       }
     }
-  } catch { /* Diagnostic failures must not replace the operation result. */ }
+  } catch {
+    /* Diagnostic failures must not replace the operation result. */
+  }
 }
 const home = (network: SocialNetwork) => `https://www.${network}.com/`;
 const messageLabel =
@@ -1754,55 +1761,63 @@ export function createSocialSendBrowser(
     ) {
       try {
         let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
-        return await withPage(account, session, timeoutMs, async (page) => {
-          let status: number | null = null;
-          try {
-            const response = await page.goto(home(account.channel), {
-              waitUntil: 'domcontentloaded',
-              timeout: timeoutMs,
-            });
-            status = response?.status() ?? null;
-            stage = 'http';
-            // Only the final main-document response, never background HTTP failures.
-            if (status === 429) throw new SocialSessionCheckError('rate_limit');
-            if (status === 407) throw new SocialSessionCheckError('proxy');
-            if (status && status >= 500)
-              throw new SocialSessionCheckError('network');
-            stage = 'auth';
-            await assertSocialSession(page, account.channel);
-            if (!status || status < 200 || status >= 300)
-              throw new SocialSessionCheckError('unknown_auth');
-          } catch (caught) {
-            const error =
-              caught instanceof SocialSessionCheckError
-                ? caught
-                : new SocialSessionCheckError(
-                    socialSessionCheckReason(
-                      caught,
-                      stage === 'navigation' ? 'network' : 'browser',
-                    ),
-                  );
-            if (caught instanceof Error && caught.name === 'TimeoutError')
-              error.errorKind = 'timeout';
-            if (
-              account.channel === 'linkedin' ||
-              account.channel === 'facebook'
-            ) {
-              // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
-              const diagnostic =
+        return await withPage(
+          account,
+          session,
+          timeoutMs,
+          async (page) => {
+            let status: number | null = null;
+            try {
+              const response = await page.goto(home(account.channel), {
+                waitUntil: 'domcontentloaded',
+                timeout: timeoutMs,
+              });
+              status = response?.status() ?? null;
+              stage = 'http';
+              // Only the final main-document response, never background HTTP failures.
+              if (status === 429)
+                throw new SocialSessionCheckError('rate_limit');
+              if (status === 407) throw new SocialSessionCheckError('proxy');
+              if (status && status >= 500)
+                throw new SocialSessionCheckError('network');
+              stage = 'auth';
+              await assertSocialSession(page, account.channel);
+              if (!status || status < 200 || status >= 300)
+                throw new SocialSessionCheckError('unknown_auth');
+            } catch (caught) {
+              const error =
+                caught instanceof SocialSessionCheckError
+                  ? caught
+                  : new SocialSessionCheckError(
+                      socialSessionCheckReason(
+                        caught,
+                        stage === 'navigation' ? 'network' : 'browser',
+                      ),
+                    );
+              if (caught instanceof Error && caught.name === 'TimeoutError')
+                error.errorKind = 'timeout';
+              if (
+                account.channel === 'linkedin' ||
                 account.channel === 'facebook'
-                  ? facebookSessionDiagnostic
-                  : sessionDiagnostic;
-              error.diagnostic = await diagnostic(
-                page,
-                stage,
-                status,
-                error.errorKind ?? 'unconfirmed',
-              ).catch(() => undefined);
+              ) {
+                // Capture before withPage closes it. Diagnostic failures cannot replace the typed reason.
+                const diagnostic =
+                  account.channel === 'facebook'
+                    ? facebookSessionDiagnostic
+                    : sessionDiagnostic;
+                error.diagnostic = await diagnostic(
+                  page,
+                  stage,
+                  status,
+                  error.errorKind ?? 'unconfirmed',
+                ).catch(() => undefined);
+              }
+              throw error;
             }
-            throw error;
-          }
-        }, false, { kind: 'check', stage: () => stage });
+          },
+          false,
+          { kind: 'check', stage: () => stage },
+        );
       } catch (error) {
         if (error instanceof SocialSessionCheckError) throw error;
         throw new SocialSessionCheckError(
@@ -1817,27 +1832,34 @@ export function createSocialSendBrowser(
       pauseMs: number,
     ) {
       let stage = 'navigation';
-      return withPage(account, session, timeoutMs, async (page) => {
-        const url =
-          account.channel === 'linkedin'
-            ? `${home(account.channel)}feed/`
-            : home(account.channel);
-        const response = await page.goto(url, {
-          waitUntil: 'domcontentloaded',
-          timeout: timeoutMs,
-        });
-        stage = 'http';
-        if (response?.status() === 429)
-          throw new SocialSessionCheckError('rate_limit');
-        if (response?.status() === 407)
-          throw new SocialSessionCheckError('proxy');
-        await assertSocialSession(page, account.channel);
-        stage = 'wait';
-        if (!response || response.status() < 200 || response.status() >= 300)
-          throw new SocialSessionCheckError('network');
-        await page.waitForTimeout(pauseMs);
-        await assertSocialSession(page, account.channel);
-      }, false, { kind: 'keepalive', stage: () => stage });
+      return withPage(
+        account,
+        session,
+        timeoutMs,
+        async (page) => {
+          const url =
+            account.channel === 'linkedin'
+              ? `${home(account.channel)}feed/`
+              : home(account.channel);
+          const response = await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+            timeout: timeoutMs,
+          });
+          stage = 'http';
+          if (response?.status() === 429)
+            throw new SocialSessionCheckError('rate_limit');
+          if (response?.status() === 407)
+            throw new SocialSessionCheckError('proxy');
+          await assertSocialSession(page, account.channel);
+          stage = 'wait';
+          if (!response || response.status() < 200 || response.status() >= 300)
+            throw new SocialSessionCheckError('network');
+          await page.waitForTimeout(pauseMs);
+          await assertSocialSession(page, account.channel);
+        },
+        false,
+        { kind: 'keepalive', stage: () => stage },
+      );
     },
     async send(
       account: SocialSessionAccount,

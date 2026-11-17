@@ -235,3 +235,23 @@ it('does not reward a platform even after a successful scan', () => {
     ),
   ).toBe(0);
 });
+
+it('prefers social profiles that support company outreach before video channels', () => {
+  const profiles = [
+    'https://www.youtube.com/@company',
+    'https://www.tiktok.com/@company',
+    'https://www.linkedin.com/company/company',
+    'https://www.facebook.com/company',
+    'https://www.instagram.com/company',
+  ].map((url, index) => contact('social', url, { rank: 100 - index }));
+  for (
+    let remaining = profiles;
+    remaining.length;
+    remaining = remaining.slice(0, -1)
+  ) {
+    expect(
+      scoreCompany({ ...empty, contacts: remaining }, {}).breakdown.top.social
+        ?.value,
+    ).toBe(remaining.at(-1)?.value);
+  }
+});

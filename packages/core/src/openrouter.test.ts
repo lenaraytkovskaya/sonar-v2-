@@ -202,3 +202,27 @@ describe('OpenRouter adapter', () => {
     ).toEqual(['cheap', 'expensive']);
   });
 });
+
+it('requests a strict output schema and routes only to compatible providers', async () => {
+  const fetcher = stub(reply);
+  const schema = {
+    type: 'object',
+    properties: { body: { type: 'string' } },
+    required: ['body'],
+    additionalProperties: false,
+  };
+  await createOpenRouterClient('test-token', fetcher).complete(
+    'chosen/model',
+    [{ role: 'user', content: 'Return JSON' }],
+    100,
+    { exclude: true },
+    schema,
+  );
+  expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toMatchObject({
+    response_format: {
+      type: 'json_schema',
+      json_schema: { name: 'response', strict: true, schema },
+    },
+    provider: { require_parameters: true },
+  });
+});

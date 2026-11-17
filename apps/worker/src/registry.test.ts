@@ -17,7 +17,7 @@ vi.mock('@sonar/db/tasks', () => ({
   runTask: vi.fn(),
   logActivity: vi.fn(),
 }));
-import { runRegistryMatch } from './registry.js';
+import { registryFooterNameMatches, runRegistryMatch } from './registry.js';
 const company = (country: string | null) => ({
   rows: [{ id: 'c', country_code: country, campaign_country: 'UA' }],
 });
@@ -25,6 +25,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   query.mockReset();
   connect.mockReset();
+});
+it('trusts a footer registry code only when the legal name matches the company or its domain', () => {
+  expect(
+    registryFooterNameMatches(
+      'Dent Art стоматологія',
+      'dentart.ua',
+      'ТОВ ДЕНТ АРТ',
+      'Дент Арт',
+    ),
+  ).toBe(true);
+  expect(
+    registryFooterNameMatches(
+      'Urist 24',
+      'urist24.com.ua',
+      'ТОВ ХОСТИНГ УКРАЇНА',
+      null,
+    ),
+  ).toBe(false);
 });
 it('skips non-Ukrainian companies without touching the registry', async () => {
   query.mockResolvedValueOnce(company('PL'));
@@ -38,9 +56,12 @@ it('skips non-Ukrainian companies without touching the registry', async () => {
   expect(lookup).not.toHaveBeenCalled();
 });
 it('falls back when the website gave no valid code', async () => {
-  query.mockResolvedValueOnce(company(null)).mockResolvedValueOnce({
-    rows: [{ value: { code: '1234', valid: false } }],
-  });
+  query
+    .mockResolvedValueOnce(company(null))
+    .mockResolvedValueOnce({
+      rows: [{ value: { code: '1234', valid: false } }],
+    })
+    .mockResolvedValueOnce({ rows: [] });
   const lookup = vi.fn();
   await expect(
     runRegistryMatch(
@@ -64,6 +85,52 @@ it('tries each code and reports a code missing from the registry', async () => {
     '40123456',
     '40123457',
   ]);
+});
+it('keeps an unrelated footer registry code as a manual candidate', async () => {
+  const statements: string[] = [];
+  const tx = {
+    query: vi.fn(async (sql: string) => {
+      statements.push(sql);
+      return { rows: [] };
+    }),
+    release: vi.fn(),
+  };
+  connect.mockResolvedValue(tx);
+  query
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'c',
+          name: 'Urist 24',
+          domain: 'urist24.com.ua',
+          country_code: 'UA',
+          campaign_country: 'UA',
+        },
+      ],
+    })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [{ value: '40123456' }] });
+  const lookup = vi.fn().mockResolvedValue({
+    entity: { ...entity, edrpou: '40123456', name: 'ТОВ ХОСТИНГ УКРАЇНА' },
+    founders: [],
+    contacts: [],
+  });
+  await expect(
+    runRegistryMatch(
+      { companyId: 'c' },
+      't',
+      lookup,
+      vi.fn().mockResolvedValue([]),
+    ),
+  ).resolves.toMatchObject({
+    status: 'skipped',
+    reasonCode: 'registry_footer_candidate',
+    reasonUk: 'Можливий збіг у ЄДР. Потрібне підтвердження у картці компанії.',
+  });
+  expect(lookup).toHaveBeenCalledWith(expect.anything(), '40123456');
+  expect(
+    statements.some((sql) => sql.includes('insert into company_facts')),
+  ).toBe(true);
 });
 it('replaces the registry snapshot and saves contacts in one transaction', async () => {
   const tx = {
@@ -128,6 +195,7 @@ const entity = {
 function prepareMatch(confirm = false) {
   query
     .mockResolvedValueOnce(company('UA'))
+    .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({ rows: [{ value: 365 }] });
   const tx = {

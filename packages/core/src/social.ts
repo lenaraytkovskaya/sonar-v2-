@@ -139,7 +139,7 @@ export function socialTarget(raw: string): SocialTarget | null {
     }
     if (!/^[a-z\d][a-z\d.\-_]*$/i.test(first)) return null;
     if (
-      /^(?:groups|people|pages|p|watch|reels?|stories|story\.php|posts|photos?|photo\.php|videos?|login(?:\.php)?|sharer(?:\.php)?|share|dialog|plugins|events|marketplace|gaming|help|settings|checkpoint|recover|search)$/.test(
+      /^(?:groups|people|pages|p|watch|reels?|stories|story\.php|posts|photos?|photo\.php|videos?|login(?:\.php)?|sharer(?:\.php)?|share|dialog|plugins|events|marketplace|gaming|help|settings|checkpoint|recover|search|business|terms(?:\.php)?|privacy(?:\.php)?|policies|legal|developers|about|l\.php|flx)$/.test(
         first,
       )
     )
@@ -157,7 +157,7 @@ export function socialTarget(raw: string): SocialTarget | null {
   if (/^(?:(?:www|m)\.)?(?:instagram\.com|instagr\.am)$/.test(host)) {
     if (!/^[\w.]{1,30}$/.test(first)) return null;
     if (
-      /^(?:p|reels?|tv|stories|explore|accounts|direct|about|developer|legal|challenge|checkpoint|web)$/.test(
+      /^(?:p|reels?|tv|stories|explore|accounts|direct|about|developers?|legal|privacy|terms|business|challenge|checkpoint|web)$/.test(
         first,
       )
     )

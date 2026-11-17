@@ -551,3 +551,25 @@ it.each(['Action blocked', 'Попробуйте позже', 'Дію забло
     expect(pauseSession).not.toHaveBeenCalled();
   },
 );
+
+it('uses only an anonymous proxy for automatic enrichment without acquiring account sessions', async () => {
+  prepareSocialFetch();
+  acquireSession.mockResolvedValue(authenticated);
+  const fetch = vi.fn().mockResolvedValue(publicPage);
+  expect(
+    await runSocialFetch({ ...payload, anonymous: true }, 'task', fetch),
+  ).toMatchObject({
+    status: 'done',
+    result: { profile: { method: 'anonymous' } },
+  });
+  expect(acquireSession).not.toHaveBeenCalled();
+  expect(reserveSession).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledWith(
+    payload.target,
+    { server: 'http://anonymous.example:8000' },
+    30000,
+    'SonarBot/1.0',
+    undefined,
+  );
+  expect(budgeted.mock.calls[0]?.[1]).toBe(0.001);
+});

@@ -21,7 +21,7 @@ export const companyFiltersSchema = z
     hasPhone: z.boolean().optional(),
     minRating: z.number().finite().min(0).max(5).optional(),
     minScore: z.number().finite().min(0).max(100).optional(),
-    sort: z.enum(['score', 'newest']).optional(),
+    sort: z.enum(['quality', 'score', 'newest']).optional(),
   })
   .strict();
 export type CompanyFilters = z.infer<typeof companyFiltersSchema>;

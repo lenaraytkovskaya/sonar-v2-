@@ -312,7 +312,11 @@ export async function accountHealth(
             Math.abs(Date.parse(shots[a]!.at!) - Date.parse(createdAt)) -
             Math.abs(Date.parse(shots[b]!.at!) - Date.parse(createdAt)),
         )[0];
-      return { ...event, createdAt, ...(failureShotKind ? { failureShotKind } : {}) };
+      return {
+        ...event,
+        createdAt,
+        ...(failureShotKind ? { failureShotKind } : {}),
+      };
     });
     const eventsByKind: Partial<Record<HealthEventKind, number>> = {};
     for (const event of events)

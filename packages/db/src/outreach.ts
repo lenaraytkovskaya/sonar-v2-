@@ -278,6 +278,7 @@ export async function enqueueOutreachDrafts(
     if (
       !campaign ||
       campaign.status !== 'active' ||
+      !Object.values(campaign.channels).some((enabled) => enabled === true) ||
       campaign.score === null ||
       campaign.score < campaign.min_score ||
       (await isContactBlocked(c, companyId))

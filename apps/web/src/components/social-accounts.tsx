@@ -529,7 +529,9 @@ export function SocialAccounts({
               {account.reasonUk && (
                 <Callout tone="err">
                   <FriendlyError reason={account.reasonUk} />
-                  {account.failureShotKinds.some((kind) => kind !== 'inbox') && (
+                  {account.failureShotKinds.some(
+                    (kind) => kind !== 'inbox',
+                  ) && (
                     <a
                       className="ml-2 underline"
                       target="_blank"
