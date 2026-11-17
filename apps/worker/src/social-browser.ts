@@ -120,7 +120,7 @@ export async function fetchSocialPage(
         const hosts = [
           `${target.network}.com`,
           ...{
-            instagram: ['cdninstagram.com', 'fbcdn.net'],
+            instagram: ['cdninstagram.com', 'fbcdn.net', 'ig.me'],
             facebook: ['fbcdn.net', 'fbsbx.com'],
             linkedin: ['licdn.com'],
           }[target.network],
@@ -137,7 +137,8 @@ export async function fetchSocialPage(
         if (
           !allowed ||
           (route.request().isNavigationRequest() &&
-            url.origin !== new URL(target.canonicalUrl).origin)
+            url.origin !== new URL(target.canonicalUrl).origin &&
+            !(target.network === 'instagram' && url.origin === 'https://ig.me'))
         )
           return route.abort();
         usedProxy = true;

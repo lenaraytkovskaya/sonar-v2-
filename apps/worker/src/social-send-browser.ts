@@ -287,6 +287,39 @@ async function instagramComposer(page: Page, dialog: Locator) {
   }
   return matchingCandidate ? named.or(matchingCandidate) : named;
 }
+async function tryInstagramDirectChat(
+  page: Page,
+  url: string,
+  handle: string,
+  timeoutMs: number,
+  assertSession: () => Promise<void>,
+) {
+  try {
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: timeoutMs,
+    });
+    if (new URL(page.url()).hostname.endsWith('instagram.com'))
+      await assertSession();
+    if (response && response.status() >= 400) return false;
+    await page.waitForURL(
+      /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
+      { timeout: timeoutMs },
+    );
+    await assertSession();
+    const dialog = await instagramDialog(page, handle, 'initial');
+    const composer = await instagramComposer(page, dialog);
+    return (
+      (await composer.count()) === 1 &&
+      (await composer.isEditable()) &&
+      (await composer.isEnabled())
+    );
+  } catch {
+    if (new URL(page.url()).hostname.endsWith('instagram.com'))
+      await assertSession();
+    return false;
+  }
+}
 async function instagramArticleConfirmation(dialog: Locator, body: string) {
   return dialog.evaluateHandle((container, body) => {
     const articleSelector = '[role="article"][aria-roledescription="message"]';
@@ -461,6 +494,7 @@ async function sendInstagram(
   timeoutMs: number,
   body: string,
   beforeSend: () => Promise<void>,
+  providerThreadId?: string,
 ) {
   let stage: SendStage = 'navigation';
   let attempted = false;
@@ -502,49 +536,71 @@ async function sendInstagram(
     stage = previous;
   };
   try {
-    const response = await page.goto(target.canonicalUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-    });
-    if (response && response.status() >= 400)
-      throw stagedFailure(
-        stage,
-        response.status() === 429 ? 'http_429' : 'http_error',
-        response.status() === 429
-          ? 'rate_limit'
-          : [401, 403].includes(response.status())
-            ? 'session_invalid'
-            : 'unavailable',
+    const directUrls: string[] = [];
+    if (providerThreadId && /^[A-Za-z0-9._:-]{1,200}$/.test(providerThreadId))
+      directUrls.push(
+        `https://www.instagram.com/direct/t/${encodeURIComponent(providerThreadId)}/`,
       );
-    await assertSession();
-    stage = 'profile';
-    if (
-      socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
-      target.canonicalUrl.toLowerCase()
-    )
-      throw stagedFailure(stage, 'mismatch');
-    const name = new RegExp(
-      `^${target.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-      'i',
-    );
-    const profile = page
-      .locator('main header, [role="main"] header')
-      .filter({ has: page.getByRole('heading', { name }) });
-    await profile.waitFor({ state: 'visible' });
-    stage = 'messagebutton';
-    const directAction = page
-      .getByRole('button', { name: messageLabel })
-      .or(page.getByRole('link', { name: messageLabel }))
-      .filter({ visible: true });
-    const optionsAction = page
-      .getByRole('button', { name: profileOptionsLabel })
-      .filter({ visible: true });
-    await profile
-      .filter({ has: directAction.or(optionsAction) })
-      .waitFor({ state: 'visible' });
-    const direct = profile.locator(directAction);
-    if (await direct.count()) await direct.click();
-    else {
+    directUrls.push(`https://ig.me/m/${encodeURIComponent(target.handle)}`);
+    let openedDirectChat = false;
+    for (const url of directUrls) {
+      if (
+        await tryInstagramDirectChat(
+          page,
+          url,
+          target.handle,
+          timeoutMs,
+          assertSession,
+        )
+      ) {
+        openedDirectChat = true;
+        break;
+      }
+    }
+    if (!openedDirectChat) {
+      const response = await page.goto(target.canonicalUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+      });
+      if (response && response.status() >= 400)
+        throw stagedFailure(
+          stage,
+          response.status() === 429 ? 'http_429' : 'http_error',
+          response.status() === 429
+            ? 'rate_limit'
+            : [401, 403].includes(response.status())
+              ? 'session_invalid'
+              : 'unavailable',
+        );
+      await assertSession();
+      stage = 'profile';
+      if (
+        socialTarget(page.url())?.canonicalUrl.toLowerCase() !==
+        target.canonicalUrl.toLowerCase()
+      )
+        throw stagedFailure(stage, 'mismatch');
+      const name = new RegExp(
+        `^${target.handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'i',
+      );
+      const profile = page
+        .locator('main header, [role="main"] header')
+        .filter({ has: page.getByRole('heading', { name }) });
+      await profile.waitFor({ state: 'visible' });
+      stage = 'messagebutton';
+      const directAction = page
+        .getByRole('button', { name: messageLabel })
+        .or(page.getByRole('link', { name: messageLabel }))
+        .filter({ visible: true });
+      const optionsAction = page
+        .getByRole('button', { name: profileOptionsLabel })
+        .filter({ visible: true });
+      await profile
+        .filter({ has: directAction.or(optionsAction) })
+        .waitFor({ state: 'visible' });
+      const direct = profile.locator(directAction);
+      if (await direct.count()) await direct.click();
+      else {
       const options = profile.locator(optionsAction);
       if ((await options.count()) !== 1)
         throw await messageButtonFailure('options_count', page, options);
@@ -850,6 +906,7 @@ async function sendInstagram(
       } finally {
         await snapshot.evaluate((state) => state.cleanup()).catch(() => {});
         await snapshot.dispose();
+      }
       }
     }
     await assertSession();
@@ -1745,6 +1802,10 @@ export function createSocialSendBrowser(
       body: string,
       beforeSend: () => Promise<void>,
     ) {
+      const providerThreadId =
+        typeof account.settings.providerThreadId === 'string'
+          ? account.settings.providerThreadId
+          : undefined;
       const target = socialTarget(to);
       if (
         !target ||
@@ -1763,7 +1824,14 @@ export function createSocialSendBrowser(
           timeoutMs,
           async (page) => {
             if (account.channel === 'instagram')
-              return sendInstagram(page, target, timeoutMs, body, beforeSend);
+              return sendInstagram(
+                page,
+                target,
+                timeoutMs,
+                body,
+                beforeSend,
+                providerThreadId,
+              );
             if (account.channel === 'facebook')
               return sendFacebook(
                 page,
