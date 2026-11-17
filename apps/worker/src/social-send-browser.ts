@@ -7,6 +7,7 @@ import {
 } from 'playwright';
 import {
   SocialSendError,
+  socialActionBlockedPattern,
   generateSocialDevice,
   type ResolvedSocialSession,
   SocialSessionCheckError,
@@ -928,6 +929,17 @@ async function sendInstagram(
         error.errorKind === 'timeout')
         ? 'timeout'
         : 'unexpected';
+    if (error instanceof SocialSessionCheckError) {
+      const errorKind =
+        error.reason === 'action_blocked'
+          ? 'restricted'
+          : kind === 'timeout'
+            ? kind
+            : 'unconfirmed';
+      const staged = stagedFailure('session', errorKind, error.code);
+      error.reasonUk = staged.reasonUk;
+      throw Object.assign(error, { stage: 'session', errorKind });
+    }
     if (
       error instanceof SocialSendError &&
       ['session_invalid', 'rate_limit'].includes(error.code)
@@ -1050,6 +1062,13 @@ export async function assertSessionNegatives(
     (await page.getByText(checkpointText).filter({ visible: true }).count())
   )
     throw new SocialSessionCheckError('checkpoint');
+  if (
+    await page
+      .getByText(socialActionBlockedPattern)
+      .filter({ visible: true })
+      .count()
+  )
+    throw new SocialSessionCheckError('action_blocked');
   if (
     /login|signin|authwall/i.test(url.pathname) ||
     (await page

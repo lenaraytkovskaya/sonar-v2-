@@ -1,3 +1,4 @@
+import { recordHealthEvent, enableAccountHealth } from './account-health.js';
 import type { PoolClient } from 'pg';
 import {
   telegramAdapter,
@@ -32,7 +33,9 @@ async function loginOperation<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (error instanceof TelegramSendError)
-      throw new EmailValidationError(error.reasonUk);
+      throw Object.assign(new EmailValidationError(error.reasonUk), {
+        healthRateLimited: /flood_wait/i.test(error.code),
+      });
     throw new EmailValidationError(
       'Не вдалося виконати запит Telegram. Повторіть спробу.',
     );
@@ -115,6 +118,13 @@ export async function beginTelegramLogin(
         }),
       ],
     );
+    await recordHealthEvent(
+      c,
+      account.id,
+      'code_requested',
+      'Telegram запросив код підтвердження входу.',
+      { eventKey: `code:${now.toISOString()}` },
+    );
     return {
       id: String(account.id),
       step: 'code' as const,
@@ -187,7 +197,31 @@ export async function pollTelegramQrLogin(
       id,
       step: login.requiresPassword ? ('password' as const) : ('code' as const),
     };
-  const result = await loginOperation(() => adapter.qrLogin(login.session));
+  const result = await loginOperation(() =>
+    adapter.qrLogin(login.session),
+  ).catch(async (error) => {
+    await transaction(async (c) => {
+      await lockAccount(c, id, userId);
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_failed',
+        'Не вдалося увійти в Telegram за QR-кодом.',
+        { eventKey: `qr-login:${now.toISOString()}` },
+        now,
+      );
+      if (error.healthRateLimited)
+        await recordHealthEvent(
+          c,
+          id,
+          'rate_limited',
+          'Telegram обмежив частоту спроб входу.',
+          { eventKey: `qr-login:${now.toISOString()}` },
+          now,
+        );
+    });
+    throw error;
+  });
   return transaction(async (c) => {
     const account = await lockAccount(c, id, userId);
     // Another poll finished or replaced this login meanwhile: keep its result.
@@ -199,14 +233,25 @@ export async function pollTelegramQrLogin(
       return { id, step: 'qr' as const };
     if (result.status === 'done') {
       await c.query(
-        "update channel_accounts set status='active',address=$3,settings=$2 where id=$1",
+        "update channel_accounts set status=case when settings->>'healthAutoPaused'='true' then 'paused' else 'active' end,address=$3,settings=$2 where id=$1",
         [
           id,
           JSON.stringify({
+            ...account.settings,
+            pending: undefined,
+            expiresAt: undefined,
+            sessionStatus: 'valid',
             sessionEncrypted: encryptTelegramSession(result.session, secret()),
           }),
           result.phone ?? read.address,
         ],
+      );
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_ok',
+        'Вхід у Telegram виконано.',
+        { eventKey: `login:${account.settings.expiresAt}` },
       );
       await logActivity(
         'telegram.account.connected',
@@ -295,15 +340,22 @@ export async function completeTelegramLogin(
       return { id, step: 'password' as const };
     }
     await c.query(
-      "update channel_accounts set status='active',settings=$2,address=$3 where id=$1",
+      "update channel_accounts set status=case when settings->>'healthAutoPaused'='true' then 'paused' else 'active' end,settings=$2,address=$3 where id=$1",
       [
         id,
         JSON.stringify({
+          ...settings,
+          pending: undefined,
+          expiresAt: undefined,
+          sessionStatus: 'valid',
           sessionEncrypted: encryptTelegramSession(result.session, secret()),
         }),
         (result as { phone?: string }).phone ?? account.address,
       ],
     );
+    await recordHealthEvent(c, id, 'relogin_ok', 'Вхід у Telegram виконано.', {
+      eventKey: `login:${settings.expiresAt}`,
+    });
     await logActivity(
       'telegram.account.connected',
       'channel_account',
@@ -313,6 +365,28 @@ export async function completeTelegramLogin(
       c,
     );
     return { id, step: 'done' as const };
+  }).catch(async (error) => {
+    await transaction(async (c) => {
+      await lockAccount(c, id, userId);
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_failed',
+        'Не вдалося увійти в Telegram. Перевірте код або пароль.',
+        { eventKey: `login-failed:${now.toISOString()}` },
+        now,
+      );
+      if (error.healthRateLimited)
+        await recordHealthEvent(
+          c,
+          id,
+          'rate_limited',
+          'Telegram обмежив частоту спроб входу.',
+          { eventKey: `login-failed:${now.toISOString()}` },
+          now,
+        );
+    });
+    throw error;
   });
 }
 export async function updateTelegramAccount(
@@ -342,6 +416,7 @@ export async function updateTelegramAccount(
             : 'disabled',
       ],
     );
+    if (input.enabled === true) await enableAccountHealth(c, id);
     await logActivity(
       'telegram.account.updated',
       'channel_account',

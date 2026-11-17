@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import type { listWhatsAppAccounts } from '@sonar/db/whatsapp';
 import { uk } from '@/i18n/uk';
@@ -10,15 +11,28 @@ import { AiAssist } from './ai-assist';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RevealValue } from './ui/reveal-value';
 import { RowActions } from './ui/row-actions';
+import {
+  HealthBadge,
+  HealthDetails,
+  HealthJournal,
+  healthJournalAction,
+  type AccountHealth,
+} from './account-health';
 
 type Account = Awaited<ReturnType<typeof listWhatsAppAccounts>>[number];
 export function WhatsAppAccounts({
   accounts,
+  health = [],
   configured,
 }: {
   accounts: Account[];
+  health?: AccountHealth[];
   configured: boolean;
 }) {
+  const router = useRouter();
+  const [healthJournal, setHealthJournal] = useState<AccountHealth | null>(
+    null,
+  );
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [current, setCurrent] = useState(accounts),
@@ -31,6 +45,9 @@ export function WhatsAppAccounts({
   const busy = useRef(false),
     generation = useRef(0);
   const account = current[0];
+  const healthPaused = health.some(
+    (item) => item.accountId === account?.id && item.pauseUntil,
+  );
   useEffect(() => {
     setCurrent(accounts);
   }, [accounts]);
@@ -90,6 +107,7 @@ export function WhatsAppAccounts({
       const result = await response.json();
       if (!response.ok) throw Error(result.error ?? uk.email.error);
       setCurrent(result.accounts);
+      router.refresh();
       if (method === 'PATCH' && 'dailyLimit' in fields) setEditing(false);
       if (method === 'POST' && 'action' in fields && fields.action === 'start')
         setOpen(false);
@@ -104,6 +122,13 @@ export function WhatsAppAccounts({
   };
   return (
     <Card className="space-y-4 p-5">
+      <HealthJournal
+        health={
+          health.find((item) => item.accountId === healthJournal?.accountId) ??
+          healthJournal
+        }
+        onClose={() => setHealthJournal(null)}
+      />
       <h2 className="border-b border-border pb-4 font-heading text-base font-semibold">
         {uk.whatsapp.accounts}
       </h2>
@@ -115,7 +140,10 @@ export function WhatsAppAccounts({
         <section className="space-y-4 border-t border-border pt-4">
           <div className="space-y-1 break-words">
             <p className="font-medium">
-              {account.name}
+              {account.name}{' '}
+              <HealthBadge
+                health={health.find((item) => item.accountId === account.id)}
+              />
               {account.providerName && ` · ${account.providerName}`}
               {account.address && account.address !== '—' && (
                 <>
@@ -147,6 +175,9 @@ export function WhatsAppAccounts({
             )}
             {account.reasonUk && <p className="text-err">{account.reasonUk}</p>}
           </div>
+          <HealthDetails
+            health={health.find((item) => item.accountId === account.id)}
+          />
           {account.status === 'qr' && (
             <div className="space-y-3">
               <p>{uk.whatsapp.scan}</p>
@@ -244,19 +275,25 @@ export function WhatsAppAccounts({
             <RowActions
               disabled={pending}
               actions={[
-                ...(account.status === 'active'
+                ...healthJournalAction(
+                  health.find((item) => item.accountId === account.id),
+                  setHealthJournal,
+                ),
+                ...(account.status === 'active' || healthPaused
                   ? [
                       {
-                        kind: account.desiredEnabled
-                          ? ('disable' as const)
-                          : ('enable' as const),
-                        label: account.desiredEnabled
-                          ? uk.email.disable
-                          : uk.email.enable,
+                        kind:
+                          account.desiredEnabled && !healthPaused
+                            ? ('disable' as const)
+                            : ('enable' as const),
+                        label:
+                          account.desiredEnabled && !healthPaused
+                            ? uk.email.disable
+                            : uk.email.enable,
                         onSelect: () =>
                           void mutate('PATCH', {
                             id: account.id,
-                            enabled: !account.desiredEnabled,
+                            enabled: healthPaused || !account.desiredEnabled,
                           }),
                       },
                     ]

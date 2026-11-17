@@ -661,7 +661,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ['captcha', 'session', 'unconfirmed', 'session_invalid'],
       ['checkpoint', 'session', 'unconfirmed', 'session_invalid'],
       ['noSession', 'session', 'timeout', 'session_invalid'],
-      ['domRateLimit', 'session', 'restricted', 'rate_limit'],
+      ['domRateLimit', 'session', 'restricted', 'session_invalid'],
       ['rateLimit', 'navigation', 'http_429', 'rate_limit'],
       ['wrongProfile', 'profile', 'timeout', 'unavailable'],
       ['noMessage', 'messagebutton', 'timeout', 'unavailable'],

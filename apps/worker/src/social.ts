@@ -9,6 +9,8 @@ import {
 } from '@sonar/core';
 import { socialAnonymousProxies } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
+import { recordHealthEvent } from '@sonar/db/account-health';
+import { socialSessionCheckReasons } from '@sonar/core/social-session';
 import { runBudgetedRequest, BillingUncertain } from '@sonar/db/budget';
 import { saveSocialProfile, type SocialPayload } from '@sonar/db/social';
 import {
@@ -40,6 +42,7 @@ type Settings = Record<string, unknown>;
 const reason = (code: string) =>
   ({
     captcha: 'Соцмережа вимагає CAPTCHA. Повторіть вручну після паузи.',
+    action_blocked: socialSessionCheckReasons.action_blocked,
     login_wall: 'Соцмережа вимагає входу. Доступні лише публічні сторінки.',
     forbidden:
       'Соцмережа заборонила доступ (403). Повторіть вручну після паузи.',
@@ -321,17 +324,46 @@ export async function runSocialFetch(
           );
           const sessionBlocked =
             page.error === 'session_invalid' ||
-            ['captcha', 'login_wall', 'forbidden', 'rate_limit'].includes(
-              sessionBlock ?? '',
+            [
+              'captcha',
+              'login_wall',
+              'forbidden',
+              'rate_limit',
+              'action_blocked',
+            ].includes(sessionBlock ?? '');
+          if (
+            session &&
+            (sessionBlock === 'rate_limit' || sessionBlock === 'action_blocked')
+          )
+            await recordHealthEvent(
+              client,
+              session.account.id,
+              sessionBlock === 'rate_limit' ? 'rate_limited' : 'action_blocked',
+              reason(sessionBlock),
+              { eventKey: `fetch:${taskId}:${request.id}` },
+              now,
             );
           // Rate limits pause the network; changing context or proxy would bypass them.
           if (
             session &&
             sessionBlock !== 'rate_limit' &&
+            sessionBlock !== 'action_blocked' &&
             (page.error || sessionBlocked)
           ) {
             if (sessionBlocked)
-              await pauseSocialFetchSession(client, session.account.id);
+              await pauseSocialFetchSession(
+                client,
+                session.account.id,
+                sessionBlock === 'captcha'
+                  ? /^https?:\/\/[^/]+\/(?:checkpoint|challenge)(?:\/|$)/i.test(
+                      page.url,
+                    )
+                    ? 'checkpoint'
+                    : 'captcha'
+                  : 'login_required',
+                now,
+                `fetch:${taskId}:${request.id}`,
+              );
             // Keep the paid session receipt even when no safe fallback is available.
             if (!anonymousProxies.length)
               return {
@@ -431,9 +463,13 @@ export async function runSocialFetch(
     if (data.failure) {
       const reasonUk = reason(data.failure);
       if (
-        ['captcha', 'login_wall', 'forbidden', 'rate_limit'].includes(
-          data.failure,
-        )
+        [
+          'captcha',
+          'login_wall',
+          'forbidden',
+          'rate_limit',
+          'action_blocked',
+        ].includes(data.failure)
       )
         await client.query(
           `update settings set value=value||$2::jsonb,updated_at=now() where key=$1`,
@@ -448,9 +484,12 @@ export async function runSocialFetch(
           ],
         );
       return {
-        status: ['captcha', 'rate_limit', 'anonymous_proxy_missing'].includes(
-          data.failure,
-        )
+        status: [
+          'captcha',
+          'rate_limit',
+          'action_blocked',
+          'anonymous_proxy_missing',
+        ].includes(data.failure)
           ? 'paused'
           : 'skipped',
         reasonCode: `social_${data.failure}`,

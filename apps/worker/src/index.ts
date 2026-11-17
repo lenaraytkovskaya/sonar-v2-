@@ -1,4 +1,8 @@
 import {
+  reconcileAccountHealthPauses,
+  cleanupAccountHealthEvents,
+} from '@sonar/db/account-health';
+import {
   registerSocialCredentialLoginTasks,
   closeSocialLoginBrowser,
 } from './social-login.js';
@@ -49,6 +53,17 @@ const started = (async () => {
   await registerSocialCredentialLoginTasks();
   await registerSocialSessionTasks();
   await registerSiteTasks();
+  await boss.createQueue('sonar.account-health.resume');
+  await boss.createQueue('sonar.account-health.cleanup');
+  await boss.work('sonar.account-health.resume', async () => {
+    await reconcileAccountHealthPauses();
+  });
+  await boss.work('sonar.account-health.cleanup', async () => {
+    await cleanupAccountHealthEvents();
+  });
+  await boss.schedule('sonar.account-health.resume', '* * * * *');
+  await boss.schedule('sonar.account-health.cleanup', '0 3 * * *');
+  await reconcileAccountHealthPauses();
   await boss.createQueue('sonar.registry.schedule');
   await runTask('system.registry_ping', async () => {
     try {

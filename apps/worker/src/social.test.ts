@@ -9,6 +9,7 @@ const {
   pauseSession,
   releaseSession,
   reservedProxies,
+  healthEvent,
 } = vi.hoisted(() => ({
   connect: vi.fn(),
   budgeted: vi.fn(),
@@ -19,8 +20,10 @@ const {
   pauseSession: vi.fn(),
   releaseSession: vi.fn(),
   reservedProxies: vi.fn(),
+  healthEvent: vi.fn(),
 }));
 vi.mock('@sonar/db', () => ({ sonarPool: { connect } }));
+vi.mock('@sonar/db/account-health', () => ({ recordHealthEvent: healthEvent }));
 vi.mock('@sonar/db/tasks', () => ({ boss: {}, runTask: vi.fn() }));
 vi.mock('@sonar/db/social', () => ({ saveSocialProfile: vi.fn() }));
 vi.mock('@sonar/db/scoring', () => ({ enqueueCompanyScores: vi.fn() }));
@@ -155,7 +158,13 @@ it.each(['accounts/login', 'checkpoint'])(
       status: 'done',
       result: { profile: { method: 'anonymous' }, costUsd: 0.002 },
     });
-    expect(pauseSession).toHaveBeenCalledWith(expect.anything(), 'account');
+    expect(pauseSession).toHaveBeenCalledWith(
+      expect.anything(),
+      'account',
+      path === 'checkpoint' ? 'checkpoint' : 'login_required',
+      expect.any(Date),
+      'fetch:task:request',
+    );
     expect(fetch.mock.calls[1]).toHaveLength(4);
     expect(fetch.mock.calls[1]?.[1]).toEqual({
       server: 'http://anonymous.example:8000',
@@ -189,6 +198,14 @@ it.each([
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]?.[1]).toEqual(authenticated.session.proxy);
     expect(pauseSession).not.toHaveBeenCalled();
+    expect(healthEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'account',
+      'rate_limited',
+      expect.any(String),
+      { eventKey: 'fetch:task:request' },
+      expect.any(Date),
+    );
     const pauseUpdate = query.mock.calls.find(([sql]) =>
       sql.includes('value=value||'),
     );
@@ -506,3 +523,31 @@ it('records zero cost when Chromium cannot start before any proxy traffic', asyn
     await closeSocialBrowser();
   }
 });
+
+it.each(['Action blocked', 'Попробуйте позже', 'Дію заблоковано'])(
+  'records action restrictions while reading without a proxy fallback: %s',
+  async (text) => {
+    prepareSocialFetch();
+    acquireSession.mockResolvedValue(authenticated);
+    const fetch = vi.fn().mockResolvedValue({
+      html: `<main>${text}</main>`,
+      url: payload.target.canonicalUrl,
+      status: 200,
+      usedProxy: true,
+    });
+    expect(await runSocialFetch(payload, 'task', fetch)).toMatchObject({
+      status: 'paused',
+      reasonCode: 'social_action_blocked',
+    });
+    expect(healthEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'account',
+      'action_blocked',
+      expect.any(String),
+      { eventKey: 'fetch:task:request' },
+      expect.any(Date),
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(pauseSession).not.toHaveBeenCalled();
+  },
+);

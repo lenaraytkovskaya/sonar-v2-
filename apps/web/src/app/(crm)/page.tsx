@@ -1,3 +1,4 @@
+import { AccountHealthOverview } from '@/components/account-health';
 import { TaskOverview } from '@/components/task-overview';
 import { PageHeader } from '@/components/shared';
 import { Button } from '@/components/ui/button';
@@ -23,14 +24,16 @@ export default async function Page({
   searchParams: Promise<{ campaign?: string }>;
 }) {
   const { campaign } = await searchParams;
+  const { accountHealth } = await import('@sonar/db/account-health');
   const { overviewMetrics } = await import('@sonar/db/metrics');
   const { sonarPool } = await import('@sonar/db');
   const selected = validId(campaign) ? campaign : undefined;
-  const [data, campaigns] = await Promise.all([
+  const [data, campaigns, health] = await Promise.all([
     overviewMetrics(selected),
     sonarPool.query<{ id: string; name: string }>(
       'select id,name from campaigns order by created_at desc',
     ),
+    accountHealth(),
   ]);
   const t = uk.overview;
   const f = data.funnel;
@@ -171,6 +174,7 @@ export default async function Page({
           )}
         </Section>
       </div>
+      <AccountHealthOverview health={health} />
       <TaskOverview />
     </div>
   );

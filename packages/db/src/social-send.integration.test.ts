@@ -348,7 +348,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         });
         expect(await send(limitedMessage.id, rateLimited)).toMatchObject({
           status: 'paused',
-          reasonCode: 'social_rate_limit',
+          reasonCode: 'account_health_paused',
         });
         expect(
           (
@@ -374,9 +374,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         });
         expect(await send(limitedMessage.id, rateLimited)).toMatchObject({
           status: 'paused',
-          reasonCode: attempted
-            ? 'social_delivery_uncertain'
-            : 'account_disabled',
+          reasonCode: 'account_health_paused',
         });
         if (attempted) {
           await reset();

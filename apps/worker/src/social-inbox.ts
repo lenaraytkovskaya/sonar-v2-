@@ -269,7 +269,13 @@ export async function runSocialInboxSync(
           ? safeSocialSessionDiagnostic(error.diagnostic)
           : undefined;
       if (error.code === 'session_invalid' || error.code === 'rate_limit')
-        await pauseSocialFetchSession(c, input.accountId, reason, now);
+        await pauseSocialFetchSession(
+          c,
+          input.accountId,
+          reason,
+          now,
+          taskId ? `inbox:${taskId}` : undefined,
+        );
       return {
         status: 'paused',
         reasonCode: `social_inbox_${reason}`,

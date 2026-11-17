@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { recordHealthEvent, enableAccountHealth } from './account-health.js';
 import { queueAutomaticSocialRelogin } from './social-login.js';
 export {
   saveSocialCredentials,
@@ -284,6 +285,7 @@ export async function pauseSocialFetchSession(
   id: string,
   reason: SocialSessionCheckReason = 'login_required',
   now = new Date(),
+  eventKey?: string,
 ) {
   const reasonUk = socialSessionCheckReasons[reason];
   const lost = [
@@ -294,7 +296,7 @@ export async function pauseSocialFetchSession(
   ].includes(reason);
   await c.query(
     `update channel_accounts set status=case when status='disabled' then status else 'paused' end,
-    settings=settings||$2::jsonb||case when $3::boolean and coalesce(settings->>'sessionLossActive','false')<>'true'
+    settings=settings||$2::jsonb||case when settings->>'healthAutoPaused'='true' then jsonb_build_object('reasonUk',settings->>'reasonUk') else '{}'::jsonb end||case when $3::boolean and coalesce(settings->>'sessionLossActive','false')<>'true'
     then jsonb_build_object('sessionLostEventId',$4::text,'sessionLostAt',$5::text,'sessionLostReasonUk',$6::text) else '{}'::jsonb end where id=$1`,
     [
       id,
@@ -313,6 +315,38 @@ export async function pauseSocialFetchSession(
       reasonUk,
     ],
   );
+  const {
+    rows: [current],
+  } = await c.query(
+    "select settings->>'sessionLostEventId' as event from channel_accounts where id=$1",
+    [id],
+  );
+  const key = eventKey ?? current?.event ?? now.toISOString();
+  if (lost)
+    await recordHealthEvent(
+      c,
+      id,
+      'session_lost',
+      reasonUk,
+      { eventKey: `session:${key}` },
+      now,
+    );
+  if (
+    reason === 'captcha' ||
+    reason === 'checkpoint' ||
+    reason === 'action_blocked' ||
+    reason === 'rate_limit'
+  )
+    await recordHealthEvent(
+      c,
+      id,
+      reason === 'rate_limit' ? 'rate_limited' : reason,
+      reasonUk,
+      {
+        eventKey: `${reason === 'rate_limit' ? 'rate_limited' : reason}:${key}`,
+      },
+      now,
+    );
 }
 /** Reserve only after the proxy budget is approved; task receipt makes retries idempotent. */
 export async function reserveSocialFetchSession(
@@ -551,11 +585,13 @@ export async function saveSocialAccount(
             sessionStatus: 'pending',
             checkedAt: null,
             reasonUk:
-              proxyChanged ||
-              existing?.settings.reasonUk ===
-                'Проксі змінено. Можлива перевірка входу.'
-                ? 'Проксі змінено. Можлива перевірка входу.'
-                : null,
+              existing?.settings.healthAutoPaused === true
+                ? existing.settings.reasonUk
+                : proxyChanged ||
+                    existing?.settings.reasonUk ===
+                      'Проксі змінено. Можлива перевірка входу.'
+                  ? 'Проксі змінено. Можлива перевірка входу.'
+                  : null,
             sessionCheckReason: null,
           }
         : {}),
@@ -576,6 +612,14 @@ export async function saveSocialAccount(
       await c.query(
         "insert into channel_accounts(id,channel,name,address,owner_id,status,daily_limit,settings) values($1,$2,$3,'',$4,'paused',$5,$6)",
         [id, input.network, name, userId, input.dailyLimit, settings],
+      );
+    if (stateJson)
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_ok',
+        'Сесію соцмережі імпортовано. Потрібна перевірка.',
+        { source: 'import', eventKey: `import:${randomUUID()}` },
       );
     await logActivity(
       'social.account.saved',
@@ -720,19 +764,25 @@ export async function updateSocialAccount(
             sessionStatus: 'pending',
             checkedAt: null,
             reasonUk:
-              proxyChanged ||
-              account.settings.reasonUk ===
-                'Проксі змінено. Можлива перевірка входу.'
-                ? 'Проксі змінено. Можлива перевірка входу.'
-                : null,
+              account.settings.healthAutoPaused === true
+                ? account.settings.reasonUk
+                : proxyChanged ||
+                    account.settings.reasonUk ===
+                      'Проксі змінено. Можлива перевірка входу.'
+                  ? 'Проксі змінено. Можлива перевірка входу.'
+                  : null,
             sessionCheckReason: null,
           }
         : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     };
-    if (input.enabled && (replaced || settings.sessionStatus !== 'valid'))
+    if (
+      input.enabled &&
+      (replaced || settings.sessionStatus !== 'valid') &&
+      account.settings.healthAutoPaused !== true
+    )
       invalid('Спочатку перевірте сесію акаунта.');
-    if (input.enabled) {
+    if (input.enabled && settings.sessionStatus === 'valid' && !replaced) {
       try {
         await prepareSocialSession(c, {
           id,
@@ -753,12 +803,23 @@ export async function updateSocialAccount(
         : replaced
           ? 'paused'
           : input.enabled
-            ? 'active'
+            ? settings.sessionStatus === 'valid'
+              ? 'active'
+              : 'paused'
             : account.status;
     await c.query(
       'update channel_accounts set daily_limit=$2,status=$3,settings=$4 where id=$1',
       [id, input.dailyLimit ?? account.daily_limit, status, settings],
     );
+    if (input.enabled === true) await enableAccountHealth(c, id);
+    if (input.storageStateJson !== undefined || input.cookiesJson !== undefined)
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_ok',
+        'Сесію соцмережі імпортовано. Потрібна перевірка.',
+        { source: 'import', eventKey: `import:${randomUUID()}` },
+      );
     await logActivity(
       'social.account.updated',
       'channel_account',
@@ -1052,7 +1113,11 @@ export async function withSocialSessionCheck(
         'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
         [
           id,
-          account.settings.enabled === false ? 'disabled' : 'active',
+          account.settings.enabled === false
+            ? 'disabled'
+            : account.settings.healthAutoPaused === true
+              ? 'paused'
+              : 'active',
           {
             sessionStatus: 'valid',
             sessionLossActive: false,
@@ -1060,9 +1125,28 @@ export async function withSocialSessionCheck(
             loginRecoveryPending: false,
             checkedAt: now.toISOString(),
             sessionCheckReason: null,
-            reasonUk: null,
+            reasonUk:
+              account.settings.healthAutoPaused === true
+                ? account.settings.reasonUk
+                : null,
           },
         ],
+      );
+    if (
+      valid &&
+      (account.settings.sessionLossActive ||
+        ['invalid', 'unconfirmed'].includes(
+          String(account.settings.sessionStatus),
+        ))
+    )
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_ok',
+        'Сесію соцмережі підтверджено.',
+        {
+          eventKey: `check:${account.settings.storageStateUpdatedAt ?? account.settings.sessionLostEventId ?? now.toISOString()}`,
+        },
       );
     if (mode === 'keepalive' || valid) {
       const nextAt = await nextSocialKeepalive(c, now);

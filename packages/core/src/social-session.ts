@@ -83,6 +83,8 @@ export const socialSessionCheckReasons = {
   captcha: 'Соцмережа вимагає CAPTCHA. Пройдіть перевірку вручну.',
   checkpoint:
     'Соцмережа вимагає підтвердження особи. Пройдіть перевірку вручну.',
+  action_blocked:
+    'Соцмережа заблокувала дії акаунта. Перевірте обмеження вручну.',
   rate_limit:
     'Соцмережа обмежила частоту запитів. Повторіть перевірку пізніше.',
   timeout: 'Час очікування соцмережі вичерпано. Повторіть перевірку пізніше.',
@@ -92,6 +94,10 @@ export const socialSessionCheckReasons = {
   browser: 'Не вдалося запустити або використати браузер. Повторіть перевірку.',
   unknown_auth: 'Сесію не підтверджено. Перевірте вхід у соцмережу вручну.',
 } as const;
+export {
+  socialActionBlockedPattern,
+  detectSocialActionBlocked,
+} from './social.js';
 export type SocialSessionCheckReason = keyof typeof socialSessionCheckReasons;
 export type SocialActorFieldKind =
   'missing' | 'null' | 'digit_string' | 'object' | 'other';
@@ -429,6 +435,7 @@ export class SocialSessionCheckError extends SocialSendError {
               'cookies_invalid',
               'captcha',
               'checkpoint',
+              'action_blocked',
               'unknown_auth',
               'proxy',
             ].includes(reason)

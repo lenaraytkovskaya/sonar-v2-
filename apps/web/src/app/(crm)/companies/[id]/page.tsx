@@ -47,9 +47,7 @@ function Section({
   return (
     <Card className={cn('min-w-0 space-y-3 break-words p-5', className)}>
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-heading text-base font-semibold">
-          {title}
-        </h2>
+        <h2 className="font-heading text-base font-semibold">{title}</h2>
         {action}
       </div>
       {children}

@@ -1,3 +1,4 @@
+import { recordHealthEvent } from './account-health.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import {
@@ -267,9 +268,10 @@ async function finishFailure(
   id: string,
   reason: keyof typeof reasons,
   now: Date,
+  eventKey?: string,
 ) {
   await c.query(
-    `update channel_accounts set status=case when status='disabled' then status else 'paused' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId')||$2::jsonb where id=$1`,
+    `update channel_accounts set status=case when status='disabled' then status else 'paused' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId')||$2::jsonb||case when settings->>'healthAutoPaused'='true' then jsonb_build_object('reasonUk',settings->>'reasonUk') else '{}'::jsonb end where id=$1`,
     [
       id,
       {
@@ -290,6 +292,24 @@ async function finishFailure(
       },
     ],
   );
+  const key = eventKey ?? now.toISOString();
+  await recordHealthEvent(
+    c,
+    id,
+    'relogin_failed',
+    reasons[reason],
+    { eventKey: `login:${key}` },
+    now,
+  );
+  if (reason === 'captcha' || reason === 'checkpoint')
+    await recordHealthEvent(
+      c,
+      id,
+      reason,
+      reasons[reason],
+      { eventKey: `${reason}:${key}` },
+      now,
+    );
 }
 export async function withSocialCredentialLogin(
   id: string,
@@ -366,7 +386,7 @@ export async function withSocialCredentialLogin(
         );
       };
     } catch {
-      await finishFailure(c, id, 'login_failed', now);
+      await finishFailure(c, id, 'login_failed', now, taskId);
       return {
         status: 'paused',
         reasonCode: 'social_login_configuration',
@@ -421,6 +441,13 @@ export async function withSocialCredentialLogin(
           },
         ],
       );
+      await recordHealthEvent(
+        c,
+        id,
+        'code_requested',
+        'Введіть код підтвердження у налаштуваннях каналу.',
+        { eventKey: `code:${taskId}:${kind}` },
+      );
       await c.query(
         "update tasks set status='paused',reason_code='social_login_code_required',reason_uk='Введіть код підтвердження у налаштуваннях каналу.' where id=$1",
         [taskId],
@@ -455,7 +482,7 @@ export async function withSocialCredentialLogin(
     }
     if (result.valid) {
       await c.query(
-        "update channel_accounts set status=case when settings->>'enabled'='false' then 'disabled' else 'active' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId'-'loginShot')||$2::jsonb where id=$1",
+        "update channel_accounts set status=case when settings->>'enabled'='false' then 'disabled' when settings->>'healthAutoPaused'='true' then 'paused' else 'active' end,settings=(settings-'loginCodeEncrypted'-'loginChallengeKind'-'loginChallengeExpiresAt'-'loginTaskId'-'loginShot')||$2::jsonb where id=$1",
         [
           id,
           {
@@ -463,11 +490,21 @@ export async function withSocialCredentialLogin(
             sessionStatus: 'valid',
             sessionLossActive: false,
             sessionCheckReason: null,
-            reasonUk: null,
+            reasonUk:
+              row.settings.healthAutoPaused === true
+                ? row.settings.reasonUk
+                : null,
             checkedAt: new Date().toISOString(),
             loginAutoAttempted: false,
           },
         ],
+      );
+      await recordHealthEvent(
+        c,
+        id,
+        'relogin_ok',
+        'Вхід у соцмережу виконано.',
+        { eventKey: `login:${taskId}` },
       );
       return {
         status: 'done',
@@ -478,7 +515,7 @@ export async function withSocialCredentialLogin(
       result.reason && Object.hasOwn(reasons, result.reason)
         ? result.reason
         : 'login_failed';
-    await finishFailure(c, id, reason, new Date());
+    await finishFailure(c, id, reason, new Date(), taskId);
     if (
       typeof result.screenshot === 'string' &&
       result.screenshot.length < 3_000_000
@@ -520,7 +557,7 @@ export async function reconcileSocialCredentialLogins() {
         }
         continue;
       }
-      await finishFailure(c, row.id, 'code_expired', new Date());
+      await finishFailure(c, row.id, 'code_expired', new Date(), row.task);
       await c.query(
         "update tasks set status='failed',finished_at=now(),reason_code='social_login_context_lost',reason_uk=$2 where id=$1 and status in ('running','paused')",
         [row.task, reasons.code_expired],

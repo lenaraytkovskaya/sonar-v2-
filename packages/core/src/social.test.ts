@@ -557,4 +557,19 @@ describe('detectSocialBlock', () => {
       ),
     ).toBe('rate_limit');
   });
+  it.each(['Try again later', 'Попробуйте позже', 'Дію заблоковано'])(
+    'recognizes visible account action restrictions: %s',
+    (text) => {
+      expect(
+        detectSocialBlock(`<main>${text}</main>`, instagram.canonicalUrl, 200),
+      ).toBe('action_blocked');
+      expect(
+        detectSocialBlock(
+          `<div hidden>${text}</div><main>Public company</main>`,
+          instagram.canonicalUrl,
+          200,
+        ),
+      ).toBeNull();
+    },
+  );
 });
