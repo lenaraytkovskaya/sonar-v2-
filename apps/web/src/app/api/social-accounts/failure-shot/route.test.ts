@@ -9,6 +9,7 @@ vi.mock('@/lib/api-access', () => ({
   validId: (id: unknown) =>
     typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id),
 }));
+vi.mock('@/i18n/uk', () => import('../../../../i18n/uk'));
 vi.mock('@sonar/db', () => ({ sonarPool: { query } }));
 import { GET } from './route.js';
 
