@@ -1198,6 +1198,7 @@ export const uk = {
     notCharged: 'Не списано',
     active: 'Зараз у роботі',
     failures: 'Помилки та паузи',
+    older: 'Старіші',
     registry: 'Перевірка реєстру ЄДР',
     aiModels: 'Оновлення моделей ШІ',
     aiAssist: 'Редагування тексту ШІ',

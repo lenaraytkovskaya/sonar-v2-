@@ -1022,3 +1022,32 @@ export async function readWorkerHealth(now = new Date()) {
     now,
   );
 }
+
+export async function overviewFailures() {
+  const { rows: config } = await sonarPool.query(
+    "select value from settings where key='tasks.failure_visible_days'",
+  );
+  const configuredDays = Number(config[0]?.value ?? 7);
+  const days =
+    Number.isFinite(configuredDays) && configuredDays >= 0 ? configuredDays : 7;
+  const { rows } = await sonarPool.query(
+    `
+    with unresolved as (
+      select *,coalesce(finished_at,started_at,created_at)<now()-$1*interval '1 day' as is_old
+      from tasks where status in ('failed','paused') and dismissed_at is null
+        -- A later successful run of the same job on the same subject resolves the failure.
+        and not exists(select 1 from tasks d where d.type=tasks.type and d.subject_id is not distinct from tasks.subject_id and d.status='done' and d.created_at>tasks.created_at)
+    ), latest as (
+      select distinct on (type,is_old,case when result->>'billingPending'='true' then id end)
+        id,type,status,reason_uk,result,created_at,is_old,
+        count(*) over (partition by type,is_old)::int as repetitions
+      from unresolved
+      order by type,is_old,case when result->>'billingPending'='true' then id end,created_at desc,id desc
+    ) select * from latest order by created_at desc`,
+    [days],
+  );
+  return {
+    failures: rows.filter((task) => !task.is_old),
+    olderFailures: rows.filter((task) => task.is_old),
+  };
+}
