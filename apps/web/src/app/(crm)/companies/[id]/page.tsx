@@ -33,7 +33,6 @@ const kindOrder = [
   'social',
   'website',
 ];
-const visibleContacts = 12;
 
 function Section({
   title,
@@ -263,15 +262,15 @@ export default async function Page({
     return (
       <li
         key={contact.id}
-        className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
+        className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 border-b border-border py-2 last:border-0 sm:flex-nowrap"
       >
-        <span className="flex w-24 shrink-0 items-start gap-1.5 pt-0.5 text-xs text-muted-foreground">
-          <ChannelIcon channel={contact.kind} value={contact.value} />
-          {contact.kind === 'social'
-            ? channelLabel(contact.kind, contact.value)
-            : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
-        </span>
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-start gap-x-2 gap-y-1">
+          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <ChannelIcon channel={contact.kind} value={contact.value} />
+            {contact.kind === 'social'
+              ? channelLabel(contact.kind, contact.value)
+              : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
+          </span>
           <div className="flex min-w-0 items-center gap-1.5">
             {href ? (
               <a
@@ -300,7 +299,7 @@ export default async function Page({
               </Link>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="w-full text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:shrink-0 sm:text-right">
             {
               uk.company.sources[
                 contact.source as keyof typeof uk.company.sources
@@ -872,19 +871,28 @@ export default async function Page({
                     </p>
                   )}
                   <ul className="text-sm">
-                    {sortedContacts.slice(0, visibleContacts).map(contactRow)}
+                    {([
+                      { key: 'email', kinds: ['email'] },
+                      { key: 'phones', kinds: ['phone'] },
+                      { key: 'messengers', kinds: ['telegram', 'whatsapp', 'viber'] },
+                      { key: 'social', kinds: ['social'] },
+                      { key: 'forms', kinds: ['form'] },
+                      { key: 'websites', kinds: ['website'] },
+                    ] as const).map(({ key, kinds }) => {
+                      const group = sortedContacts
+                        .filter((contact) => kinds.includes(contact.kind as never))
+                        .sort((a, b) => b.rank - a.rank);
+                      if (!group.length) return null;
+                      return (
+                        <li key={key} className="list-none space-y-1.5 py-3 first:pt-0">
+                          <h3 className="text-sm font-semibold">
+                            {uk.company.contactGroups[key]} ({group.length})
+                          </h3>
+                          <ul className="text-sm">{group.map(contactRow)}</ul>
+                        </li>
+                      );
+                    })}
                   </ul>
-                  {sortedContacts.length > visibleContacts && (
-                    <details className="text-sm">
-                      <summary className="cursor-pointer text-accent">
-                        {uk.company.more}:{' '}
-                        {sortedContacts.length - visibleContacts}
-                      </summary>
-                      <ul>
-                        {sortedContacts.slice(visibleContacts).map(contactRow)}
-                      </ul>
-                    </details>
-                  )}
                 </Section>
               </div>
             ),
