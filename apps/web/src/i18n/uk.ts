@@ -112,6 +112,51 @@ export const uk = {
   },
 
   more: 'Докладніше',
+  settings: {
+    range: (min: number, max: number) =>
+      `Допустиме значення: від ${min} до ${max}.`,
+    section: 'Розділ налаштувань',
+    showAll: 'Показати все',
+    modelHint: 'Для помічника та щоденних завдань.',
+    aboutHint: 'Опис послуг для аналізу компаній і першого повідомлення.',
+    userAgentHint: 'Як сканер представляється сайтам компаній.',
+    sections: {
+      notifications: {
+        title: 'Сповіщення',
+        description: 'Звук і сповіщення браузера про нові повідомлення.',
+      },
+      ai: {
+        title: 'ШІ',
+        description: 'Моделі та інформація про ваші послуги.',
+      },
+      analysis: {
+        title: 'Аналіз компаній',
+        description:
+          'Інструкції для оцінювання компаній і підготовки пропозиції.',
+      },
+      google: {
+        title: 'Пошук Google',
+        description: 'Профілі запитів, ціни та строки зберігання результатів.',
+      },
+      scanner: {
+        title: 'Сканер сайтів',
+        description: 'Ліміти сканування й допомога ШІ у пошуку контактів.',
+      },
+      social: {
+        title: 'Соцмережі',
+        description: 'Доступ до публічних профілів, паузи та ліміти запитів.',
+      },
+      registry: {
+        title: 'ЄДР і Prozorro',
+        description:
+          'Індексація контактів реєстру та синхронізація закупівель.',
+      },
+      budget: {
+        title: 'Ліміти й бюджет',
+        description: 'Місячний ліміт витрат на платні сервіси.',
+      },
+    },
+  },
   notifications: {
     title: 'Нове повідомлення',
     close: 'Закрити',
@@ -646,6 +691,12 @@ export const uk = {
   },
   forms: {
     contactDetails: 'Контактні дані',
+    sendingTitle: 'Відправка форм',
+    dailyLimit: 'Ліміт форм на день',
+    sentToday: (sent: number, limit: number) =>
+      `Сьогодні надіслано: ${sent} / ${limit}`,
+    sendingHint: 'Надіслані форми — у «Вхідні» → «Форми»',
+    formUrl: 'Сторінка форми',
     contactHint: 'Контакти, які Sonar залишає у формах компаній.',
     contactLabels: {
       name: 'Ім’я / компанія',

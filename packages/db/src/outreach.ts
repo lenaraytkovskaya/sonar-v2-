@@ -15,6 +15,7 @@ import {
   EmailValidationError,
   isContactBlocked,
   transaction,
+  ensureFormAccount,
 } from './email.js';
 import { enqueueTask, logActivity } from './tasks.js';
 
@@ -781,9 +782,12 @@ export async function markOutreachManualSent(
     assertNoPlaceholder(message);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна позначити надісланим.');
+    let accountId = message.account_id;
+    if (message.channel === 'form' && !accountId)
+      accountId = (await ensureFormAccount(c)).id;
     await c.query(
-      "update messages set status='sent',source='manual',sent_at=now(),created_by=coalesce(created_by,$2),reason_uk=null where id=$1",
-      [messageId, userId],
+      "update messages set account_id=$3,status='sent',source='manual',sent_at=now(),created_by=coalesce(created_by,$2),reason_uk=null where id=$1",
+      [messageId, userId, accountId],
     );
     await logActivity(
       'outreach.message.manual',

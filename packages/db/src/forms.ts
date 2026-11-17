@@ -1,6 +1,7 @@
 import {
   nextSendTime,
   normalizePhone,
+  sharedFormContactsFromValues,
   type SharedFormContact,
   type SendHours,
 } from '@sonar/core';
@@ -11,6 +12,7 @@ import {
   isContactBlocked,
   sameFormDomain,
   transaction,
+  ensureFormAccount,
   validFormUrl,
 } from './email.js';
 import { logActivity, type TaskOutcome } from './tasks.js';
@@ -59,9 +61,25 @@ async function loadContactDetails(
 export async function getContactDetails(): Promise<ContactDetails> {
   return loadContactDetails(sonarPool);
 }
+export async function getFormDeliverySettings(): Promise<{
+  dailyLimit: number;
+  sentToday: number;
+}> {
+  const {
+    rows: [row],
+  } = await sonarPool.query(
+    `select coalesce((select daily_limit from channel_accounts where channel='form' order by created_at,id limit 1), (select (value #>> '{}')::int from settings where key='send.form_company_daily_limit'), 1) as "dailyLimit",
+      (select count(*)::int from messages where channel='form' and direction='out' and sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"`,
+  );
+  return {
+    dailyLimit: Number(row.dailyLimit),
+    sentToday: Number(row.sentToday),
+  };
+}
 export async function saveContactDetails(
   input: ContactDetails,
   userId: string,
+  dailyLimit?: number,
 ): Promise<void> {
   const values = Object.fromEntries(
     contactFields.map((key) => [
@@ -76,6 +94,13 @@ export async function saveContactDetails(
     Object.values(values).some((v) => v.length > 2000)
   )
     throw new EmailValidationError('Перевірте ім’я, email та адресу сайту.');
+  if (
+    dailyLimit !== undefined &&
+    (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 100000)
+  )
+    throw new EmailValidationError(
+      'Ліміт має бути цілим числом від 1 до 100000.',
+    );
   for (const key of ['phone', 'whatsapp'] as const) {
     if (!values[key]) continue;
     const phone = values[key].startsWith('+') && normalizePhone(values[key]);
@@ -86,6 +111,13 @@ export async function saveContactDetails(
     values[key] = phone;
   }
   await transaction(async (c) => {
+    if (dailyLimit !== undefined) {
+      await ensureFormAccount(c);
+      await c.query(
+        "update channel_accounts set daily_limit=$1 where channel='form'",
+        [dailyLimit],
+      );
+    }
     for (const key of contactFields)
       await c.query(
         'insert into settings(key,value) values($1,$2::jsonb) on conflict(key) do update set value=excluded.value',
@@ -174,6 +206,21 @@ export async function sendFormMessage(
         'message_missing',
         'Повідомлення форми не знайдено.',
       );
+    if (!identity.account_id) {
+      await c.query('begin');
+      try {
+        const ensured = await ensureFormAccount(c);
+        await c.query(
+          'update messages set account_id=$2 where id=$1 and account_id is null',
+          [messageId, ensured.id],
+        );
+        await c.query('commit');
+        identity.account_id = ensured.id;
+      } catch (error) {
+        await c.query('rollback');
+        throw error;
+      }
+    }
     await c.query(
       "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
       [identity.account_id],
@@ -261,7 +308,7 @@ export async function sendFormMessage(
         [accountId],
       );
       if (active?.status !== 'active')
-        return stop('paused', 'account_disabled', 'Акаунт форм вимкнено.');
+        return stop('paused', 'account_disabled', 'Надсилання форм вимкнено.');
       const {
         rows: [contact],
       } = await c.query(
@@ -566,12 +613,17 @@ export type FormInboxMessage = {
 export async function listFormMessages(
   options: { status?: FormInboxStatus } = {},
 ): Promise<FormInboxMessage[]> {
-  const { rows } = await sonarPool.query<FormInboxMessage>(
+  const { rows } = await sonarPool.query<
+    Omit<FormInboxMessage, 'sharedContacts'> & {
+      savedSharedContacts: SharedFormContact[] | null;
+    }
+  >(
     `select m.id,v.company_id as "companyId",co.name as "companyName",v.id as "conversationId",m.to_value as url,
       coalesce(m.request_snapshot->>'body',m.body) as body,m.status,m.created_at as "createdAt",m.sent_at as "sentAt",m.reason_uk as "reasonUk",
       coalesce(m.request_snapshot->>'name','') as "senderName",coalesce(m.request_snapshot->>'email','') as "senderEmail",coalesce(m.request_snapshot->>'phone','') as "senderPhone",
       coalesce(m.request_snapshot->>'whatsapp','') as "senderWhatsapp",coalesce(m.request_snapshot->>'telegram','') as "senderTelegram",coalesce(m.request_snapshot->>'senderWebsite','') as "senderWebsite",
-      coalesce(m.request_snapshot->'sharedContacts','[]'::jsonb) as "sharedContacts",(m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",
+      m.request_snapshot->'sharedContacts' as "savedSharedContacts",
+      (m.screenshot_before is not null) as "screenshotBefore",(m.screenshot_after is not null) as "screenshotAfter",
       coalesce(replies.items,'[]'::jsonb) as "replyConversations",coalesce(replies.n,0)::int as replies
      from messages m join conversations v on v.id=m.conversation_id join companies co on co.id=v.company_id
      left join lateral (
@@ -582,7 +634,18 @@ export async function listFormMessages(
      where m.channel='form' and m.direction='out' and ($1::text is null or ($1='replied' and replies.n>0) or ($1<>'replied' and m.status=$1)) order by m.created_at desc,m.id desc`,
     [options.status ?? null],
   );
-  return rows;
+  return rows.map((row) => ({
+    ...row,
+    sharedContacts: sharedFormContactsFromValues(
+      {
+        email: row.senderEmail,
+        phone: row.senderPhone,
+        whatsapp: row.senderWhatsapp,
+        telegram: row.senderTelegram,
+      },
+      row.savedSharedContacts,
+    ),
+  }));
 }
 export async function listManualFormMessages() {
   return listFormMessages({ status: 'awaiting_manual' });

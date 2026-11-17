@@ -4,9 +4,9 @@ import { uk } from '@/i18n/uk';
 import { getSession } from '@/lib/auth';
 export default async function Page() {
   const user = (await getSession()).user;
-  const { listEmailAccounts, listFormAccounts } =
-    await import('@sonar/db/email');
-  const { getContactDetails } = await import('@sonar/db/forms');
+  const { listEmailAccounts } = await import('@sonar/db/email');
+  const { getContactDetails, getFormDeliverySettings } =
+    await import('@sonar/db/forms');
   const { accountHealth } = await import('@sonar/db/account-health');
   const { listTelegramAccounts } = await import('@sonar/db/telegram');
   const { listWhatsAppAccounts } = await import('@sonar/db/whatsapp');
@@ -18,8 +18,8 @@ export default async function Page() {
   } = await import('@sonar/db/social-accounts');
   const [
     email,
-    forms,
     contactDetails,
+    formDelivery,
     telegram,
     whatsapp,
     social,
@@ -27,8 +27,8 @@ export default async function Page() {
     health,
   ] = await Promise.all([
     listEmailAccounts(),
-    listFormAccounts(),
     getContactDetails(),
+    getFormDeliverySettings(),
     listTelegramAccounts(),
     listWhatsAppAccounts(),
     listSocialAccounts(user?.id),
@@ -62,8 +62,7 @@ export default async function Page() {
             process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH
           ),
         }}
-        contactDetails={{ initial: contactDetails }}
-        forms={{ accounts: forms }}
+        contactDetails={{ initial: contactDetails, formDelivery }}
         whatsapp={{
           accounts: whatsapp,
           health,

@@ -16,6 +16,7 @@ import {
   EmailValidationError,
   isContactBlocked,
   transaction,
+  ensureFormAccount,
 } from './email.js';
 import { assertFacebookBinding } from './social-inbox.js';
 import { canonicalSocialPeer } from '@sonar/core/social-inbox';
@@ -707,6 +708,8 @@ async function reply(
     }
     if (!last || (await isContactBlocked(c, v.company_id, last.to_value)))
       invalid('Контакт у списку «Не контактувати».');
+    if (queued && v.channel === 'form' && !last.account_id)
+      last.account_id = (await ensureFormAccount(c)).id;
     let receivingMeta: Record<string, unknown> | null = null;
     if (v.channel === 'social' && v.provider_thread_id && v.account_id) {
       const {

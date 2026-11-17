@@ -382,7 +382,10 @@ export function ConversationChat({
           )}
         >
           {conversation.companyId ? (
-            <Link href={`/companies/${conversation.companyId}`}>
+            <Link
+              href={`/companies/${conversation.companyId}`}
+              className="text-accent hover:underline"
+            >
               {conversation.companyName}
             </Link>
           ) : (

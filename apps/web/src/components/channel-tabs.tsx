@@ -5,7 +5,6 @@ import { ContactDetails } from './contact-details';
 import { EmailAccounts } from './email-accounts';
 import { SocialAccounts } from './social-accounts';
 import { TelegramAccounts } from './telegram-accounts';
-import { FormAccounts } from './form-accounts';
 import { WhatsAppAccounts } from './whatsapp-accounts';
 import { Button } from './ui/button';
 import { uk } from '@/i18n/uk';
@@ -16,14 +15,12 @@ export function ChannelTabs({
   contactDetails,
   social,
   telegram,
-  forms,
   whatsapp,
 }: {
   email: ComponentProps<typeof EmailAccounts>;
   contactDetails: ComponentProps<typeof ContactDetails>;
   social: Omit<ComponentProps<typeof SocialAccounts>, 'network' | 'active'>;
   telegram: ComponentProps<typeof TelegramAccounts>;
-  forms: ComponentProps<typeof FormAccounts>;
   whatsapp: ComponentProps<typeof WhatsAppAccounts>;
 }) {
   const id = useId();
@@ -33,7 +30,6 @@ export function ChannelTabs({
       'email',
       ...Object.keys(uk.social.networks),
       'telegram',
-      'forms',
       'whatsapp',
     ],
     'contact-details',
@@ -71,11 +67,6 @@ export function ChannelTabs({
       key: 'telegram',
       label: uk.campaign.channelNames.telegram,
       content: <TelegramAccounts {...telegram} />,
-    },
-    {
-      key: 'forms',
-      label: uk.campaign.channelNames.forms,
-      content: <FormAccounts {...forms} />,
     },
     {
       key: 'whatsapp',

@@ -140,7 +140,11 @@ export function MessageNotifier() {
 }
 
 /** Settings controls: chime on/off and browser notification permission. */
-export function NotificationSettings() {
+export function NotificationSettings({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const [sound, setSound] = useState(true);
   const [permission, setPermission] = useState<string>('default');
   useEffect(() => {
@@ -150,12 +154,21 @@ export function NotificationSettings() {
     );
   }, []);
   return (
-    <section className="space-y-3 rounded-xl border border-border bg-surface p-6 shadow-xs">
-      <h2 className="font-heading text-base font-bold">
-        {uk.notifications.settings}
-      </h2>
-      <label className="flex items-center gap-2 text-sm">
+    <section
+      className={
+        embedded
+          ? 'space-y-5'
+          : 'space-y-3 rounded-xl border border-border bg-surface p-6 shadow-xs'
+      }
+    >
+      {!embedded && (
+        <h2 className="font-heading text-base font-bold">
+          {uk.notifications.settings}
+        </h2>
+      )}
+      <label className="flex min-h-11 items-center justify-between gap-4 text-sm">
         <input
+          className="order-last"
           type="checkbox"
           checked={sound}
           onChange={(event) => {
@@ -173,7 +186,7 @@ export function NotificationSettings() {
         />
         {uk.notifications.sound}
       </label>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-4 border-t border-border pt-5 text-sm">
         <span>{uk.notifications.browser}:</span>
         {permission === 'granted' ? (
           <span className="text-ok">{uk.notifications.allowed}</span>

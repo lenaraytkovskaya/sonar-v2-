@@ -50,3 +50,19 @@ export function prepareFormContacts(
     ).filter(present),
   };
 }
+
+/** Infer which contact fields were saved in a legacy form request snapshot. */
+export function sharedFormContactsFromValues(
+  contacts: FormContactValues,
+  savedSharedContacts?: SharedFormContact[] | null,
+): SharedFormContact[] {
+  const saved = savedSharedContacts?.filter(
+    (kind): kind is SharedFormContact =>
+      ['email', 'phone', 'telegram', 'whatsapp'].includes(kind) &&
+      Boolean(contacts[kind]?.trim()),
+  );
+  if (saved?.length) return saved;
+  return (['email', 'phone', 'telegram', 'whatsapp'] as const).filter((kind) =>
+    Boolean(contacts[kind]?.trim()),
+  );
+}

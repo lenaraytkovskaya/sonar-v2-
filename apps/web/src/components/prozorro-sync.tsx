@@ -16,7 +16,7 @@ type SyncState = {
   'prozorro.tender.progress'?: Progress;
   'prozorro.contract.progress'?: Progress;
 };
-export function ProzorroSync() {
+export function ProzorroSync({ embedded = false }: { embedded?: boolean }) {
   const [data, setData] = useState<SyncState>({}),
     [pending, setPending] = useState(false),
     [loaded, setLoaded] = useState(false),
@@ -61,9 +61,14 @@ export function ProzorroSync() {
       setPending(false);
     }
   };
+  const Container = embedded ? 'section' : Card;
   return (
-    <Card className="space-y-4 p-6">
-      <label className="flex min-h-11 items-center gap-3">
+    <Container
+      className={
+        embedded ? 'space-y-4 border-t border-border pt-6' : 'space-y-4 p-6'
+      }
+    >
+      <label className="flex min-h-11 flex-row-reverse items-center justify-between gap-3 text-sm font-medium">
         <input
           type="checkbox"
           checked={data['prozorro.enabled'] === true}
@@ -78,6 +83,7 @@ export function ProzorroSync() {
         </summary>
         <div className="flex flex-wrap gap-3">
           <Button
+            type="button"
             disabled={
               !loaded || pending || data['prozorro.full_sync.enabled'] === true
             }
@@ -86,6 +92,7 @@ export function ProzorroSync() {
             {uk.prozorro.start}
           </Button>
           <Button
+            type="button"
             variant="outline"
             disabled={
               !loaded || pending || data['prozorro.full_sync.enabled'] !== true
@@ -139,6 +146,6 @@ export function ProzorroSync() {
           </p>
         )}
       </details>
-    </Card>
+    </Container>
   );
 }

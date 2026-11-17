@@ -41,10 +41,12 @@ export async function POST(request: Request, context: Context) {
         ? { ok: true }
         : Response.json({ error: uk.ai.invalid }, { status: 400 });
     }
+    const channel = data?.channel ?? 'email';
     if (
       data?.action !== 'send' ||
       !validId(data.campaignId) ||
-      !validId(data.accountId) ||
+      (!validId(data.accountId) &&
+        !(channel === 'form' && data.accountId == null)) ||
       !validId(data.idempotencyKey) ||
       typeof data.toAddress !== 'string' ||
       typeof data.subject !== 'string' ||
@@ -64,11 +66,11 @@ export async function POST(request: Request, context: Context) {
         idempotencyKey: data.idempotencyKey,
         submit: true,
         channel:
-          data.channel === 'whatsapp'
+          channel === 'whatsapp'
             ? 'whatsapp'
-            : data.channel === 'telegram'
+            : channel === 'telegram'
               ? 'telegram'
-              : data.channel === 'form'
+              : channel === 'form'
                 ? 'form'
                 : 'email',
       },

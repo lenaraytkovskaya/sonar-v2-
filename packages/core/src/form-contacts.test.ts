@@ -1,5 +1,8 @@
 import { expect, it } from 'vitest';
-import { prepareFormContacts } from './form-contacts.js';
+import {
+  prepareFormContacts,
+  sharedFormContactsFromValues,
+} from './form-contacts.js';
 
 const contacts = {
   email: 'hello@example.com',
@@ -34,4 +37,21 @@ it('keeps contact fields out of the message body and includes WhatsApp only when
   expect(
     prepareFormContacts({ email: '', phone: '' }, 'Hello', ['email', 'phone']),
   ).toEqual({ body: 'Hello', sharedContacts: [] });
+});
+
+it('infers legacy shared contacts from the values saved in the request snapshot', () => {
+  expect(
+    sharedFormContactsFromValues({
+      email: ' hello@example.com ',
+      phone: '',
+      telegram: '@sonar',
+      whatsapp: '  ',
+    }),
+  ).toEqual(['email', 'telegram']);
+});
+
+it('prefers saved shared-contact fields when they are present', () => {
+  expect(
+    sharedFormContactsFromValues(contacts, ['email', 'phone', 'telegram']),
+  ).toEqual(['email', 'phone', 'telegram']);
 });
