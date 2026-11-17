@@ -450,7 +450,7 @@ export async function persistSocialInboxBatch(
           const {
             rows: [inserted],
           } = await c.query(
-            "insert into conversations(channel,account_id,provider_thread_id,peer_value,company_id,contact_id,campaign_id) values('social',$1,$2,$3,$4,$5,$6) returning *",
+            "insert into conversations(channel,account_id,provider_thread_id,peer_value,company_id,contact_id,campaign_id,form_reply_match) values('social',$1,$2,$3,$4,$5,$6,$7) returning *",
             [
               accountId,
               message.threadId,
@@ -458,6 +458,22 @@ export async function persistSocialInboxBatch(
               companyId ?? null,
               companyId ? candidates[0]!.id : null,
               campaign?.campaign_id ?? null,
+              companyId
+                ? {
+                    state: 'bound',
+                    companyId,
+                    suggestedCompanyId: null,
+                    method: 'automatic',
+                    confidence: 1,
+                    reasonUk:
+                      'Профіль співрозмовника точно збігається із соціальним контактом компанії.',
+                    formMessageId: null,
+                    taskId: null,
+                    originalCompanyId: null,
+                    originalCampaignId: null,
+                    originalContactId: null,
+                  }
+                : null,
             ],
           );
           conversation = inserted;
@@ -480,6 +496,11 @@ export async function persistSocialInboxBatch(
           ? { legacyConflictIds: legacy.map((row) => row.id) }
           : {}),
       };
+      const incomplete = message.incomplete === true;
+      const incompleteReason = incomplete
+        ? (message.incompleteReasonUk ??
+          'Запит не відкрито, щоб не позначати прочитаним.')
+        : null;
       const {
         rows: [inserted],
       } = await c.query(
@@ -492,23 +513,28 @@ export async function persistSocialInboxBatch(
           message.direction === 'in' ? 'inbound' : 'manual',
           message.peerProfile,
           message.body,
-          message.direction === 'in' ? 'delivered' : 'sent',
+          incomplete
+            ? 'failed'
+            : message.direction === 'in'
+              ? 'delivered'
+              : 'sent',
           key,
           message.externalMessageId,
           meta,
           message.occurredAt ?? message.observedAt,
-          legacy.length > 0,
-          legacy.length
-            ? 'Можливий збіг зі старим повідомленням без ID. Перевірте чат вручну.'
-            : null,
+          incomplete || legacy.length > 0,
+          incompleteReason ??
+            (legacy.length
+              ? 'Можливий збіг зі старим повідомленням без ID. Перевірте чат вручну.'
+              : null),
           message.occurredAt,
         ],
       );
       created++;
       observe(conversation.id, inserted.id, message);
-      if (message.direction === 'in' && !conversation.company_id)
+      if (message.direction === 'in' && !incomplete && !conversation.company_id)
         await enqueueFormReplyMatch(c, conversation.id, inserted.id);
-      if (message.direction === 'in')
+      if (message.direction === 'in' && !incomplete)
         await enqueueTask(
           'ai.inbound',
           `ai.inbound:${inserted.id}`,

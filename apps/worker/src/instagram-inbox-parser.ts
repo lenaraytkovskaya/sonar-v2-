@@ -52,6 +52,7 @@ export type InstagramInboxPage = {
 export function parseInstagramInbox(
   value: unknown,
   observedAt: string,
+  expectedFolder: 'PRIMARY' | 'GENERAL' | 'REQUESTS' = 'PRIMARY',
 ): InstagramInboxPage | null {
   const mailbox = object(
     object(object(value).data).get_slide_mailbox_for_iris_subscription,
@@ -92,7 +93,13 @@ export function parseInstagramInbox(
         threadViewerId: fieldKind(thread.viewer_id),
       },
     });
-    if (thread.folder !== 'PRIMARY') {
+    if (
+      expectedFolder === 'REQUESTS'
+        ? !['REQUESTS', 'REQUEST', 'PENDING', 'OTHER'].includes(
+            String(thread.folder),
+          )
+        : thread.folder !== expectedFolder
+    ) {
       result.skipped.push('unsupported_folder');
       continue;
     }
@@ -156,10 +163,15 @@ export function parseInstagramInbox(
           : message.sender_fbid === viewer.interop_messaging_user_fbid
             ? 'out'
             : null;
+      if (expectedFolder === 'REQUESTS' && direction !== 'in') continue;
       const text =
         typeof message.text_body === 'string'
           ? message.text_body
           : content.text_body;
+      const preview =
+        typeof message.igd_snippet === 'string'
+          ? message.igd_snippet
+          : content.igd_snippet;
       const timestamp = digits(message.timestamp_ms)
         ? Number(message.timestamp_ms)
         : NaN;
@@ -169,7 +181,9 @@ export function parseInstagramInbox(
         message.__typename !== 'SlideMessage' ||
         message.content_type !== 'TEXT' ||
         content.__typename !== 'SlideMessageText' ||
-        typeof text !== 'string' ||
+        (expectedFolder === 'REQUESTS'
+          ? typeof preview !== 'string' || !preview.trim()
+          : typeof text !== 'string') ||
         (typeof content.text_body === 'string' && content.text_body !== text) ||
         !Number.isSafeInteger(timestamp) ||
         timestamp <= 0 ||
@@ -186,10 +200,21 @@ export function parseInstagramInbox(
         senderPlatformId: message.sender_fbid as string,
         ...(direction === 'in' ? { senderProfile: peerProfile } : {}),
         peerProfile,
-        body: text,
+        body:
+          expectedFolder === 'REQUESTS'
+            ? (preview as string)
+            : (text as string),
         occurredAt: new Date(timestamp).toISOString(),
         observedAt,
+        ...(expectedFolder === 'REQUESTS'
+          ? {
+              incomplete: true,
+              incompleteReasonUk:
+                'Запит не відкрито, щоб не позначати прочитаним.',
+            }
+          : {}),
       });
+      if (expectedFolder === 'REQUESTS') break;
     }
   }
   return result;

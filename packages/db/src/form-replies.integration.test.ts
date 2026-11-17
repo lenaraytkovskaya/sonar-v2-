@@ -15,6 +15,11 @@ it.skipIf(!enabled)(
       otherFormConversation = randomUUID();
     const form = randomUUID(),
       otherForm = randomUUID();
+    const socialConversation = randomUUID(),
+      socialReplyConversation = randomUUID();
+    const socialOutreach = randomUUID(),
+      socialReply = randomUUID(),
+      socialTask = randomUUID();
     const conversations = [randomUUID(), randomUUID(), randomUUID()];
     const messages = conversations.map(() => randomUUID()),
       tasks = conversations.map(() => randomUUID());
@@ -83,6 +88,26 @@ it.skipIf(!enabled)(
         "insert into messages(id,conversation_id,channel,to_value,subject,body,status,idempotency_key,sent_at,request_snapshot) values($1::uuid,$2,'form','https://company.invalid/form','','draft text','sent',$1::text,now(),'{\"sharedContacts\":[\"email\"],\"body\":\"Actual sent body and contact email\"}'),($3::uuid,$4,'form','https://other.invalid/form','','Other message','sent',$3::text,now(),'{\"sharedContacts\":[\"telegram\"]}')",
         [form, formConversation, otherForm, otherFormConversation],
       );
+      await sonarPool.query(
+        "insert into conversations(id,company_id,campaign_id,channel) values($1,$2,$3,'social'),($4,null,null,'social')",
+        [socialConversation, company, campaign, socialReplyConversation],
+      );
+      await sonarPool.query(
+        "insert into messages(id,conversation_id,channel,direction,to_value,subject,body,status,idempotency_key,sent_at) values($1::uuid,$2,'social','out','https://instagram.com/company/','','Social outreach','sent',$1::text,now()),($3::uuid,$4,'social','in','https://instagram.com/peer/','','Could this fit?','delivered',$3::text,now())",
+        [
+          socialOutreach,
+          socialConversation,
+          socialReply,
+          socialReplyConversation,
+        ],
+      );
+      await sonarPool.query(
+        "insert into tasks(id,type,idempotency_key,payload) values($1::uuid,'form.reply.match',$1::text,$2)",
+        [
+          socialTask,
+          { conversationId: socialReplyConversation, messageId: socialReply },
+        ],
+      );
       for (let i = 0; i < conversations.length; i++) {
         await sonarPool.query(
           "insert into conversations(id,channel) values($1,'email')",
@@ -111,6 +136,35 @@ it.skipIf(!enabled)(
         message: 'Actual sent body and contact email',
       });
       expect(candidates.some((c) => c.companyId === otherCompany)).toBe(false);
+      const socialCandidates = await replies.getFormReplyCandidates(
+        'social',
+        365,
+        100,
+        1500,
+      );
+      expect(
+        socialCandidates.find((c) => c.companyId === company),
+      ).toMatchObject({
+        formMessageId: socialOutreach,
+        message: 'Social outreach',
+      });
+      expect(
+        await matchFormReply(
+          { conversationId: socialReplyConversation, messageId: socialReply },
+          socialTask,
+          client,
+        ),
+      ).toMatchObject({ result: { bound: false, applied: true } });
+      expect(
+        await replies.getFormReplyMatch(socialReplyConversation),
+      ).toMatchObject({
+        state: 'suggested',
+        method: 'ai',
+        suggestedCompanyId: company,
+        formMessageId: socialOutreach,
+      });
+      expect(complete).toHaveBeenCalledOnce();
+      complete.mockClear();
       expect(
         await matchFormReply(
           { conversationId: conversations[0]!, messageId: messages[0]! },
@@ -265,10 +319,10 @@ it.skipIf(!enabled)(
       vi.unstubAllEnvs();
       await sonarPool.query(
         'delete from spend_events where task_id=any($1::uuid[])',
-        [tasks],
+        [[...tasks, socialTask]],
       );
       await sonarPool.query('delete from tasks where id=any($1::uuid[])', [
-        tasks,
+        [...tasks, socialTask],
       ]);
       await sonarPool.query(
         'delete from activity_log where entity_id=any($1::text[])',
@@ -276,11 +330,27 @@ it.skipIf(!enabled)(
       );
       await sonarPool.query(
         'delete from messages where conversation_id=any($1::uuid[])',
-        [[...conversations, formConversation, otherFormConversation]],
+        [
+          [
+            ...conversations,
+            formConversation,
+            otherFormConversation,
+            socialConversation,
+            socialReplyConversation,
+          ],
+        ],
       );
       await sonarPool.query(
         'delete from conversations where id=any($1::uuid[])',
-        [[...conversations, formConversation, otherFormConversation]],
+        [
+          [
+            ...conversations,
+            formConversation,
+            otherFormConversation,
+            socialConversation,
+            socialReplyConversation,
+          ],
+        ],
       );
       await sonarPool.query('delete from companies where id=any($1::uuid[])', [
         [company, otherCompany],

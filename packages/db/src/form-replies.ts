@@ -119,6 +119,19 @@ export async function getFormReplyCandidates(
   limit: number,
   chars: number,
 ): Promise<FormReplyCandidate[]> {
+  if (channel === 'social') {
+    return (
+      await sonarPool.query(
+        `select distinct on(v.company_id) v.company_id as "companyId",m.id as "formMessageId",v.campaign_id as "campaignId",
+        c.name,c.city,c.website,left(m.body,$2) as message
+       from messages m join conversations v on v.id=m.conversation_id join companies c on c.id=v.company_id
+       where m.channel in ('social','form') and m.direction='out' and m.status in ('sent','delivered','read')
+         and coalesce(m.sent_at,m.created_at)>=now()-interval '30 days'
+       order by v.company_id,coalesce(m.sent_at,m.created_at) desc,m.id limit $1`,
+        [limit, chars],
+      )
+    ).rows;
+  }
   const channels = channel === 'whatsapp' ? ['whatsapp', 'phone'] : [channel];
   return (
     await sonarPool.query(
@@ -170,7 +183,7 @@ export async function bindFormReplyConversation(input: {
       rows: [form],
     } = await c.query(
       `select m.id,v.campaign_id from messages m join conversations v on v.id=m.conversation_id
-       where v.company_id=$1 and m.channel='form' and m.direction='out' and m.status in ('sent','delivered','read')
+       where v.company_id=$1 and m.channel in ('form','social') and m.direction='out' and m.status in ('sent','delivered','read')
        and ($2::uuid is null or m.id=$2) order by m.sent_at desc nulls last,m.id limit 1`,
       [input.companyId, input.formMessageId ?? null],
     );

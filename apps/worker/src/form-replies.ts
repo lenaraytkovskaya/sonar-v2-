@@ -127,7 +127,9 @@ async function runMatchFormReply(
   if (!candidates.length)
     return skip(
       'reply_match_no_candidates',
-      'Немає нещодавно надісланих форм зі спільним каналом відповіді.',
+      context.channel === 'social'
+        ? 'Немає компаній, яким за останні 30 днів надсилали повідомлення в соцмережах або форми.'
+        : 'Немає нещодавно надісланих форм зі спільним каналом відповіді.',
     );
   const model = (config['ai.models'] as TextModel[] | undefined)?.find(
     (m) => m.id === config['ai.model.cheap'],

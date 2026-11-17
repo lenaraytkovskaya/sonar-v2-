@@ -498,6 +498,11 @@ it.skipIf(!enabled)(
       let url = '';
       let listener: ((response: unknown) => void) | undefined;
       const frame = { url: () => url };
+      const noFolderTab = {
+        count: async () => 0,
+        click: async () => {},
+        or: () => ({ count: async () => 0, click: async () => {} }),
+      };
       const page = {
         on: (_event: string, fn: typeof listener) => {
           listener = fn;
@@ -531,6 +536,7 @@ it.skipIf(!enabled)(
         waitForTimeout: async (ms: number) => {
           await new Promise((resolve) => setTimeout(resolve, ms));
         },
+        getByRole: () => noFolderTab,
       };
       const emptyAdapter: import('../../../apps/worker/src/social-inbox.js').SocialInboxAdapter =
         {
@@ -649,6 +655,19 @@ it.skipIf(!enabled)(
           )
         ).rows[0].n,
       ).toBe(1);
+      const unread = await db.sonarPool.query(
+        "select count(*)::int as count from messages where account_id=$1 and direction='in' and read_at is null",
+        [id],
+      );
+      expect(unread.rows[0].count).toBe(1);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select id from messages where account_id=$1 and direction='in' and read_at is null order by coalesce(sent_at,created_at) desc,id desc limit 1",
+            [id],
+          )
+        ).rows,
+      ).toHaveLength(1);
       expect(
         (
           await db.sonarPool.query(
@@ -1380,6 +1399,76 @@ it.skipIf(!enabled)(
     }
   },
 );
+it.skipIf(!enabled)(
+  'stores request previews as incomplete unread messages without matching or AI tasks',
+  async () => {
+    const id = randomUUID();
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,daily_limit) values($1,'facebook','Request preview test','',20)",
+      [id],
+    );
+    const preview = {
+      ...message('preview:request-thread'),
+      threadId: 'request-thread',
+      occurredAt: null,
+      providerTimestamp: 'request-preview-only',
+      incomplete: true,
+      incompleteReasonUk: 'Запит не відкрито, щоб не позначати прочитаним.',
+      body: 'Synthetic preview',
+    };
+    try {
+      expect(
+        await inbox.persistSocialInboxBatch(id, 'facebook', {
+          messages: [preview],
+          resumeAnchor: { folders: { requests: 'request-thread' } },
+        }),
+      ).toMatchObject({ created: 1 });
+      const saved = (
+        await db.sonarPool.query(
+          'select status,needs_human,reason_uk,social_meta from messages where account_id=$1',
+          [id],
+        )
+      ).rows[0];
+      expect(saved).toMatchObject({
+        status: 'failed',
+        needs_human: true,
+        reason_uk: preview.incompleteReasonUk,
+        social_meta: { incomplete: true },
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as count from messages where account_id=$1 and direction='in' and read_at is null",
+            [id],
+          )
+        ).rows[0].count,
+      ).toBe(1);
+      expect(
+        (
+          await db.sonarPool.query(
+            "select count(*)::int as count from tasks where payload->>'messageId' in(select id::text from messages where account_id=$1)",
+            [id],
+          )
+        ).rows[0].count,
+      ).toBe(0);
+    } finally {
+      await db.sonarPool.query(
+        "delete from tasks where payload->>'messageId' in(select id::text from messages where account_id=$1)",
+        [id],
+      );
+      await db.sonarPool.query('delete from messages where account_id=$1', [
+        id,
+      ]);
+      await db.sonarPool.query(
+        'delete from conversations where account_id=$1',
+        [id],
+      );
+      await db.sonarPool.query('delete from channel_accounts where id=$1', [
+        id,
+      ]);
+    }
+  },
+);
 it.skipIf(!enabled).each(['instagram', 'linkedin'] as const)(
   'imports %s via the same ID contract and matches a unique network-scoped handle',
   async (network) => {
@@ -1426,11 +1515,21 @@ it.skipIf(!enabled).each(['instagram', 'linkedin'] as const)(
       expect(
         (
           await db.sonarPool.query(
-            'select company_id from conversations where account_id=$1',
+            'select company_id,form_reply_match from conversations where account_id=$1',
             [id],
           )
-        ).rows[0].company_id,
-      ).toBe(secondCompany);
+        ).rows[0],
+      ).toMatchObject({
+        company_id: secondCompany,
+        form_reply_match: {
+          state: 'bound',
+          method: 'automatic',
+          companyId: secondCompany,
+          originalCompanyId: null,
+          originalCampaignId: null,
+          originalContactId: null,
+        },
+      });
     } finally {
       await db.sonarPool.query(
         "delete from tasks where payload->>'messageId' in (select id::text from messages where account_id=$1)",

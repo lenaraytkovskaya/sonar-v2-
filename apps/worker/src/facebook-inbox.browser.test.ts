@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
   captureFacebookInbox,
+  readFacebookRequestPreviews,
   readFacebookThread,
 } from './facebook-inbox-browser.js';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
@@ -21,6 +22,10 @@ const captured = readFileSync(
   'data-message-id="100000000000001@msgr.$1"',
 );
 const path = '/messages/e2ee/t/900000000000001/';
+const requestsFixture = readFileSync(
+  new URL('./facebook-requests.sanitized.fixture.html', import.meta.url),
+  'utf8',
+);
 describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
   'Facebook observed inbox DOM',
   () => {
@@ -100,6 +105,40 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await context.close();
       }
     });
+    it('reads Facebook request previews without opening or accepting them', async () => {
+      const { page, context, navigations } = await fixture((url) =>
+        url === '/messages/requests/' ? requestsFixture : captured,
+      );
+      try {
+        await page.goto('https://www.facebook.com/messages/requests/');
+        await page.evaluate(() => {
+          (window as unknown as { accepted: number }).accepted = 0;
+          document.querySelector('button')!.addEventListener('click', () => {
+            (window as unknown as { accepted: number }).accepted++;
+          });
+        });
+        const result = await readFacebookRequestPreviews(page);
+        expect(result.messages).toMatchObject([
+          {
+            externalMessageId: 'preview:900000000000071',
+            threadId: '900000000000071',
+            incomplete: true,
+            incompleteReasonUk:
+              'Запит не відкрито, щоб не позначати прочитаним.',
+            peerProfile: 'https://www.facebook.com/900000000000072/',
+          },
+        ]);
+        expect(result.skipped).toContain('requests_preview_only');
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { accepted: number }).accepted,
+          ),
+        ).toBe(0);
+        expect(navigations).not.toContain('/messages/t/900000000000071/');
+      } finally {
+        await context.close();
+      }
+    });
     it('imports relative timestamps without inventing an occurrence date, commits chunks and never claims complete coverage', async () => {
       const html = captured
         .replaceAll('4 November 2026, 20:17', '01:08')
@@ -121,10 +160,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           reason: 'unsupported_dom',
           skipped: [
             'pagination_unverified',
-            'requests_and_archived_unverified',
+            'archived_folder_unverified',
+            'requests_empty_or_unverified',
           ],
         });
-        expect(persist).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledTimes(2);
         expect(batches[0]!.messages[2]).toMatchObject({
           occurredAt: null,
           providerTimestamp: '01:08',
@@ -134,7 +174,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           occurredAt: null,
           providerTimestamp: 'Saturday 16:45',
         });
-        expect(navigations).toEqual([path, '/messages/', path]);
+        expect(navigations).toEqual([
+          path,
+          '/messages/',
+          path,
+          '/messages/requests/',
+        ]);
       } finally {
         await context.close();
       }
