@@ -7,6 +7,7 @@ import type { getCompanySocial } from '@sonar/db/social';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
+import { FriendlyError } from './friendly-error';
 
 type SocialData = Awaited<ReturnType<typeof getCompanySocial>>;
 const fields = {
@@ -185,7 +186,12 @@ export function CompanySocial({
               {uk.tasks.status[
                 row.task.status as keyof typeof uk.tasks.status
               ] ?? '—'}
-              {row.task.reasonUk && ` · ${row.task.reasonUk}`}
+              {row.task.reasonUk && (
+                <>
+                  {' '}
+                  · <FriendlyError reason={row.task.reasonUk} />
+                </>
+              )}
             </p>
           )}
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">

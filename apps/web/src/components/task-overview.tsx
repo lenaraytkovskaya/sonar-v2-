@@ -12,12 +12,14 @@ import { uk } from '@/i18n/uk';
 import { Callout, Section } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, type ScanResult } from './shared';
+import { FriendlyError } from './friendly-error';
 type Task = {
   id: string;
   type: string;
   subject_id?: string;
   company_name?: string;
   status: string;
+  created_at?: string;
   reason_uk: string | null;
   repetitions: number;
   result:
@@ -100,6 +102,23 @@ export function useTasks() {
   if (!context) throw Error('TasksProvider missing');
   return context;
 }
+export function RecentFailuresCallout() {
+  const { failures } = useTasks();
+  const count = failures.filter(
+    (task) =>
+      task.status === 'failed' &&
+      task.created_at &&
+      Date.parse(task.created_at) >= Date.now() - 86_400_000,
+  ).length;
+  if (!count) return null;
+  return (
+    <Callout tone="err">
+      <Link href="#task-failures" className="underline underline-offset-2">
+        {uk.overview.errors}: {count}
+      </Link>
+    </Callout>
+  );
+}
 export function WorkerStatus() {
   const { workerHealth } = useTasks();
   if (!workerHealth || workerHealth.worker) return null;
@@ -139,31 +158,7 @@ export function TaskOverview() {
   const [pending, setPending] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState<string | null>(null);
   const name = (type: string) =>
-    ({
-      'system.registry_ping': uk.tasks.registry,
-      'registry.match': uk.company.registry,
-      'registry.phones.sync': uk.registry.sync,
-      'prozorro.sync': uk.prozorro.title,
-      'prozorro.lookup': uk.prozorro.title,
-      'prozorro.company': uk.prozorro.title,
-      'ai.models': uk.tasks.aiModels,
-      'ai.assist': uk.tasks.aiAssist,
-      'ai.drafts': uk.outreach.generate,
-      'ai.inbound': uk.inbound.classify,
-      'ai.reply': uk.inbound.suggest,
-      'email.receive': uk.inbound.received,
-      'whatsapp.receive': uk.inbound.received,
-      'google.batch': uk.google.title,
-      'google.request': uk.google.title,
-      'google.company': uk.google.title,
-      'google.resolve': uk.google.title,
-      'site.scan': uk.scanner.title,
-      'social.fetch': uk.social.title,
-      'social.request': uk.social.title,
-      'company.score': uk.company.score,
-      'company.analyze': uk.analysis.title,
-      'message.send': uk.email.title,
-    })[type] ?? type;
+    (uk.tasks.names as Record<string, string>)[type] ?? uk.tasks.unknown;
   const active = [
     ...new Set(
       counts
@@ -211,7 +206,7 @@ export function TaskOverview() {
                   : 'mt-0.5 text-sm text-err'
               }
             >
-              {task.reason_uk}
+              <FriendlyError reason={task.reason_uk ?? uk.tasks.unknown} />
               <span className="text-muted-foreground">
                 {' '}
                 · {uk.tasks.repetitions}: {task.repetitions}
@@ -276,6 +271,7 @@ export function TaskOverview() {
     <div className="space-y-6">
       {(error || retryError) && <Callout tone="err">{uk.tasks.error}</Callout>}
       <Section
+        id="task-failures"
         title={uk.tasks.failures}
         description={failures.length ? undefined : uk.tasks.noFailures}
       >
@@ -327,7 +323,7 @@ export function TaskOverview() {
                 )}
                 {batch.reason_uk && (
                   <p className="text-xs text-muted-foreground">
-                    {batch.reason_uk}
+                    <FriendlyError reason={batch.reason_uk} />
                   </p>
                 )}
               </li>
@@ -390,7 +386,7 @@ export function TaskOverview() {
                   )}
                   {task.reason_uk && (
                     <span className="block text-xs text-muted-foreground">
-                      {task.reason_uk}
+                      <FriendlyError reason={task.reason_uk} />
                     </span>
                   )}
                   {task.type === 'site.scan' && (

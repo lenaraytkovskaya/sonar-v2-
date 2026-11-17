@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { X } from 'lucide-react';
 import { uk } from '@/i18n/uk';
 import { claimSocialSessionEvent } from '@/lib/social-session-notices';
+import { FriendlyError } from './friendly-error';
 
 type Notice = {
   id: string;
@@ -101,7 +102,14 @@ export function SocialSessionNotices() {
                 '{network}',
                 uk.social.networks[notice.network],
               )}{' '}
-              ({notice.name}){notice.reasonUk ? `: ${notice.reasonUk}` : ''}
+              ({notice.name})
+              {notice.reasonUk ? (
+                <>
+                  : <FriendlyError reason={notice.reasonUk} />
+                </>
+              ) : (
+                ''
+              )}
             </p>
           ))}
           <Link

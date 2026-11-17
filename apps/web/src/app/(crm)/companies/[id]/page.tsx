@@ -21,6 +21,7 @@ import { ScanSummary, Score } from '@/components/shared';
 import { cn } from '@/lib/utils';
 import { ChannelIcon } from '@/components/channel-icon';
 import { WhatsAppRetry } from '@/components/whatsapp-retry';
+import { DetailList } from '@/components/ui/layout';
 
 const kindOrder = [
   'email',
@@ -32,7 +33,6 @@ const kindOrder = [
   'social',
   'website',
 ];
-const visibleContacts = 12;
 
 function Section({
   title,
@@ -204,6 +204,14 @@ export default async function Page({
     (f) => f.kind === 'manual_source' && f.value?.source === 'googleMaps',
   );
   const map = normalizeWebsite(c.google_maps_uri)?.website;
+  const googleFact = facts.find(
+    (f) =>
+      f.kind === 'google_place' &&
+      f.source_url === c.google_maps_uri &&
+      (!f.expires_at || new Date(f.expires_at) > new Date()),
+  );
+  const google = googleFact?.value;
+  const googlePhone = contacts.find((contact) => contact.kind === 'phone');
   const website = normalizeWebsite(c.website ?? undefined);
   const siteStatus = siteFacts.find((fact) => fact.kind === 'site_status');
   // A click on a contact opens its dialog: the inbox when one exists, otherwise the contact tab.
@@ -254,15 +262,15 @@ export default async function Page({
     return (
       <li
         key={contact.id}
-        className="flex min-w-0 items-start gap-2 border-b border-border py-1.5 last:border-0"
+        className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 border-b border-border py-2 last:border-0 sm:flex-nowrap"
       >
-        <span className="flex w-24 shrink-0 items-start gap-1.5 pt-0.5 text-xs text-muted-foreground">
-          <ChannelIcon channel={contact.kind} value={contact.value} />
-          {contact.kind === 'social'
-            ? channelLabel(contact.kind, contact.value)
-            : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
-        </span>
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-start gap-x-2 gap-y-1">
+          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <ChannelIcon channel={contact.kind} value={contact.value} />
+            {contact.kind === 'social'
+              ? channelLabel(contact.kind, contact.value)
+              : uk.company.kinds[contact.kind as keyof typeof uk.company.kinds]}
+          </span>
           <div className="flex min-w-0 items-center gap-1.5">
             {href ? (
               <a
@@ -291,7 +299,7 @@ export default async function Page({
               </Link>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="w-full text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:shrink-0 sm:text-right">
             {
               uk.company.sources[
                 contact.source as keyof typeof uk.company.sources
@@ -485,55 +493,83 @@ export default async function Page({
                 <Section
                   title={uk.company.googleData}
                   action={
-                    map && (
-                      <a
-                        className="inline-flex items-center gap-1 text-xs text-accent"
-                        href={map}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <MapPin aria-hidden="true" className="size-3.5" />
-                        {uk.company.maps}
-                      </a>
-                    )
+                    <div className="flex items-center gap-2">
+                      {map && (
+                        <a
+                          className="inline-flex min-h-11 items-center gap-1 text-sm text-accent"
+                          href={map}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <MapPin aria-hidden="true" className="size-4" />
+                          {uk.company.maps}
+                        </a>
+                      )}
+                    </div>
                   }
                 >
                   <ManualSource
                     companyId={id}
                     source="googleMaps"
                     current={c.google_maps_uri}
+                    menuAction
                   />
-                  {facts
-                    .filter(
-                      (f) =>
-                        f.kind === 'google_place' &&
-                        f.source_url === c.google_maps_uri &&
-                        (!f.expires_at || new Date(f.expires_at) > new Date()),
-                    )
-                    .slice(0, 1)
-                    .map((f) => (
-                      <div key={f.id} className="space-y-1 text-sm">
-                        <p className="font-medium">
-                          {uk.manualSource.collected}
-                        </p>
-                        <p>{f.value.displayName?.text}</p>
-                        <p>{f.value.formattedAddress}</p>
-                        <p>
-                          {f.value.rating ?? '—'} ·{' '}
-                          {f.value.userRatingCount ?? 0} {uk.company.reviews}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {uk.company.sources.google} ·{' '}
-                          <LocalTime value={f.found_at} />
-                        </p>
-                      </div>
-                    ))}
+                  <DetailList
+                    items={[
+                      {
+                        label: uk.company.address,
+                        value:
+                          google?.formattedAddress ??
+                          c.address ??
+                          uk.company.noData,
+                      },
+                      {
+                        label: uk.company.rating,
+                        value: google?.rating ?? c.rating ?? '—',
+                      },
+                      {
+                        label: uk.company.reviews,
+                        value:
+                          google?.userRatingCount ?? c.ratings_count ?? '—',
+                      },
+                      {
+                        label: uk.company.type,
+                        value: google?.primaryType ?? c.primary_type ?? '—',
+                      },
+                      {
+                        label: uk.company.phone,
+                        value:
+                          google?.nationalPhoneNumber ??
+                          googlePhone?.value ??
+                          '—',
+                      },
+                      {
+                        label: uk.company.website,
+                        value: google?.websiteUri ?? c.website ?? '—',
+                      },
+                      {
+                        label: uk.company.hours,
+                        value:
+                          google?.regularOpeningHours?.weekdayDescriptions?.join(
+                            '; ',
+                          ) ?? '—',
+                        hidden:
+                          !google?.regularOpeningHours?.weekdayDescriptions
+                            ?.length,
+                      },
+                    ]}
+                  />
+                  {googleFact && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.manualSource.collected}: {uk.company.sources.google} ·{' '}
+                      <LocalTime value={googleFact.found_at} />
+                    </p>
+                  )}
                   {manualMaps && (
                     <p className="text-xs text-muted-foreground">
                       {uk.manualSource.originalGoogle}
                     </p>
                   )}
-                  <p className="text-sm">{c.address ?? uk.company.noData}</p>
                   <p className="text-sm text-muted-foreground">
                     {uk.google.businessStatus[
                       c.business_status as keyof typeof uk.google.businessStatus
@@ -846,19 +882,38 @@ export default async function Page({
                     </p>
                   )}
                   <ul className="text-sm">
-                    {sortedContacts.slice(0, visibleContacts).map(contactRow)}
+                    {(
+                      [
+                        { key: 'email', kinds: ['email'] },
+                        { key: 'phones', kinds: ['phone'] },
+                        {
+                          key: 'messengers',
+                          kinds: ['telegram', 'whatsapp', 'viber'],
+                        },
+                        { key: 'social', kinds: ['social'] },
+                        { key: 'forms', kinds: ['form'] },
+                        { key: 'websites', kinds: ['website'] },
+                      ] as const
+                    ).map(({ key, kinds }) => {
+                      const group = sortedContacts
+                        .filter((contact) =>
+                          kinds.includes(contact.kind as never),
+                        )
+                        .sort((a, b) => b.rank - a.rank);
+                      if (!group.length) return null;
+                      return (
+                        <li
+                          key={key}
+                          className="list-none space-y-1.5 py-3 first:pt-0"
+                        >
+                          <h3 className="text-sm font-semibold">
+                            {uk.company.contactGroups[key]} ({group.length})
+                          </h3>
+                          <ul className="text-sm">{group.map(contactRow)}</ul>
+                        </li>
+                      );
+                    })}
                   </ul>
-                  {sortedContacts.length > visibleContacts && (
-                    <details className="text-sm">
-                      <summary className="cursor-pointer text-accent">
-                        {uk.company.more}:{' '}
-                        {sortedContacts.length - visibleContacts}
-                      </summary>
-                      <ul>
-                        {sortedContacts.slice(visibleContacts).map(contactRow)}
-                      </ul>
-                    </details>
-                  )}
                 </Section>
               </div>
             ),

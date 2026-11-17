@@ -8,6 +8,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { FriendlyError } from './friendly-error';
 
 export function ProzorroSearch({
   companyId,
@@ -134,7 +135,8 @@ export function ProzorroSearch({
       )}
       {!open && (message || task?.reason_uk) && (
         <p role="status" className="text-xs text-muted-foreground">
-          {message || task?.reason_uk}
+          {message ||
+            (task?.reason_uk && <FriendlyError reason={task.reason_uk} />)}
         </p>
       )}
     </div>

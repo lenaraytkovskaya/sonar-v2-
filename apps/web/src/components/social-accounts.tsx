@@ -11,6 +11,7 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
 import { SocialLoginDialog } from './social-login-dialog';
+import { FriendlyError } from './friendly-error';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
 import {
@@ -526,7 +527,9 @@ export function SocialAccounts({
                 </Callout>
               )}
               {account.reasonUk && (
-                <Callout tone="err">{account.reasonUk}</Callout>
+                <Callout tone="err">
+                  <FriendlyError reason={account.reasonUk} />
+                </Callout>
               )}
               {account.inboxSyncErrorUk && (
                 <Callout tone="err">{account.inboxSyncErrorUk}</Callout>

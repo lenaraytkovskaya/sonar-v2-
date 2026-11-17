@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { listTelegramAccounts } from '@sonar/db/telegram';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
+import { ChannelIcon } from './channel-icon';
+import { DetailList } from './ui/layout';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -125,55 +127,135 @@ export function TelegramAccounts({
       {!configured && <p role="status">{uk.telegram.configuration}</p>}
       {!accounts.length && <p>{uk.telegram.empty}</p>}
       {accounts.map((account) => (
-        <section
+        <article
           key={account.id}
-          className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4"
+          className="space-y-4 rounded-lg border border-border p-4"
         >
-          <div className="min-w-0 space-y-1 break-words">
-            <p className="font-medium">
-              {account.name}{' '}
-              <HealthBadge
-                health={health.find((item) => item.accountId === account.id)}
-              />{' '}
-              ·{' '}
-              <RevealValue
-                value={account.address}
-                masked={account.addressMasked}
-                copy
-              />
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {uk.email.today}: {account.sentToday} / {account.dailyLimit} ·{' '}
-              {account.status === 'disconnected'
-                ? uk.telegram.disconnected
-                : account.enabled
-                  ? uk.email.enabled
-                  : uk.email.disabled}
-            </p>
-            {account.nextSendAt && (
-              <p className="text-sm text-muted-foreground">
-                {uk.email.next}:{' '}
-                {new Date(account.nextSendAt).toLocaleString('uk-UA')}
-              </p>
-            )}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-chip">
+                <ChannelIcon channel="telegram" />
+              </span>
+              <div className="min-w-0 space-y-1 break-words">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">{account.name}</h3>
+                  <StatusBadge
+                    status={
+                      account.status === 'disconnected'
+                        ? 'disabled'
+                        : account.enabled
+                          ? 'active'
+                          : 'paused'
+                    }
+                  >
+                    {account.status === 'disconnected'
+                      ? uk.telegram.disconnected
+                      : account.enabled
+                        ? uk.email.enabled
+                        : uk.email.disabled}
+                  </StatusBadge>
+                  <HealthBadge
+                    health={health.find(
+                      (item) => item.accountId === account.id,
+                    )}
+                  />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  <RevealValue
+                    value={account.address}
+                    masked={account.addressMasked}
+                    copy
+                  />
+                </p>
+              </div>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {account.status !== 'disconnected' && (
+                <CrudButton
+                  action="edit"
+                  aria-label={`${uk.crud.editLimit}: ${account.name}`}
+                  disabled={pending}
+                  onClick={() => {
+                    setError('');
+                    setLimits({
+                      ...limits,
+                      [account.id]: String(account.dailyLimit),
+                    });
+                    setEditing(account.id);
+                  }}
+                >
+                  {uk.crud.editLimit}
+                </CrudButton>
+              )}
+              {account.status !== 'disconnected' ? (
+                <RowActions
+                  disabled={pending}
+                  actions={[
+                    ...healthJournalAction(
+                      health.find((item) => item.accountId === account.id),
+                      setHealthJournal,
+                    ),
+                    {
+                      kind: account.enabled ? 'disable' : 'enable',
+                      label: account.enabled
+                        ? uk.email.disable
+                        : uk.email.enable,
+                      onSelect: () =>
+                        void mutate('PATCH', {
+                          id: account.id,
+                          enabled: !account.enabled,
+                        }),
+                    },
+                    {
+                      kind: 'disconnect',
+                      label: uk.telegram.disconnect,
+                      danger: true,
+                      onSelect: () => void mutate('DELETE', { id: account.id }),
+                    },
+                  ]}
+                />
+              ) : (
+                <RowActions
+                  disabled={pending}
+                  actions={[
+                    ...healthJournalAction(
+                      health.find((item) => item.accountId === account.id),
+                      setHealthJournal,
+                    ),
+                    {
+                      kind: 'delete',
+                      label: uk.email.remove,
+                      danger: true,
+                      confirm: `${uk.email.removeConfirm} ${account.name}?`,
+                      onSelect: () =>
+                        void mutate('DELETE', {
+                          id: account.id,
+                          action: 'remove',
+                        }),
+                    },
+                  ]}
+                />
+              )}
+            </div>
           </div>
+          <DetailList
+            items={[
+              {
+                label: uk.email.today,
+                value: `${account.sentToday} / ${account.dailyLimit}`,
+              },
+              {
+                label: uk.email.next,
+                value: account.nextSendAt
+                  ? new Date(account.nextSendAt).toLocaleString('uk-UA')
+                  : '—',
+                hidden: !account.nextSendAt,
+              },
+              { label: uk.email.owner, value: account.ownerName ?? '—' },
+            ]}
+          />
           {account.status !== 'disconnected' && (
             <>
-              <CrudButton
-                action="edit"
-                aria-label={`${uk.crud.editLimit}: ${account.name}`}
-                disabled={pending}
-                onClick={() => {
-                  setError('');
-                  setLimits({
-                    ...limits,
-                    [account.id]: String(account.dailyLimit),
-                  });
-                  setEditing(account.id);
-                }}
-              >
-                {uk.crud.editLimit}
-              </CrudButton>
               <CrudDialog
                 open={editing === account.id}
                 onOpenChange={() => setEditing(null)}
@@ -232,55 +314,10 @@ export function TelegramAccounts({
               </CrudDialog>
             </>
           )}
-          {account.status !== 'disconnected' && (
-            <RowActions
-              disabled={pending}
-              actions={[
-                ...healthJournalAction(
-                  health.find((item) => item.accountId === account.id),
-                  setHealthJournal,
-                ),
-                {
-                  kind: account.enabled ? 'disable' : 'enable',
-                  label: account.enabled ? uk.email.disable : uk.email.enable,
-                  onSelect: () =>
-                    void mutate('PATCH', {
-                      id: account.id,
-                      enabled: !account.enabled,
-                    }),
-                },
-                {
-                  kind: 'disconnect',
-                  label: uk.telegram.disconnect,
-                  danger: true,
-                  onSelect: () => void mutate('DELETE', { id: account.id }),
-                },
-              ]}
-            />
-          )}
-          {account.status === 'disconnected' && (
-            <RowActions
-              disabled={pending}
-              actions={[
-                ...healthJournalAction(
-                  health.find((item) => item.accountId === account.id),
-                  setHealthJournal,
-                ),
-                {
-                  kind: 'delete',
-                  label: uk.email.remove,
-                  danger: true,
-                  confirm: `${uk.email.removeConfirm} ${account.name}?`,
-                  onSelect: () =>
-                    void mutate('DELETE', { id: account.id, action: 'remove' }),
-                },
-              ]}
-            />
-          )}
           <HealthDetails
             health={health.find((item) => item.accountId === account.id)}
           />
-        </section>
+        </article>
       ))}
       <CrudButton
         disabled={pending}

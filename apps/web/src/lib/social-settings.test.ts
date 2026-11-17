@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { socialFields, validSocialSettings } from './social-settings';
 const valid = () => ({
   'social.enabled': true,
+  'social.inbox.enabled': true,
+  'social.inbox.facebook.enabled': true,
+  'social.inbox.instagram.enabled': true,
   ...Object.fromEntries(
     Object.entries(socialFields).map(([key, range]) => [key, range.min]),
   ),

@@ -338,10 +338,23 @@ export function CampaignPanel({
                   {uk.campaign.pause}
                 </Button>
               </div>
-              <p className="text-sm text-muted-foreground">
-                {rows.find((row) => row.id === selectedId)?.cities.join(', ')} ·{' '}
-                {rows.find((row) => row.id === selectedId)?.queries.join(', ')}
-              </p>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  {rows.find((row) => row.id === selectedId)?.cities.join(', ')}
+                </p>
+                <ul className="flex flex-wrap gap-2">
+                  {rows
+                    .find((row) => row.id === selectedId)
+                    ?.queries.map((query) => (
+                      <li
+                        key={query}
+                        className="max-w-full break-words rounded-full bg-chip px-3 py-1 text-foreground"
+                      >
+                        {query}
+                      </li>
+                    ))}
+                </ul>
+              </div>
               <BatchList key={selectedId} campaignId={selectedId} />
             </>
           ) : (

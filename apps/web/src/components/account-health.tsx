@@ -1,16 +1,21 @@
 'use client';
+import { alarmHealthKinds } from '@sonar/core/account-health';
 import type { accountHealth } from '@sonar/db/account-health';
 import { uk } from '@/i18n/uk';
 import { StatusBadge } from './shared';
 import { DetailList, InfoTip, Section } from './ui/layout';
 import { CrudDialog } from './crud-dialog';
 import { LocalTime } from './local-time';
+import { FriendlyError } from './friendly-error';
 import type { RowAction } from './ui/row-actions';
 
 export type AccountHealth = Awaited<ReturnType<typeof accountHealth>>[number];
 const t = uk.accountHealth;
 export function HealthBadge({ health }: { health?: AccountHealth }) {
   if (!health) return null;
+  const lastAlarm = health.events.find((event) =>
+    alarmHealthKinds.includes(event.kind),
+  );
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-1">
       <StatusBadge
@@ -31,7 +36,18 @@ export function HealthBadge({ health }: { health?: AccountHealth }) {
           t.statuses[health.status]
         )}
       </StatusBadge>
-      <InfoTip label={t.title}>{t.hint}</InfoTip>
+      <InfoTip label={t.title}>
+        {health.status === 'warning' && lastAlarm ? (
+          <span className="block space-y-1">
+            <span className="block">{lastAlarm.reasonUk}</span>
+            <span className="block text-xs text-muted-foreground">
+              <LocalTime value={lastAlarm.createdAt} />
+            </span>
+          </span>
+        ) : (
+          t.hint
+        )}
+      </InfoTip>
     </span>
   );
 }
@@ -156,7 +172,9 @@ export function HealthJournal({
                     <LocalTime value={event.createdAt} />
                   </span>
                 </div>
-                <p>{event.reasonUk}</p>
+                <p>
+                  <FriendlyError reason={event.reasonUk} />
+                </p>
               </li>
             ))}
           </ol>
@@ -176,7 +194,7 @@ export function AccountHealthOverview({ health }: { health: AccountHealth[] }) {
       }
       description={t.description}
     >
-      {!health.length ? (
+      {!health.some((account) => account.visible) ? (
         <p className="text-sm text-muted-foreground">{t.empty}</p>
       ) : (
         <table className="block w-full text-left text-sm md:table">
@@ -192,39 +210,46 @@ export function AccountHealthOverview({ health }: { health: AccountHealth[] }) {
             </tr>
           </thead>
           <tbody className="block divide-y divide-border md:table-row-group">
-            {health.map((account) => (
-              <tr
-                key={account.accountId}
-                className="grid gap-2 py-4 md:table-row"
-              >
-                <td className="min-w-0 break-words md:py-3 md:pr-3">
-                  {account.name}
-                </td>
-                <td className="md:py-3">
-                  {
-                    { ...uk.campaign.channelNames, ...uk.social.networks }[
-                      account.channel as keyof (typeof uk.campaign.channelNames &
-                        typeof uk.social.networks)
-                    ]
-                  }
-                </td>
-                <td className="md:py-3">
-                  <HealthBadge health={account} />
-                </td>
-                <td className="tabular-nums md:py-3">
-                  <span className="mr-2 text-xs text-muted-foreground md:hidden">
-                    {t.today}
-                  </span>
-                  {account.sentToday} / {account.dailyLimit}
-                </td>
-                <td className="tabular-nums md:py-3">
-                  <span className="mr-2 text-xs text-muted-foreground md:hidden">
-                    {t.alarms}
-                  </span>
-                  {account.alarmCount7Days}
-                </td>
-              </tr>
-            ))}
+            {health
+              .filter((account) => account.visible)
+              .map((account) => (
+                <tr
+                  key={account.accountId}
+                  className="grid gap-2 py-4 md:table-row"
+                >
+                  <td className="min-w-0 break-words md:py-3 md:pr-3">
+                    <span className="block font-medium">{account.name}</span>
+                    {account.addressMasked && (
+                      <span className="block text-xs text-muted-foreground">
+                        {account.addressMasked}
+                      </span>
+                    )}
+                  </td>
+                  <td className="md:py-3">
+                    {
+                      { ...uk.campaign.channelNames, ...uk.social.networks }[
+                        account.channel as keyof (typeof uk.campaign.channelNames &
+                          typeof uk.social.networks)
+                      ]
+                    }
+                  </td>
+                  <td className="md:py-3">
+                    <HealthBadge health={account} />
+                  </td>
+                  <td className="tabular-nums md:py-3">
+                    <span className="mr-2 text-xs text-muted-foreground md:hidden">
+                      {t.today}
+                    </span>
+                    {account.sentToday} / {account.dailyLimit}
+                  </td>
+                  <td className="tabular-nums md:py-3">
+                    <span className="mr-2 text-xs text-muted-foreground md:hidden">
+                      {t.alarms}
+                    </span>
+                    {account.alarmCount7Days}
+                  </td>
+                </tr>
+              ))}
           </tbody>
         </table>
       )}

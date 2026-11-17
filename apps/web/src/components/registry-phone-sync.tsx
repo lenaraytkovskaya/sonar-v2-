@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
+import { FriendlyError } from './friendly-error';
 import { Card } from './shared';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
@@ -110,7 +111,11 @@ export function RegistryPhoneSync({
           )}
         </div>
       )}
-      {task?.reason_uk && <p className="text-sm">{task.reason_uk}</p>}
+      {task?.reason_uk && (
+        <p className="text-sm">
+          <FriendlyError reason={task.reason_uk} />
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-err">
           {error}

@@ -21,6 +21,7 @@ import { LocalTime } from './local-time';
 import { useMessageDraft } from './use-message-draft';
 import { sameDraft, normalizedDraft } from '@/lib/draft-state';
 import { MessageBody } from './message-body';
+import { FriendlyError } from './friendly-error';
 import {
   AlertCircle,
   Ban,
@@ -120,7 +121,7 @@ export function MessageBubble({ message }: { message: Message }) {
         {message.reasonUk && !dispatched && (
           <p className="flex items-start gap-1 text-xs text-err">
             <AlertCircle aria-hidden className="mt-0.5 size-3 shrink-0" />
-            {message.reasonUk}
+            <FriendlyError reason={message.reasonUk} />
           </p>
         )}
       </section>
@@ -416,7 +417,9 @@ export function Draft({
         </a>
       )}
       {message.reasonUk && !dispatched && (
-        <p className="text-sm text-err">{message.reasonUk}</p>
+        <p className="text-sm text-err">
+          <FriendlyError reason={message.reasonUk} />
+        </p>
       )}
     </section>
   );
@@ -710,7 +713,12 @@ export function CompanyChat({
       {task && (
         <p role="status" className="text-muted-foreground">
           {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && ` · ${task.reason_uk}`}
+          {task.reason_uk && (
+            <>
+              {' '}
+              · <FriendlyError reason={task.reason_uk} />
+            </>
+          )}
         </p>
       )}
       {notice && <p role="status">{notice}</p>}

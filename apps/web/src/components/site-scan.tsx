@@ -5,6 +5,7 @@ import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import { ScanSummary } from './shared';
+import { FriendlyError } from './friendly-error';
 export function SiteScan({
   companyId,
   hasWebsite,
@@ -74,7 +75,12 @@ export function SiteScan({
         <>
           <p>
             {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-            {task.reason_uk && ` · ${task.reason_uk}`}
+            {task.reason_uk && (
+              <>
+                {' '}
+                · <FriendlyError reason={task.reason_uk} />
+              </>
+            )}
           </p>
           {task.type === 'site.scan' && <ScanSummary result={task.result} />}
         </>

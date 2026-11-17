@@ -11,6 +11,7 @@ import { Button } from './ui/button';
 import { Callout, DetailList } from './ui/layout';
 import { LocalTime } from './local-time';
 import { InboxModeTabs } from './inbox-mode-tabs';
+import { FriendlyError } from './friendly-error';
 import { useInboxPolling } from './use-inbox-polling';
 
 type Forms = Awaited<ReturnType<typeof listFormMessages>>;
@@ -270,7 +271,11 @@ export function FormInbox({
                   </p>
                 </div>
               </section>
-              {selected.reasonUk && <Callout>{selected.reasonUk}</Callout>}
+              {selected.reasonUk && (
+                <Callout>
+                  <FriendlyError reason={selected.reasonUk} />
+                </Callout>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 {(['before', 'after'] as const)
                   .filter((phase) =>

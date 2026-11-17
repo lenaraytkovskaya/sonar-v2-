@@ -122,9 +122,6 @@ export function ChannelTabs({
           </Button>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">
-        {uk.pages.channels.drafts}
-      </p>
       {tabs.map((tab) => (
         <div
           key={tab.key}
