@@ -192,7 +192,10 @@ export function FormInbox({
             <div className="space-y-5">
               <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
                 <h2 className="min-w-0 break-words font-heading text-lg font-bold">
-                  <Link href={`/companies/${selected.companyId}`}>
+                  <Link
+                    href={`/companies/${selected.companyId}`}
+                    className="text-accent hover:underline"
+                  >
                     {selected.companyName}
                   </Link>
                 </h2>
