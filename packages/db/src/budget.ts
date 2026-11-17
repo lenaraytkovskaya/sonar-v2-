@@ -10,11 +10,45 @@ import {
 import { sonarPool } from './index.js';
 import { logActivity } from './tasks.js';
 export class BillingUncertain extends Error {
-  constructor() {
+  constructor(readonly cause?: string) {
     super(
       'Результат попереднього платного запиту невідомий. Звірте витрати перед повтором.',
     );
   }
+}
+function safeUncertainMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  let message = raw
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (value) => {
+      try {
+        const url = new URL(value);
+        url.username = '';
+        url.password = '';
+        url.search = '';
+        url.hash = '';
+        return url.toString();
+      } catch {
+        return '[URL]';
+      }
+    })
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(
+      /\b(api[-_ ]?key|token|password|secret|authorization)\b\s*[:=]\s*[^\s,;]+/gi,
+      '$1=[redacted]',
+    );
+  message = [...message]
+    .map((character) =>
+      character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127
+        ? ' '
+        : character,
+    )
+    .join('');
+  for (const [name, secret] of Object.entries(process.env)) {
+    if (!/(API_KEY|API_TOKEN|SECRET|PASSWORD)$/i.test(name) || !secret)
+      continue;
+    if (secret) message = message.split(secret).join('[redacted]');
+  }
+  return message.trim().slice(0, 200) || 'Невідома помилка платного запиту.';
 }
 async function usage(client: PoolClient, service: string) {
   const {
@@ -70,6 +104,25 @@ export async function runBudgetedRequest(
     transaction = true;
     await client.query('select pg_advisory_xact_lock(719401)');
     const {
+      rows: [task],
+    } = await client.query('select result,type from tasks where id=$1', [
+      taskId,
+    ]);
+    if (!task) throw new Error('Unknown task');
+    const markUncertain = async (error: unknown) => {
+      const message = safeUncertainMessage(error);
+      await client.query(
+        `update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1`,
+        [taskId, JSON.stringify({ uncertainCause: message })],
+      );
+      const errorName =
+        error instanceof Error && error.name ? error.name : 'Error';
+      console.warn(
+        `[paid-request] uncertain ${JSON.stringify({ service, taskType: task.type, errorName, message })}`,
+      );
+      return new BillingUncertain(message);
+    };
+    const {
       rows: [previous],
     } = await client.query(
       'select service_code,units,cost_usd,meta from spend_events where task_id=$1 and attempt=$2',
@@ -110,16 +163,22 @@ export async function runBudgetedRequest(
       }
       if (previous.meta.error)
         throw new PaidHttpError(previous.meta.error.status);
-      if (!previous.meta.response) throw new BillingUncertain();
+      if (!previous.meta.response)
+        throw await markUncertain(
+          new Error('Збережений результат платного запиту відсутній.'),
+        );
       return previous.meta.response as PaidResponse;
     }
-    const {
-      rows: [task],
-    } = await client.query('select result,type from tasks where id=$1', [
-      taskId,
-    ]);
-    if (!task) throw new Error('Unknown task');
-    if (task.result?.billingPending) throw new BillingUncertain();
+    if (task.result?.billingPending) {
+      await client.query('commit');
+      transaction = false;
+      throw await markUncertain(
+        new Error(
+          task.result.uncertainCause ??
+            'Попередній платний запит не завершився.',
+        ),
+      );
+    }
     checkBudget(await usage(client, service), estimateUsd);
     if (
       service === 'google_places' ||
@@ -228,7 +287,7 @@ export async function runBudgetedRequest(
         throw error;
       }
       if (error instanceof OpenRouterError) throw error;
-      throw new BillingUncertain();
+      throw await markUncertain(error);
     }
     moneyUnits(response.costUsd);
     if (!Number.isSafeInteger(response.units) || response.units < 0)

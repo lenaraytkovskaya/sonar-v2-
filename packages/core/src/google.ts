@@ -56,38 +56,51 @@ export const profilesSchema = z
   .length(2)
   .refine((p) => new Set(p.map((v) => v.id)).size === 2);
 export type GoogleProfile = z.infer<typeof profileSchema>;
-export const googlePageSchema = z.object({
-  places: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        displayName: z.object({ text: z.string() }).optional(),
-        formattedAddress: z.string().optional(),
-        addressComponents: z
-          .array(
-            z.object({
-              longText: z.string(),
-              shortText: z.string().optional(),
-              types: z.array(z.string()),
-            }),
-          )
-          .optional(),
-        location: z
-          .object({ latitude: z.number(), longitude: z.number() })
-          .optional(),
-        types: z.array(z.string()).optional(),
-        primaryType: z.string().optional(),
-        businessStatus: z.string().optional(),
-        googleMapsUri: z.string().optional(),
-        websiteUri: z.string().optional(),
-        nationalPhoneNumber: z.string().optional(),
-        internationalPhoneNumber: z.string().optional(),
-        rating: z.number().optional(),
-        userRatingCount: z.number().optional(),
+const googlePlaceSchema = z.object({
+  id: z.string().min(1),
+  displayName: z.object({ text: z.string() }).optional().catch(undefined),
+  formattedAddress: z.string().optional().catch(undefined),
+  addressComponents: z
+    .array(z.unknown())
+    .transform((components) =>
+      components.flatMap((component) => {
+        const parsed = z
+          .object({
+            longText: z.string().optional(),
+            shortText: z.string().optional(),
+            types: z.array(z.string()).optional().default([]),
+          })
+          .safeParse(component);
+        return parsed.success ? [parsed.data] : [];
       }),
     )
+    .optional()
+    .catch(undefined),
+  location: z
+    .object({ latitude: z.number(), longitude: z.number() })
+    .optional()
+    .catch(undefined),
+  types: z.array(z.string()).optional().catch(undefined),
+  primaryType: z.string().optional().catch(undefined),
+  businessStatus: z.string().optional().catch(undefined),
+  googleMapsUri: z.string().optional().catch(undefined),
+  websiteUri: z.string().optional().catch(undefined),
+  nationalPhoneNumber: z.string().optional().catch(undefined),
+  internationalPhoneNumber: z.string().optional().catch(undefined),
+  rating: z.number().optional().catch(undefined),
+  userRatingCount: z.number().optional().catch(undefined),
+});
+export const googlePageSchema = z.object({
+  places: z
+    .array(z.unknown())
     .max(20)
-    .default([]),
+    .default([])
+    .transform((places) =>
+      places.flatMap((place) => {
+        const parsed = googlePlaceSchema.safeParse(place);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    ),
   nextPageToken: z.string().optional(),
 });
 export type GooglePage = z.infer<typeof googlePageSchema>;
@@ -139,6 +152,34 @@ export function createGoogleClient(key: string, fetcher: typeof fetch = fetch) {
     );
     if (!response.ok) throw new PaidHttpError(response.status);
     return googlePageSchema.parse(await response.json());
+  };
+}
+
+// Keep the paid response as raw text so callers can persist its receipt before parsing.
+export function createGoogleClientRaw(
+  key: string,
+  fetcher: typeof fetch = fetch,
+) {
+  return async (
+    input: GoogleSearch,
+    profile: GoogleProfile,
+  ): Promise<string> => {
+    if (!key) throw Error('Google key missing');
+    const response = await fetcher(
+      'https://places.googleapis.com/v1/places:searchText',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': key,
+          'X-Goog-FieldMask': profile.fields.join(','),
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(30000),
+      },
+    );
+    if (!response.ok) throw new PaidHttpError(response.status);
+    return response.text();
   };
 }
 
