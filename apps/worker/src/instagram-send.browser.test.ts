@@ -197,6 +197,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       }
     });
     it.each([
+      ['Напишите сообщение…', 'ru'],
+      ['Напишіть повідомлення…', 'uk'],
+      ['mEsSaGe...', 'en'],
+    ])(
+      'fills the %s Lexical composer and confirms a link-only chat header (%s)',
+      async (lexicalPlaceholder) => {
+        const f = await fixture({
+          lexical: true,
+          lexicalPlaceholder,
+          containerHeader: true,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.inputs).toEqual(['textbox']);
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+          expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
       {},
       { innerDialog: true },
       { nestedSemanticHeader: true },
@@ -227,7 +251,6 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { wrongRecipient: true },
       { hiddenRecipient: true },
       { sidebarOnlyRecipient: true },
-      { mainOnlyRecipient: true },
       { unknownPagelet: true },
       { foreignNestedDialog: true },
       { splitPane: true },

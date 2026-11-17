@@ -87,6 +87,12 @@
             header.append(pagelet);
           }
         }
+        if (f.containerHeader) {
+          const container = document.createElement('div');
+          container.innerHTML = `<div><a href="/${f.wrongRecipient ? 'other' : 'fixture_company'}/">Recipient</a></div>`;
+          conversationHeader.replaceWith(container);
+          conversationHeader = container;
+        }
         if (f.lexicalDecoys) {
           conversationHeader.insertAdjacentHTML('beforeend', lexical);
           main.insertAdjacentHTML(
