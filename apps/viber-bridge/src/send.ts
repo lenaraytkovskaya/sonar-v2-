@@ -70,11 +70,14 @@ export function createSend(
       }
       const started = new Date();
       // Fail before reserving if the database cannot be read. Never send without confirmation capability.
-      const before = new Set(
-        (await desktop.messages(started).catch(() => [] as ViberMessage[])).map(
-          (m) => m.providerMessageId,
-        ),
-      );
+      let databaseReadable = true;
+      let beforeMessages: ViberMessage[] = [];
+      try {
+        beforeMessages = await desktop.messages(started);
+      } catch {
+        databaseReadable = false;
+      }
+      const before = new Set(beforeMessages.map((m) => m.providerMessageId));
       let result: SendResult = {
         state: 'uncertain',
         reason: 'dispatch_interrupted',
@@ -110,13 +113,20 @@ export function createSend(
               break;
             }
           }
-          const match = (await desktop.messages(started)).find(
-            (m) =>
-              m.outgoing &&
-              m.from === input.to &&
-              m.text === input.text &&
-              !before.has(m.providerMessageId),
-          );
+          let match: ViberMessage | undefined;
+          if (databaseReadable) {
+            try {
+              match = (await desktop.messages(started)).find(
+                (m) =>
+                  m.outgoing &&
+                  m.from === input.to &&
+                  m.text === input.text &&
+                  !before.has(m.providerMessageId),
+              );
+            } catch {
+              databaseReadable = false;
+            }
+          }
           if (match) {
             result = {
               state: 'sent',
@@ -127,8 +137,9 @@ export function createSend(
         }
         if (result.state === 'uncertain')
           result.reason = 'outgoing_not_confirmed';
-      } catch {
-        result.reason = 'desktop_or_database_error';
+      } catch (error) {
+        result.reason =
+          error instanceof Error ? error.message : 'desktop_operation_failed';
       }
       if (result.state === 'uncertain') {
         try {
