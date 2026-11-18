@@ -104,7 +104,21 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
   const since = new Date(
     (latest?.since?.getTime() ?? now.getTime() - 24 * 60 * 60_000) - 60_000,
   ).toISOString();
-  const response = await bridge(`/inbound?since=${encodeURIComponent(since)}`);
+  const { rows: recentRecipients } = await sonarPool.query<{
+    to_value: string;
+  }>(
+    `select distinct to_value from messages
+     where channel='viber' and direction='out' and account_id=$1
+       and coalesce(sent_at,created_at)>=now()-interval '14 days'
+       and to_value ~ '^\\+[1-9][0-9]{6,14}$'
+     order by to_value limit 500`,
+    [account.id],
+  );
+  const inboundUrl = new URL('/inbound', 'http://bridge');
+  inboundUrl.searchParams.set('since', since);
+  for (const recipient of recentRecipients)
+    inboundUrl.searchParams.append('to', recipient.to_value);
+  const response = await bridge(`${inboundUrl.pathname}${inboundUrl.search}`);
   const messages = (await response.json()) as ViberInbound[];
   if (!Array.isArray(messages))
     throw new ViberBridgeError('Некоректна відповідь списку Viber.');
@@ -122,7 +136,32 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
     });
     if (result.created) imported++;
   }
-  return { status: 'done', result: { imported } };
+  let reconciled = 0;
+  try {
+    const outgoingUrl = new URL('/outgoing', 'http://bridge');
+    outgoingUrl.searchParams.set(
+      'since',
+      new Date(now.getTime() - 2 * 60_000).toISOString(),
+    );
+    for (const recipient of recentRecipients)
+      outgoingUrl.searchParams.append('to', recipient.to_value);
+    const response = await bridge(
+      `${outgoingUrl.pathname}${outgoingUrl.search}`,
+    );
+    const outgoing = (await response.json()) as {
+      from: string;
+      text: string;
+      at: string;
+      providerMessageId: string;
+    }[];
+    if (Array.isArray(outgoing)) {
+      const { reconcileViberDeliveries } = await import('@sonar/db/viber');
+      reconciled = await reconcileViberDeliveries(outgoing, now);
+    }
+  } catch {
+    // Incoming synchronization remains useful if outbound reconciliation is unavailable.
+  }
+  return { status: 'done', result: { imported, reconciled } };
 }
 
 async function enqueueViberInboxIfDue(now = new Date()) {

@@ -112,6 +112,11 @@ export async function POST(request: Request, context: Context) {
       )
     )
       return invalid();
+    if (data.action === 'manual-viber') {
+      if (chat.conversation.channel !== 'viber') return invalid();
+      const { markViberSentManually } = await import('@sonar/db/viber');
+      return markViberSentManually(data.messageId, id, user.id);
+    }
     const outreach = await import('@sonar/db/outreach');
     if (data.action === 'save') {
       if (

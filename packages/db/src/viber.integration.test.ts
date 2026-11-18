@@ -164,6 +164,83 @@ it.skipIf(!enabled)(
           ids.user,
         ),
       ).toMatchObject({ companyId: ids.company });
+
+      const uncertain = await email.createCompanyMessage(
+        {
+          channel: 'viber',
+          companyId: ids.company,
+          campaignId: ids.campaign,
+          accountId: account.id,
+          toAddress: '+48500100200',
+          body: 'Observed outgoing Viber fixture',
+          submit: true,
+          idempotencyKey: randomUUID(),
+        },
+        ids.user,
+      );
+      const manual = await email.createCompanyMessage(
+        {
+          channel: 'viber',
+          companyId: ids.company,
+          campaignId: ids.campaign,
+          accountId: account.id,
+          toAddress: '+48500100200',
+          body: 'Manually confirmed Viber fixture',
+          submit: true,
+          idempotencyKey: randomUUID(),
+        },
+        ids.user,
+      );
+      const attemptedAt = new Date(Date.now() - 2000);
+      await db.sonarPool.query(
+        "update messages set status='failed',first_attempt_at=$2,reason_uk='confirmation uncertain' where id=any($1::uuid[])",
+        [[uncertain.id, manual.id], attemptedAt],
+      );
+      const { reconcileViberDeliveries, markViberSentManually } =
+        await import('./viber.js');
+      const observedAt = new Date(Date.now() - 1000).toISOString();
+      expect(
+        await reconcileViberDeliveries(
+          [
+            {
+              from: '+48500100200',
+              text: 'Observed outgoing Viber fixturc',
+              at: observedAt,
+              providerMessageId: 'screen-outgoing-fixture',
+            },
+          ],
+          new Date(),
+        ),
+      ).toBe(1);
+      const reconciled = await db.sonarPool.query(
+        'select status,provider_id,sent_at from messages where id=$1',
+        [uncertain.id],
+      );
+      expect(reconciled.rows[0]).toMatchObject({
+        status: 'sent',
+        provider_id: 'screen-outgoing-fixture',
+      });
+      const {
+        rows: [manualRow],
+      } = await db.sonarPool.query<{ conversation_id: string }>(
+        'select conversation_id from messages where id=$1',
+        [manual.id],
+      );
+      expect(
+        await markViberSentManually(
+          manual.id,
+          manualRow!.conversation_id,
+          ids.user,
+        ),
+      ).toMatchObject({ status: 'sent' });
+      const activity = await db.sonarPool.query(
+        "select user_id,action from activity_log where entity_id=$1 and action='viber.manually_sent'",
+        [ids.company],
+      );
+      expect(activity.rows).toContainEqual({
+        user_id: ids.user,
+        action: 'viber.manually_sent',
+      });
     } finally {
       await db.sonarPool.query('delete from tasks where subject_id=$1', [
         ids.company,

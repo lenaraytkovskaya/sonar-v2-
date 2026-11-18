@@ -33,7 +33,11 @@ export function createSend(
     open(url: string, to: string): Promise<void>;
     enter(): Promise<void>;
     screen(): Promise<Buffer>;
-    confirm?(): Promise<{ composer: string; outgoingBubble: string }>;
+    confirm?(): Promise<{
+      composer: string;
+      outgoingBubble: string;
+      messageTime?: string;
+    }>;
     wait(): Promise<void>;
   },
 ) {
@@ -93,6 +97,8 @@ export function createSend(
                 input.text,
                 screen.composer,
                 screen.outgoingBubble,
+                screen.messageTime,
+                started,
               )
             ) {
               result = {

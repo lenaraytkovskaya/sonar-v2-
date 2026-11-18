@@ -190,7 +190,27 @@ export function Draft({
       busy.current = false;
     }
   };
-  if (bubble && !showEditor) return <MessageBubble message={message} />;
+  if (bubble && !showEditor)
+    return (
+      <div className="space-y-2">
+        <MessageBubble message={message} />
+        {message.channel === 'viber' &&
+          message.direction === 'out' &&
+          message.status === 'failed' && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                disabled={pending}
+                onClick={() =>
+                  void act('manual-viber', { messageId: message.id })
+                }
+              >
+                {uk.viber.markSent}
+              </Button>
+            </div>
+          )}
+      </div>
+    );
   return (
     <section
       className={cn(
