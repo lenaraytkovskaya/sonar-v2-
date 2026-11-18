@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
 import { FriendlyError } from './friendly-error';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 type Progress = {
@@ -74,21 +74,28 @@ export function RegistryPhoneSync({
         <h2 className="font-heading text-base font-bold">
           {uk.registry.syncTitle}
         </h2>
-        <Button
-          type="button"
-          disabled={pending || !!active}
-          onClick={() => void sync()}
-        >
-          {pending || active
-            ? uk.tasks.status[
-                status === 'running'
-                  ? 'running'
-                  : status === 'paused'
-                    ? 'paused'
-                    : 'queued'
-              ]
-            : uk.registry.sync}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {active && (
+            <StatusBadge status={status ?? 'queued'}>
+              {
+                uk.tasks.status[
+                  status === 'running'
+                    ? 'running'
+                    : status === 'paused'
+                      ? 'paused'
+                      : 'queued'
+                ]
+              }
+            </StatusBadge>
+          )}
+          <Button
+            type="button"
+            disabled={pending || !!active}
+            onClick={() => void sync()}
+          >
+            {uk.registry.sync}
+          </Button>
+        </div>
       </div>
       {progress && (
         <div role="status" className="space-y-1 text-sm text-muted-foreground">

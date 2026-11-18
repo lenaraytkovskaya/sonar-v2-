@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { FriendlyError } from './friendly-error';
 type Progress = {
@@ -109,7 +109,13 @@ export function ProzorroSync({ embedded = false }: { embedded?: boolean }) {
             return (
               <section key={feed} className="space-y-1 text-sm">
                 <h3 className="font-semibold">{uk.prozorro[feed]}</h3>
-                <p>
+                <StatusBadge
+                  status={
+                    data['prozorro.full_sync.enabled'] === false
+                      ? 'paused'
+                      : (progress?.status ?? 'queued')
+                  }
+                >
                   {
                     uk.tasks.status[
                       data['prozorro.full_sync.enabled'] === false
@@ -117,7 +123,7 @@ export function ProzorroSync({ embedded = false }: { embedded?: boolean }) {
                         : (progress?.status ?? 'queued')
                     ]
                   }
-                </p>
+                </StatusBadge>
                 <p>
                   {uk.prozorro.documents}:{' '}
                   {(progress?.documents ?? 0).toLocaleString('uk-UA')}

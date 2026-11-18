@@ -11,7 +11,7 @@ import { channelLabel, contactLabel } from '@/lib/outreach-labels';
 import { useInboxPolling } from './use-inbox-polling';
 import { inboxReadSnapshot } from '@/lib/inbox-read';
 import { isNearBottom, newMessageCount } from '@/lib/inbox-scroll';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Draft } from './company-email';
 import { AiAssist } from './ai-assist';
 import { Button } from './ui/button';
@@ -371,9 +371,7 @@ export function ConversationChat({
             </Link>
           )}
           {conversation.needsHuman && (
-            <p className="rounded-lg bg-wait-bg px-2 py-1 text-xs text-wait">
-              {uk.inbound.needsHuman}
-            </p>
+            <StatusBadge status="waiting">{uk.inbound.needsHuman}</StatusBadge>
           )}
         </div>
         <h2
@@ -410,9 +408,7 @@ export function ConversationChat({
           · {contactLabel(conversation.contactValue)}
         </p>
         {data.blocked && (
-          <p className="rounded-lg bg-err-bg p-3 text-err">
-            {uk.email.blocked}
-          </p>
+          <StatusBadge status="closed">{uk.email.blocked}</StatusBadge>
         )}
       </header>
       <FormReplyMatch
@@ -515,15 +511,12 @@ export function ConversationChat({
             <p className="text-err">{uk.inbound.refreshError}</p>
           )}
           {task && (
-            <p>
-              {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-              {task.reason_uk && (
-                <>
-                  {' '}
-                  · <FriendlyError reason={task.reason_uk} />
-                </>
-              )}
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={task.status}>
+                {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+              </StatusBadge>
+              {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+            </div>
           )}
           {notice && <p>{notice}</p>}
         </div>

@@ -11,7 +11,7 @@ import {
 import { uk } from '@/i18n/uk';
 import { Callout, Section } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
-import { ScanSummary, type ScanResult } from './shared';
+import { ScanSummary, StatusBadge, type ScanResult } from './shared';
 import { FriendlyError } from './friendly-error';
 type Task = {
   id: string;
@@ -131,11 +131,14 @@ export function WorkerStatus() {
   return (
     <div
       role="alert"
-      className="shrink-0 border-b border-err/20 bg-err-bg px-4 py-3 text-sm text-err md:px-6"
+      className="flex flex-wrap items-center gap-2 border-b border-err/20 bg-err-bg px-4 py-3 text-sm md:px-6"
     >
-      {time
-        ? uk.tasks.workerStopped.replace('{time}', time)
-        : uk.tasks.workerMissing}
+      <StatusBadge status="failed">{uk.tasks.status.failed}</StatusBadge>
+      <span className="text-err">
+        {time
+          ? uk.tasks.workerStopped.replace('{time}', time)
+          : uk.tasks.workerMissing}
+      </span>
     </div>
   );
 }
@@ -197,7 +200,9 @@ export function TaskOverview() {
           <div className="min-w-0 flex-1 break-words">
             <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
               {name(task.type)}
-              <StatusText status={task.status} />
+              <StatusBadge status={task.status}>
+                {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+              </StatusBadge>
             </p>
             <p
               className={
@@ -303,7 +308,13 @@ export function TaskOverview() {
                       · ${Number(batch.cost_usd).toFixed(3)}
                     </p>
                   </div>
-                  <StatusText status={batch.status} />
+                  <StatusBadge status={batch.status}>
+                    {
+                      uk.tasks.status[
+                        batch.status as keyof typeof uk.tasks.status
+                      ]
+                    }
+                  </StatusBadge>
                 </div>
                 <ProgressRow
                   label={uk.google.title}
@@ -349,14 +360,18 @@ export function TaskOverview() {
               return (
                 <li key={type} className="space-y-1.5 text-sm">
                   <ProgressRow label={name(type)} value={done} max={total} />
-                  <p className="text-xs text-muted-foreground">
-                    {rows
-                      .map(
-                        (x) =>
-                          `${uk.tasks.status[x.status as keyof typeof uk.tasks.status]}: ${x.count}`,
-                      )
-                      .join(' · ')}
-                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {rows.map((x) => (
+                      <StatusBadge key={x.status} status={x.status}>
+                        {
+                          uk.tasks.status[
+                            x.status as keyof typeof uk.tasks.status
+                          ]
+                        }
+                        : {x.count}
+                      </StatusBadge>
+                    ))}
+                  </div>
                 </li>
               );
             })}
@@ -405,7 +420,11 @@ export function TaskOverview() {
                       </span>
                     )}
                 </span>
-                <StatusText status={task.status} />
+                <StatusBadge status={task.status}>
+                  {uk.tasks.status[
+                    task.status as keyof typeof uk.tasks.status
+                  ] ?? task.status}
+                </StatusBadge>
               </li>
             ))}
         </ul>
@@ -445,23 +464,5 @@ function ProgressRow({
         />
       </div>
     </div>
-  );
-}
-
-const statusTones: Record<string, string> = {
-  done: 'bg-ok-bg text-ok',
-  running: 'bg-run-bg text-run',
-  queued: 'bg-idle-bg text-idle',
-  skipped: 'bg-wait-bg text-wait',
-  paused: 'bg-wait-bg text-wait',
-  failed: 'bg-err-bg text-err',
-};
-function StatusText({ status }: { status: string }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${statusTones[status] ?? statusTones.queued}`}
-    >
-      {uk.tasks.status[status as keyof typeof uk.tasks.status] ?? status}
-    </span>
   );
 }
