@@ -143,6 +143,27 @@ it.skipIf(!enabled)(
         created: false,
         companyId: ids.company,
       });
+      const unbound = {
+        ...incoming,
+        providerId: 'fixture-viber-event-unbound',
+        externalMessageId: 'fixture-viber-event-unbound',
+        providerThreadId: 'fixture-viber-chat-unbound',
+        sender: '',
+      };
+      const pending = await inbound.recordInbound(unbound);
+      expect(pending).toMatchObject({ created: true, companyId: null });
+      expect(await inbound.recordInbound(unbound)).toMatchObject({
+        created: false,
+        conversationId: pending.conversationId,
+      });
+      expect(
+        await inbound.bindViberThread(
+          pending.conversationId,
+          ids.company,
+          draft.rows[0]!.id,
+          ids.user,
+        ),
+      ).toMatchObject({ companyId: ids.company });
     } finally {
       await db.sonarPool.query('delete from tasks where subject_id=$1', [
         ids.company,
