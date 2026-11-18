@@ -23,7 +23,13 @@ it('requires an email subject and preserves the company language', () => {
     ).toThrow();
 });
 it('uses body-only drafts outside email and enforces messenger and social length', () => {
-  for (const channel of ['form', 'social', 'telegram', 'whatsapp'] as const)
+  for (const channel of [
+    'form',
+    'social',
+    'telegram',
+    'whatsapp',
+    'viber',
+  ] as const)
     expect(parseOutreachDraft('{"body":"Hello"}', channel, 5)).toEqual({
       subject: '',
       body: 'Hello',
@@ -113,4 +119,16 @@ it('does not select social drafts when every campaign channel is disabled', () =
       { email: false, telegram: false, whatsapp: false, forms: false },
     ),
   ).toEqual([]);
+});
+
+it('uses an enabled Viber channel for direct Viber and mobile phone contacts only', () => {
+  const contacts = [
+    { id: 'phone', kind: 'phone', normalized: '+380501234567', rank: 10 },
+    { id: 'viber', kind: 'viber', normalized: '+380671234567', rank: 9 },
+  ];
+  expect(selectOutreachContacts(contacts, { viber: false })).toEqual([]);
+  expect(selectOutreachContacts(contacts, { viber: true })).toEqual([
+    { ...contacts[0], channel: 'viber' },
+    { ...contacts[1], channel: 'viber' },
+  ]);
 });

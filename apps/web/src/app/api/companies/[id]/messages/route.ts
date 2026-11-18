@@ -52,7 +52,9 @@ export async function POST(request: Request, context: Context) {
       typeof data.subject !== 'string' ||
       typeof data.body !== 'string' ||
       (data.channel !== undefined &&
-        !['email', 'form', 'telegram', 'whatsapp'].includes(data.channel))
+        !['email', 'form', 'telegram', 'whatsapp', 'viber'].includes(
+          data.channel,
+        ))
     )
       return Response.json({ error: uk.ai.invalid }, { status: 400 });
     return email.createCompanyMessage(
@@ -72,7 +74,9 @@ export async function POST(request: Request, context: Context) {
               ? 'telegram'
               : channel === 'form'
                 ? 'form'
-                : 'email',
+                : channel === 'viber'
+                  ? 'viber'
+                  : 'email',
       },
       user.id,
     );

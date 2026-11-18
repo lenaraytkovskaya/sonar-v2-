@@ -15,6 +15,7 @@ import {
 import type { PoolClient } from 'pg';
 import {
   EmailSendError,
+  normalizePhone,
   socialTarget,
   messageStatusForMode,
   nextSendTime,
@@ -143,7 +144,7 @@ export async function retryWhatsAppContact(
 }
 export interface EmailMessage {
   id: string;
-  channel: 'email' | 'form' | 'telegram' | 'whatsapp';
+  channel: 'email' | 'form' | 'telegram' | 'whatsapp' | 'viber';
   screenshotBefore: boolean;
   screenshotAfter: boolean;
   accountId: string;
@@ -360,7 +361,7 @@ export async function isContactBlocked(
   const whatsappTo = normalizeWhatsAppRecipient(address, country);
   if (whatsappTo) {
     const { rows } = await c.query(
-      "select value_normalized from do_not_contact where kind in ('whatsapp','phone')",
+      "select value_normalized from do_not_contact where kind in ('whatsapp','viber','phone')",
     );
     if (
       rows.some(
@@ -387,7 +388,7 @@ export async function isContactBlocked(
   }
   return (
     await c.query(
-      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind in ('phone','telegram','whatsapp') and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
+      `select exists(select 1 from companies c where c.id=$1 and (c.status in ('refused','do_not_contact') or exists(select 1 from do_not_contact d where (d.company_id=c.id or (d.kind='company' and d.value_normalized=c.id::text)) or (d.kind='email' and d.value_normalized=lower($2)) or (d.kind='form' and d.value_normalized=$2) or (d.kind in ('phone','telegram','whatsapp','viber') and d.value_normalized=$2) or (d.kind='domain' and d.value_normalized in (lower(split_part($2,'@',2)),lower(c.domain)))))) as blocked`,
       [companyId, address],
     )
   ).rows[0].blocked;
@@ -477,7 +478,7 @@ export async function getCompanyMessaging(companyId: string) {
   };
 }
 type MessageInput = {
-  channel?: 'email' | 'form' | 'telegram' | 'whatsapp';
+  channel?: 'email' | 'form' | 'telegram' | 'whatsapp' | 'viber';
   companyId: string;
   campaignId: string;
   accountId?: string;
@@ -511,7 +512,7 @@ export async function createCompanyMessage(
 ) {
   const channel = input.channel ?? 'email';
   const country =
-    channel === 'whatsapp'
+    channel === 'whatsapp' || channel === 'viber'
       ? (
           await (existing ?? sonarPool).query(
             'select country_code from campaigns where id=$1',
@@ -524,9 +525,11 @@ export async function createCompanyMessage(
         ? input.toAddress?.trim().toLowerCase()
         : channel === 'whatsapp'
           ? (normalizeWhatsAppRecipient(input.toAddress ?? '', country) ?? '')
-          : channel === 'telegram'
-            ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
-            : input.toAddress?.trim(),
+          : channel === 'viber'
+            ? (normalizePhone(input.toAddress ?? '', country) ?? '')
+            : channel === 'telegram'
+              ? (normalizeTelegramRecipient(input.toAddress ?? '') ?? '')
+              : input.toAddress?.trim(),
     subject = channel === 'email' ? (input.subject?.trim() ?? '') : '',
     body = input.body?.trim();
   if (
@@ -534,9 +537,11 @@ export async function createCompanyMessage(
       ? !validEmail(to) || !subject
       : channel === 'whatsapp'
         ? !normalizeWhatsAppRecipient(to, country)
-        : channel === 'telegram'
-          ? !normalizeTelegramRecipient(to)
-          : !validFormUrl(to)) ||
+        : channel === 'viber'
+          ? !normalizePhone(to, country)
+          : channel === 'telegram'
+            ? !normalizeTelegramRecipient(to)
+            : !validFormUrl(to)) ||
     subject.length > 998 ||
     /[\r\n]/.test(subject) ||
     !body ||
@@ -545,8 +550,8 @@ export async function createCompanyMessage(
     input.idempotencyKey.length > 200
   )
     invalid(
-      channel === 'whatsapp'
-        ? 'Вкажіть міжнародний телефон WhatsApp та текст повідомлення.'
+      channel === 'whatsapp' || channel === 'viber'
+        ? `Вкажіть міжнародний телефон ${channel === 'viber' ? 'Viber' : 'WhatsApp'} та текст повідомлення.`
         : channel === 'telegram'
           ? 'Вкажіть Telegram username або міжнародний телефон та текст повідомлення.'
           : channel === 'form'
@@ -612,12 +617,19 @@ export async function createCompanyMessage(
           ? (await telegramContacts(c, input.companyId, to)).find(
               (r) => !r.meta.telegram_unavailable,
             )
-          : (
-              await c.query(
-                'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
-                [input.companyId, to, channel],
-              )
-            ).rows[0];
+          : channel === 'viber'
+            ? (
+                await c.query(
+                  "select id from contacts where company_id=$1 and kind in ('viber','phone') and normalized=$2 order by kind='viber' desc limit 1 for share",
+                  [input.companyId, to],
+                )
+              ).rows[0]
+            : (
+                await c.query(
+                  'select id from contacts where company_id=$1 and kind=$3 and normalized=$2 for share',
+                  [input.companyId, to, channel],
+                )
+              ).rows[0];
     if (!contact) invalid('Оберіть адресу із контактів компанії.');
     if (channel === 'form') {
       const {
@@ -886,7 +898,7 @@ export async function sendEmailMessage(
   send: ChannelSender,
   now = new Date(),
   random = Math.random,
-  channel: 'email' | 'telegram' | 'whatsapp' | 'social' = 'email',
+  channel: 'email' | 'telegram' | 'whatsapp' | 'viber' | 'social' = 'email',
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
@@ -1245,7 +1257,9 @@ export async function sendEmailMessage(
         ? 'social.send'
         : channel === 'whatsapp'
           ? 'send.whatsapp'
-          : 'send';
+          : channel === 'viber'
+            ? 'send.viber'
+            : 'send';
     const min = Number(config[`${gapPrefix}.min_gap_seconds`]),
       max = Number(config[`${gapPrefix}.max_gap_seconds`]);
     try {
@@ -1378,7 +1392,7 @@ export async function sendEmailMessage(
       'update channel_accounts set sent_day=case when $4 then sent_day else $2 end,attempt_count=case when $4 then attempt_count when sent_day=$2 then attempt_count+1 else 1 end,next_send_at=$3 where id=$1',
       [account.id, day, nextSendAt, m.quota_day === day],
     );
-    if (channel === 'telegram' || channel === 'whatsapp')
+    if (channel === 'telegram' || channel === 'whatsapp' || channel === 'viber')
       await c.query('update messages set reason_uk=null where id=$1', [
         messageId,
       ]);
@@ -1463,7 +1477,10 @@ export async function sendEmailMessage(
     };
     try {
       const providerId =
-        channel === 'telegram' || channel === 'whatsapp' || channel === 'social'
+        channel === 'telegram' ||
+        channel === 'whatsapp' ||
+        channel === 'viber' ||
+        channel === 'social'
           ? await send(request, {
               id: account.id,
               settings: {
@@ -1840,9 +1857,11 @@ export async function sendEmailMessage(
           ? error.reasonUk
           : channel === 'whatsapp'
             ? 'Не вдалося підтвердити доставку WhatsApp. Перевірте доставку вручну; автоматичний повтор заблоковано.'
-            : channel === 'telegram'
-              ? 'Не вдалося підтвердити доставку Telegram. Повтор використає той самий ключ.'
-              : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
+            : channel === 'viber'
+              ? 'Не вдалося підтвердити доставку Viber. Перевірте чат вручну; автоматичний повтор заблоковано.'
+              : channel === 'telegram'
+                ? 'Не вдалося підтвердити доставку Telegram. Повтор використає той самий ключ.'
+                : 'Не вдалося підтвердити доставку email. Повтор використає той самий ключ Resend.';
       await c.query(
         "update messages set status='failed',reason_uk=$2 where id=$1",
         [messageId, reason],
@@ -1851,6 +1870,8 @@ export async function sendEmailMessage(
         return terminal('failed', error.code, reason);
       if (channel === 'whatsapp')
         return terminal('paused', 'whatsapp_delivery_uncertain', reason);
+      if (channel === 'viber')
+        return terminal('paused', 'viber_delivery_uncertain', reason);
       if (channel === 'telegram')
         return terminal('paused', 'telegram_delivery_uncertain', reason);
       throw new TaskFailure(

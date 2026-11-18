@@ -68,6 +68,10 @@
       "types": "./dist/whatsapp.d.ts",
       "default": "./dist/whatsapp.js"
     },
+    "./viber": {
+      "types": "./dist/viber.d.ts",
+      "default": "./dist/viber.js"
+    },
     "./inbound": {
       "types": "./dist/inbound.d.ts",
       "default": "./dist/inbound.js"

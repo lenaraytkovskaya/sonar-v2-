@@ -6,6 +6,7 @@ import { EmailAccounts } from './email-accounts';
 import { SocialAccounts } from './social-accounts';
 import { TelegramAccounts } from './telegram-accounts';
 import { WhatsAppAccounts } from './whatsapp-accounts';
+import { ViberAccounts } from './viber-accounts';
 import { Button } from './ui/button';
 import { uk } from '@/i18n/uk';
 
@@ -16,12 +17,14 @@ export function ChannelTabs({
   social,
   telegram,
   whatsapp,
+  viber,
 }: {
   email: ComponentProps<typeof EmailAccounts>;
   contactDetails: ComponentProps<typeof ContactDetails>;
   social: Omit<ComponentProps<typeof SocialAccounts>, 'network' | 'active'>;
   telegram: ComponentProps<typeof TelegramAccounts>;
   whatsapp: ComponentProps<typeof WhatsAppAccounts>;
+  viber: ComponentProps<typeof ViberAccounts>;
 }) {
   const id = useId();
   const { active, select, visited } = useUrlTab(
@@ -31,6 +34,7 @@ export function ChannelTabs({
       ...Object.keys(uk.social.networks),
       'telegram',
       'whatsapp',
+      'viber',
     ],
     'contact-details',
   );
@@ -72,6 +76,11 @@ export function ChannelTabs({
       key: 'whatsapp',
       label: uk.campaign.channelNames.whatsapp,
       content: <WhatsAppAccounts {...whatsapp} />,
+    },
+    {
+      key: 'viber',
+      label: uk.campaign.channelNames.viber,
+      content: <ViberAccounts {...viber} />,
     },
   ];
   return (

@@ -419,10 +419,13 @@ export const channelAccounts = pgTable(
     uniqueIndex('channel_accounts_whatsapp_singleton')
       .on(t.channel)
       .where(sql`${t.channel} = 'whatsapp'`),
+    uniqueIndex('channel_accounts_viber_singleton')
+      .on(t.channel)
+      .where(sql`${t.channel} = 'viber'`),
     check('account_daily_limit', sql`${t.dailyLimit} > 0`),
     check(
       'account_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form','instagram','facebook','linkedin')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','viber','form','instagram','facebook','linkedin')`,
     ),
   ],
 );
@@ -572,7 +575,7 @@ export const messages = pgTable(
     check('message_direction', sql`${t.direction} in ('out','in')`),
     check(
       'message_channel',
-      sql`${t.channel} in ('email','telegram','whatsapp','form','social','call')`,
+      sql`${t.channel} in ('email','telegram','whatsapp','viber','form','social','call')`,
     ),
     check(
       'message_status',

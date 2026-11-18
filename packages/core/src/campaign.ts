@@ -28,6 +28,7 @@ export const campaignSchema = z
         email: z.boolean(),
         telegram: z.boolean(),
         whatsapp: z.boolean(),
+        viber: z.boolean().default(false),
         forms: z.boolean(),
       })
       .strict(),

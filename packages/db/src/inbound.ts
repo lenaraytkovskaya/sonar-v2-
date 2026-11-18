@@ -1,7 +1,11 @@
 import { enqueueFormReplyMatch } from './form-replies.js';
 import { messageHistoryOrder } from './message-history.js';
 import { createHash } from 'node:crypto';
-import { findMessagePlaceholder, socialTarget } from '@sonar/core';
+import {
+  findMessagePlaceholder,
+  normalizePhone,
+  socialTarget,
+} from '@sonar/core';
 import { normalizeTelegramRecipient } from '@sonar/core/telegram';
 import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
 import { sonarPool } from './index.js';
@@ -32,10 +36,11 @@ export type InboundCategory =
   | 'refusal'
   | 'autoreply';
 export interface InboundInput {
-  channel: 'email' | 'telegram' | 'whatsapp';
+  channel: 'email' | 'telegram' | 'whatsapp' | 'viber';
   accountId: string;
   providerId: string;
   externalMessageId?: string;
+  providerThreadId?: string;
   sender: string;
   senderPhone?: string;
   subject?: string;
@@ -60,7 +65,9 @@ const normalize = (channel: string, value: string) => {
       ? /^telegram:user:[1-9]\d*(?::-?\d+)?$/.test(address)
         ? address
         : normalizeTelegramRecipient(address)?.toLowerCase()
-      : normalizeWhatsAppRecipient(address);
+      : channel === 'viber'
+        ? normalizePhone(address)
+        : normalizeWhatsAppRecipient(address);
 };
 
 export async function recordInbound(input: InboundInput) {
@@ -204,6 +211,14 @@ export async function recordInbound(input: InboundInput) {
           ],
         );
         conversation = created;
+      }
+      if (input.channel === 'viber' && input.providerThreadId && conversation) {
+        await c.query(
+          `update conversations v set provider_thread_id=$2,account_id=$3
+          where v.id=$1 and v.channel='viber' and v.provider_thread_id is null
+          and not exists(select 1 from conversations other where other.channel='viber' and other.account_id=$3 and other.provider_thread_id=$2)`,
+          [conversation.id, input.providerThreadId, input.accountId],
+        );
       }
     }
     const {
@@ -657,7 +672,9 @@ async function reply(
           );
     if (
       !v ||
-      !['email', 'telegram', 'whatsapp', ...manualChannels].includes(v.channel)
+      !['email', 'telegram', 'whatsapp', 'viber', ...manualChannels].includes(
+        v.channel,
+      )
     )
       invalid('Цей діалог не підтримує відповіді.');
     const socialBrowser =

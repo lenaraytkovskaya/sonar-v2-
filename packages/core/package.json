@@ -16,6 +16,10 @@
       "types": "./dist/whatsapp.d.ts",
       "default": "./dist/whatsapp.js"
     },
+    "./viber": {
+      "types": "./dist/viber.d.ts",
+      "default": "./dist/viber.js"
+    },
     "./social-session": {
       "types": "./dist/social-session.d.ts",
       "default": "./dist/social-session.js"
