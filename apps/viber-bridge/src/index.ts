@@ -21,6 +21,8 @@ import {
   verticalColorBoundaries,
   visibleInboundMessages,
   visibleMessageTimestamp,
+  messageBubbleRegions,
+  inboundBubbleMessage,
 } from './screen.js';
 import { canRestart, restartDelay } from './supervisor.js';
 
@@ -366,7 +368,11 @@ if (!key) {
     if (!account) throw Error('needs_activation');
     return readMessages(account.path, since);
   };
-  const inboxFromScreen = async (since: Date, recipients: string[] = []) => {
+  const inboxFromScreen = async (
+    since: Date,
+    recipients: string[] = [],
+    afterByRecipient = new Map<string, Date>(),
+  ) => {
     const modal = await checkModals();
     if (modal) throw Error('needs_attention');
     const found: ReturnType<typeof visibleInboundMessages> = [];
@@ -407,23 +413,42 @@ if (!key) {
       const threadId = `screen:${screenMessageId(from, '', '')}`;
       if (visited.has(threadId)) return;
       visited.add(threadId);
+      const frontier = afterByRecipient.get(from);
+      if (!frontier) return;
       const headerBottom = Math.max(
         140,
         ...layout.lines
           .filter((line) => line.top < layout.height * 0.16)
           .map((line) => line.top + 28),
       );
-      found.push(
-        ...visibleInboundMessages(layout.lines, {
+      const source = join(data, 'layout-source.jpg');
+      const { stdout: rawPixels } = await run(
+        'convert',
+        [source, '-depth', '8', 'rgb:-'],
+        { encoding: 'buffer', timeout: 10000, maxBuffer: 5 * 1024 * 1024 },
+      );
+      const bubbles = messageBubbleRegions(
+        rawPixels,
+        layout.width,
+        layout.height,
+        layout.bounds,
+        headerBottom,
+      );
+      const reference = new Date();
+      const image = await readFile(source);
+      for (const bubble of bubbles) {
+        const crop = `${bubble.right - bubble.left}x${bubble.bottom - bubble.top}+${bubble.left}+${bubble.top}`;
+        const result = await ocr(image, crop, '6');
+        const bubbleLines = groupOcrLines(parseTsvWords(result.stdout));
+        const message = inboundBubbleMessage(bubbleLines, {
           threadId,
           from,
-          since,
-          left: layout.bounds.left,
-          right: layout.bounds.right,
-          headerBottom,
-          height: layout.height,
-        }),
-      );
+          since: frontier,
+          reference,
+          region: bubble,
+        });
+        if (message) found.push(message);
+      }
     };
     try {
       await scanCurrent();
@@ -767,6 +792,18 @@ if (!key) {
         const since = new Date(url.searchParams.get('since') || '');
         if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
         const account = await database();
+        const afterByRecipient = new Map<string, Date>();
+        for (const value of url.searchParams.getAll('after')) {
+          const separator = value.indexOf('|');
+          if (separator < 0) continue;
+          const recipient = value.slice(0, separator);
+          const after = new Date(value.slice(separator + 1));
+          if (
+            /^\+[1-9]\d{6,14}$/.test(recipient) &&
+            Number.isFinite(after.getTime())
+          )
+            afterByRecipient.set(recipient, after);
+        }
         let incoming;
         try {
           incoming = account
@@ -779,13 +816,18 @@ if (!key) {
                   providerMessageId: message.providerMessageId,
                   threadId: message.threadId,
                 }))
-            : await inboxFromScreen(since, url.searchParams.getAll('to'));
+            : await inboxFromScreen(
+                since,
+                url.searchParams.getAll('to'),
+                afterByRecipient,
+              );
         } catch (error) {
           if (error instanceof Error && error.message === 'needs_attention')
             throw error;
           incoming = await inboxFromScreen(
             since,
             url.searchParams.getAll('to'),
+            afterByRecipient,
           );
         }
         return json(200, incoming);

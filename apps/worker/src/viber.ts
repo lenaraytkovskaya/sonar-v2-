@@ -95,29 +95,43 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
       reasonCode: 'viber_account_paused',
       reasonUk: 'Синхронізацію Viber призупинено.',
     };
-  const {
-    rows: [latest],
-  } = await sonarPool.query<{ since: Date | null }>(
-    "select max(created_at) as since from messages where channel='viber' and direction='in' and account_id=$1",
-    [account.id],
-  );
-  const since = new Date(
-    (latest?.since?.getTime() ?? now.getTime() - 24 * 60 * 60_000) - 60_000,
-  ).toISOString();
   const { rows: recentRecipients } = await sonarPool.query<{
     to_value: string;
   }>(
     `select distinct to_value from messages
-     where channel='viber' and direction='out' and account_id=$1
+     where channel='viber' and account_id=$1
        and coalesce(sent_at,created_at)>=now()-interval '14 days'
        and to_value ~ '^\\+[1-9][0-9]{6,14}$'
      order by to_value limit 500`,
     [account.id],
   );
+  const { rows: frontiers } = await sonarPool.query<{
+    to_value: string;
+    after: Date | null;
+  }>(
+    `select to_value,
+       max(case when direction='in' then created_at
+                when direction='out' and status in ('sent','delivered','read') then coalesce(sent_at,created_at)
+           end) as after
+     from messages where channel='viber' and account_id=$1
+       and to_value ~ '^\\+[1-9][0-9]{6,14}$'
+     group by to_value`,
+    [account.id],
+  );
+  const afterByRecipient = new Map(
+    frontiers
+      .filter((item): item is { to_value: string; after: Date } => !!item.after)
+      .map((item) => [item.to_value, item.after.toISOString()]),
+  );
   const inboundUrl = new URL('/inbound', 'http://bridge');
-  inboundUrl.searchParams.set('since', since);
+  inboundUrl.searchParams.set(
+    'since',
+    new Date(now.getTime() - 24 * 60 * 60_000).toISOString(),
+  );
   for (const recipient of recentRecipients)
     inboundUrl.searchParams.append('to', recipient.to_value);
+  for (const [recipient, after] of afterByRecipient)
+    inboundUrl.searchParams.append('after', `${recipient}|${after}`);
   const response = await bridge(`${inboundUrl.pathname}${inboundUrl.search}`);
   const messages = (await response.json()) as ViberInbound[];
   if (!Array.isArray(messages))
