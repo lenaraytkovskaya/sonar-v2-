@@ -3,10 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import {
   groupOcrLines,
+  classifyViberModal,
+  desktopPresenceState,
   normalizeOcr,
   outgoingScreenConfirmed,
   parseTsvWords,
   screenMessageId,
+  screenClickPoint,
   textSimilarity,
 } from './screen.js';
 
@@ -24,6 +27,30 @@ it('normalizes OCR text and tolerates small recognition errors', () => {
   expect(
     outgoingScreenConfirmed('Очікуваний текст', '', 'Інше повідомлення'),
   ).toBe(false);
+});
+
+it('requires both the Viber process and visible window for a ready state', () => {
+  expect(desktopPresenceState(true, true)).toBe('ready');
+  expect(desktopPresenceState(false, true)).toBe('not_running');
+  expect(desktopPresenceState(true, false)).toBe('not_running');
+});
+
+it('recognizes known recovery and sync overlays from OCR text and fails closed', () => {
+  expect(classifyViberModal('Something went wrong. Fix now')).toBe('repair');
+  expect(classifyViberModal('Sync chat history')).toBe('sync_history');
+  expect(classifyViberModal('Leaving so soon? Close anyway')).toBe(
+    'close_confirmation',
+  );
+  expect(classifyViberModal('Warning: account needs confirmation')).toBe(
+    'unknown',
+  );
+  expect(classifyViberModal('Viber chats')).toBe('none');
+});
+
+it('maps displayed screenshot coordinates onto the Xvfb screen', () => {
+  expect(screenClickPoint(640, 450, 1280, 900)).toEqual({ x: 640, y: 450 });
+  expect(screenClickPoint(320, 225, 640, 450)).toEqual({ x: 640, y: 450 });
+  expect(() => screenClickPoint(641, 10, 640, 450)).toThrow('invalid_click');
 });
 
 it('parses OCR coordinates for unread chat badges and lines', () => {

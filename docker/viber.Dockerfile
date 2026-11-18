@@ -1,8 +1,14 @@
 FROM node:22-bookworm-slim AS compile
 WORKDIR /app
 RUN npm install --global typescript@5.9.3 @types/node@22
-COPY tsconfig.json ./
-COPY apps/viber-bridge ./apps/viber-bridge
+COPY apps/viber-bridge/tsconfig.json ./apps/viber-bridge/tsconfig.json
+COPY apps/viber-bridge/package.json ./apps/viber-bridge/package.json
+COPY apps/viber-bridge/src/index.ts ./apps/viber-bridge/src/index.ts
+COPY apps/viber-bridge/src/database.ts ./apps/viber-bridge/src/database.ts
+COPY apps/viber-bridge/src/missing-key.ts ./apps/viber-bridge/src/missing-key.ts
+COPY apps/viber-bridge/src/screen.ts ./apps/viber-bridge/src/screen.ts
+COPY apps/viber-bridge/src/send.ts ./apps/viber-bridge/src/send.ts
+COPY apps/viber-bridge/src/supervisor.ts ./apps/viber-bridge/src/supervisor.ts
 RUN tsc -p apps/viber-bridge/tsconfig.json --typeRoots /usr/local/lib/node_modules/@types
 
 FROM node:22-bookworm-slim
@@ -21,4 +27,4 @@ COPY --from=compile /app/apps/viber-bridge/dist ./dist
 COPY apps/viber-bridge/package.json ./package.json
 USER node
 EXPOSE 3000
-CMD ["dbus-run-session", "--", "node", "dist/index.js"]
+CMD ["sh", "-c", "export DBUS_SESSION_BUS_ADDRESS=\"$(dbus-daemon --session --fork --print-address=1)\"; exec node dist/index.js"]

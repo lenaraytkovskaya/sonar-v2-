@@ -129,6 +129,8 @@ services:
       context: ..
       dockerfile: docker/viber.Dockerfile
     platform: linux/amd64
+    init: true
+    stop_grace_period: 40s
     environment:
       VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
     volumes:
