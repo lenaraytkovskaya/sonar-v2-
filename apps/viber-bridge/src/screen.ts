@@ -401,14 +401,14 @@ export function chatColumnBounds(
   profileOpen = false,
 ) {
   const left = boundaries.find((x) => x > width * 0.08 && x < width * 0.4);
-  const panelCandidates = boundaries.filter(
-    (x) => x > width * 0.45 && x < width * 0.98,
-  );
+  const panelCandidates = profileOpen
+    ? boundaries.filter((x) => x > width * 0.45 && x < width * 0.98)
+    : [];
   const panelBoundary = profileOpen
     ? [...panelCandidates].sort(
         (a, b) => Math.abs(a / width - 0.77) - Math.abs(b / width - 0.77),
       )[0]
-    : [...panelCandidates].reverse().find((x) => x > width * 0.7);
+    : undefined;
   const right = panelBoundary ?? width;
   return { left: left ?? 0, right: right ?? width };
 }
