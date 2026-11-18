@@ -119,7 +119,15 @@ export function ViberAccounts({
           <HealthDetails health={accountHealth} />
         </>
       )}
-      {bridge.reason && <FriendlyError reason={bridge.reason} />}
+      {bridge.reason && (
+        <FriendlyError
+          reason={
+            bridge.reason === 'bridge_key_missing'
+              ? uk.viber.bridgeKeyMissing
+              : bridge.reason
+          }
+        />
+      )}
       {account && (
         <p className="text-sm">
           {uk.viber.today}: {account.sentToday} / {account.dailyLimit}

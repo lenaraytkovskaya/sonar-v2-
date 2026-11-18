@@ -8,8 +8,12 @@ export async function GET(request: Request) {
   const accounts = await listViberAccounts();
   const url = process.env.VIBER_BRIDGE_URL,
     key = process.env.VIBER_BRIDGE_KEY;
-  let bridge = { state: 'error', reason: uk.viber.bridgeUnavailable };
-  if (url && key) {
+  let bridge: { state: string; reason: string } = {
+    state: 'error',
+    reason: uk.viber.bridgeUnavailable,
+  };
+  if (!key?.trim()) bridge = { state: 'error', reason: 'bridge_key_missing' };
+  if (url && key?.trim()) {
     try {
       const response = await fetch(new URL('/status', url), {
         headers: { Authorization: `Bearer ${key}` },

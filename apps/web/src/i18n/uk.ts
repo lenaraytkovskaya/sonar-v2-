@@ -848,6 +848,7 @@ export const uk = {
     scanHint:
       'Відскануйте QR-код у Viber на телефоні: Налаштування → Комп’ютери й планшети.',
     bridgeUnavailable: 'Внутрішній міст Viber Desktop недоступний.',
+    bridgeKeyMissing: 'Додайте VIBER_BRIDGE_KEY на сервері',
     screenUnavailable: 'Не вдалося отримати знімок Viber Desktop.',
     screen: 'Екран Viber Desktop',
     limit: 'Денний ліміт',
