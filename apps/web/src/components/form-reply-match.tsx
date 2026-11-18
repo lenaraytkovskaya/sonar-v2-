@@ -6,6 +6,7 @@ import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { useInboxPolling } from './use-inbox-polling';
 import { FriendlyError } from './friendly-error';
+import { StatusBadge } from './shared';
 
 type Match = Awaited<ReturnType<typeof getFormReplyMatch>>;
 export function FormReplyMatch({
@@ -71,7 +72,7 @@ export function FormReplyMatch({
       aria-label={uk.inbound.binding}
       className="max-h-[35%] shrink-0 space-y-2 overflow-y-auto overscroll-contain border-b border-border p-3 text-sm"
     >
-      <p className="text-xs font-medium">
+      <StatusBadge status={match.state === 'bound' ? 'done' : 'pending'}>
         {match.state === 'bound'
           ? match.method === 'manual'
             ? uk.inbound.manualMatch
@@ -79,7 +80,7 @@ export function FormReplyMatch({
               ? uk.inbound.aiMatch
               : uk.inbound.automaticMatch
           : uk.inbound.probableCompany}
-      </p>
+      </StatusBadge>
       {match.state === 'suggested' && (
         <p className="font-medium">
           {match.suggestedCompanyName ?? uk.inbound.unknownCompany}

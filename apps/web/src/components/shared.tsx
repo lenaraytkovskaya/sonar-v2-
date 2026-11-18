@@ -44,50 +44,17 @@ export function Score({
     </div>
   );
 }
-const companyTones: Record<keyof typeof uk.company.statuses, string> = {
-  new: 'bg-idle-bg text-idle',
-  enriching: 'bg-run-bg text-run',
-  ready: 'bg-run-bg text-run',
-  contacted: 'bg-wait-bg text-wait',
-  replied: 'bg-ok-bg text-ok',
-  interested: 'bg-ok-bg text-ok',
-  deal: 'bg-ok-bg text-ok',
-  refused: 'bg-err-bg text-err',
-  do_not_contact: 'bg-err-bg text-err',
-};
 export function CompanyStatus({
   status,
 }: {
   status: keyof typeof uk.company.statuses;
 }) {
   return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-        companyTones[status],
-      )}
-    >
-      {uk.company.statuses[status]}
-    </span>
+    <StatusBadge status={status}>{uk.company.statuses[status]}</StatusBadge>
   );
 }
 export function StatusPill({ status }: { status: keyof typeof uk.status }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-        {
-          ok: 'bg-ok-bg text-ok',
-          run: 'bg-run-bg text-run',
-          wait: 'bg-wait-bg text-wait',
-          err: 'bg-err-bg text-err',
-          idle: 'bg-idle-bg text-idle',
-        }[status],
-      )}
-    >
-      {uk.status[status]}
-    </span>
-  );
+  return <StatusBadge status={status}>{uk.status[status]}</StatusBadge>;
 }
 /** Page title, one line of description and the page's main action on the right (DESIGN.md §1). */
 export function PageHeader({
@@ -160,15 +127,13 @@ export function ScanSummary({ result }: { result: ScanResult | null }) {
         uk.scanner.aiStatuses[
           result.aiStatus as keyof typeof uk.scanner.aiStatuses
         ] && (
-          <span>
-            {' '}
-            ·{' '}
+          <StatusBadge status={result.aiStatus}>
             {
               uk.scanner.aiStatuses[
                 result.aiStatus as keyof typeof uk.scanner.aiStatuses
               ]
             }
-          </span>
+          </StatusBadge>
         )}
       {result.costUsd !== undefined && (
         <>

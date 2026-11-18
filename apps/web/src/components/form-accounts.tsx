@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { listFormAccounts } from '@sonar/db/email';
 import { uk } from '@/i18n/uk';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
@@ -59,10 +59,10 @@ export function FormAccounts({ accounts }: { accounts: Account[] }) {
             className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4"
           >
             <div className="min-w-0 space-y-1 break-words">
-              <p className="font-medium">
-                {account.name} ·{' '}
+              <p className="font-medium">{account.name}</p>
+              <StatusBadge status={account.enabled ? 'active' : 'disabled'}>
                 {account.enabled ? uk.email.enabled : uk.email.disabled}
-              </p>
+              </StatusBadge>
               <p className="text-sm text-muted-foreground">
                 {uk.email.owner}: {account.ownerName ?? '—'} · {uk.email.today}:{' '}
                 {account.sentToday} / {account.dailyLimit}

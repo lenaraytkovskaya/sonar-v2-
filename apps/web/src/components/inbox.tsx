@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { getInbox } from '@sonar/db/outreach';
 import type { getConversationChat } from '@sonar/db/inbound';
+import { StatusBadge } from '@/components/shared';
 import { uk } from '@/i18n/uk';
 import {
   inboxChannels as channels,
@@ -214,20 +215,22 @@ export function Inbox({
                   : uk.email.noMessages}
               </p>
               {(row.needsHuman || row.lastStatus) && (
-                <p className="flex flex-wrap gap-x-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
                   {row.needsHuman && (
-                    <span className="text-wait">{uk.inbound.needsHuman}</span>
+                    <StatusBadge status="waiting">
+                      {uk.inbound.needsHuman}
+                    </StatusBadge>
                   )}
                   {row.lastStatus && (
-                    <span className="text-muted-foreground">
+                    <StatusBadge status={row.lastStatus}>
                       {messageStatus(row.lastStatus, {
                         channel: row.channel,
                         toValue: row.contactValue,
                         reasonUk: row.lastReasonUk,
                       })}
-                    </span>
+                    </StatusBadge>
                   )}
-                </p>
+                </div>
               )}
             </Link>
           ))}

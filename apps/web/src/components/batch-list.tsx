@@ -4,6 +4,7 @@ import { useTasks } from './task-overview';
 import { Button } from './ui/button';
 import { FriendlyError } from './friendly-error';
 import { uk } from '@/i18n/uk';
+import { StatusBadge } from './shared';
 function EnrichButton({ batchId }: { batchId: string }) {
   const [state, setState] = useState<'idle' | 'pending' | 'done' | 'error'>(
     'idle',
@@ -108,7 +109,9 @@ export function BatchList({ campaignId }: { campaignId: string }) {
               <tr key={b.id} className="border-t border-border">
                 <td className="p-2">#{b.number}</td>
                 <td className="p-2">
-                  {uk.tasks.status[b.status]}
+                  <StatusBadge status={b.status}>
+                    {uk.tasks.status[b.status]}
+                  </StatusBadge>
                   {b.reason_uk && (
                     <p>
                       <FriendlyError reason={b.reason_uk} />

@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { useTasks } from './task-overview';
 import type { RegistryEntity } from '@sonar/core';
 import { FriendlyError } from './friendly-error';
+import { StatusBadge } from './shared';
 export function RegistryMatch({
   companyId,
   candidates = [],
@@ -71,11 +72,16 @@ export function RegistryMatch({
               <p className="break-words font-medium">
                 {candidate.name ?? candidate.short_name}
               </p>
-              <p className="break-words text-sm text-muted-foreground">
-                {[candidate.edrpou, candidate.address, candidate.status]
+              <div className="flex flex-wrap items-center gap-2 break-words text-sm text-muted-foreground">
+                {[candidate.edrpou, candidate.address]
                   .filter(Boolean)
                   .join(' · ')}
-              </p>
+                {candidate.status && (
+                  <StatusBadge status={candidate.status}>
+                    {candidate.status}
+                  </StatusBadge>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 <Button
                   disabled={pending || !!active}
@@ -96,15 +102,12 @@ export function RegistryMatch({
         </div>
       )}
       {task && !active && (
-        <p className="text-sm text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && (
-            <>
-              {' '}
-              · <FriendlyError reason={task.reason_uk} />
-            </>
-          )}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
+          {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+        </div>
       )}
       {error && (
         <p role="alert" className="text-err">

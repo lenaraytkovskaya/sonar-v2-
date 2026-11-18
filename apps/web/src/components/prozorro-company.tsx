@@ -2,6 +2,7 @@ import type { ProzorroCompanySnapshot } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { LocalTime } from './local-time';
 import { ProzorroSearch } from './prozorro-search';
+import { StatusBadge } from './shared';
 const amounts = (values: Record<string, number>) =>
   Object.entries(values)
     .map(
@@ -106,7 +107,11 @@ export function ProzorroCompany({
                       {t.amount?.toLocaleString('uk-UA') ?? '—'} {t.currency}
                     </td>
                     <td className="p-2">
-                      {t.winner ? uk.prozorro.winner : uk.prozorro.participant}
+                      <StatusBadge status={t.winner ? 'winner' : 'participant'}>
+                        {t.winner
+                          ? uk.prozorro.winner
+                          : uk.prozorro.participant}
+                      </StatusBadge>
                     </td>
                   </tr>
                 ))}

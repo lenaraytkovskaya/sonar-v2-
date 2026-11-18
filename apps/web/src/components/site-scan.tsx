@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { useTasks } from './task-overview';
-import { ScanSummary } from './shared';
+import { ScanSummary, StatusBadge } from './shared';
 import { FriendlyError } from './friendly-error';
 export function SiteScan({
   companyId,
@@ -73,15 +73,12 @@ export function SiteScan({
       </Button>
       {task && (
         <>
-          <p>
-            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-            {task.reason_uk && (
-              <>
-                {' '}
-                · <FriendlyError reason={task.reason_uk} />
-              </>
-            )}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={task.status}>
+              {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+            </StatusBadge>
+            {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+          </div>
           {task.type === 'site.scan' && <ScanSummary result={task.result} />}
         </>
       )}
