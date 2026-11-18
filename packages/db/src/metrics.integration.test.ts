@@ -197,7 +197,10 @@ it.skipIf(!enabled)(
       expect(
         overview.channels.find((c) => c.channel === 'email')?.last7Days,
       ).toBe(2);
-      expect(overview.channels).toHaveLength(4);
+      expect(overview.channels).toHaveLength(5);
+      expect(
+        overview.channels.find((c) => c.channel === 'viber'),
+      ).toMatchObject({ channel: 'viber', today: 0, last7Days: 0 });
       expect(overview.channels.find((c) => c.channel === 'email')?.today).toBe(
         2,
       );

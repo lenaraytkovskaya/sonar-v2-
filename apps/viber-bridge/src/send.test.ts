@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it, vi } from 'vitest';
 import { chatUrl, createSend } from './send.js';
-import { readMessages, run } from './database.js';
+import { readMessages } from './database.js';
 
 const folders: string[] = [];
 const temporary = async () => {
@@ -87,10 +88,17 @@ it('confirms only a new matching outgoing provider row', async () => {
 });
 it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', async () => {
   const path = join(await temporary(), 'viber.db');
-  await run('sqlite3', [
-    path,
-    `create table Contact(ContactID integer,Number text);create table Events(EventID integer,ChatID integer,ContactID integer,TimeStamp integer,Direction integer);create table Messages(EventID integer,Body text);insert into Contact values(1,'380671234567');insert into Events values(10,2,1,1700000000000,0),(11,2,1,1700000001000,1);insert into Messages values(10,'Вхідне'),(11,'Вихідне');`,
-  ]);
+  const fixture = new DatabaseSync(path);
+  fixture.exec(
+    `create table Contact(ContactID integer,Number text);
+    create table Events(EventID integer,ChatID integer,ContactID integer,TimeStamp integer,Direction integer);
+    create table Messages(EventID integer,Body text);
+    insert into Contact values(1,'380671234567');
+    insert into Events values(10,2,1,1700000000000,0),(11,2,1,1700000001000,1);
+    insert into Messages values(10,'Вхідне'),(11,'Вихідне');`,
+  );
+  fixture.close();
+  const original = await readFile(path);
   const rows = await readMessages(path, new Date('2023-01-01T00:00:00Z'));
   expect(rows).toEqual([
     {
@@ -110,7 +118,5 @@ it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', as
       outgoing: true,
     },
   ]);
-  expect(
-    (await run('sqlite3', [path, 'select count(*) from Events'])).stdout.trim(),
-  ).toBe('2');
+  expect(await readFile(path)).toEqual(original);
 });
