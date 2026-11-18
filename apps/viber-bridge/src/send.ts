@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ViberMessage } from './database.js';
+import { outgoingScreenConfirmed } from './screen.js';
 
 export type SendInput = { to: string; text: string; idempotencyKey: string };
 export type SendResult = {
@@ -32,6 +33,7 @@ export function createSend(
     open(url: string, to: string): Promise<void>;
     enter(): Promise<void>;
     screen(): Promise<Buffer>;
+    confirm?(): Promise<{ composer: string; outgoingBubble: string }>;
     wait(): Promise<void>;
   },
 ) {
@@ -65,7 +67,9 @@ export function createSend(
       const started = new Date();
       // Fail before reserving if the database cannot be read. Never send without confirmation capability.
       const before = new Set(
-        (await desktop.messages(started)).map((m) => m.providerMessageId),
+        (await desktop.messages(started).catch(() => [] as ViberMessage[])).map(
+          (m) => m.providerMessageId,
+        ),
       );
       let result: SendResult = {
         state: 'uncertain',
@@ -82,6 +86,24 @@ export function createSend(
         await desktop.enter();
         for (let i = 0; i < 8; i++) {
           await desktop.wait();
+          if (desktop.confirm) {
+            const screen = await desktop.confirm();
+            if (
+              outgoingScreenConfirmed(
+                input.text,
+                screen.composer,
+                screen.outgoingBubble,
+              )
+            ) {
+              result = {
+                state: 'sent',
+                providerMessageId: `screen:${createHash('sha256')
+                  .update(`${input.idempotencyKey}:${started.toISOString()}`)
+                  .digest('hex')}`,
+              };
+              break;
+            }
+          }
           const match = (await desktop.messages(started)).find(
             (m) =>
               m.outgoing &&

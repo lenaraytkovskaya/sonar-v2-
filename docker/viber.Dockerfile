@@ -8,7 +8,7 @@ RUN tsc -p apps/viber-bridge/tsconfig.json --typeRoots /usr/local/lib/node_modul
 FROM node:22-bookworm-slim
 ARG VIBER_VERSION=29.4.0.7
 ARG VIBER_SHA256=34b3c18f5d441a9813066811d037e971e1207d439c246766abd28e185a7ecd37
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xvfb xdotool openbox dbus-x11 imagemagick sqlite3 tesseract-ocr fonts-dejavu xdg-utils && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xvfb xdotool openbox dbus-x11 imagemagick sqlite3 tesseract-ocr tesseract-ocr-ukr tesseract-ocr-rus tesseract-ocr-eng fonts-dejavu xdg-utils && \
     curl --fail --location https://download.cdn.viber.com/cdn/desktop/Linux/viber.deb --output /tmp/viber.deb && \
     echo "$VIBER_SHA256  /tmp/viber.deb" | sha256sum --check - && \
     test "$(dpkg-deb --field /tmp/viber.deb Version)" = "$VIBER_VERSION" && \
