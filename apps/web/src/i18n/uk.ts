@@ -724,6 +724,8 @@ export const uk = {
       'message.send': 'Повідомлення поставлено в чергу',
       'message.sent': 'Повідомлення надіслано',
       'message.dispatched': 'Відправлено, перевірте в чаті',
+      'viber.delivery.reconciled': 'Підтверджено надіслане повідомлення Viber',
+      'viber.manually_sent': 'Повідомлення Viber позначено надісланим вручну',
       'contact.whatsapp_rechecked': 'Дозволено повторну перевірку WhatsApp',
       'form.manual_required': 'Форма потребує ручного завершення',
       'form.manually_sent': 'Форму позначено надісланою вручну',
@@ -883,6 +885,7 @@ export const uk = {
     pause: 'Призупинити',
     resume: 'Відновити',
     lastFailure: 'Знімок останнього збою',
+    markSent: 'Позначити як надіслане',
   },
   email: {
     title: 'Email',

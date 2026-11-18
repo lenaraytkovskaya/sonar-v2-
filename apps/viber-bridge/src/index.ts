@@ -9,11 +9,16 @@ import { createSend, type SendInput } from './send.js';
 import { createMissingKeyServer } from './missing-key.js';
 import {
   classifyViberModal,
+  chatHeaderMatchesRecipient,
+  chatColumnBounds,
   desktopPresenceState,
   groupOcrLines,
   parseTsvWords,
   screenClickPoint,
   screenMessageId,
+  safeLayoutClick,
+  verticalColorBoundaries,
+  visibleMessageTimestamp,
 } from './screen.js';
 import { canRestart, restartDelay } from './supervisor.js';
 
@@ -154,6 +159,106 @@ if (!key) {
       [target, 'stdout', '-l', 'ukr+rus+eng', '--psm', psm, 'tsv'],
       { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
     );
+  };
+  const inspectChatLayout = async (image: Buffer) => {
+    const source = join(data, 'layout-source.jpg');
+    await writeFile(source, image, { mode: 0o600 });
+    const { stdout: size } = await run(
+      'identify',
+      ['-format', '%w %h', source],
+      {
+        timeout: 3000,
+      },
+    );
+    const dimensions = size.trim().split(/\s+/).map(Number);
+    const width = dimensions[0] ?? 1280;
+    const height = dimensions[1] ?? 900;
+    const [ocrResult, colorResult] = await Promise.all([
+      ocr(image),
+      run(
+        'convert',
+        [source, '-resize', `${width}x1!`, '-depth', '8', 'txt:-'],
+        {
+          timeout: 5000,
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      ),
+    ]);
+    const samples = colorResult.stdout
+      .split(/\r?\n/)
+      .slice(1)
+      .flatMap((line) => {
+        const match = line.match(/\((\d+),(\d+),(\d+)/);
+        return match
+          ? [[Number(match[1]), Number(match[2]), Number(match[3])] as const]
+          : [];
+      });
+    const words = parseTsvWords(ocrResult.stdout);
+    const lines = groupOcrLines(words);
+    const allText = lines.map((line) => line.text).join(' ');
+    const profileOpen = words.some(
+      (word) =>
+        word.left > width * 0.65 &&
+        /^(media|gifs?|links|files|participants?)$/i.test(word.text),
+    );
+    const bounds = chatColumnBounds(
+      width,
+      verticalColorBoundaries(samples),
+      profileOpen,
+    );
+    const blockedWords = words
+      .filter((word) => /^(block|report|spam)$/i.test(word.text))
+      .map((word) => ({
+        left: word.left,
+        top: word.top,
+        right: word.left + word.width,
+        bottom: word.top + word.height,
+      }));
+    return {
+      width,
+      height,
+      words,
+      lines,
+      allText,
+      profileOpen,
+      bounds,
+      blockedWords,
+    };
+  };
+  const normalizeChatLayout = async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const layout = await inspectChatLayout(await screen());
+      if (layout.profileOpen) {
+        const media = layout.lines.find((line) =>
+          /^(media|gifs?|links|files|participants?)/i.test(line.text),
+        );
+        const x = layout.width - 14;
+        const y = Math.max(48, Math.min(145, (media?.top ?? 105) - 28));
+        if (!safeLayoutClick(x, y, layout.blockedWords))
+          throw Error('profile_close_unsafe');
+        await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+        await delay(300);
+        continue;
+      }
+      if (
+        /not\s+in\s+your\s+contact\s+list|is\s+not\s+in\s+your\s+contacts/i.test(
+          layout.allText,
+        )
+      ) {
+        const banner = layout.lines.find((line) =>
+          /not in your contact list|not in your contacts/i.test(line.text),
+        );
+        const x = Math.min(layout.bounds.right - 12, layout.width - 12);
+        const y = (banner?.top ?? 130) + 20;
+        if (!safeLayoutClick(x, y, layout.blockedWords))
+          throw Error('banner_close_unsafe');
+        await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+        await delay(300);
+        continue;
+      }
+      return layout;
+    }
+    throw Error('chat_layout_not_normalized');
   };
   const checkModals = async () => {
     const image = await screen();
@@ -325,20 +430,89 @@ if (!key) {
     }
     return found;
   };
+  const outgoingFromScreen = async (since: Date) => {
+    const layout = await inspectChatLayout(await screen());
+    const header = layout.lines
+      .filter((line) => line.top < Math.max(130, layout.height * 0.17))
+      .map((line) => line.text)
+      .join(' ');
+    const phone = header.match(/\+?\d[\d ()-]{7,}\d/);
+    if (!phone) return [];
+    const from = `+${phone[0].replace(/\D/g, '')}`;
+    const headerBottom = Math.max(
+      90,
+      ...layout.lines
+        .filter((line) => line.top < layout.height * 0.18)
+        .map((line) => line.top + 28),
+    );
+    const lines = layout.lines.filter(
+      (line) =>
+        line.top > headerBottom &&
+        line.top < layout.height - 100 &&
+        line.left >
+          layout.bounds.left +
+            (layout.bounds.right - layout.bounds.left) * 0.42 &&
+        line.right < layout.bounds.right,
+    );
+    const result = [];
+    for (let index = 0; index < lines.length; index++) {
+      const time = lines[index]!.text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/);
+      if (!time) continue;
+      const at = visibleMessageTimestamp(time[0], new Date());
+      if (!at) continue;
+      if (at < since) continue;
+      const text = lines
+        .slice(Math.max(0, index - 5), index)
+        .map((line) => line.text)
+        .filter((line) => !/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line))
+        .join(' ')
+        .trim();
+      if (!text) continue;
+      const threadId = `screen:${screenMessageId(header, '', '')}`;
+      result.push({
+        from,
+        text,
+        at: at.toISOString(),
+        providerMessageId: screenMessageId(threadId, text, time[0]),
+      });
+    }
+    return result;
+  };
   const send = createSend(join(data, 'receipts'), {
     messages,
     screen,
     async confirm() {
       const image = await screen();
-      const composer = await ocr(image, '620x80+500+790');
-      const bubble = await ocr(image, '660x650+620+120');
+      const layout = await inspectChatLayout(image);
+      const headerBottom = Math.max(
+        90,
+        ...layout.lines
+          .filter((line) => line.top < layout.height * 0.18)
+          .map((line) => line.top + 28),
+      );
+      const composer = await ocr(
+        image,
+        `${Math.max(1, layout.bounds.right - layout.bounds.left)}x${Math.min(100, Math.floor(layout.height * 0.14))}+${layout.bounds.left}+${Math.floor(layout.height * 0.86)}`,
+      );
+      const bodyLines = layout.lines.filter(
+        (line) =>
+          line.top > headerBottom &&
+          line.top < layout.height - 100 &&
+          line.left >
+            layout.bounds.left +
+              (layout.bounds.right - layout.bounds.left) * 0.42 &&
+          line.right < layout.bounds.right,
+      );
+      const messageTime = [...bodyLines]
+        .reverse()
+        .map((line) => line.text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/)?.[0])
+        .find(Boolean);
       return {
         composer: groupOcrLines(parseTsvWords(composer.stdout))
           .map((line) => line.text)
           .join(' '),
-        outgoingBubble: groupOcrLines(parseTsvWords(bubble.stdout))
-          .map((line) => line.text)
-          .join(' '),
+        outgoingBubble: bodyLines.map((line) => line.text).join(' '),
+        messageTime,
       };
     },
     wait: () => delay(1000),
@@ -357,16 +531,18 @@ if (!key) {
       await run('xdotool', ['windowsize', window, '1280', '900']);
       await run('xdotool', ['windowmove', window, '0', '0']);
       await run('xdotool', ['windowactivate', '--sync', window]);
-      // Only a visibly verified numeric chat header permits pressing Enter.
-      // Named contacts or a changed layout fail closed and retain an uncertain receipt.
-      const crop = join(data, 'chat-header.png');
-      await run('import', ['-window', window, '-crop', '900x110+380+0', crop]);
-      const { stdout: header } = await run(
-        'tesseract',
-        [crop, 'stdout', '--psm', '11'],
-        { timeout: 10000 },
-      );
-      if (!header.replace(/[^\d]/g, '').includes(to.slice(1)))
+      const layout = await normalizeChatLayout();
+      const header = layout.lines
+        .filter(
+          (line) =>
+            line.top < Math.max(130, layout.height * 0.17) &&
+            line.left >= layout.bounds.left &&
+            line.right <= layout.bounds.right,
+        )
+        .map((line) => line.text)
+        .join(' ');
+      // Contact name and its second-line phone both remain in the dynamic header area.
+      if (!chatHeaderMatchesRecipient(header, to))
         throw Error('recipient_not_verified');
       // Clipboard paste preserves multiline text without producing Enter events.
       // Verify the exact composer selection before dispatching the message.
@@ -377,8 +553,8 @@ if (!key) {
         'mousemove',
         '--window',
         window,
-        '800',
-        '835',
+        String(Math.round((layout.bounds.left + layout.bounds.right) / 2)),
+        String(layout.height - 65),
         'click',
         '1',
         'key',
@@ -557,6 +733,27 @@ if (!key) {
           incoming = await inboxFromScreen(since);
         }
         return json(200, incoming);
+      }
+      if (req.method === 'GET' && url.pathname === '/outgoing') {
+        const since = new Date(url.searchParams.get('since') || '');
+        if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
+        const account = await database();
+        let outgoing;
+        try {
+          outgoing = account
+            ? (await readMessages(account.path, since))
+                .filter((message) => message.outgoing)
+                .map((message) => ({
+                  from: message.from,
+                  text: message.text,
+                  at: message.at,
+                  providerMessageId: message.providerMessageId,
+                }))
+            : await outgoingFromScreen(since);
+        } catch {
+          outgoing = await outgoingFromScreen(since);
+        }
+        return json(200, outgoing);
       }
       if (req.method === 'POST' && url.pathname === '/send') {
         const modal = await checkModals();

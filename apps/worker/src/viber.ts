@@ -122,7 +122,27 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
     });
     if (result.created) imported++;
   }
-  return { status: 'done', result: { imported } };
+  let reconciled = 0;
+  try {
+    const response = await bridge(
+      `/outgoing?since=${encodeURIComponent(
+        new Date(now.getTime() - 2 * 60_000).toISOString(),
+      )}`,
+    );
+    const outgoing = (await response.json()) as {
+      from: string;
+      text: string;
+      at: string;
+      providerMessageId: string;
+    }[];
+    if (Array.isArray(outgoing)) {
+      const { reconcileViberDeliveries } = await import('@sonar/db/viber');
+      reconciled = await reconcileViberDeliveries(outgoing, now);
+    }
+  } catch {
+    // Incoming synchronization remains useful if outbound reconciliation is unavailable.
+  }
+  return { status: 'done', result: { imported, reconciled } };
 }
 
 async function enqueueViberInboxIfDue(now = new Date()) {
