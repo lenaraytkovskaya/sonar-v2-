@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { accountDatabase, readMessages, run } from './database.js';
 import { createSend, type SendInput } from './send.js';
 import { createMissingKeyServer } from './missing-key.js';
+import { groupOcrLines, parseTsvWords, screenMessageId } from './screen.js';
 
 const key = process.env.VIBER_BRIDGE_KEY?.trim();
 if (!key) {
@@ -25,6 +26,35 @@ if (!key) {
   );
   await delay(1500);
   const wm = spawn('openbox', [], { stdio: 'ignore' });
+  const notificationMonitor = spawn(
+    'dbus-monitor',
+    ['--session', "interface='org.freedesktop.Notifications',member='Notify'"],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const notifications: { title: string; text: string; at: string }[] = [];
+  let notificationBlock: string[] = [];
+  notificationMonitor.stdout?.on('data', (chunk: Buffer) => {
+    for (const line of chunk.toString().split(/\r?\n/)) {
+      if (line.startsWith('method call ')) notificationBlock = [];
+      notificationBlock.push(line);
+      const strings = notificationBlock.flatMap((value) =>
+        [...value.matchAll(/string "((?:\\.|[^"])*)"/g)].map((match) =>
+          match[1]!.replace(/\\n/g, '\n').replace(/\\"/g, '"'),
+        ),
+      );
+      if (strings.length >= 4) {
+        if (/viber/i.test(strings[0]!)) {
+          notifications.push({
+            title: strings[2]!,
+            text: strings[3]!,
+            at: new Date().toISOString(),
+          });
+          if (notifications.length > 100) notifications.shift();
+        }
+        notificationBlock = [];
+      }
+    }
+  });
   const viber = spawn('/opt/viber/Viber', [], { stdio: 'inherit' });
   let processError = false;
   for (const child of [xvfb, wm, viber])
@@ -39,15 +69,151 @@ if (!key) {
         maxBuffer: 3 * 1024 * 1024,
       })
     ).stdout;
+  const ocr = async (image: Buffer, crop?: string, psm = '11') => {
+    const source = join(data, 'ocr-source.jpg');
+    const target = join(data, 'ocr-target.png');
+    await writeFile(source, image, { mode: 0o600 });
+    await run(
+      'convert',
+      crop ? [source, '-crop', crop, '+repage', target] : [source, target],
+      { timeout: 5000 },
+    );
+    return run(
+      'tesseract',
+      [target, 'stdout', '-l', 'ukr+rus+eng', '--psm', psm, 'tsv'],
+      { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
+    );
+  };
   const database = () => accountDatabase(join(data, '.ViberPC'));
   const messages = async (since: Date) => {
     const account = await database();
     if (!account) throw Error('needs_activation');
     return readMessages(account.path, since);
   };
+  const inboxFromScreen = async (since: Date) => {
+    const list = await ocr(await screen());
+    const badges = parseTsvWords(list.stdout)
+      .filter(
+        (word) =>
+          /^\d{1,2}$/.test(word.text) &&
+          word.left >= 300 &&
+          word.left < 430 &&
+          word.top >= 90 &&
+          word.top < 780,
+      )
+      .map((word) => Math.round((word.top + word.height / 2) / 48) * 48)
+      .filter((row, index, rows) => rows.indexOf(row) === index);
+    const found = [];
+    for (const row of badges.slice(0, 20)) {
+      await run('xdotool', ['mousemove', '370', String(row), 'click', '1'], {
+        timeout: 3000,
+      });
+      await delay(500);
+      const chat = await ocr(await screen());
+      const lines = groupOcrLines(parseTsvWords(chat.stdout));
+      const header = lines
+        .filter((line) => line.top < 110 && line.right > 410)
+        .map((line) => line.text)
+        .join(' ');
+      const phoneMatch = header.match(/\+?\d[\d ()-]{7,}\d/);
+      let from = phoneMatch ? `+${phoneMatch[0].replace(/\D/g, '')}` : '';
+      const threadId = `screen:${screenMessageId(header || `chat-${row}`, '', '')}`;
+      if (!from) {
+        await run('xdotool', ['mousemove', '700', '45', 'click', '1']).catch(
+          () => {},
+        );
+        await delay(300);
+        const profile = await ocr(await screen());
+        const profileText = groupOcrLines(parseTsvWords(profile.stdout))
+          .map((line) => line.text)
+          .join(' ');
+        const profilePhone = profileText.match(/\+?\d[\d ()-]{7,}\d/);
+        if (profilePhone) from = `+${profilePhone[0].replace(/\D/g, '')}`;
+        await run('xdotool', ['key', 'Escape']).catch(() => {});
+        await delay(200);
+      }
+      const bodyLines = lines.filter(
+        (line) => line.top > 130 && line.left > 410 && line.right < 1080,
+      );
+      let timeIndex = -1;
+      bodyLines.forEach((line, index) => {
+        if (/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line.text)) timeIndex = index;
+      });
+      const timeText =
+        timeIndex >= 0
+          ? bodyLines[timeIndex]!.text.match(
+              /\b(?:[01]?\d|2[0-3]):[0-5]\d\b/,
+            )![0]
+          : '';
+      let screenAt: Date | undefined;
+      if (timeText) {
+        const [hour, minute] = timeText.split(':').map(Number);
+        screenAt = new Date();
+        screenAt.setHours(hour!, minute!, 0, 0);
+        if (screenAt.getTime() > Date.now() + 12 * 60 * 60_000)
+          screenAt.setDate(screenAt.getDate() - 1);
+      }
+      const noticeIndex = notifications.findIndex(
+        (notice) =>
+          new Date(notice.at) >= since &&
+          notice.text.trim() &&
+          (!notice.title ||
+            header
+              .toLocaleLowerCase('uk')
+              .includes(notice.title.toLocaleLowerCase('uk')) ||
+            notice.title
+              .toLocaleLowerCase('uk')
+              .includes(header.toLocaleLowerCase('uk'))),
+      );
+      const notice =
+        noticeIndex >= 0 ? notifications.splice(noticeIndex, 1)[0] : undefined;
+      const text = notice
+        ? notice.text.trim()
+        : timeIndex >= 0
+          ? bodyLines
+              .slice(Math.max(0, timeIndex - 5), timeIndex)
+              .map((line) => line.text)
+              .join(' ')
+              .trim()
+          : '';
+      if (
+        text &&
+        (notice ? new Date(notice.at) >= since : screenAt && screenAt >= since)
+      )
+        found.push({
+          from,
+          text,
+          at: notice?.at ?? screenAt!.toISOString(),
+          threadId,
+          providerMessageId: screenMessageId(
+            threadId,
+            text,
+            notice?.at ?? timeText,
+          ),
+        });
+      await run('xdotool', ['mousemove', '420', '45', 'click', '1']).catch(
+        () => {},
+      );
+      await delay(200);
+    }
+    return found;
+  };
   const send = createSend(join(data, 'receipts'), {
     messages,
     screen,
+    async confirm() {
+      const image = await screen();
+      const composer = await ocr(image, '620x80+500+790');
+      const bubble = await ocr(image, '660x650+620+120');
+      return {
+        composer: groupOcrLines(parseTsvWords(composer.stdout))
+          .map((line) => line.text)
+          .join(' '),
+        outgoingBubble: groupOcrLines(parseTsvWords(bubble.stdout))
+          .map((line) => line.text)
+          .join(' '),
+      };
+    },
     wait: () => delay(1000),
     async open(url, to) {
       // The official .desktop entry is Exec=/opt/viber/Viber %u. A second instance
@@ -154,15 +320,21 @@ if (!key) {
         if (!account) return json(200, { state: 'needs_activation', version });
         try {
           await readMessages(account.path, new Date());
-        } catch {
           return json(200, {
-            state: 'error',
+            state: 'ready',
             number: account.number,
             version,
-            reason: 'database_unreadable_or_schema_changed',
+            mode: 'database',
+          });
+        } catch {
+          // Viber Desktop encrypts viber.db in some installations; screen OCR is the fallback.
+          return json(200, {
+            state: 'ready',
+            number: account.number,
+            version,
+            mode: 'screen',
           });
         }
-        return json(200, { state: 'ready', number: account.number, version });
       }
       if (req.method === 'GET' && url.pathname === '/screen') {
         const bytes = url.searchParams.has('lastFailure')
@@ -173,18 +345,25 @@ if (!key) {
       }
       if (req.method === 'GET' && url.pathname === '/inbound') {
         const since = new Date(url.searchParams.get('since') || '');
-        return json(
-          200,
-          (await messages(since))
-            .filter((message) => !message.outgoing)
-            .map((message) => ({
-              from: message.from,
-              text: message.text,
-              at: message.at,
-              providerMessageId: message.providerMessageId,
-              threadId: message.threadId,
-            })),
-        );
+        if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
+        const account = await database();
+        let incoming;
+        try {
+          incoming = account
+            ? (await readMessages(account.path, since))
+                .filter((message) => !message.outgoing)
+                .map((message) => ({
+                  from: message.from,
+                  text: message.text,
+                  at: message.at,
+                  providerMessageId: message.providerMessageId,
+                  threadId: message.threadId,
+                }))
+            : await inboxFromScreen(since);
+        } catch {
+          incoming = await inboxFromScreen(since);
+        }
+        return json(200, incoming);
       }
       if (req.method === 'POST' && url.pathname === '/send') {
         let raw = '';
@@ -225,6 +404,7 @@ if (!key) {
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
     process.on(signal, () => {
       server.close();
-      for (const child of [viber, wm, xvfb]) child.kill('SIGTERM');
+      for (const child of [viber, notificationMonitor, wm, xvfb])
+        child.kill('SIGTERM');
     });
 }

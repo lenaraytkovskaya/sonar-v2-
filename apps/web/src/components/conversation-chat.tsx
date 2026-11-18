@@ -18,6 +18,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Callout } from './ui/layout';
 import { FormReplyMatch } from './form-reply-match';
+import { ViberThreadMatch } from './viber-thread-match';
 import { ChannelIcon } from './channel-icon';
 import { FriendlyError } from './friendly-error';
 type Message = NonNullable<
@@ -414,6 +415,15 @@ export function ConversationChat({
         conversationId={conversation.id}
         companyId={conversation.companyId}
         active={active}
+      />
+      <ViberThreadMatch
+        conversationId={conversation.id}
+        active={
+          active &&
+          conversation.channel === 'viber' &&
+          !conversation.companyId &&
+          conversation.contactValue?.startsWith('viber-thread:') === true
+        }
       />
       <div className="relative min-h-12 flex-1">
         <div

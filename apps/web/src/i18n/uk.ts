@@ -850,6 +850,19 @@ export const uk = {
     bridgeUnavailable: 'Внутрішній міст Viber Desktop недоступний.',
     bridgeKeyMissing: 'Додайте VIBER_BRIDGE_KEY на сервері',
     screenUnavailable: 'Не вдалося отримати знімок Viber Desktop.',
+    recipientNotVerified:
+      'Не вдалося підтвердити потрібний чат Viber. Повідомлення не надіслано.',
+    deliveryUncertain:
+      'Не вдалося підтвердити надсилання Viber. Перевірте чат вручну; автоматичний повтор заблоковано.',
+    desktopError:
+      'Viber Desktop не відповів. Перевірте стан каналу та знімок екрана.',
+    manualBinding: 'Невідомий контакт Viber',
+    manualBindingHint:
+      'Знайдіть компанію та оберіть її телефонний контакт, щоб прив’язати цей діалог.',
+    searchCompany: 'Пошук компанії',
+    choosePhone: 'Оберіть телефонний контакт',
+    searchButton: 'Знайти',
+    bindThread: 'Прив’язати діалог',
     screen: 'Екран Viber Desktop',
     limit: 'Денний ліміт',
     today: 'Надіслано сьогодні',

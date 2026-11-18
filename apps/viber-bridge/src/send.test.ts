@@ -86,6 +86,29 @@ it('confirms only a new matching outgoing provider row', async () => {
   })(input);
   expect(result).toEqual({ state: 'sent', providerMessageId: '7' });
 });
+it('confirms the empty composer and matching outgoing OCR bubble without a database', async () => {
+  const path = await temporary();
+  const enter = vi.fn();
+  const confirm = vi.fn().mockResolvedValue({
+    composer: '',
+    outgoingBubble: 'Привіт & + ? Другий рядок',
+  });
+  const desktop = {
+    messages: vi.fn().mockRejectedValue(Error('encrypted_database')),
+    open: vi.fn(),
+    enter,
+    confirm,
+    screen: async () => Buffer.from('synthetic screenshot'),
+    wait: async () => {},
+  };
+  const send = createSend(path, desktop);
+  const first = await send(input);
+  expect(first.state).toBe('sent');
+  expect(first.providerMessageId).toMatch(/^screen:/);
+  expect(await createSend(path, desktop)(input)).toEqual(first);
+  expect(enter).toHaveBeenCalledTimes(1);
+  expect(confirm).toHaveBeenCalledTimes(1);
+});
 it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', async () => {
   const path = join(await temporary(), 'viber.db');
   const fixture = new DatabaseSync(path);

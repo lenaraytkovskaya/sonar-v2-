@@ -71,12 +71,20 @@ const normalize = (channel: string, value: string) => {
 };
 
 export async function recordInbound(input: InboundInput) {
-  const sender = normalize(input.channel, input.sender);
+  const unresolvedViberThread =
+    input.channel === 'viber' &&
+    !input.sender.trim() &&
+    !!input.providerThreadId?.trim();
+  const sender = unresolvedViberThread
+    ? `viber-thread:${input.providerThreadId!.trim()}`
+    : normalize(input.channel, input.sender);
   const receivedAt = input.receivedAt ? new Date(input.receivedAt) : new Date();
   if (
     !sender ||
     !input.providerId?.trim() ||
     input.providerId.length > 1000 ||
+    (input.providerThreadId?.length ?? 0) > 1000 ||
+    /[\r\n]/.test(input.providerThreadId ?? '') ||
     (input.externalMessageId?.length ?? 0) > 1000 ||
     /[\r\n]/.test(input.externalMessageId ?? '') ||
     typeof input.body !== 'string' ||
@@ -238,19 +246,20 @@ export async function recordInbound(input: InboundInput) {
         input.externalMessageId ?? null,
       ],
     );
-    if (!conversation.company_id)
+    if (!conversation.company_id && !unresolvedViberThread)
       await enqueueFormReplyMatch(
         c,
         conversation.id,
         message.id,
         input.senderPhone,
       );
-    await enqueueTask(
-      'ai.inbound',
-      `ai.inbound:${message.id}`,
-      { messageId: message.id },
-      c,
-    );
+    if (!unresolvedViberThread)
+      await enqueueTask(
+        'ai.inbound',
+        `ai.inbound:${message.id}`,
+        { messageId: message.id },
+        c,
+      );
     await logActivity(
       'message.received',
       conversation.company_id ? 'company' : 'conversation',
@@ -265,6 +274,80 @@ export async function recordInbound(input: InboundInput) {
       companyId: conversation.company_id as string | null,
       created: true,
     };
+  });
+}
+
+export async function bindViberThread(
+  conversationId: string,
+  companyId: string,
+  contactId: string,
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const {
+      rows: [conversation],
+    } = await c.query(
+      `select id,peer_value,provider_thread_id from conversations
+      where id=$1 and channel='viber' and company_id is null for update`,
+      [conversationId],
+    );
+    if (
+      !conversation?.provider_thread_id ||
+      !String(conversation.peer_value ?? '').startsWith('viber-thread:')
+    )
+      invalid('Діалог Viber уже прив’язаний або не потребує ручної прив’язки.');
+    const {
+      rows: [contact],
+    } = await c.query(
+      `select id,normalized from contacts where id=$1 and company_id=$2
+      and kind::text in ('phone','viber') for share`,
+      [contactId, companyId],
+    );
+    if (!contact || !normalizePhone(contact.normalized))
+      invalid('Оберіть телефонний контакт цієї компанії.');
+    const {
+      rows: [campaign],
+    } = await c.query(
+      `select campaign_id from campaign_companies where company_id=$1
+      order by added_at desc,campaign_id limit 1`,
+      [companyId],
+    );
+    await c.query(
+      `update conversations set company_id=$2,campaign_id=$3,contact_id=$4,
+      peer_value=$5 where id=$1`,
+      [
+        conversationId,
+        companyId,
+        campaign?.campaign_id ?? null,
+        contact.id,
+        contact.normalized,
+      ],
+    );
+    await c.query(
+      `update messages set to_value=$2 where conversation_id=$1 and channel='viber'
+      and to_value=$3`,
+      [conversationId, contact.normalized, conversation.peer_value],
+    );
+    const { rows: messages } = await c.query<{ id: string }>(
+      "select id from messages where conversation_id=$1 and direction='in' order by created_at,id",
+      [conversationId],
+    );
+    for (const message of messages)
+      await enqueueTask(
+        'ai.inbound',
+        `ai.inbound:${message.id}`,
+        { messageId: message.id },
+        c,
+      );
+    await logActivity(
+      'conversation.viber_bound',
+      'company',
+      companyId,
+      userId,
+      { conversationId, contactId: contact.id },
+      c,
+    );
+    return { conversationId, companyId, contactId: contact.id };
   });
 }
 
