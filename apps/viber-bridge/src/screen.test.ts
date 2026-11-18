@@ -19,7 +19,31 @@ import {
   textSimilarity,
   verticalColorBoundaries,
   visibleInboundMessages,
+  messageBubbleRegions,
+  inboundBubbleMessage,
 } from './screen.js';
+
+function syntheticBubblePixels() {
+  const width = 640;
+  const height = 400;
+  const pixels = new Uint8Array(width * height * 3);
+  const paint = (
+    left: number,
+    top: number,
+    right: number,
+    bottom: number,
+    color: readonly [number, number, number],
+  ) => {
+    for (let y = top; y < bottom; y++)
+      for (let x = left; x < right; x++) pixels.set(color, (y * width + x) * 3);
+  };
+  paint(0, 0, width, height, [220, 224, 230]);
+  paint(50, 125, 280, 200, [255, 255, 255]);
+  paint(55, 220, 260, 295, [255, 255, 255]);
+  paint(360, 125, 610, 200, [117, 71, 174]);
+  paint(220, 75, 420, 105, [190, 190, 190]); // centered encryption notice
+  return { width, height, pixels };
+}
 
 function syntheticLayoutPng() {
   const width = 1280;
@@ -102,6 +126,116 @@ it('normalizes OCR text and tolerates small recognition errors', () => {
   expect(
     outgoingScreenConfirmed('Очікуваний текст', '', 'Інше повідомлення'),
   ).toBe(false);
+});
+
+it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
+  const image = syntheticBubblePixels();
+  const bubbles = messageBubbleRegions(
+    image.pixels,
+    image.width,
+    image.height,
+    { left: 20, right: 620 },
+    110,
+  );
+  expect(bubbles.map(({ side, top }) => [side, top])).toEqual([
+    ['left', 125],
+    ['right', 125],
+    ['left', 220],
+  ]);
+  const first = inboundBubbleMessage(
+    [
+      { text: 'перше повідомлення', left: 0, top: 0, right: 90 },
+      { text: 'з двох рядків', left: 0, top: 15, right: 80 },
+      { text: '17:12', left: 0, top: 32, right: 30 },
+    ],
+    {
+      threadId: 'screen:+380638215990',
+      from: '+380637058571',
+      since: new Date('2026-11-18T17:11:00Z'),
+      reference: new Date('2026-11-18T17:20:00Z'),
+      region: bubbles[0]!,
+    },
+  );
+  expect(first).toMatchObject({
+    text: 'перше повідомлення\nз двох рядків',
+    at: '2026-11-18T17:12:00.000Z',
+  });
+  expect(
+    inboundBubbleMessage(
+      [
+        {
+          text: "Messages in this chat are private and protected by Viber's end-to-end encryption.",
+          left: 0,
+          top: 0,
+          right: 250,
+        },
+      ],
+      {
+        threadId: 'screen:+380638215990',
+        from: '+380637058571',
+        since: new Date('2026-11-18T17:11:00Z'),
+        reference: new Date('2026-11-18T17:20:00Z'),
+        region: {
+          left: 200,
+          top: 100,
+          right: 500,
+          bottom: 180,
+          side: 'center',
+        },
+      },
+    ),
+  ).toBeNull();
+  expect(
+    inboundBubbleMessage(
+      [
+        { text: 'V5 test one', left: 0, top: 0, right: 90 },
+        { text: '17:48', left: 0, top: 20, right: 30 },
+      ],
+      {
+        threadId: 'screen:+380638215990',
+        from: '+380637058571',
+        since: new Date('2026-11-18T17:11:00Z'),
+        reference: new Date('2026-11-18T17:20:00Z'),
+        region: bubbles[1]!,
+      },
+    ),
+  ).toBeNull();
+  expect(
+    inboundBubbleMessage(
+      [
+        { text: 'друге повідомлення', left: 0, top: 0, right: 90 },
+        { text: '17:13', left: 0, top: 20, right: 30 },
+      ],
+      {
+        threadId: 'screen:+380638215990',
+        from: '+380637058571',
+        since: new Date('2026-11-18T17:11:00Z'),
+        reference: new Date('2026-11-18T17:20:00Z'),
+        region: bubbles[2]!,
+      },
+    ),
+  ).toMatchObject({
+    text: 'друге повідомлення',
+    at: '2026-11-18T17:13:00.000Z',
+  });
+  expect(
+    inboundBubbleMessage([], {
+      threadId: 'screen:+380638215990',
+      from: '+380637058571',
+      since: new Date('2026-11-18T17:11:00Z'),
+      reference: new Date('2026-11-18T17:20:00Z'),
+      region: bubbles[1]!,
+    }),
+  ).toBeNull();
+  expect(
+    inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
+      threadId: 'screen:+380638215990',
+      from: '+380637058571',
+      since: new Date('2026-11-18T17:12:00Z'),
+      reference: new Date('2026-11-18T17:20:00Z'),
+      region: bubbles[0]!,
+    }),
+  ).toBeNull();
 });
 
 it('confirms wrapped outgoing text in the dynamic chat column with a sent time', () => {
@@ -279,4 +413,14 @@ it('includes synthetic outgoing-chat and unread-list PNG screenshots', async () 
     expect(image.readUInt32BE(16)).toBe(1280);
     expect(image.readUInt32BE(20)).toBe(900);
   }
+});
+
+it('keeps the anonymized test Viber chat crop as a fixture', async () => {
+  const image = await readFile(
+    fileURLToPath(
+      new URL('./fixtures/viber-inbound-live.png', import.meta.url),
+    ),
+  );
+  expect(image.readUInt32BE(16)).toBe(680);
+  expect(image.readUInt32BE(20)).toBe(625);
 });
