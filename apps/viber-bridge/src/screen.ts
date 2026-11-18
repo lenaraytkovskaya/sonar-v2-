@@ -94,3 +94,48 @@ export function groupOcrLines(words: OcrWord[]) {
     right: Math.max(...line.map((word) => word.left + word.width)),
   }));
 }
+
+export type ViberModal =
+  'none' | 'sync_history' | 'repair' | 'close_confirmation' | 'unknown';
+
+export function desktopPresenceState(hasProcess: boolean, hasWindow: boolean) {
+  return hasProcess && hasWindow ? 'ready' : 'not_running';
+}
+
+export function classifyViberModal(text: string): ViberModal {
+  const value = normalizeOcr(text);
+  if (/fixnow|somethingwentwrong|repair|виправити|восстановить/.test(value))
+    return 'repair';
+  if (/leavingsosoon/.test(value)) return 'close_confirmation';
+  if (
+    /synchistory|syncchathistory|синхронізаціячатів|синхронизацияистории/.test(
+      value,
+    )
+  )
+    return 'sync_history';
+  if (/dialog|modal|error|warning|помилка|попередження/.test(value))
+    return 'unknown';
+  return 'none';
+}
+
+export function screenClickPoint(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  if (
+    ![x, y, width, height].every(Number.isFinite) ||
+    width <= 0 ||
+    height <= 0 ||
+    x < 0 ||
+    y < 0 ||
+    x > width ||
+    y > height
+  )
+    throw Error('invalid_click');
+  return {
+    x: Math.min(1279, Math.round((x / width) * 1280)),
+    y: Math.min(899, Math.round((y / height) * 900)),
+  };
+}

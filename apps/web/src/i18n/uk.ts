@@ -842,6 +842,18 @@ export const uk = {
     title: 'Viber Desktop',
     connect: 'Підключити',
     disconnected: 'Не запущено',
+    needsAttention: 'Потрібна увага',
+    repairRequired:
+      'Viber просить відновити базу. Натисніть «Виправити» і відскануйте QR знову.',
+    unknownWindow:
+      'Viber показує невідоме вікно. Перевірте знімок і закрийте його вручну.',
+    restarting: 'Viber перезапускається після збою.',
+    restartLimit:
+      'Viber не запустився після кількох спроб. Перевірте контейнер.',
+    windowMissing: 'Процес Viber є, але його вікно не відображається.',
+    screenRestarting: 'Графічний екран Viber перезапускається.',
+    screenRestartLimit: 'Не вдалося відновити графічний екран Viber.',
+    supervisorError: 'Не вдалося перевірити стан Viber.',
     activation: 'Потрібна активація',
     ready: 'Підключений',
     error: 'Помилка',
@@ -864,6 +876,8 @@ export const uk = {
     searchButton: 'Знайти',
     bindThread: 'Прив’язати діалог',
     screen: 'Екран Viber Desktop',
+    screenEsc: 'Esc',
+    screenEnter: 'Enter',
     limit: 'Денний ліміт',
     today: 'Надіслано сьогодні',
     pause: 'Призупинити',

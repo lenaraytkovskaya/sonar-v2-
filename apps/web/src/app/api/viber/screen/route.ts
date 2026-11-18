@@ -12,10 +12,18 @@ export async function GET(request: Request) {
       { status: 503 },
     );
   try {
-    const failure =
-      new URL(request.url).searchParams.get('lastFailure') === '1';
+    const query = new URL(request.url).searchParams;
+    const failure = query.get('lastFailure') === '1';
+    const attention = query.get('attention') === '1';
     const response = await fetch(
-      new URL(failure ? '/screen?lastFailure=1' : '/screen', url),
+      new URL(
+        attention
+          ? '/screen?attention=1'
+          : failure
+            ? '/screen?lastFailure=1'
+            : '/screen',
+        url,
+      ),
       {
         headers: { Authorization: `Bearer ${key}` },
         cache: 'no-store',
@@ -30,6 +38,69 @@ export async function GET(request: Request) {
     return new Response(response.body, {
       headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
     });
+  } catch {
+    return Response.json(
+      { error: uk.viber.screenUnavailable },
+      { status: 502 },
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  const user = await apiUser(request, true);
+  if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
+  const input = await request.json().catch(() => null);
+  if (
+    !input ||
+    input.screenOpen !== true ||
+    Object.keys(input).some(
+      (key) =>
+        !['x', 'y', 'width', 'height', 'key', 'screenOpen'].includes(key),
+    ) ||
+    (input.key !== undefined && !['Escape', 'Enter'].includes(input.key))
+  )
+    return Response.json(
+      { error: uk.viber.screenUnavailable },
+      { status: 400 },
+    );
+  const { sonarPool } = await import('@sonar/db');
+  let { rows } = await sonarPool.query(
+    `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
+    [user.id],
+  );
+  if (!rows.length) {
+    await sonarPool.query(
+      `update channel_accounts set owner_id=$1 where channel='viber' and owner_id is null
+        and (select count(*) from users)=1`,
+      [user.id],
+    );
+    ({ rows } = await sonarPool.query(
+      `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
+      [user.id],
+    ));
+  }
+  if (!rows.length)
+    return Response.json({ error: uk.unauthorized }, { status: 403 });
+  const url = process.env.VIBER_BRIDGE_URL,
+    key = process.env.VIBER_BRIDGE_KEY;
+  if (!url || !key)
+    return Response.json(
+      { error: uk.viber.bridgeUnavailable },
+      { status: 503 },
+    );
+  try {
+    const response = await fetch(new URL('/click', url), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    const result = await response.json().catch(() => ({}));
+    return Response.json(result, { status: response.status });
   } catch {
     return Response.json(
       { error: uk.viber.screenUnavailable },

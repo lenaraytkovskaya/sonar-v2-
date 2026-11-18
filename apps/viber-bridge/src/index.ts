@@ -7,7 +7,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { accountDatabase, readMessages, run } from './database.js';
 import { createSend, type SendInput } from './send.js';
 import { createMissingKeyServer } from './missing-key.js';
-import { groupOcrLines, parseTsvWords, screenMessageId } from './screen.js';
+import {
+  classifyViberModal,
+  desktopPresenceState,
+  groupOcrLines,
+  parseTsvWords,
+  screenClickPoint,
+  screenMessageId,
+} from './screen.js';
+import { canRestart, restartDelay } from './supervisor.js';
 
 const key = process.env.VIBER_BRIDGE_KEY?.trim();
 if (!key) {
@@ -19,7 +27,7 @@ if (!key) {
   const data = process.env.VIBER_DATA_DIR || '/data';
   const version = process.env.VIBER_DESKTOP_VERSION || '29.4.0.7';
   await mkdir(data, { recursive: true, mode: 0o700 });
-  const xvfb = spawn(
+  let xvfb = spawn(
     'Xvfb',
     [':99', '-screen', '0', '1280x900x24', '-nolisten', 'tcp'],
     { stdio: 'inherit' },
@@ -55,12 +63,75 @@ if (!key) {
       }
     }
   });
-  const viber = spawn('/opt/viber/Viber', [], { stdio: 'inherit' });
-  let processError = false;
-  for (const child of [xvfb, wm, viber])
-    child.on('error', () => {
-      processError = true;
+  spawn('/opt/viber/Viber', [], { stdio: 'inherit' });
+  let xvfbAttempts = 0;
+  let lastXvfbAttempt = 0;
+  let missingViberSince: number | undefined;
+  let viberAttempts = 0;
+  let lastViberAttempt = 0;
+  let supervisorReason = '';
+  const hasViberProcess = async () =>
+    run('pgrep', ['-f', '^/opt/viber/Viber']).then(
+      ({ stdout }) => stdout.trim().length > 0,
+      () => false,
+    );
+  const visibleViber = async () =>
+    run('xdotool', ['search', '--onlyvisible', '--class', 'Viber'], {
+      timeout: 3000,
+    }).then(
+      ({ stdout }) => stdout.trim().split(/\s+/).filter(Boolean),
+      () => [],
+    );
+  const supervisor = setInterval(() => {
+    void (async () => {
+      if (shuttingDown) return;
+      const now = Date.now();
+      if (
+        (xvfb.exitCode !== null || xvfb.signalCode !== null) &&
+        xvfbAttempts < 5
+      ) {
+        if (now - lastXvfbAttempt >= restartDelay(xvfbAttempts)) {
+          xvfbAttempts++;
+          lastXvfbAttempt = now;
+          xvfb = spawn(
+            'Xvfb',
+            [':99', '-screen', '0', '1280x900x24', '-nolisten', 'tcp'],
+            { stdio: 'inherit' },
+          );
+          supervisorReason = `xvfb_restart_${xvfbAttempts}`;
+          if (!shuttingDown)
+            await run('pkill', ['-TERM', '-f', '^/opt/viber/Viber']).catch(
+              () => {},
+            );
+          missingViberSince = now;
+        }
+      } else if (xvfb.exitCode !== null || xvfb.signalCode !== null)
+        supervisorReason = 'xvfb_restart_limit';
+      const running = await hasViberProcess();
+      if (running) {
+        if ((await visibleViber()).length > 0) {
+          missingViberSince = undefined;
+          viberAttempts = 0;
+        } else {
+          missingViberSince ??= now;
+        }
+        return;
+      }
+      missingViberSince ??= now;
+      if (canRestart(missingViberSince, now, viberAttempts, lastViberAttempt)) {
+        if (shuttingDown) return;
+        viberAttempts++;
+        lastViberAttempt = now;
+        supervisorReason = `viber_restart_${viberAttempts}`;
+        spawn('/opt/viber/Viber', [], { stdio: 'inherit' });
+      } else if (viberAttempts >= 5) {
+        supervisorReason = 'viber_restart_limit';
+      }
+    })().catch(() => {
+      supervisorReason = 'supervisor_check_failed';
     });
+  }, 2000);
+  supervisor.unref();
   const screen = async () =>
     (
       await run('import', ['-window', 'root', '-quality', '85', 'jpeg:-'], {
@@ -84,6 +155,60 @@ if (!key) {
       { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
     );
   };
+  const checkModals = async () => {
+    const image = await screen();
+    const result = await ocr(image);
+    const text = groupOcrLines(parseTsvWords(result.stdout))
+      .map((line) => line.text)
+      .join(' ');
+    const windows = await visibleViber();
+    const titles = await Promise.all(
+      windows.map((window) =>
+        run('xdotool', ['getwindowname', window], { timeout: 2000 }).then(
+          ({ stdout }) => stdout.trim(),
+          () => '',
+        ),
+      ),
+    );
+    const modal = classifyViberModal(`${text} ${titles.join(' ')}`);
+    if (modal === 'sync_history') {
+      await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
+        timeout: 3000,
+      });
+      await delay(300);
+      return undefined;
+    }
+    if (modal === 'repair') {
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      return 'repair';
+    }
+    if (modal === 'close_confirmation') {
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      return 'unknown_modal';
+    }
+    if (modal === 'unknown' || windows.length > 1) {
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      return 'unknown_modal';
+    }
+    return undefined;
+  };
+  const closeExitConfirmation = async () => {
+    const image = await screen();
+    const result = await ocr(image);
+    const words = parseTsvWords(result.stdout);
+    const text = groupOcrLines(words)
+      .map((line) => line.text)
+      .join(' ');
+    if (classifyViberModal(text) !== 'close_confirmation') return false;
+    // Viber renders this exact confirmation centered in the fixed 1280x900 display.
+    // Its gray "Close anyway" label is invisible to Tesseract, so the known button
+    // position is clicked only after OCR verifies the unique dialog title.
+    await run('xdotool', ['mousemove', '760', '506', 'click', '1'], {
+      timeout: 1500,
+    });
+    await delay(300);
+    return true;
+  };
   const database = () => accountDatabase(join(data, '.ViberPC'));
   const messages = async (since: Date) => {
     const account = await database();
@@ -91,6 +216,8 @@ if (!key) {
     return readMessages(account.path, since);
   };
   const inboxFromScreen = async (since: Date) => {
+    const modal = await checkModals();
+    if (modal) throw Error('needs_attention');
     const list = await ocr(await screen());
     const badges = parseTsvWords(list.stdout)
       .filter(
@@ -308,14 +435,33 @@ if (!key) {
     };
     try {
       if (req.method === 'GET' && url.pathname === '/status') {
+        if (xvfb.exitCode !== null || xvfb.signalCode !== null)
+          return json(200, {
+            state: 'not_running',
+            version,
+            reason: supervisorReason || 'xvfb_not_running',
+          });
         if (
-          processError ||
-          viber.exitCode !== null ||
-          viber.signalCode !== null ||
-          xvfb.exitCode !== null ||
-          xvfb.signalCode !== null
+          desktopPresenceState(
+            await hasViberProcess(),
+            (await visibleViber()).length > 0,
+          ) === 'not_running'
         )
-          return json(200, { state: 'not_running', version });
+          return json(200, {
+            state: 'not_running',
+            version,
+            reason:
+              supervisorReason ||
+              (missingViberSince ? 'viber_restarting' : 'viber_not_visible'),
+          });
+        const modal = await checkModals();
+        if (modal)
+          return json(200, {
+            state: 'needs_attention',
+            version,
+            reason: modal,
+            screenshot: '/screen?attention=1',
+          });
         const account = await database();
         if (!account) return json(200, { state: 'needs_activation', version });
         try {
@@ -337,13 +483,58 @@ if (!key) {
         }
       }
       if (req.method === 'GET' && url.pathname === '/screen') {
-        const bytes = url.searchParams.has('lastFailure')
-          ? await readFile(join(data, 'receipts', 'last-failure.jpg'))
-          : await screen();
+        const bytes = url.searchParams.has('attention')
+          ? await readFile(join(data, 'attention.jpg'))
+          : url.searchParams.has('lastFailure')
+            ? await readFile(join(data, 'receipts', 'last-failure.jpg'))
+            : await screen();
         res.writeHead(200, { 'Content-Type': 'image/jpeg' }).end(bytes);
         return;
       }
+      if (req.method === 'POST' && url.pathname === '/click') {
+        let raw = '';
+        for await (const chunk of req) {
+          raw += chunk;
+          if (Buffer.byteLength(raw) > 4096) throw Error('invalid_click');
+        }
+        const input = JSON.parse(raw) as {
+          x?: number;
+          y?: number;
+          width?: number;
+          height?: number;
+          key?: string;
+          screenOpen?: boolean;
+        };
+        if (input.screenOpen !== true) throw Error('screen_not_open');
+        if (input.key === 'Escape' || input.key === 'Enter')
+          await run(
+            'xdotool',
+            [
+              'key',
+              '--clearmodifiers',
+              input.key === 'Escape' ? 'Escape' : 'Return',
+            ],
+            { timeout: 3000 },
+          );
+        else {
+          const point = screenClickPoint(
+            input.x!,
+            input.y!,
+            input.width!,
+            input.height!,
+          );
+          await run(
+            'xdotool',
+            ['mousemove', String(point.x), String(point.y), 'click', '1'],
+            { timeout: 3000 },
+          );
+        }
+        return json(200, { ok: true });
+      }
       if (req.method === 'GET' && url.pathname === '/inbound') {
+        const modal = await checkModals();
+        if (modal)
+          return json(423, { error: 'needs_attention', reason: modal });
         const since = new Date(url.searchParams.get('since') || '');
         if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
         const account = await database();
@@ -360,12 +551,17 @@ if (!key) {
                   threadId: message.threadId,
                 }))
             : await inboxFromScreen(since);
-        } catch {
+        } catch (error) {
+          if (error instanceof Error && error.message === 'needs_attention')
+            throw error;
           incoming = await inboxFromScreen(since);
         }
         return json(200, incoming);
       }
       if (req.method === 'POST' && url.pathname === '/send') {
+        const modal = await checkModals();
+        if (modal)
+          return json(423, { error: 'needs_attention', reason: modal });
         let raw = '';
         for await (const chunk of req) {
           raw += chunk;
@@ -386,6 +582,9 @@ if (!key) {
           'invalid_since',
           'idempotency_conflict',
           'needs_activation',
+          'invalid_click',
+          'screen_not_open',
+          'needs_attention',
         ].includes(error.message)
           ? error.message
           : 'bridge_operation_failed';
@@ -401,10 +600,94 @@ if (!key) {
   });
   server.requestTimeout = 60000;
   server.listen(3000, '0.0.0.0');
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(supervisor);
+    server.close();
+    console.info('Viber graceful shutdown requested');
+    const windows = await visibleViber();
+    for (const window of windows.reverse())
+      await run('xdotool', ['windowactivate', '--sync', window], {
+        timeout: 1000,
+      }).catch(() => {});
+    const mainWindow = windows.at(0);
+    if (mainWindow) {
+      const geometry = await run(
+        'xdotool',
+        ['getwindowgeometry', '--shell', mainWindow],
+        { timeout: 1000 },
+      ).catch(() => ({ stdout: '' }));
+      const getGeometry = (name: string) =>
+        Number(geometry.stdout.match(new RegExp(`^${name}=(\\d+)$`, 'm'))?.[1]);
+      const x = getGeometry('X');
+      const y = getGeometry('Y');
+      const width = getGeometry('WIDTH');
+      if ([x, y, width].every(Number.isFinite))
+        await run(
+          'xdotool',
+          [
+            'mousemove',
+            '--sync',
+            String(x + width - 11),
+            String(y - 31),
+            'click',
+            '1',
+          ],
+          { timeout: 1000 },
+        ).catch(() => {});
+    }
+    let deadline = Date.now() + 1500;
+    while (Date.now() < deadline && (await hasViberProcess())) await delay(500);
+    if (await hasViberProcess())
+      await closeExitConfirmation().catch(() => false);
+    deadline = Date.now() + 3000;
+    while (Date.now() < deadline && (await hasViberProcess())) await delay(500);
+    try {
+      if (await hasViberProcess()) {
+        const activeWindows = await visibleViber();
+        const activeWindow = activeWindows.at(-1);
+        if (activeWindow)
+          await run('xdotool', ['windowactivate', '--sync', activeWindow], {
+            timeout: 1000,
+          });
+        await run('xdotool', ['key', '--clearmodifiers', 'ctrl+q'], {
+          timeout: 1000,
+        });
+        deadline = Date.now() + 1500;
+        while (Date.now() < deadline && (await hasViberProcess()))
+          await delay(500);
+      }
+    } catch {
+      /* SIGTERM below is the documented fallback when X11 cannot close Viber. */
+    }
+    if (await hasViberProcess()) {
+      console.info(
+        'Viber is still open; sending SIGTERM and waiting up to 20 seconds',
+      );
+      await run('pkill', ['-TERM', '-f', '^/opt/viber/Viber']).catch(() => {});
+      deadline = Date.now() + 20_000;
+      while (Date.now() < deadline && (await hasViberProcess()))
+        await delay(500);
+    }
+    if (!(await hasViberProcess())) {
+      console.info('Viber closed cleanly');
+    } else {
+      console.error('Viber did not exit after SIGTERM; sending SIGKILL');
+      await run('pkill', ['-KILL', '-f', '^/opt/viber/Viber']).catch(() => {});
+    }
+    console.info('Stopping Viber bridge helpers');
+    for (const child of [notificationMonitor, wm, xvfb]) child.kill('SIGTERM');
+    const childDeadline = Date.now() + 2500;
+    while (
+      Date.now() < childDeadline &&
+      [notificationMonitor, wm, xvfb].some((child) => child.exitCode === null)
+    )
+      await delay(100);
+    console.info('Viber bridge shutdown complete');
+    process.exit(0);
+  };
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
-    process.on(signal, () => {
-      server.close();
-      for (const child of [viber, notificationMonitor, wm, xvfb])
-        child.kill('SIGTERM');
-    });
+    process.on(signal, () => void shutdown());
 }

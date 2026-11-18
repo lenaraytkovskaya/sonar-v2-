@@ -17,7 +17,8 @@ import {
 
 type Account = Awaited<ReturnType<typeof listViberAccounts>>[number];
 type Bridge = {
-  state: 'not_running' | 'needs_activation' | 'ready' | 'error';
+  state:
+    'not_running' | 'needs_activation' | 'ready' | 'needs_attention' | 'error';
   number?: string;
   version?: string;
   reason?: string;
@@ -48,7 +49,10 @@ export function ViberAccounts({
       try {
         const response = await fetch('/api/viber', { cache: 'no-store' });
         const data = await response.json();
-        if (active && response.ok) setBridge(data.bridge);
+        if (active && response.ok) {
+          setBridge(data.bridge);
+          if (data.bridge.state === 'needs_attention') setScreen(true);
+        }
       } catch {
         if (active) setBridge({ state: 'error' });
       }
@@ -85,17 +89,59 @@ export function ViberAccounts({
   const stateText = {
     not_running: uk.viber.disconnected,
     needs_activation: uk.viber.activation,
+    needs_attention: uk.viber.needsAttention,
     ready: uk.viber.ready,
     error: uk.viber.error,
   }[bridge.state];
+  const reasonText =
+    bridge.reason === 'repair'
+      ? uk.viber.repairRequired
+      : bridge.reason === 'unknown_modal'
+        ? uk.viber.unknownWindow
+        : bridge.reason === 'viber_restart_limit'
+          ? uk.viber.restartLimit
+          : bridge.reason?.startsWith('viber_restart_') ||
+              bridge.reason === 'viber_restarting'
+            ? uk.viber.restarting
+            : bridge.reason === 'viber_not_visible'
+              ? uk.viber.windowMissing
+              : bridge.reason === 'xvfb_restart_limit'
+                ? uk.viber.screenRestartLimit
+                : bridge.reason?.startsWith('xvfb_restart_') ||
+                    bridge.reason === 'xvfb_not_running'
+                  ? uk.viber.screenRestarting
+                  : bridge.reason === 'supervisor_check_failed'
+                    ? uk.viber.supervisorError
+                    : bridge.reason === 'bridge_key_missing'
+                      ? uk.viber.bridgeKeyMissing
+                      : bridge.reason;
   const tone =
     bridge.state === 'ready'
       ? 'ok'
-      : bridge.state === 'needs_activation'
-        ? 'wait'
-        : bridge.state === 'error'
-          ? 'err'
-          : 'idle';
+      : bridge.state === 'needs_attention'
+        ? 'err'
+        : bridge.state === 'needs_activation'
+          ? 'wait'
+          : bridge.state === 'error'
+            ? 'err'
+            : 'idle';
+  const clickScreen = async (input: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    key?: 'Escape' | 'Enter';
+  }) => {
+    const response = await fetch('/api/viber/screen', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...input, screenOpen: true }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      setError(data.error ?? uk.viber.screenUnavailable);
+    }
+  };
   return (
     <Card className="space-y-4 p-5">
       <h2 className="flex items-center gap-2 border-b border-border pb-4 font-heading text-base font-semibold">
@@ -103,7 +149,11 @@ export function ViberAccounts({
         {uk.viber.title}
       </h2>
       <div className="flex flex-wrap items-center gap-3">
-        <StatusBadge status={tone}>{stateText}</StatusBadge>
+        <StatusBadge status={tone}>
+          {bridge.state === 'needs_attention'
+            ? uk.viber.needsAttention
+            : stateText}
+        </StatusBadge>
         {bridge.number && (
           <span className="text-sm text-muted-foreground">{bridge.number}</span>
         )}
@@ -119,15 +169,7 @@ export function ViberAccounts({
           <HealthDetails health={accountHealth} />
         </>
       )}
-      {bridge.reason && (
-        <FriendlyError
-          reason={
-            bridge.reason === 'bridge_key_missing'
-              ? uk.viber.bridgeKeyMissing
-              : bridge.reason
-          }
-        />
-      )}
+      {bridge.reason && <FriendlyError reason={reasonText ?? bridge.reason} />}
       {account && (
         <p className="text-sm">
           {uk.viber.today}: {account.sentToday} / {account.dailyLimit}
@@ -172,14 +214,57 @@ export function ViberAccounts({
       {screen && (
         <section className="space-y-2">
           <p className="text-sm">{uk.viber.scanHint}</p>
+          {bridge.state === 'needs_attention' && (
+            <p className="text-sm font-medium text-destructive">
+              {bridge.reason === 'repair'
+                ? uk.viber.repairRequired
+                : uk.viber.unknownWindow}
+            </p>
+          )}
           <Image
             unoptimized
             width={1280}
             height={720}
             alt={uk.viber.screen}
-            src={`/api/viber/screen?v=${imageVersion}`}
+            src={`/api/viber/screen?${bridge.state === 'needs_attention' ? 'attention=1&' : ''}v=${imageVersion}`}
             className="h-auto max-h-[70vh] w-full rounded-lg border border-border object-contain"
+            onClick={(event) => {
+              const image = event.currentTarget;
+              const bounds = image.getBoundingClientRect();
+              const scale = Math.min(
+                bounds.width / image.naturalWidth,
+                bounds.height / image.naturalHeight,
+              );
+              const renderedWidth = image.naturalWidth * scale;
+              const renderedHeight = image.naturalHeight * scale;
+              const offsetX = (bounds.width - renderedWidth) / 2;
+              const offsetY = (bounds.height - renderedHeight) / 2;
+              const x = event.clientX - bounds.left - offsetX;
+              const y = event.clientY - bounds.top - offsetY;
+              if (x < 0 || y < 0 || x > renderedWidth || y > renderedHeight)
+                return;
+              void clickScreen({
+                x: (x / renderedWidth) * image.naturalWidth,
+                y: (y / renderedHeight) * image.naturalHeight,
+                width: image.naturalWidth,
+                height: image.naturalHeight,
+              });
+            }}
           />
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void clickScreen({ key: 'Escape' })}
+            >
+              {uk.viber.screenEsc}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void clickScreen({ key: 'Enter' })}
+            >
+              {uk.viber.screenEnter}
+            </Button>
+          </div>
         </section>
       )}
       {showFailure && (
