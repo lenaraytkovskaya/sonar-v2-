@@ -5,6 +5,7 @@ import type { AnalysisResult } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { FriendlyError } from './friendly-error';
+import { StatusBadge } from './shared';
 type Task = {
   id: string;
   status: string;
@@ -85,15 +86,12 @@ export function CompanyAnalysis({
         {pending || active ? uk.ai.pending : uk.analysis.run}
       </Button>
       {task && (
-        <p className="text-sm text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && (
-            <>
-              {' '}
-              · <FriendlyError reason={task.reason_uk} />
-            </>
-          )}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
+          {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+        </div>
       )}
       {result ? (
         <>

@@ -9,7 +9,7 @@ import {
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, PageHeader } from './shared';
+import { Card, PageHeader, StatusBadge } from './shared';
 import { AiAssist } from './ai-assist';
 import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
@@ -294,9 +294,9 @@ export function CampaignPanel({
               }}
             >
               {row.name}
-              <span className="block text-sm text-muted-foreground">
+              <StatusBadge status={row.status}>
                 {uk.campaign.statuses[row.status]}
-              </span>
+              </StatusBadge>
             </button>
           ))}
         </Card>

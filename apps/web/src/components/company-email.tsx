@@ -12,7 +12,7 @@ import {
   facebookHistoryLink,
   facebookDispatched,
 } from '@/lib/outreach-labels';
-import { Card } from './shared';
+import { Card, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Callout } from './ui/layout';
@@ -22,46 +22,12 @@ import { useMessageDraft } from './use-message-draft';
 import { sameDraft, normalizedDraft } from '@/lib/draft-state';
 import { MessageBody } from './message-body';
 import { FriendlyError } from './friendly-error';
-import {
-  AlertCircle,
-  Ban,
-  Check,
-  CheckCheck,
-  Clock,
-  Hourglass,
-  PencilLine,
-  Sparkles,
-} from 'lucide-react';
+import { AlertCircle, Sparkles } from 'lucide-react';
 
-/** Messenger-style delivery mark: clock, one tick, two ticks, error. */
+/** Message delivery status uses the shared status badge. */
 function DeliveryMark({ message }: { message: Message }) {
   const label = messageStatus(message.status, message);
-  const Icon =
-    message.status === 'failed'
-      ? AlertCircle
-      : message.status === 'skipped'
-        ? Ban
-        : message.status === 'draft'
-          ? PencilLine
-          : ['awaiting_approval', 'awaiting_manual'].includes(message.status)
-            ? Hourglass
-            : ['delivered', 'read'].includes(message.status)
-              ? CheckCheck
-              : message.status === 'sent'
-                ? Check
-                : Clock;
-  return (
-    <Icon
-      aria-label={label}
-      className={cn(
-        'size-3.5',
-        message.status === 'failed' && 'text-err',
-        message.status === 'read' && 'text-accent',
-      )}
-    >
-      <title>{label}</title>
-    </Icon>
-  );
+  return <StatusBadge status={message.status}>{label}</StatusBadge>;
 }
 export function MessageBubble({ message }: { message: Message }) {
   const incoming = message.direction === 'in';
@@ -92,10 +58,14 @@ export function MessageBubble({ message }: { message: Message }) {
                 message.classification as keyof typeof uk.inbound.categories
               ]
             }
-            {message.needsHuman && ` · ${uk.inbound.needsHuman}`}
+            {message.needsHuman && (
+              <StatusBadge status="waiting">
+                {uk.inbound.needsHuman}
+              </StatusBadge>
+            )}
           </p>
         )}
-        <p className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+        <p className="flex flex-wrap items-center justify-end gap-1 text-[11px] text-muted-foreground">
           {generated && (
             <Sparkles aria-label={uk.outreach.sources.ai} className="size-3">
               <title>{uk.outreach.sources.ai}</title>
@@ -240,7 +210,9 @@ export function Draft({
             ? uk.outreach.incoming
             : uk.outreach.outgoing}
         </span>
-        <span>{messageStatus(message.status, message)}</span>
+        <StatusBadge status={message.status}>
+          {messageStatus(message.status, message)}
+        </StatusBadge>
         {!(message.direction === 'in' && message.source === 'inbound') && (
           <span>
             {uk.outreach.sources[
@@ -261,7 +233,9 @@ export function Draft({
               message.classification as keyof typeof uk.inbound.categories
             ]
           }
-          {message.needsHuman && ` · ${uk.inbound.needsHuman}`}
+          {message.needsHuman && (
+            <StatusBadge status="waiting">{uk.inbound.needsHuman}</StatusBadge>
+          )}
         </p>
       )}
       {editable && !blocked ? (
@@ -642,11 +616,7 @@ export function CompanyChat({
         ))}
       </div>
       {!contacts.length && <p>{uk.outreach.emptyContacts}</p>}
-      {blocked && (
-        <p role="status" className="rounded-lg bg-err-bg p-3 text-err">
-          {uk.email.blocked}
-        </p>
-      )}
+      {blocked && <StatusBadge status="closed">{uk.email.blocked}</StatusBadge>}
       {href && (
         <a
           href={href}
@@ -711,15 +681,12 @@ export function CompanyChat({
           </Button>
         ) : null)}
       {task && (
-        <p role="status" className="text-muted-foreground">
-          {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-          {task.reason_uk && (
-            <>
-              {' '}
-              · <FriendlyError reason={task.reason_uk} />
-            </>
-          )}
-        </p>
+        <div role="status" className="flex flex-wrap items-center gap-2">
+          <StatusBadge status={task.status}>
+            {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
+          </StatusBadge>
+          {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+        </div>
       )}
       {notice && <p role="status">{notice}</p>}
     </Card>

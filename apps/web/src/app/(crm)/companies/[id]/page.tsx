@@ -10,7 +10,12 @@ import {
   type RegistryEntity,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
-import { Card, CompanyStatus, scoreTone } from '@/components/shared';
+import {
+  Card,
+  CompanyStatus,
+  scoreTone,
+  StatusBadge,
+} from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
 import { ManualSource } from '@/components/manual-source';
 import { CompanyTabs } from '@/components/company-tabs';
@@ -539,9 +544,11 @@ export default async function Page({
             <p className="text-sm text-muted-foreground">{uk.registry.empty}</p>
           )}
           {terminated && (
-            <p role="alert" className="text-sm text-err">
-              {uk.registry.terminated}
-            </p>
+            <div role="alert">
+              <StatusBadge status="closed">
+                {uk.registry.terminated}
+              </StatusBadge>
+            </div>
           )}
           <p className="text-sm text-muted-foreground">
             {uk.prozorro.title} · {uk.prozorro.purchases}:{' '}
@@ -672,12 +679,15 @@ export default async function Page({
                       },
                       {
                         label: uk.company.status,
-                        value:
-                          uk.google.businessStatus[
-                            c.business_status as keyof typeof uk.google.businessStatus
-                          ] ??
-                          c.business_status ??
-                          '—',
+                        value: c.business_status ? (
+                          <StatusBadge status={c.business_status}>
+                            {uk.google.businessStatus[
+                              c.business_status as keyof typeof uk.google.businessStatus
+                            ] ?? c.business_status}
+                          </StatusBadge>
+                        ) : (
+                          '—'
+                        ),
                       },
                     ]}
                   />
@@ -725,10 +735,29 @@ export default async function Page({
                     </p>
                   )}
                   {siteStatus && (
-                    <p className="text-xs text-muted-foreground">
-                      {uk.scanner.kinds.site_status}:{' '}
-                      {siteStatus.value?.reason ?? uk.tasks.status.done}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">
+                        {uk.scanner.kinds.site_status}:
+                      </span>
+                      <StatusBadge
+                        status={
+                          siteStatus.value?.status ??
+                          (siteStatus.value?.reason ? 'failed' : 'done')
+                        }
+                      >
+                        {
+                          uk.tasks.status[
+                            siteStatus.value?.status === 'done' ||
+                            !siteStatus.value?.reason
+                              ? 'done'
+                              : 'failed'
+                          ]
+                        }
+                      </StatusBadge>
+                      {siteStatus.value?.reason && (
+                        <span>{siteStatus.value.reason}</span>
+                      )}
+                    </div>
                   )}
                   {websiteCandidates.map((fact) => (
                     <div
@@ -783,15 +812,34 @@ export default async function Page({
                               ] ?? fact.kind}
                               :
                             </span>{' '}
-                            {fact.kind === 'site_status'
-                              ? (fact.value.reason ?? uk.tasks.status.done)
-                              : fact.kind === 'captcha'
-                                ? (uk.scanner.captchas[
-                                    fact.value as keyof typeof uk.scanner.captchas
-                                  ] ?? String(fact.value))
-                                : typeof fact.value === 'string'
-                                  ? fact.value
-                                  : JSON.stringify(fact.value)}
+                            {fact.kind === 'site_status' ? (
+                              <span className="inline-flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  status={
+                                    fact.value.status ??
+                                    (fact.value.reason ? 'failed' : 'done')
+                                  }
+                                >
+                                  {
+                                    uk.tasks.status[
+                                      fact.value.status === 'done' ||
+                                      !fact.value.reason
+                                        ? 'done'
+                                        : 'failed'
+                                    ]
+                                  }
+                                </StatusBadge>
+                                {fact.value.reason}
+                              </span>
+                            ) : fact.kind === 'captcha' ? (
+                              (uk.scanner.captchas[
+                                fact.value as keyof typeof uk.scanner.captchas
+                              ] ?? String(fact.value))
+                            ) : typeof fact.value === 'string' ? (
+                              fact.value
+                            ) : (
+                              JSON.stringify(fact.value)
+                            )}
                           </span>
                           <SourceLink url={fact.source_url} />
                         </p>
@@ -836,26 +884,29 @@ export default async function Page({
                             ] ?? fact.kind}
                           </dt>
                           <dd className="break-words">
-                            {fact.kind === 'registry_match_method'
-                              ? (uk.registry.methods[
-                                  String(
-                                    fact.value,
-                                  ) as keyof typeof uk.registry.methods
-                                ] ?? String(fact.value))
-                              : fact.kind === 'founders' &&
-                                  Array.isArray(fact.value)
-                                ? fact.value
-                                    .map(
-                                      (f: {
-                                        name: string | null;
-                                        role: string;
-                                      }) =>
-                                        [f.name, f.role]
-                                          .filter(Boolean)
-                                          .join(' · '),
-                                    )
-                                    .join('; ')
-                                : String(fact.value)}
+                            {fact.kind === 'registry_status' ? (
+                              <StatusBadge status={String(fact.value)}>
+                                {String(fact.value)}
+                              </StatusBadge>
+                            ) : fact.kind === 'registry_match_method' ? (
+                              (uk.registry.methods[
+                                String(
+                                  fact.value,
+                                ) as keyof typeof uk.registry.methods
+                              ] ?? String(fact.value))
+                            ) : fact.kind === 'founders' &&
+                              Array.isArray(fact.value) ? (
+                              fact.value
+                                .map(
+                                  (f: { name: string | null; role: string }) =>
+                                    [f.name, f.role]
+                                      .filter(Boolean)
+                                      .join(' · '),
+                                )
+                                .join('; ')
+                            ) : (
+                              String(fact.value)
+                            )}
                           </dd>
                         </div>
                       ))}
@@ -1061,30 +1112,47 @@ export default async function Page({
                   title={`${uk.company.history} · ${history.length + scans.length}`}
                 >
                   {campaigns.map((row) => (
-                    <p key={row.id}>
+                    <p
+                      key={row.id}
+                      className="flex flex-wrap items-center gap-2"
+                    >
                       <Link
                         className="text-accent"
                         href={'/campaigns?campaign=' + row.id}
                       >
                         {row.name}
                       </Link>{' '}
-                      ·{' '}
-                      {row.batch_id
-                        ? `${uk.company.batch} #${row.number} · ${uk.tasks.status[row.status as keyof typeof uk.tasks.status]}`
-                        : uk.manual.withoutBatch}{' '}
-                      · <LocalTime value={row.added_at} />
+                      {row.batch_id ? (
+                        <>
+                          <span>
+                            {uk.company.batch} #{row.number}
+                          </span>
+                          <StatusBadge status={row.status}>
+                            {
+                              uk.tasks.status[
+                                row.status as keyof typeof uk.tasks.status
+                              ]
+                            }
+                          </StatusBadge>
+                        </>
+                      ) : (
+                        uk.manual.withoutBatch
+                      )}{' '}
+                      <LocalTime value={row.added_at} />
                     </p>
                   ))}
                   {scans.map((scan) => (
                     <div key={scan.id}>
-                      <p>
-                        {uk.scanner.title} ·{' '}
-                        {
-                          uk.tasks.status[
-                            scan.status as keyof typeof uk.tasks.status
-                          ]
-                        }{' '}
-                        · <LocalTime value={scan.created_at} />
+                      <p className="flex flex-wrap items-center gap-2">
+                        {uk.scanner.title}
+                        <StatusBadge status={scan.status}>
+                          {
+                            uk.tasks.status[
+                              scan.status as keyof typeof uk.tasks.status
+                            ]
+                          }
+                        </StatusBadge>
+                        <LocalTime value={scan.created_at} />
                       </p>
                       {scan.reason_uk && (
                         <p className="text-muted-foreground">

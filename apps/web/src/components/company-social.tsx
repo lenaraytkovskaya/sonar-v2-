@@ -8,6 +8,7 @@ import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
 import { FriendlyError } from './friendly-error';
+import { StatusBadge } from './shared';
 
 type SocialData = Awaited<ReturnType<typeof getCompanySocial>>;
 const fields = {
@@ -186,17 +187,16 @@ export function CompanySocial({
               ))}
           </p>
           {row.task && (
-            <p className="text-xs text-muted-foreground">
-              {uk.tasks.status[
-                row.task.status as keyof typeof uk.tasks.status
-              ] ?? '—'}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <StatusBadge status={row.task.status}>
+                {uk.tasks.status[
+                  row.task.status as keyof typeof uk.tasks.status
+                ] ?? '—'}
+              </StatusBadge>
               {row.task.reasonUk && (
-                <>
-                  {' '}
-                  · <FriendlyError reason={row.task.reasonUk} />
-                </>
+                <FriendlyError reason={row.task.reasonUk} />
               )}
-            </p>
+            </div>
           )}
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
             {fields[row.network].map((field) => (

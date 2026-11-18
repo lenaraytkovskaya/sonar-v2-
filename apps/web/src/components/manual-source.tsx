@@ -14,6 +14,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { LocalTime } from './local-time';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { StatusBadge } from './shared';
 import { FriendlyError } from './friendly-error';
 import { RowActions } from './ui/row-actions';
 
@@ -319,17 +320,16 @@ export function ManualSource({
               result: Record<string, unknown> | null;
             }) => (
               <div key={task.id}>
-                <p>
-                  {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
-                  {task.reason_uk ? (
-                    <>
-                      {' '}
-                      · <FriendlyError reason={task.reason_uk} />
-                    </>
-                  ) : (
-                    ''
-                  )}
-                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge status={task.status}>
+                    {
+                      uk.tasks.status[
+                        task.status as keyof typeof uk.tasks.status
+                      ]
+                    }
+                  </StatusBadge>
+                  {task.reason_uk && <FriendlyError reason={task.reason_uk} />}
+                </div>
                 {task.status === 'done' && (
                   <p className="text-xs text-muted-foreground">
                     {uk.manualSource.done}

@@ -7,23 +7,36 @@ describe('status tones', () => {
       [
         'success',
         'done',
+        'ready',
+        'OPERATIONAL',
         'sent',
         'active',
         'valid',
-        'ready',
         'delivered',
         'read',
       ],
     ],
     [
       'err',
-      ['errors', 'failed', 'refused', 'do_not_contact', 'DNC', 'invalid'],
+      [
+        'errors',
+        'failed',
+        'closed',
+        'CLOSED_TEMPORARILY',
+        'closed_permanently',
+        'refused',
+        'do_not_contact',
+        'DNC',
+        'invalid',
+      ],
     ],
     [
       'wait',
       [
         'paused',
-        'queued',
+        'waiting',
+        'skipped',
+        'pending',
         'awaiting',
         'awaiting_approval',
         'awaiting_manual',
@@ -31,11 +44,8 @@ describe('status tones', () => {
         'qr',
       ],
     ],
-    ['run', ['running', 'scanning', 'enriching', 'starting']],
-    [
-      'idle',
-      ['disabled', 'new', 'skipped', 'draft', 'disconnected', 'unknown'],
-    ],
+    ['run', ['running', 'queued', 'scanning', 'enriching', 'starting']],
+    ['idle', ['disabled', 'new', 'draft', 'disconnected', 'unknown']],
   ] as const)('maps %s without changing domain statuses', (tone, statuses) => {
     for (const status of statuses) expect(statusTone(status)).toBe(tone);
   });
