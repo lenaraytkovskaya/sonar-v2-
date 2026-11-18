@@ -137,38 +137,28 @@ if (!key) {
         maxBuffer: 3 * 1024 * 1024,
       })
     ).stdout;
-  const ocr = async (image: Buffer, crop?: string, psm = '11') => {
+  const ocr = async (
+    image: Buffer,
+    crop?: string,
+    psm = '11',
+    preprocess = true,
+  ) => {
     const source = join(data, 'ocr-source.jpg');
     const target = join(data, 'ocr-target.png');
     await writeFile(source, image, { mode: 0o600 });
-    await run(
-      'convert',
-      crop
-        ? [
-            source,
-            '-crop',
-            crop,
-            '+repage',
-            '-resize',
-            '200%',
-            '-colorspace',
-            'Gray',
-            '-threshold',
-            '55%',
-            target,
-          ]
-        : [
-            source,
-            '-resize',
-            '200%',
-            '-colorspace',
-            'Gray',
-            '-threshold',
-            '55%',
-            target,
-          ],
-      { timeout: 5000 },
-    );
+    const convertArgs = [source];
+    if (crop) convertArgs.push('-crop', crop, '+repage');
+    if (preprocess)
+      convertArgs.push(
+        '-resize',
+        '200%',
+        '-colorspace',
+        'Gray',
+        '-threshold',
+        '55%',
+      );
+    convertArgs.push(target);
+    await run('convert', convertArgs, { timeout: 5000 });
     const result = await run(
       'tesseract',
       [target, 'stdout', '-l', 'ukr+rus+eng', '--psm', psm, 'tsv'],
@@ -182,7 +172,7 @@ if (!key) {
         for (const column of [6, 7, 8, 9]) {
           const value = Number(fields[column]);
           if (Number.isFinite(value))
-            fields[column] = String(Math.round(value / 2));
+            fields[column] = String(Math.round(value / (preprocess ? 2 : 1)));
         }
         return fields.join('\t');
       })
@@ -337,13 +327,37 @@ if (!key) {
     const words = parseTsvWords(ocrResult.stdout);
     const lines = groupOcrLines(words);
     const allText = lines.map((line) => line.text).join(' ');
-    const profileSidebarOpen = words.some(
+    let profileSidebarOpen = words.some(
       (word) =>
         word.left > width * 0.65 &&
         /^(media|gifs?|links|files|participants?|encrypted|mute|groups)$/i.test(
           word.text,
         ),
     );
+    const boundaries = verticalColorBoundaries(samples);
+    if (
+      !profileSidebarOpen &&
+      boundaries.some((x) => Math.abs(x / width - 0.77) < 0.07)
+    ) {
+      const sidebarLeft = Math.floor(width * 0.7);
+      const sidebarOcr = await ocr(
+        image,
+        `${width - sidebarLeft}x${height - 100}+${sidebarLeft}+100`,
+        '11',
+        false,
+      );
+      const sidebarLabels = new Set(
+        groupOcrLines(parseTsvWords(sidebarOcr.stdout))
+          .flatMap((line) => line.text.match(/[\p{L}]+/gu) ?? [])
+          .map((word) => word.toLocaleLowerCase())
+          .filter((word) =>
+            /^(media|gifs?|links|files|participants?|encrypted|mute|groups)$/.test(
+              word,
+            ),
+          ),
+      );
+      profileSidebarOpen = sidebarLabels.size >= 2;
+    }
     const chatgptSidebarOpen = words.some(
       (word) =>
         word.left > width * 0.68 &&
@@ -351,11 +365,7 @@ if (!key) {
         /^chatgpt$/i.test(word.text),
     );
     const profileOpen = profileSidebarOpen || chatgptSidebarOpen;
-    const bounds = chatColumnBounds(
-      width,
-      verticalColorBoundaries(samples),
-      profileOpen,
-    );
+    const bounds = chatColumnBounds(width, boundaries, profileOpen);
     const blockedWords = words
       .filter((word) => /^(block|report|spam)$/i.test(word.text))
       .map((word) => ({
@@ -435,10 +445,16 @@ if (!key) {
   const profileRecipientMatch = async (
     layout: Awaited<ReturnType<typeof inspectChatLayout>>,
     to: string,
-    openedByRecipientUri = false,
   ) => {
     const matches = (candidate: string) =>
       chatHeaderMatchesRecipient(candidate, to);
+    const phoneInCrop = async (image: Buffer, crop: string) => {
+      const result = await ocr(image, crop, '11', false);
+      return phoneFromOcrLines(
+        groupOcrLines(parseTsvWords(result.stdout)),
+        () => true,
+      );
+    };
     const visible = phoneFromOcrLines(
       layout.lines,
       (line) =>
@@ -447,42 +463,65 @@ if (!key) {
         line.left < layout.bounds.right,
     );
     if (matches(visible)) return true;
+    const headerImage = await screen();
+    const headerWidth = Math.max(1, layout.bounds.right - layout.bounds.left);
+    const headerCropNumber = await phoneInCrop(
+      headerImage,
+      `${headerWidth}x220+${layout.bounds.left}+0`,
+    );
+    if (matches(headerCropNumber)) return true;
     let current = layout;
-    if (!current.profileOpen || current.chatgptSidebarOpen) {
+    if (current.chatgptSidebarOpen) {
+      const toggle = current.words.find(
+        (word) =>
+          word.top < 130 &&
+          word.left > current.width * 0.55 &&
+          word.left < current.width * 0.7 &&
+          /^chatgpt$/i.test(word.text),
+      );
+      if (!toggle) return false;
+      const x = Math.round(toggle.left + toggle.width / 2);
+      const y = Math.round(toggle.top + toggle.height / 2);
+      if (!safeLayoutClick(x, y, current.blockedWords)) return false;
+      await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+      await delay(400);
+      current = await inspectChatLayout(await screen());
+    }
+    if (!current.profileOpen) {
       const x = current.bounds.right - 28;
       const y = 76;
-      if (safeLayoutClick(x, y, current.blockedWords)) {
-        await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
-        await delay(300);
-        current = await inspectChatLayout(await screen());
-      }
+      if (!safeLayoutClick(x, y, current.blockedWords)) return false;
+      await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+      await delay(1000);
+      current = await inspectChatLayout(await screen());
     }
-    const profileNumber = phoneFromOcrLines(
-      current.lines,
-      (line) =>
-        line.top < current.height * 0.55 &&
-        line.left >= current.bounds.right - 5,
-    );
+    const profileNumber = current.profileOpen
+      ? phoneFromOcrLines(
+          current.lines,
+          (line) =>
+            line.top < current.height * 0.55 &&
+            line.left >= current.bounds.right - 5,
+        )
+      : '';
     if (matches(profileNumber)) return true;
-    const visibleHeader = current.lines
-      .filter(
-        (line) =>
-          line.top < current.height * 0.55 &&
-          line.left >= current.bounds.left &&
-          line.left < current.bounds.right,
+    if (current.bounds.right < current.width) {
+      const profileImage = await screen();
+      if (
+        matches(
+          await phoneInCrop(
+            profileImage,
+            `${current.width - current.bounds.right}x${Math.floor(current.height * 0.55)}+${current.bounds.right}+0`,
+          ),
+        )
       )
-      .map((line) => line.text)
-      .join(' ');
-    return (
-      openedByRecipientUri &&
-      !!visibleHeader.trim() &&
-      !/my\s+notes/i.test(visibleHeader)
-    );
+        return true;
+    }
+    return false;
   };
   const openRecipientChat = async (to: string) => {
     const url = `viber://chat?${new URLSearchParams({ number: to.replace(/\D/g, '') })}`;
     await run('/opt/viber/Viber', [url], { timeout: 10000 });
-    await delay(800);
+    await delay(2000);
     const { stdout } = await run(
       'xdotool',
       ['search', '--onlyvisible', '--class', 'Viber'],
@@ -495,7 +534,7 @@ if (!key) {
     await run('xdotool', ['windowraise', window]);
     await run('xdotool', ['windowfocus', '--sync', window]);
     const layout = await inspectChatLayout(await screen());
-    if (!(await profileRecipientMatch(layout, to, true)))
+    if (!(await profileRecipientMatch(layout, to)))
       throw Error('recipient_not_verified');
   };
   const returnToMyNotes = async () => {
@@ -923,7 +962,7 @@ if (!key) {
       await run('xdotool', ['windowraise', window]);
       await run('xdotool', ['windowfocus', '--sync', window]);
       let layout = await inspectChatLayout(await screen());
-      if (!(await profileRecipientMatch(layout, to, true)))
+      if (!(await profileRecipientMatch(layout, to)))
         throw Error('recipient_not_verified');
       layout = await normalizeChatLayout();
       // Clipboard paste preserves multiline text without producing Enter events.

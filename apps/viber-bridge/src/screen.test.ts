@@ -146,6 +146,12 @@ it('recovers a compact OCR timestamp when the colon is unreadable', () => {
   expect(visibleTimeText('2561')).toBeUndefined();
 });
 
+it('does not trust a URI-opened chat header without the recipient number', () => {
+  expect(chatHeaderMatchesRecipient('Other Company', '+380638215990')).toBe(
+    false,
+  );
+});
+
 it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
   const image = syntheticBubblePixels();
   const bubbles = messageBubbleRegions(
@@ -361,7 +367,9 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
     left: 145,
     right: 1135,
   });
-  expect(chatColumnBounds(image.width, boundaries).right).toBe(1135);
+  expect(chatColumnBounds(image.width, boundaries, true).right).toBe(1135);
+  expect(chatColumnBounds(image.width, boundaries).right).toBe(image.width);
+  expect(chatColumnBounds(1280, [299, 1241]).right).toBe(1280);
   expect(chatColumnBounds(1280, [299, 640], true).right).toBe(640);
   expect(
     chatColumnBounds(1280, [299, 934, 955, 972, 1027, 1168], true).right,
