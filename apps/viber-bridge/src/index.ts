@@ -21,8 +21,12 @@ import {
   verticalColorBoundaries,
   visibleInboundMessages,
   visibleMessageTimestamp,
+  visibleTimeText,
   messageBubbleRegions,
   inboundBubbleMessage,
+  copyMenuPoint,
+  clipboardChanged,
+  exactOptionPoint,
 } from './screen.js';
 import { canRestart, restartDelay } from './supervisor.js';
 
@@ -62,6 +66,7 @@ if (!key) {
   let viberAttempts = 0;
   let lastViberAttempt = 0;
   let supervisorReason = '';
+  let attentionReason = '';
   const hasViberProcess = async () =>
     run('pgrep', ['-f', '^/opt/viber/Viber']).then(
       ({ stdout }) => stdout.trim().length > 0,
@@ -132,20 +137,151 @@ if (!key) {
         maxBuffer: 3 * 1024 * 1024,
       })
     ).stdout;
-  const ocr = async (image: Buffer, crop?: string, psm = '11') => {
+  const ocr = async (
+    image: Buffer,
+    crop?: string,
+    psm = '11',
+    preprocess = true,
+  ) => {
     const source = join(data, 'ocr-source.jpg');
     const target = join(data, 'ocr-target.png');
     await writeFile(source, image, { mode: 0o600 });
-    await run(
-      'convert',
-      crop ? [source, '-crop', crop, '+repage', target] : [source, target],
-      { timeout: 5000 },
-    );
-    return run(
+    const convertArgs = [source];
+    if (crop) convertArgs.push('-crop', crop, '+repage');
+    if (preprocess)
+      convertArgs.push(
+        '-resize',
+        '200%',
+        '-colorspace',
+        'Gray',
+        '-threshold',
+        '55%',
+      );
+    convertArgs.push(target);
+    await run('convert', convertArgs, { timeout: 5000 });
+    const result = await run(
       'tesseract',
       [target, 'stdout', '-l', 'ukr+rus+eng', '--psm', psm, 'tsv'],
       { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
     );
+    const stdout = result.stdout
+      .split(/\r?\n/)
+      .map((row, index) => {
+        if (index === 0 || !row) return row;
+        const fields = row.split('\t');
+        for (const column of [6, 7, 8, 9]) {
+          const value = Number(fields[column]);
+          if (Number.isFinite(value))
+            fields[column] = String(Math.round(value / (preprocess ? 2 : 1)));
+        }
+        return fields.join('\t');
+      })
+      .join('\n');
+    return { ...result, stdout };
+  };
+  const copyBubble = async (bubble: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  }) => {
+    const clipboard = ['-selection', 'clipboard'];
+    await run('xclip', [...clipboard, '-i', '/dev/null'], { timeout: 3000 });
+    const before = (await run('xclip', [...clipboard, '-o'], { timeout: 3000 }))
+      .stdout;
+    if (before !== '') {
+      attentionReason = 'clipboard_clear_failed';
+      const image = await screen();
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      throw Error('needs_attention');
+    }
+    try {
+      await run('xdotool', [
+        'mousemove',
+        String(Math.round((bubble.left + bubble.right) / 2)),
+        String(Math.round((bubble.top + bubble.bottom) / 2)),
+        'click',
+        '3',
+      ]);
+      await delay(1000);
+      const image = await screen();
+      const menuLeft = Math.max(0, Math.min(bubble.left + 80, 980));
+      const menuWidth = Math.min(300, 1280 - menuLeft);
+      let point: { x: number; y: number } | null = null;
+      for (const menuTop of [
+        Math.max(0, bubble.top + 20),
+        Math.max(0, bubble.top - 350),
+      ]) {
+        const menuHeight = Math.min(450, 900 - menuTop);
+        const result = await ocr(
+          image,
+          `${menuWidth}x${menuHeight}+${menuLeft}+${menuTop}`,
+          '6',
+        );
+        const localPoint = copyMenuPoint(
+          groupOcrLines(parseTsvWords(result.stdout)),
+        );
+        if (localPoint) {
+          point = {
+            x: localPoint.x + menuLeft,
+            y: localPoint.y + menuTop,
+          };
+          break;
+        }
+      }
+      if (!point) {
+        console.log(
+          'viber_copy_menu_missing',
+          JSON.stringify({
+            bubble,
+            menuLeft,
+            menuTops: [
+              Math.max(0, bubble.top + 20),
+              Math.max(0, bubble.top - 350),
+            ],
+            menuWidth,
+          }),
+        );
+        await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+        attentionReason = 'copy_menu_missing';
+        throw Error('needs_attention');
+      }
+      await run('xdotool', [
+        'mousemove',
+        String(point.x),
+        String(point.y),
+        'click',
+        '1',
+      ]);
+      await delay(100);
+      const after = (
+        await run('xclip', [...clipboard, '-o'], { timeout: 3000 })
+      ).stdout;
+      if (!clipboardChanged(before, after)) {
+        await writeFile(join(data, 'attention.jpg'), await screen(), {
+          mode: 0o600,
+        });
+        attentionReason = 'clipboard_not_changed';
+        throw Error('needs_attention');
+      }
+      attentionReason = '';
+      return after;
+    } catch (error) {
+      if (!(error instanceof Error && error.message === 'needs_attention')) {
+        attentionReason = 'copy_failed';
+        const image = await screen().catch(() => null);
+        if (image)
+          await writeFile(join(data, 'attention.jpg'), image, {
+            mode: 0o600,
+          }).catch(() => {});
+        throw Error('needs_attention');
+      }
+      throw error;
+    } finally {
+      await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
+        timeout: 3000,
+      }).catch(() => {});
+    }
   };
   const inspectChatLayout = async (image: Buffer) => {
     const source = join(data, 'layout-source.jpg');
@@ -164,7 +300,15 @@ if (!key) {
       ocr(image),
       run(
         'convert',
-        [source, '-resize', `${width}x1!`, '-depth', '8', 'txt:-'],
+        [
+          source,
+          '-crop',
+          `${width}x1+0+${Math.floor(height / 2)}`,
+          '+repage',
+          '-depth',
+          '8',
+          'txt:-',
+        ],
         {
           timeout: 5000,
           maxBuffer: 2 * 1024 * 1024,
@@ -183,16 +327,45 @@ if (!key) {
     const words = parseTsvWords(ocrResult.stdout);
     const lines = groupOcrLines(words);
     const allText = lines.map((line) => line.text).join(' ');
-    const profileOpen = words.some(
+    let profileSidebarOpen = words.some(
       (word) =>
         word.left > width * 0.65 &&
-        /^(media|gifs?|links|files|participants?)$/i.test(word.text),
+        /^(media|gifs?|links|files|participants?|encrypted|mute|groups)$/i.test(
+          word.text,
+        ),
     );
-    const bounds = chatColumnBounds(
-      width,
-      verticalColorBoundaries(samples),
-      profileOpen,
+    const boundaries = verticalColorBoundaries(samples);
+    if (
+      !profileSidebarOpen &&
+      boundaries.some((x) => Math.abs(x / width - 0.77) < 0.07)
+    ) {
+      const sidebarLeft = Math.floor(width * 0.7);
+      const sidebarOcr = await ocr(
+        image,
+        `${width - sidebarLeft}x${height - 100}+${sidebarLeft}+100`,
+        '11',
+        false,
+      );
+      const sidebarLabels = new Set(
+        groupOcrLines(parseTsvWords(sidebarOcr.stdout))
+          .flatMap((line) => line.text.match(/[\p{L}]+/gu) ?? [])
+          .map((word) => word.toLocaleLowerCase())
+          .filter((word) =>
+            /^(media|gifs?|links|files|participants?|encrypted|mute|groups)$/.test(
+              word,
+            ),
+          ),
+      );
+      profileSidebarOpen = sidebarLabels.size >= 2;
+    }
+    const chatgptSidebarOpen = words.some(
+      (word) =>
+        word.left > width * 0.68 &&
+        word.top > 26 &&
+        /^chatgpt$/i.test(word.text),
     );
+    const profileOpen = profileSidebarOpen || chatgptSidebarOpen;
+    const bounds = chatColumnBounds(width, boundaries, profileOpen);
     const blockedWords = words
       .filter((word) => /^(block|report|spam)$/i.test(word.text))
       .map((word) => ({
@@ -208,19 +381,42 @@ if (!key) {
       lines,
       allText,
       profileOpen,
+      chatgptSidebarOpen,
       bounds,
       blockedWords,
     };
   };
   const normalizeChatLayout = async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const seenPanels = new Set<string>();
+    for (let attempt = 0; attempt < 5; attempt++) {
       const layout = await inspectChatLayout(await screen());
-      if (layout.profileOpen) {
-        const media = layout.lines.find((line) =>
-          /^(media|gifs?|links|files|participants?)/i.test(line.text),
+      const banner = layout.lines.find((line) =>
+        /not in your contact list|not in your contacts/i.test(line.text),
+      );
+      if (layout.chatgptSidebarOpen) {
+        if (seenPanels.has('chatgpt')) return layout;
+        seenPanels.add('chatgpt');
+        const toggle = layout.words.find(
+          (word) =>
+            word.top < 130 &&
+            word.left > layout.width * 0.55 &&
+            word.left < layout.width * 0.7 &&
+            /^chatgpt$/i.test(word.text),
         );
-        const x = layout.width - 14;
-        const y = Math.max(48, Math.min(145, (media?.top ?? 105) - 28));
+        if (!toggle) throw Error('chatgpt_panel_toggle_missing');
+        const x = Math.round(toggle.left + toggle.width / 2);
+        const y = Math.round(toggle.top + toggle.height / 2);
+        if (!safeLayoutClick(x, y, layout.blockedWords))
+          throw Error('chatgpt_panel_close_unsafe');
+        await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+        await delay(300);
+        continue;
+      }
+      if (layout.profileOpen) {
+        if (seenPanels.has('profile')) return layout;
+        seenPanels.add('profile');
+        const x = layout.width - 24;
+        const y = 24;
         if (!safeLayoutClick(x, y, layout.blockedWords))
           throw Error('profile_close_unsafe');
         await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
@@ -232,11 +428,10 @@ if (!key) {
           layout.allText,
         )
       ) {
-        const banner = layout.lines.find((line) =>
-          /not in your contact list|not in your contacts/i.test(line.text),
-        );
-        const x = Math.min(layout.bounds.right - 12, layout.width - 12);
-        const y = (banner?.top ?? 130) + 20;
+        if (seenPanels.has('banner')) return layout;
+        seenPanels.add('banner');
+        const x = Math.min(layout.bounds.right - 24, layout.width - 24);
+        const y = (banner?.top ?? 130) + 6;
         if (!safeLayoutClick(x, y, layout.blockedWords))
           throw Error('banner_close_unsafe');
         await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
@@ -253,6 +448,13 @@ if (!key) {
   ) => {
     const matches = (candidate: string) =>
       chatHeaderMatchesRecipient(candidate, to);
+    const phoneInCrop = async (image: Buffer, crop: string) => {
+      const result = await ocr(image, crop, '11', false);
+      return phoneFromOcrLines(
+        groupOcrLines(parseTsvWords(result.stdout)),
+        () => true,
+      );
+    };
     const visible = phoneFromOcrLines(
       layout.lines,
       (line) =>
@@ -261,28 +463,65 @@ if (!key) {
         line.left < layout.bounds.right,
     );
     if (matches(visible)) return true;
-    let current = layout;
-    if (!current.profileOpen) {
-      const x = Math.min(current.width - 35, current.bounds.right - 38);
-      const y = 45;
-      if (safeLayoutClick(x, y, current.blockedWords)) {
-        await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
-        await delay(300);
-        current = await inspectChatLayout(await screen());
-      }
-    }
-    const profileNumber = phoneFromOcrLines(
-      current.lines,
-      (line) =>
-        line.top < current.height * 0.55 &&
-        line.left >= current.bounds.right - 5,
+    const headerImage = await screen();
+    const headerWidth = Math.max(1, layout.bounds.right - layout.bounds.left);
+    const headerCropNumber = await phoneInCrop(
+      headerImage,
+      `${headerWidth}x220+${layout.bounds.left}+0`,
     );
-    return matches(profileNumber);
+    if (matches(headerCropNumber)) return true;
+    let current = layout;
+    if (current.chatgptSidebarOpen) {
+      const toggle = current.words.find(
+        (word) =>
+          word.top < 130 &&
+          word.left > current.width * 0.55 &&
+          word.left < current.width * 0.7 &&
+          /^chatgpt$/i.test(word.text),
+      );
+      if (!toggle) return false;
+      const x = Math.round(toggle.left + toggle.width / 2);
+      const y = Math.round(toggle.top + toggle.height / 2);
+      if (!safeLayoutClick(x, y, current.blockedWords)) return false;
+      await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+      await delay(400);
+      current = await inspectChatLayout(await screen());
+    }
+    if (!current.profileOpen) {
+      const x = current.bounds.right - 28;
+      const y = 76;
+      if (!safeLayoutClick(x, y, current.blockedWords)) return false;
+      await run('xdotool', ['mousemove', String(x), String(y), 'click', '1']);
+      await delay(1000);
+      current = await inspectChatLayout(await screen());
+    }
+    const profileNumber = current.profileOpen
+      ? phoneFromOcrLines(
+          current.lines,
+          (line) =>
+            line.top < current.height * 0.55 &&
+            line.left >= current.bounds.right - 5,
+        )
+      : '';
+    if (matches(profileNumber)) return true;
+    if (current.bounds.right < current.width) {
+      const profileImage = await screen();
+      if (
+        matches(
+          await phoneInCrop(
+            profileImage,
+            `${current.width - current.bounds.right}x${Math.floor(current.height * 0.55)}+${current.bounds.right}+0`,
+          ),
+        )
+      )
+        return true;
+    }
+    return false;
   };
   const openRecipientChat = async (to: string) => {
     const url = `viber://chat?${new URLSearchParams({ number: to.replace(/\D/g, '') })}`;
     await run('/opt/viber/Viber', [url], { timeout: 10000 });
-    await delay(800);
+    await delay(2000);
     const { stdout } = await run(
       'xdotool',
       ['search', '--onlyvisible', '--class', 'Viber'],
@@ -292,7 +531,8 @@ if (!key) {
     if (!window || !/^\d+$/.test(window)) throw Error('chat_window_missing');
     await run('xdotool', ['windowsize', window, '1280', '900']);
     await run('xdotool', ['windowmove', window, '0', '0']);
-    await run('xdotool', ['windowactivate', '--sync', window]);
+    await run('xdotool', ['windowraise', window]);
+    await run('xdotool', ['windowfocus', '--sync', window]);
     const layout = await inspectChatLayout(await screen());
     if (!(await profileRecipientMatch(layout, to)))
       throw Error('recipient_not_verified');
@@ -309,41 +549,71 @@ if (!key) {
     return true;
   };
   const checkModals = async () => {
-    const image = await screen();
-    const result = await ocr(image);
-    const text = groupOcrLines(parseTsvWords(result.stdout))
-      .map((line) => line.text)
-      .join(' ');
-    const windows = await visibleViber();
-    const titles = await Promise.all(
-      windows.map((window) =>
-        run('xdotool', ['getwindowname', window], { timeout: 2000 }).then(
-          ({ stdout }) => stdout.trim(),
-          () => '',
+    let image = Buffer.alloc(0);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      image = await screen();
+      const result = await ocr(image);
+      const lines = groupOcrLines(parseTsvWords(result.stdout));
+      const text = lines.map((line) => line.text).join(' ');
+      const windows = await visibleViber();
+      const titles = await Promise.all(
+        windows.map((window) =>
+          run('xdotool', ['getwindowname', window], { timeout: 2000 }).then(
+            ({ stdout }) => stdout.trim(),
+            () => '',
+          ),
         ),
-      ),
-    );
-    const modal = classifyViberModal(`${text} ${titles.join(' ')}`);
-    if (modal === 'sync_history') {
-      await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
-        timeout: 3000,
-      });
-      await delay(300);
+      );
+      const modal = classifyViberModal(`${text} ${titles.join(' ')}`);
+      if (modal === 'sync_history') {
+        await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
+          timeout: 3000,
+        });
+        await delay(300);
+        continue;
+      }
+      if (modal === 'sync_canceled') {
+        const confirmButtons = lines.filter(
+          (line) =>
+            line.top >= 405 &&
+            line.top <= 585 &&
+            line.left >= 256 &&
+            line.right <= 1024,
+        );
+        const point = exactOptionPoint(confirmButtons, ['yes', 'так', 'да']);
+        if (!point) {
+          attentionReason = 'sync_cancel_confirmation_missing';
+          await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+          return 'unknown_modal';
+        }
+        await run('xdotool', [
+          'mousemove',
+          String(point.x),
+          String(point.y),
+          'click',
+          '1',
+        ]);
+        await delay(300);
+        continue;
+      }
+      if (modal === 'repair') {
+        await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+        return 'repair';
+      }
+      if (
+        modal === 'close_confirmation' ||
+        modal === 'unknown' ||
+        windows.length > 1
+      ) {
+        await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+        return 'unknown_modal';
+      }
+      attentionReason = '';
       return undefined;
     }
-    if (modal === 'repair') {
-      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-      return 'repair';
-    }
-    if (modal === 'close_confirmation') {
-      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-      return 'unknown_modal';
-    }
-    if (modal === 'unknown' || windows.length > 1) {
-      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-      return 'unknown_modal';
-    }
-    return undefined;
+    attentionReason = 'sync_history_not_closed';
+    await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+    return 'unknown_modal';
   };
   const closeExitConfirmation = async () => {
     const image = await screen();
@@ -440,12 +710,25 @@ if (!key) {
         const crop = `${bubble.right - bubble.left}x${bubble.bottom - bubble.top}+${bubble.left}+${bubble.top}`;
         const result = await ocr(image, crop, '6');
         const bubbleLines = groupOcrLines(parseTsvWords(result.stdout));
+        if (
+          !inboundBubbleMessage(bubbleLines, {
+            threadId,
+            from,
+            since: frontier,
+            reference,
+            region: bubble,
+            copiedText: 'probe',
+          })
+        )
+          continue;
+        const copiedText = await copyBubble(bubble);
         const message = inboundBubbleMessage(bubbleLines, {
           threadId,
           from,
           since: frontier,
           reference,
           region: bubble,
+          copiedText,
         });
         if (message) found.push(message);
       }
@@ -474,11 +757,14 @@ if (!key) {
     const visited = new Set<string>();
     const scanCurrent = async (hint = '') => {
       let layout = await inspectChatLayout(await screen());
-      const header = layout.lines
-        .filter((line) => line.top < Math.max(130, layout.height * 0.22))
-        .map((line) => line.text)
-        .join(' ');
-      if (!hint && /my\s+notes/i.test(header)) return;
+      if (
+        !hint &&
+        layout.lines.some(
+          (line) =>
+            line.top < layout.height * 0.55 && /my\s+notes/i.test(line.text),
+        )
+      )
+        return;
       let from =
         hint ||
         phoneFromOcrLines(
@@ -528,25 +814,64 @@ if (!key) {
               (layout.bounds.right - layout.bounds.left) * 0.42 &&
           line.right < layout.bounds.right,
       );
+      const source = join(data, 'layout-source.jpg');
+      const { stdout: rawPixels } = await run(
+        'convert',
+        [source, '-depth', '8', 'rgb:-'],
+        {
+          encoding: 'buffer',
+          timeout: 10000,
+          maxBuffer: 5 * 1024 * 1024,
+        },
+      );
+      const bubbles = messageBubbleRegions(
+        rawPixels,
+        layout.width,
+        layout.height,
+        layout.bounds,
+        headerBottom,
+      );
+      let timeLines = 0;
+      let recentTimeLines = 0;
+      let matchedBubbles = 0;
+      const copied = new Set<string>();
       for (let index = 0; index < lines.length; index++) {
-        const time = lines[index]!.text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/);
-        if (!time) continue;
-        const at = visibleMessageTimestamp(time[0], new Date());
+        const visibleTime = visibleTimeText(lines[index]!.text);
+        if (!visibleTime) continue;
+        timeLines++;
+        const at = visibleMessageTimestamp(visibleTime, new Date());
         if (!at || at < since) continue;
-        const text = lines
-          .slice(Math.max(0, index - 5), index)
-          .map((line) => line.text)
-          .filter((line) => !/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line))
-          .join(' ')
-          .trim();
-        if (!text) continue;
+        recentTimeLines++;
+        const candidate = bubbles
+          .filter(
+            (bubble) =>
+              bubble.side === 'right' &&
+              bubble.top < lines[index]!.top &&
+              !copied.has(`${bubble.left}:${bubble.top}`),
+          )
+          .sort((a, b) => b.top - a.top)[0];
+        if (!candidate) continue;
+        matchedBubbles++;
+        const copiedText = await copyBubble(candidate);
+        copied.add(`${candidate.left}:${candidate.top}`);
         result.push({
           from,
-          text,
+          text: copiedText,
           at: at.toISOString(),
-          providerMessageId: screenMessageId(threadId, text, time[0]),
+          providerMessageId: screenMessageId(threadId, copiedText, visibleTime),
         });
       }
+      console.log(
+        'viber_outgoing_scan',
+        JSON.stringify({
+          bounds: layout.bounds,
+          lineCount: lines.length,
+          bubbleCount: bubbles.length,
+          timeLines,
+          recentTimeLines,
+          matchedBubbles,
+        }),
+      );
     };
     try {
       await scanCurrent();
@@ -589,13 +914,33 @@ if (!key) {
       );
       const messageTime = [...bodyLines]
         .reverse()
-        .map((line) => line.text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/)?.[0])
+        .map((line) => visibleTimeText(line.text))
         .find(Boolean);
+      const bodySource = join(data, 'layout-source.jpg');
+      const { stdout: rawPixels } = await run(
+        'convert',
+        [bodySource, '-depth', '8', 'rgb:-'],
+        {
+          encoding: 'buffer',
+          timeout: 10000,
+          maxBuffer: 5 * 1024 * 1024,
+        },
+      );
+      const bubbles = messageBubbleRegions(
+        rawPixels,
+        layout.width,
+        layout.height,
+        layout.bounds,
+        headerBottom,
+      )
+        .filter((bubble) => bubble.side === 'right')
+        .sort((a, b) => b.top - a.top);
+      const outgoingBubble = bubbles[0] ? await copyBubble(bubbles[0]) : '';
       return {
         composer: groupOcrLines(parseTsvWords(composer.stdout))
           .map((line) => line.text)
           .join(' '),
-        outgoingBubble: bodyLines.map((line) => line.text).join(' '),
+        outgoingBubble,
         messageTime,
       };
     },
@@ -614,7 +959,8 @@ if (!key) {
       if (!window || !/^\d+$/.test(window)) throw Error('chat_window_missing');
       await run('xdotool', ['windowsize', window, '1280', '900']);
       await run('xdotool', ['windowmove', window, '0', '0']);
-      await run('xdotool', ['windowactivate', '--sync', window]);
+      await run('xdotool', ['windowraise', window]);
+      await run('xdotool', ['windowfocus', '--sync', window]);
       let layout = await inspectChatLayout(await screen());
       if (!(await profileRecipientMatch(layout, to)))
         throw Error('recipient_not_verified');
@@ -663,6 +1009,16 @@ if (!key) {
     },
   });
 
+  let desktopQueue = Promise.resolve();
+  const serializeDesktop = <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = desktopQueue.then(operation, operation);
+    desktopQueue = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
+  };
+
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const authorization =
@@ -687,6 +1043,13 @@ if (!key) {
     };
     try {
       if (req.method === 'GET' && url.pathname === '/status') {
+        if (attentionReason)
+          return json(200, {
+            state: 'needs_attention',
+            version,
+            reason: attentionReason,
+            screenshot: '/screen?attention=1',
+          });
         if (xvfb.exitCode !== null || xvfb.signalCode !== null)
           return json(200, {
             state: 'not_running',
@@ -706,7 +1069,7 @@ if (!key) {
               supervisorReason ||
               (missingViberSince ? 'viber_restarting' : 'viber_not_visible'),
           });
-        const modal = await checkModals();
+        const modal = await serializeDesktop(checkModals);
         if (modal)
           return json(200, {
             state: 'needs_attention',
@@ -816,18 +1179,22 @@ if (!key) {
                   providerMessageId: message.providerMessageId,
                   threadId: message.threadId,
                 }))
-            : await inboxFromScreen(
-                since,
-                url.searchParams.getAll('to'),
-                afterByRecipient,
+            : await serializeDesktop(() =>
+                inboxFromScreen(
+                  since,
+                  url.searchParams.getAll('to'),
+                  afterByRecipient,
+                ),
               );
         } catch (error) {
           if (error instanceof Error && error.message === 'needs_attention')
             throw error;
-          incoming = await inboxFromScreen(
-            since,
-            url.searchParams.getAll('to'),
-            afterByRecipient,
+          incoming = await serializeDesktop(() =>
+            inboxFromScreen(
+              since,
+              url.searchParams.getAll('to'),
+              afterByRecipient,
+            ),
           );
         }
         return json(200, incoming);
@@ -847,11 +1214,12 @@ if (!key) {
                   at: message.at,
                   providerMessageId: message.providerMessageId,
                 }))
-            : await outgoingFromScreen(since, url.searchParams.getAll('to'));
+            : await serializeDesktop(() =>
+                outgoingFromScreen(since, url.searchParams.getAll('to')),
+              );
         } catch {
-          outgoing = await outgoingFromScreen(
-            since,
-            url.searchParams.getAll('to'),
+          outgoing = await serializeDesktop(() =>
+            outgoingFromScreen(since, url.searchParams.getAll('to')),
           );
         }
         return json(200, outgoing);
@@ -869,10 +1237,17 @@ if (!key) {
             return;
           }
         }
-        return json(200, await send(JSON.parse(raw) as SendInput));
+        return json(
+          200,
+          await serializeDesktop(() => send(JSON.parse(raw) as SendInput)),
+        );
       }
       json(404, { error: 'not_found' });
     } catch (error) {
+      console.error(
+        'bridge_operation_failed',
+        error instanceof Error ? error.message : 'unknown_error',
+      );
       const code =
         error instanceof Error &&
         [

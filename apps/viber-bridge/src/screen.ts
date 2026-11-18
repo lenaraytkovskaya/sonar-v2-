@@ -28,22 +28,6 @@ export function textSimilarity(left: string, right: string) {
   return 1 - previous[b.length]! / Math.max(a.length, b.length);
 }
 
-function bestContainedSimilarity(expected: string, observed: string) {
-  const target = normalizeOcr(expected);
-  const source = normalizeOcr(observed);
-  if (!target || !source) return target === source ? 1 : 0;
-  const min = Math.max(1, Math.floor(target.length * 0.8));
-  const max = Math.min(source.length, Math.ceil(target.length * 1.2));
-  let best = 0;
-  for (let size = min; size <= max; size++)
-    for (let start = 0; start + size <= source.length; start++)
-      best = Math.max(
-        best,
-        textSimilarity(target, source.slice(start, start + size)),
-      );
-  return best;
-}
-
 export function outgoingScreenConfirmed(
   expected: string,
   composer: string,
@@ -52,10 +36,79 @@ export function outgoingScreenConfirmed(
   startedAt?: Date,
 ) {
   void composer;
-  const prefix = Array.from(expected.trim()).slice(0, 60).join('');
   const timeMatches =
     !messageTime || !startedAt || messageTimeAtOrAfter(messageTime, startedAt);
-  return timeMatches && bestContainedSimilarity(prefix, outgoingBubble) >= 0.8;
+  return (
+    timeMatches &&
+    normalizeMessageText(expected) === normalizeMessageText(outgoingBubble)
+  );
+}
+
+export function normalizeMessageText(value: string) {
+  return value.replace(/\s+/gu, ' ').trim();
+}
+
+export function visibleTimeText(value: string) {
+  const separated = value.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/)?.[0];
+  if (separated) return separated;
+  const compact = value.match(/\b([01]\d|2[0-3])([0-5]\d)\b/);
+  return compact ? `${compact[1]}:${compact[2]}` : undefined;
+}
+
+export function copyMenuPoint(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+) {
+  const labels = [
+    'copy',
+    'copy message',
+    'копіювати',
+    'копіювати повідомлення',
+    'копировать',
+    'копировать сообщение',
+  ].map((value) => value.toLocaleLowerCase().match(/[\p{L}]+/gu) ?? []);
+  const line = lines.find((candidate) => {
+    const words = candidate.text.toLocaleLowerCase().match(/[\p{L}]+/gu) ?? [];
+    return labels.some((label) => {
+      const offset = words.length === label.length + 1 && words[0]!.length <= 1;
+      const actual = offset ? words.slice(1) : words;
+      return (
+        actual.length === label.length &&
+        actual.every((word, index) => word === label[index])
+      );
+    });
+  });
+  return line
+    ? {
+        x: Math.round((line.left + line.right) / 2),
+        y: Math.round(line.top + 10),
+      }
+    : null;
+}
+
+export function exactOptionPoint(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  labels: readonly string[],
+) {
+  const normalize = (value: string) =>
+    value
+      .normalize('NFKC')
+      .toLocaleLowerCase()
+      .replace(/[\s…:]+$/u, '')
+      .trim();
+  const options = new Set(labels.map(normalize));
+  const line = lines.find((candidate) =>
+    options.has(normalize(candidate.text)),
+  );
+  return line
+    ? {
+        x: Math.round((line.left + line.right) / 2),
+        y: Math.round(line.top + 10),
+      }
+    : null;
+}
+
+export function clipboardChanged(before: string, after: string) {
+  return after.length > 0 && after !== before;
 }
 
 export function chatHeaderMatchesRecipient(header: string, phone: string) {
@@ -113,9 +166,7 @@ export function visibleInboundMessages(
   }[] = [];
   let previousTimeIndex = -1;
   for (let index = 0; index < body.length; index++) {
-    const visibleTime = body[index]!.text.match(
-      /\b(?:[01]?\d|2[0-3]):[0-5]\d\b/,
-    )?.[0];
+    const visibleTime = visibleTimeText(body[index]!.text);
     if (!visibleTime) continue;
     const at = visibleMessageTimestamp(
       visibleTime,
@@ -125,7 +176,7 @@ export function visibleInboundMessages(
     const text = body
       .slice(start, index)
       .map((line) => line.text)
-      .filter((line) => !/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line))
+      .filter((line) => !visibleTimeText(line))
       .join(' ')
       .trim();
     previousTimeIndex = index;
@@ -267,26 +318,26 @@ export function inboundBubbleMessage(
     since: Date;
     reference: Date;
     region: BubbleRegion;
+    copiedText?: string;
   },
 ) {
   if (input.region.side !== 'left') return null;
   const ordered = [...lines].sort((a, b) => a.top - b.top || a.left - b.left);
   const timeLine = [...ordered]
     .reverse()
-    .find((line) => /\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line.text));
+    .find((line) => visibleTimeText(line.text));
   if (!timeLine) return null;
-  const visibleTime = timeLine.text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/)![0];
+  const visibleTime = visibleTimeText(timeLine.text)!;
   const at = visibleMessageTimestamp(visibleTime, input.reference);
-  const text = ordered
-    .filter(
-      (line) =>
-        line !== timeLine && !/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line.text),
-    )
-    .map((line) => line.text.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-  if (!at || at <= input.since || !text) return null;
+  const text = input.copiedText ?? '';
+  // Visible Viber timestamps are minute-precision; overlap the frontier minute
+  // so a later message in the same minute is not silently skipped.
+  if (
+    !at ||
+    at.getTime() < Math.floor(input.since.getTime() / 60_000) * 60_000 ||
+    !normalizeMessageText(text)
+  )
+    return null;
   const dayTime = at.toISOString().slice(0, 10);
   return {
     from: input.from,
@@ -350,11 +401,15 @@ export function chatColumnBounds(
   profileOpen = false,
 ) {
   const left = boundaries.find((x) => x > width * 0.08 && x < width * 0.4);
-  const right = profileOpen
-    ? [...boundaries]
-        .reverse()
-        .find((x) => x > width * 0.58 && x < width * 0.98)
-    : width;
+  const panelCandidates = profileOpen
+    ? boundaries.filter((x) => x > width * 0.45 && x < width * 0.98)
+    : [];
+  const panelBoundary = profileOpen
+    ? [...panelCandidates].sort(
+        (a, b) => Math.abs(a / width - 0.77) - Math.abs(b / width - 0.77),
+      )[0]
+    : undefined;
+  const right = panelBoundary ?? width;
   return { left: left ?? 0, right: right ?? width };
 }
 
@@ -387,7 +442,7 @@ export function screenMessageId(
   visibleTime: string,
 ) {
   return createHash('sha256')
-    .update([threadId, normalizeOcr(text), visibleTime].join('\n'))
+    .update([threadId, normalizeMessageText(text), visibleTime].join('\n'))
     .digest('hex');
 }
 
@@ -438,7 +493,12 @@ export function groupOcrLines(words: OcrWord[]) {
 }
 
 export type ViberModal =
-  'none' | 'sync_history' | 'repair' | 'close_confirmation' | 'unknown';
+  | 'none'
+  | 'sync_history'
+  | 'sync_canceled'
+  | 'repair'
+  | 'close_confirmation'
+  | 'unknown';
 
 export function desktopPresenceState(hasProcess: boolean, hasWindow: boolean) {
   return hasProcess && hasWindow ? 'ready' : 'not_running';
@@ -448,6 +508,12 @@ export function classifyViberModal(text: string): ViberModal {
   const value = normalizeOcr(text);
   if (/fixnow|somethingwentwrong|repair|виправити|восстановить/.test(value))
     return 'repair';
+  if (
+    /syncingcanceled|chathistorywillnotbesynced|синхронізаціюскасовано/.test(
+      value,
+    )
+  )
+    return 'sync_canceled';
   if (/leavingsosoon/.test(value)) return 'close_confirmation';
   if (
     /synchistory|syncchathistory|синхронізаціячатів|синхронизацияистории/.test(

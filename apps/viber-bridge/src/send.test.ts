@@ -109,6 +109,27 @@ it('confirms the empty composer and matching outgoing OCR bubble without a datab
   expect(enter).toHaveBeenCalledTimes(1);
   expect(confirm).toHaveBeenCalledTimes(1);
 });
+it('keeps checking exact copied screen text when the Viber database is unreadable', async () => {
+  const confirm = vi
+    .fn()
+    .mockResolvedValueOnce({ composer: '', outgoingBubble: 'wrong text' })
+    .mockResolvedValue({
+      composer: '',
+      outgoingBubble: input.text.replaceAll(' ', '\n'),
+    });
+  const wait = vi.fn().mockResolvedValue(undefined);
+  const result = await createSend(await temporary(), {
+    messages: vi.fn().mockRejectedValue(Error('encrypted_database')),
+    open: vi.fn().mockResolvedValue(undefined),
+    enter: vi.fn().mockResolvedValue(undefined),
+    confirm,
+    screen: async () => Buffer.from('synthetic screenshot'),
+    wait,
+  })(input);
+  expect(result.state).toBe('sent');
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(wait).toHaveBeenCalledTimes(2);
+});
 it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', async () => {
   const path = join(await temporary(), 'viber.db');
   const fixture = new DatabaseSync(path);

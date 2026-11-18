@@ -110,24 +110,23 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
     after: Date | null;
   }>(
     `select to_value,
-       max(case when direction='in' then created_at
-                when direction='out' and status in ('sent','delivered','read') then coalesce(sent_at,created_at)
-           end) as after
+       max(created_at) filter (where direction='in') as after
      from messages where channel='viber' and account_id=$1
        and to_value ~ '^\\+[1-9][0-9]{6,14}$'
      group by to_value`,
     [account.id],
   );
+  const scanSince = new Date(now.getTime() - 24 * 60 * 60_000);
   const afterByRecipient = new Map(
     frontiers
       .filter((item): item is { to_value: string; after: Date } => !!item.after)
       .map((item) => [item.to_value, item.after.toISOString()]),
   );
+  for (const recipient of recentRecipients)
+    if (!afterByRecipient.has(recipient.to_value))
+      afterByRecipient.set(recipient.to_value, scanSince.toISOString());
   const inboundUrl = new URL('/inbound', 'http://bridge');
-  inboundUrl.searchParams.set(
-    'since',
-    new Date(now.getTime() - 24 * 60 * 60_000).toISOString(),
-  );
+  inboundUrl.searchParams.set('since', scanSince.toISOString());
   for (const recipient of recentRecipients)
     inboundUrl.searchParams.append('to', recipient.to_value);
   for (const [recipient, after] of afterByRecipient)

@@ -21,6 +21,11 @@ import {
   visibleInboundMessages,
   messageBubbleRegions,
   inboundBubbleMessage,
+  copyMenuPoint,
+  exactOptionPoint,
+  clipboardChanged,
+  normalizeMessageText,
+  visibleTimeText,
 } from './screen.js';
 
 function syntheticBubblePixels() {
@@ -112,13 +117,13 @@ function syntheticLayoutPng() {
   };
 }
 
-it('normalizes OCR text and tolerates small recognition errors', () => {
+it('normalizes OCR and clipboard text while confirming outgoing text exactly', () => {
   expect(normalizeOcr(' Привіт, VIBER! ')).toBe('привітviber');
   expect(textSimilarity('Привіт Viber', 'Привiт Viber')).toBeGreaterThanOrEqual(
     0.8,
   );
   expect(outgoingScreenConfirmed('Привіт Viber', '', 'Привiт Viber')).toBe(
-    true,
+    false,
   );
   expect(
     outgoingScreenConfirmed('Привіт Viber', 'Привіт Viber', 'Привіт Viber'),
@@ -126,6 +131,25 @@ it('normalizes OCR text and tolerates small recognition errors', () => {
   expect(
     outgoingScreenConfirmed('Очікуваний текст', '', 'Інше повідомлення'),
   ).toBe(false);
+  expect(normalizeMessageText('  Привіт\n   світе 🙂 ')).toBe(
+    'Привіт світе 🙂',
+  );
+  expect(outgoingScreenConfirmed('Hello  world', '', 'Hello\nworld')).toBe(
+    true,
+  );
+});
+
+it('recovers a compact OCR timestamp when the colon is unreadable', () => {
+  expect(visibleTimeText('19:17')).toBe('19:17');
+  expect(visibleTimeText('1917')).toBe('19:17');
+  expect(visibleTimeText('V6 1917')).toBe('19:17');
+  expect(visibleTimeText('2561')).toBeUndefined();
+});
+
+it('does not trust a URI-opened chat header without the recipient number', () => {
+  expect(chatHeaderMatchesRecipient('Other Company', '+380638215990')).toBe(
+    false,
+  );
 });
 
 it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
@@ -154,6 +178,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       since: new Date('2026-11-18T17:11:00Z'),
       reference: new Date('2026-11-18T17:20:00Z'),
       region: bubbles[0]!,
+      copiedText: 'перше повідомлення\nз двох рядків',
     },
   );
   expect(first).toMatchObject({
@@ -197,6 +222,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
         since: new Date('2026-11-18T17:11:00Z'),
         reference: new Date('2026-11-18T17:20:00Z'),
         region: bubbles[1]!,
+        copiedText: 'outgoing text',
       },
     ),
   ).toBeNull();
@@ -212,6 +238,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
         since: new Date('2026-11-18T17:11:00Z'),
         reference: new Date('2026-11-18T17:20:00Z'),
         region: bubbles[2]!,
+        copiedText: 'друге повідомлення',
       },
     ),
   ).toMatchObject({
@@ -219,7 +246,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     at: '2026-11-18T17:13:00.000Z',
   });
   expect(
-    inboundBubbleMessage([], {
+    inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
       from: '+380637058571',
       since: new Date('2026-11-18T17:11:00Z'),
@@ -231,25 +258,71 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
       from: '+380637058571',
-      since: new Date('2026-11-18T17:12:00Z'),
+      since: new Date('2026-11-18T17:12:35Z'),
       reference: new Date('2026-11-18T17:20:00Z'),
       region: bubbles[0]!,
+      copiedText: 'same minute',
     }),
-  ).toBeNull();
+  ).toMatchObject({ text: 'same minute', at: '2026-11-18T17:12:00.000Z' });
 });
 
-it('confirms wrapped outgoing text in the dynamic chat column with a sent time', () => {
+it('selects only an exact localized Copy menu item and requires clipboard change', () => {
+  expect(
+    copyMenuPoint([
+      { text: 'Copy', left: 20, top: 30, right: 65 },
+      { text: 'Forward', left: 20, top: 50, right: 80 },
+    ]),
+  ).toEqual({ x: 43, y: 40 });
+  expect(
+    copyMenuPoint([{ text: 'Copy message', left: 20, top: 30, right: 100 }]),
+  ).toEqual({ x: 60, y: 40 });
+  expect(
+    copyMenuPoint([{ text: 'й! Copy message', left: 20, top: 30, right: 120 }]),
+  ).toEqual({ x: 70, y: 40 });
+  expect(
+    copyMenuPoint([{ text: 'Copy link', left: 1, top: 2, right: 60 }]),
+  ).toBeNull();
+  expect(
+    copyMenuPoint([{ text: 'Копіювати', left: 10, top: 15, right: 90 }]),
+  ).toEqual({ x: 50, y: 25 });
+  expect(
+    exactOptionPoint(
+      [{ text: 'Yes', left: 120, top: 500, right: 160 }],
+      ['Yes', 'Так'],
+    ),
+  ).toEqual({ x: 140, y: 510 });
+  expect(
+    exactOptionPoint(
+      [{ text: 'Yes, sync', left: 120, top: 500, right: 190 }],
+      ['Yes', 'Так'],
+    ),
+  ).toBeNull();
+  expect(clipboardChanged('', 'exact copied text')).toBe(true);
+  expect(clipboardChanged('', '')).toBe(false);
+  expect(clipboardChanged('old', 'old')).toBe(false);
+});
+
+it('requires exact copied outgoing text after whitespace normalization and a sent time', () => {
   const expected = 'Ми підготували пропозицію для вас · можна обговорити?';
   const wrapped = 'Ми підготували пропозицію\nдля вас — можна обговорити';
   expect(
     outgoingScreenConfirmed(
       expected,
       'draft still visible',
-      wrapped,
+      expected.replaceAll(' ', '\n'),
       '15:02',
       new Date('2026-11-18T15:01:00'),
     ),
   ).toBe(true);
+  expect(
+    outgoingScreenConfirmed(
+      expected,
+      '',
+      wrapped,
+      '15:02',
+      new Date('2026-11-18T15:01:00'),
+    ),
+  ).toBe(false);
   expect(
     outgoingScreenConfirmed(
       expected,
@@ -294,6 +367,13 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
     left: 145,
     right: 1135,
   });
+  expect(chatColumnBounds(image.width, boundaries, true).right).toBe(1135);
+  expect(chatColumnBounds(image.width, boundaries).right).toBe(image.width);
+  expect(chatColumnBounds(1280, [299, 1241]).right).toBe(1280);
+  expect(chatColumnBounds(1280, [299, 640], true).right).toBe(640);
+  expect(
+    chatColumnBounds(1280, [299, 934, 955, 972, 1027, 1168], true).right,
+  ).toBe(972);
   const block = [{ left: 980, top: 85, right: 1040, bottom: 110 }];
   expect(safeLayoutClick(1120, 90, block)).toBe(true);
   expect(safeLayoutClick(1010, 98, block)).toBe(false);
@@ -369,6 +449,9 @@ it('requires both the Viber process and visible window for a ready state', () =>
 it('recognizes known recovery and sync overlays from OCR text and fails closed', () => {
   expect(classifyViberModal('Something went wrong. Fix now')).toBe('repair');
   expect(classifyViberModal('Sync chat history')).toBe('sync_history');
+  expect(
+    classifyViberModal('Syncing canceled. Chat history will not be synced'),
+  ).toBe('sync_canceled');
   expect(classifyViberModal('Leaving so soon? Close anyway')).toBe(
     'close_confirmation',
   );
@@ -397,8 +480,9 @@ it('parses OCR coordinates for unread chat badges and lines', () => {
 });
 
 it('keeps stable inbound identifiers for the same visible thread, text, and time', () => {
-  const first = screenMessageId('thread-1', 'Привіт!', '12:45');
-  expect(screenMessageId('thread-1', 'привіт', '12:45')).toBe(first);
+  const first = screenMessageId('thread-1', 'Привіт! ', '12:45');
+  expect(screenMessageId('thread-1', 'Привіт!\n', '12:45')).toBe(first);
+  expect(screenMessageId('thread-1', 'привіт', '12:45')).not.toBe(first);
   expect(screenMessageId('thread-1', 'привіт', '12:46')).not.toBe(first);
 });
 
