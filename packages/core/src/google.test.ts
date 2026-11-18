@@ -56,6 +56,31 @@ it('keeps places when address components have missing or malformed fields', () =
     { longText: 'Ukraine', shortText: 'UA', types: ['country'] },
   ]);
 });
+it('accepts the Ukrainian localized primary type in the existing Pro profile', () => {
+  expect(
+    googlePageSchema.parse({
+      places: [
+        {
+          id: 'abc',
+          primaryType: 'car_repair',
+          primaryTypeDisplayName: { text: 'Автосервіс', languageCode: 'uk' },
+        },
+      ],
+    }).places[0],
+  ).toMatchObject({
+    primaryType: 'car_repair',
+    primaryTypeDisplayName: { text: 'Автосервіс' },
+  });
+  expect(
+    profileSchema.parse({
+      id: 'basic',
+      name: 'Basic',
+      fields: ['places.id', 'places.primaryTypeDisplayName', 'nextPageToken'],
+      priceUsd: 0.032,
+      sku: 'Text Search Pro',
+    }).fields,
+  ).toContain('places.primaryTypeDisplayName');
+});
 it('returns raw Google response text without parsing it', async () => {
   const client = createGoogleClientRaw(
     'stub',

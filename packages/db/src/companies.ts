@@ -60,6 +60,7 @@ export type CompanyRow = {
   name: string;
   city: string | null;
   primary_type: string | null;
+  primary_type_display_name?: string | null;
   rating: string | null;
   score: number | null;
   fit: number | null;
@@ -137,7 +138,7 @@ export async function listCompanies(
     values,
   );
   const { rows } = await connection.query<CompanyRow>(
-    `select t.* from (select c.id,c.name,c.city,c.primary_type,c.rating,c.ratings_count,${scoreSql} as score,a.fit,a.fit_qualified,c.website,c.domain,c.status,c.created_at,
+    `select t.* from (select c.id,c.name,c.city,c.primary_type,c.primary_type_display_name,c.rating,c.ratings_count,${scoreSql} as score,a.fit,a.fit_qualified,c.website,c.domain,c.status,c.created_at,
  ${platform} as platform,${chainKey} as chain_key,
  row_number() over (partition by ${chainKey} order by ${windowOrder}) as chain_rank,
  count(*) over (partition by ${chainKey})::int as chain_size,

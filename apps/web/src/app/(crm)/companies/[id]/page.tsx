@@ -4,7 +4,11 @@ import Link from 'next/link';
 import { ExternalLink, MapPin, Star } from 'lucide-react';
 import { validId } from '@/lib/api-access';
 import { notFound } from 'next/navigation';
-import { normalizeWebsite, type RegistryEntity } from '@sonar/core';
+import {
+  normalizePhone,
+  normalizeWebsite,
+  type RegistryEntity,
+} from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Card, CompanyStatus, scoreTone } from '@/components/shared';
 import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
@@ -22,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { ChannelIcon } from '@/components/channel-icon';
 import { WhatsAppRetry } from '@/components/whatsapp-retry';
 import { DetailList } from '@/components/ui/layout';
+import { googleTypeLabel } from '@/lib/google-type';
 
 const kindOrder = [
   'email',
@@ -407,11 +412,19 @@ export default async function Page({
             />
           </div>
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            {[c.city, c.primary_type].filter(Boolean).join(' · ')}
+            {[
+              c.city,
+              google?.primaryTypeDisplayName?.text ??
+                c.primary_type_display_name ??
+                googleTypeLabel(c.primary_type),
+            ]
+              .filter(Boolean)
+              .join(' · ')}
             {c.rating && (
               <span className="inline-flex items-center gap-1">
                 <Star aria-hidden="true" className="size-3.5 text-wait" />
-                {c.rating} ({c.ratings_count ?? 0} {uk.company.reviews})
+                {c.rating} ({c.ratings_count ?? 0}{' '}
+                {uk.company.reviewsCountSuffix})
               </span>
             )}
             {website && (
@@ -549,6 +562,12 @@ export default async function Page({
                   title={uk.company.googleData}
                   action={
                     <div className="flex items-center gap-2">
+                      <ManualSource
+                        companyId={id}
+                        source="googleMaps"
+                        current={c.google_maps_uri}
+                        menuAction
+                      />
                       {map && (
                         <a
                           className="inline-flex min-h-11 items-center gap-1 text-sm text-accent"
@@ -563,20 +582,27 @@ export default async function Page({
                     </div>
                   }
                 >
-                  <ManualSource
-                    companyId={id}
-                    source="googleMaps"
-                    current={c.google_maps_uri}
-                    menuAction
-                  />
                   <DetailList
                     items={[
                       {
                         label: uk.company.address,
                         value:
-                          google?.formattedAddress ??
-                          c.address ??
-                          uk.company.noData,
+                          (google?.formattedAddress ?? c.address) ? (
+                            map ? (
+                              <a
+                                className="text-accent"
+                                href={map}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {google?.formattedAddress ?? c.address}
+                              </a>
+                            ) : (
+                              (google?.formattedAddress ?? c.address)
+                            )
+                          ) : (
+                            uk.company.noData
+                          ),
                       },
                       {
                         label: uk.company.rating,
@@ -589,30 +615,79 @@ export default async function Page({
                       },
                       {
                         label: uk.company.type,
-                        value: google?.primaryType ?? c.primary_type ?? '—',
-                      },
-                      {
-                        label: uk.company.phone,
                         value:
-                          google?.nationalPhoneNumber ??
-                          googlePhone?.value ??
+                          google?.primaryTypeDisplayName?.text ??
+                          c.primary_type_display_name ??
+                          googleTypeLabel(
+                            google?.primaryType ?? c.primary_type,
+                          ) ??
                           '—',
                       },
                       {
+                        label: uk.company.phone,
+                        value: (() => {
+                          const value =
+                            google?.internationalPhoneNumber ??
+                            google?.nationalPhoneNumber ??
+                            googlePhone?.value;
+                          const phone = normalizePhone(
+                            value ?? '',
+                            (c.country_code ?? 'UA') as Parameters<
+                              typeof normalizePhone
+                            >[1],
+                          );
+                          return phone ? (
+                            <a className="text-accent" href={`tel:${phone}`}>
+                              {value}
+                            </a>
+                          ) : (
+                            (value ?? '—')
+                          );
+                        })(),
+                      },
+                      {
                         label: uk.company.website,
-                        value: google?.websiteUri ?? c.website ?? '—',
+                        value: (() => {
+                          const site = normalizeWebsite(
+                            google?.websiteUri ?? c.website ?? undefined,
+                          );
+                          return site ? (
+                            <a
+                              className="text-accent"
+                              href={site.website}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {site.website}
+                            </a>
+                          ) : (
+                            '—'
+                          );
+                        })(),
                       },
                       {
                         label: uk.company.hours,
                         value: openingHours || '—',
                         hidden: !openingHours,
                       },
+                      {
+                        label: uk.company.status,
+                        value:
+                          uk.google.businessStatus[
+                            c.business_status as keyof typeof uk.google.businessStatus
+                          ] ??
+                          c.business_status ??
+                          '—',
+                      },
                     ]}
                   />
-                  {googleFact && (
+                  {c.google_maps_uri && !c.place_id.startsWith('manual:') && (
                     <p className="text-xs text-muted-foreground">
                       {uk.manualSource.collected}: {uk.company.sources.google} ·{' '}
-                      <LocalTime value={googleFact.found_at} />
+                      <LocalTime
+                        value={googleFact?.found_at ?? c.created_at}
+                        dateOnly
+                      />
                     </p>
                   )}
                   {manualMaps && (
@@ -620,13 +695,6 @@ export default async function Page({
                       {uk.manualSource.originalGoogle}
                     </p>
                   )}
-                  <p className="text-sm text-muted-foreground">
-                    {uk.google.businessStatus[
-                      c.business_status as keyof typeof uk.google.businessStatus
-                    ] ??
-                      c.business_status ??
-                      '—'}
-                  </p>
                 </Section>
               </div>
             ),

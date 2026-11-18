@@ -258,6 +258,7 @@ export const companies = pgTable('companies', {
   placeId: text('place_id').notNull().unique(),
   name: text('name').notNull(),
   primaryType: text('primary_type'),
+  primaryTypeDisplayName: text('primary_type_display_name'),
   types: text('types').array().notNull().default([]),
   address: text('address'),
   city: text('city'),

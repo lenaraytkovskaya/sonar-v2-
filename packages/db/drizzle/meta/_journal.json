@@ -391,7 +391,14 @@
       "idx": 55,
       "version": "7",
       "when": 1795000001000,
-      "tag": "0055_viber_desktop",
+      "tag": "0055_google_type_display_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795000002000,
+      "tag": "0056_viber_desktop",
       "breakpoints": true
     }
   ]

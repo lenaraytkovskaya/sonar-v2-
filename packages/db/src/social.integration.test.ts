@@ -98,6 +98,7 @@ it.skipIf(!enabled)(
         ...parseSocialProfile('', target, 'UA'),
         name: 'Sonar public company',
         address: 'Тестова вулиця, 12',
+        website: 'https://social-demo.invalid/',
         emails: ['social@example.test'],
         method: 'session' as const,
       };
@@ -110,6 +111,14 @@ it.skipIf(!enabled)(
             emails: enriched.emails,
           },
         );
+        expect(
+          (
+            await sonarPool.query(
+              "select kind,source,source_url,found_at from contacts where company_id=$1 and kind='website' and normalized='social-demo.invalid'",
+              [id],
+            )
+          ).rows,
+        ).toHaveLength(1);
         expect(
           (
             await sonarPool.query(
