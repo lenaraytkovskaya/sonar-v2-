@@ -63,6 +63,84 @@ export function chatHeaderMatchesRecipient(header: string, phone: string) {
   return expected.length >= 7 && header.replace(/\D/g, '').includes(expected);
 }
 
+export function phoneFromOcrLines(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  accept: (line: {
+    text: string;
+    left: number;
+    top: number;
+    right: number;
+  }) => boolean,
+) {
+  for (const line of lines) {
+    if (!accept(line)) continue;
+    for (const candidate of line.text.match(/\+?\d[\d ()-]{6,}\d/g) ?? []) {
+      const digits = candidate.replace(/\D/g, '');
+      if (digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+    }
+  }
+  return '';
+}
+
+export function visibleInboundMessages(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  input: {
+    threadId: string;
+    from: string;
+    since: Date;
+    reference?: Date;
+    left: number;
+    right: number;
+    headerBottom: number;
+    height: number;
+  },
+) {
+  const central = input.left + (input.right - input.left) / 2;
+  const body = lines.filter(
+    (line) =>
+      line.top > input.headerBottom &&
+      line.top < input.height - 90 &&
+      line.left >= input.left &&
+      line.left < central &&
+      line.right <= input.right,
+  );
+  const result: {
+    from: string;
+    text: string;
+    at: string;
+    threadId: string;
+    providerMessageId: string;
+  }[] = [];
+  let previousTimeIndex = -1;
+  for (let index = 0; index < body.length; index++) {
+    const visibleTime = body[index]!.text.match(
+      /\b(?:[01]?\d|2[0-3]):[0-5]\d\b/,
+    )?.[0];
+    if (!visibleTime) continue;
+    const at = visibleMessageTimestamp(
+      visibleTime,
+      input.reference ?? new Date(),
+    );
+    const start = Math.max(previousTimeIndex + 1, index - 5);
+    const text = body
+      .slice(start, index)
+      .map((line) => line.text)
+      .filter((line) => !/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(line))
+      .join(' ')
+      .trim();
+    previousTimeIndex = index;
+    if (!at || at < input.since || !text) continue;
+    result.push({
+      from: input.from,
+      text,
+      at: at.toISOString(),
+      threadId: input.threadId,
+      providerMessageId: screenMessageId(input.threadId, text, visibleTime),
+    });
+  }
+  return result;
+}
+
 export function messageTimeAtOrAfter(value: string, startedAt: Date) {
   const visible = visibleMessageTimestamp(value, startedAt);
   if (!visible) return true;

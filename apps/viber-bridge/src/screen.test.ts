@@ -12,11 +12,13 @@ import {
   messageTimeAtOrAfter,
   outgoingScreenConfirmed,
   parseTsvWords,
+  phoneFromOcrLines,
   screenMessageId,
   screenClickPoint,
   safeLayoutClick,
   textSimilarity,
   verticalColorBoundaries,
+  visibleInboundMessages,
 } from './screen.js';
 
 function syntheticLayoutPng() {
@@ -37,6 +39,7 @@ function syntheticLayoutPng() {
   paint(0, 0, 145, height, [255, 255, 255]);
   paint(1135, 0, width, height, [210, 218, 229]);
   paint(145, 55, 1135, 120, [117, 71, 174]); // New-contact banner.
+  paint(180, 165, 480, 245, [255, 255, 255]); // Incoming bubble in the open chat.
   paint(690, 170, 1080, 250, [209, 237, 248]); // Wrapped outgoing bubble.
   paint(145, 790, 1135, 860, [255, 255, 255]); // Composer.
   const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -166,6 +169,61 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
       '+380637058571',
     ),
   ).toBe(true);
+  expect(
+    phoneFromOcrLines(
+      [
+        { text: 'Olena Kovalenko Active', left: 180, top: 60, right: 360 },
+        {
+          text: 'Olena +380 63 705 85 71 is not in your contact list',
+          left: 180,
+          top: 90,
+          right: 650,
+        },
+      ],
+      (line) => line.top < 210 && line.left >= 145 && line.left < 1135,
+    ),
+  ).toBe('+380637058571');
+  expect(
+    phoneFromOcrLines(
+      [{ text: '+380 63 705 85 71', left: 1145, top: 185, right: 1270 }],
+      (line) => line.top < 495 && line.left >= 1130,
+    ),
+  ).toBe('+380637058571');
+  expect(
+    chatHeaderMatchesRecipient(
+      'Olena Kovalenko Active\nOlena +380 63 705 85 71 is not in your contact list',
+      '+380637058571',
+    ),
+  ).toBe(true);
+  const incoming = visibleInboundMessages(
+    [
+      { text: 'відповідь у', left: 180, top: 170, right: 260 },
+      { text: 'два рядки', left: 180, top: 185, right: 255 },
+      { text: '15:02', left: 180, top: 205, right: 215 },
+      { text: 'outgoing must be ignored', left: 710, top: 175, right: 900 },
+      { text: '15:03', left: 990, top: 215, right: 1025 },
+    ],
+    {
+      threadId: 'screen:380637058571',
+      from: '+380637058571',
+      since: new Date('2026-11-18T15:01:00'),
+      reference: new Date('2026-11-18T15:04:00'),
+      left: 145,
+      right: 1135,
+      headerBottom: 140,
+      height: 900,
+    },
+  );
+  expect(incoming).toHaveLength(1);
+  expect(incoming[0]).toMatchObject({
+    from: '+380637058571',
+    text: 'відповідь у два рядки',
+  });
+  expect(new Date(incoming[0]!.at).getHours()).toBe(15);
+  expect(new Date(incoming[0]!.at).getMinutes()).toBe(2);
+  expect(incoming[0]?.providerMessageId).toBe(
+    screenMessageId('screen:380637058571', 'відповідь у два рядки', '15:02'),
+  );
 });
 
 it('requires both the Viber process and visible window for a ready state', () => {
