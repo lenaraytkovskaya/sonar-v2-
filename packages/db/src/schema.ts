@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   customType,
   bigint,
+  date,
   primaryKey,
   index,
   type AnyPgColumn,
@@ -139,6 +140,55 @@ export const spendEvents = pgTable(
       'spend_nonnegative',
       sql`${table.costUsd} >= 0 and ${table.units} >= 0`,
     ),
+  ],
+);
+
+export const manualExpenses = pgTable(
+  'manual_expenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    category: text('category').notNull(),
+    amount: numeric('amount', { precision: 20, scale: 10 }).notNull(),
+    currency: text('currency').notNull(),
+    amountUsd: numeric('amount_usd', { precision: 20, scale: 10 }).notNull(),
+    rateUsed: numeric('rate_used', { precision: 20, scale: 10 }).notNull(),
+    paidOn: date('paid_on').notNull(),
+    paidUntil: date('paid_until'),
+    accountId: uuid('account_id').references(() => channelAccounts.id, {
+      onDelete: 'set null',
+    }),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    renewedFromId: uuid('renewed_from_id').references(
+      (): AnyPgColumn => manualExpenses.id,
+      {
+        onDelete: 'set null',
+      },
+    ),
+  },
+  (table) => [
+    check('manual_expense_amount_positive', sql`${table.amount} > 0`),
+    check('manual_expense_amount_usd_positive', sql`${table.amountUsd} > 0`),
+    check('manual_expense_rate_positive', sql`${table.rateUsed} > 0`),
+    check(
+      'manual_expense_currency_valid',
+      sql`${table.currency} in ('USD', 'UAH', 'EUR')`,
+    ),
+    check(
+      'manual_expense_category_valid',
+      sql`${table.category} in ('proxy', 'phone', 'subscription', 'other')`,
+    ),
+    index('manual_expenses_paid_on_idx').on(table.paidOn),
+    uniqueIndex('manual_expenses_renewal_once')
+      .on(table.renewedFromId)
+      .where(sql`${table.renewedFromId} is not null`),
   ],
 );
 

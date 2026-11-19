@@ -435,6 +435,13 @@
       "when": 1795000007000,
       "tag": "0061_stuck_task_reconciler",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1795000008000,
+      "tag": "0062_manual_expenses",
+      "breakpoints": true
     }
   ]
 }

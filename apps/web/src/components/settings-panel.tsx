@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { TextModel, GoogleProfile } from '@sonar/core';
+import type { TextModel, GoogleProfile, FinanceRates } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
 import { Input } from './ui/input';
@@ -116,6 +116,12 @@ export function SettingsPanel({ section }: { section?: string }) {
     [cheap, setCheap] = useState(''),
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
+    [financeRates, setFinanceRates] = useState<FinanceRates>({
+      USD: 1,
+      UAH: 0.024,
+      EUR: 1.08,
+    }),
+    [renewalReminderDays, setRenewalReminderDays] = useState(3),
     [about, setAbout] = useState(''),
     [analysisPrompt, setAnalysisPrompt] = useState(''),
     [resendLastEvent, setResendLastEvent] = useState<string | null>(null),
@@ -125,6 +131,8 @@ export function SettingsPanel({ section }: { section?: string }) {
     cheap,
     strong,
     budget,
+    financeRates,
+    renewalReminderDays,
     about,
     analysisPrompt,
     profiles,
@@ -138,6 +146,8 @@ export function SettingsPanel({ section }: { section?: string }) {
     setCheap(value.cheap);
     setStrong(value.strong);
     setBudget(value.budget);
+    setFinanceRates(value.financeRates);
+    setRenewalReminderDays(value.renewalReminderDays);
     setAbout(value.about);
     setAnalysisPrompt(value.analysisPrompt);
     setProfiles(value.profiles);
@@ -156,6 +166,8 @@ export function SettingsPanel({ section }: { section?: string }) {
     setCheap(data['ai.model.cheap'] ?? '');
     setStrong(data['ai.model.strong'] ?? '');
     setBudget(data['budget.monthly_usd'] ?? 50);
+    setFinanceRates(data['finance.rates'] ?? { USD: 1, UAH: 0.024, EUR: 1.08 });
+    setRenewalReminderDays(data['finance.renewal_reminder_days'] ?? 3);
     setAbout(data['company.about'] ?? '');
     setAnalysisPrompt(data['analysis.prompt'] ?? '');
     setResendLastEvent(data['email.resend.last_event'] ?? null);
@@ -209,6 +221,8 @@ export function SettingsPanel({ section }: { section?: string }) {
           cheap,
           strong,
           budget,
+          financeRates,
+          renewalReminderDays,
           about,
           analysisPrompt,
           googleProfiles: profiles,
@@ -702,16 +716,51 @@ export function SettingsPanel({ section }: { section?: string }) {
               </div>
             )}
             {active === 'budget' && (
-              <SettingRow
-                label={uk.ai.budget}
-                description={sections.budget.description}
-              >
-                {numeric(uk.ai.budget, budget, setBudget, {
-                  min: 0,
-                  max: 1e9,
-                  step: 0.01,
-                })}
-              </SettingRow>
+              <>
+                <SettingRow
+                  label={uk.ai.budget}
+                  description={sections.budget.description}
+                >
+                  {numeric(uk.ai.budget, budget, setBudget, {
+                    min: 0,
+                    max: 1e9,
+                    step: 0.01,
+                  })}
+                </SettingRow>
+                <SettingRow
+                  label={uk.finance.rateUah}
+                  description={uk.finance.rateHint}
+                >
+                  {numeric(
+                    uk.finance.rateUah,
+                    financeRates.UAH,
+                    (UAH) => setFinanceRates({ ...financeRates, UAH }),
+                    { min: 0.0000001, max: 1e6, step: 0.000001 },
+                  )}
+                </SettingRow>
+                <SettingRow
+                  label={uk.finance.rateEur}
+                  description={uk.finance.rateHint}
+                >
+                  {numeric(
+                    uk.finance.rateEur,
+                    financeRates.EUR,
+                    (EUR) => setFinanceRates({ ...financeRates, EUR }),
+                    { min: 0.0000001, max: 1e6, step: 0.000001 },
+                  )}
+                </SettingRow>
+                <SettingRow
+                  label={uk.finance.reminderDays}
+                  description={uk.finance.reminderDaysHint}
+                >
+                  {numeric(
+                    uk.finance.reminderDays,
+                    renewalReminderDays,
+                    setRenewalReminderDays,
+                    { min: 0, max: 90, step: 1 },
+                  )}
+                </SettingRow>
+              </>
             )}
           </fieldset>
           {editing && (

@@ -30,13 +30,15 @@ export default async function Page({
   const { accountHealth } = await import('@sonar/db/account-health');
   const { overviewMetrics } = await import('@sonar/db/metrics');
   const { sonarPool } = await import('@sonar/db');
+  const { manualExpenseReminders } = await import('@sonar/db/manual-expenses');
   const selected = validId(campaign) ? campaign : undefined;
-  const [data, campaigns, health] = await Promise.all([
+  const [data, campaigns, health, renewalData] = await Promise.all([
     overviewMetrics(selected),
     sonarPool.query<{ id: string; name: string }>(
       'select id,name from campaigns order by created_at desc',
     ),
     accountHealth(),
+    manualExpenseReminders(),
   ]);
   const t = uk.overview;
   const f = data.funnel;
@@ -174,6 +176,39 @@ export default async function Page({
         </Section>
       </div>
       <AccountHealthOverview health={health} />
+      {renewalData.reminders.length > 0 && (
+        <Section title={uk.finance.renewalReminders}>
+          <ul className="divide-y divide-border">
+            {renewalData.reminders.map((reminder) => (
+              <li
+                key={reminder.id}
+                className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <span className="min-w-0 font-medium">{reminder.title}</span>
+                <span className="flex flex-wrap items-center gap-2 text-sm">
+                  <span
+                    className={
+                      reminder.status === 'overdue'
+                        ? 'font-medium text-err'
+                        : 'text-wait'
+                    }
+                  >
+                    {reminder.status === 'overdue'
+                      ? uk.finance.overdue
+                      : uk.finance.upcoming}
+                  </span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {uk.finance.dueOn}: {reminder.paid_until}
+                  </span>
+                  <Button asChild variant="outline" className="min-h-10">
+                    <a href="/finance">{uk.finance.continue}</a>
+                  </Button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
       <TaskOverview />
     </div>
   );

@@ -1,6 +1,6 @@
 import { scannerKeys, validScannerSettings } from '@/lib/scanner-settings';
 import { socialKeys, validSocialSettings } from '@/lib/social-settings';
-import { profilesSchema } from '@sonar/core';
+import { profilesSchema, validFinanceRates } from '@sonar/core';
 import { apiUser } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
 export async function GET(request: Request) {
@@ -15,6 +15,8 @@ export async function GET(request: Request) {
         'ai.model.cheap',
         'ai.model.strong',
         'budget.monthly_usd',
+        'finance.rates',
+        'finance.renewal_reminder_days',
         'company.about',
         'analysis.prompt',
         'email.resend.last_event',
@@ -32,6 +34,8 @@ export async function GET(request: Request) {
   );
   return Response.json({
     'budget.monthly_usd': Number(process.env.MONTHLY_BUDGET_USD ?? 50),
+    'finance.rates': { USD: 1, UAH: 0.024, EUR: 1.08 },
+    'finance.renewal_reminder_days': 3,
     ...Object.fromEntries(rows.map((row) => [row.key, row.value])),
   });
 }
@@ -59,7 +63,13 @@ export async function POST(request: Request) {
     (data.googleDays !== undefined &&
       (!Number.isInteger(data.googleDays) ||
         data.googleDays < 1 ||
-        data.googleDays > 3650))
+        data.googleDays > 3650)) ||
+    (data.financeRates !== undefined &&
+      !validFinanceRates(data.financeRates)) ||
+    (data.renewalReminderDays !== undefined &&
+      (!Number.isInteger(data.renewalReminderDays) ||
+        data.renewalReminderDays < 0 ||
+        data.renewalReminderDays > 90))
   )
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   const { sonarPool } = await import('@sonar/db');
@@ -101,6 +111,12 @@ export async function POST(request: Request) {
         : {}),
       ...(data.googleDays !== undefined
         ? { 'retention.google_days': data.googleDays }
+        : {}),
+      ...(data.financeRates !== undefined
+        ? { 'finance.rates': data.financeRates }
+        : {}),
+      ...(data.renewalReminderDays !== undefined
+        ? { 'finance.renewal_reminder_days': data.renewalReminderDays }
         : {}),
     }))
       await client.query(

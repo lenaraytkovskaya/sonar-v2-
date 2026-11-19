@@ -2,6 +2,7 @@ import { Card, PageHeader } from '@/components/shared';
 import { InfoTip } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { uk } from '@/i18n/uk';
+import { ManualExpenses } from '@/components/manual-expenses';
 const money = (value: number | null) =>
   value === null
     ? '—'
@@ -17,14 +18,24 @@ export default async function Page({
 }) {
   const { month } = await searchParams;
   const { financeMetrics } = await import('@sonar/db/metrics');
+  const { listManualExpenses, listManualExpenseAccounts } =
+    await import('@sonar/db/manual-expenses');
   const selected =
     typeof month === 'string' &&
     /^\d{4}-(0[1-9]|1[0-2])$/.test(month) &&
     Number(month.slice(0, 4)) > 0
       ? month
       : new Date().toISOString().slice(0, 7);
-  const data = await financeMetrics(selected);
+  const [data, manualExpenses, accounts] = await Promise.all([
+    financeMetrics(selected),
+    listManualExpenses(selected),
+    listManualExpenseAccounts(),
+  ]);
   const t = uk.finance;
+  const manualUsd = manualExpenses.reduce(
+    (sum, row) => sum + Number(row.amount_usd),
+    0,
+  );
   const peak = Math.max(...data.daily.map((day) => day.spentUsd), 0.001);
   return (
     <>
@@ -47,9 +58,11 @@ export default async function Page({
           </form>
         }
       />
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {[
-          [t.spent, data.totalUsd],
+          [t.automatic, data.totalUsd],
+          [t.manualTotal, manualUsd],
+          [t.totalMonth, data.totalUsd + manualUsd],
           [t.budget, data.monthlyLimitUsd],
           [t.reserved, data.reservedUsd],
           [t.remaining, data.remainingUsd],
@@ -62,6 +75,11 @@ export default async function Page({
           </Card>
         ))}
       </div>
+      <ManualExpenses
+        month={data.month}
+        expenses={manualExpenses}
+        accounts={accounts}
+      />
       <Card className="mb-6 p-5">
         <h2 className="mb-4 font-heading text-base font-semibold">{t.daily}</h2>
         <div className="overflow-x-auto">
