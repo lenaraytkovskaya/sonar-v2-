@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { SocialProfileBusyError } from '@sonar/core/social-session';
 import type { SocialSessionAccount } from './social-send-browser.js';
 import type { SocialBrowserSession } from './social-send-browser.js';
 
@@ -117,7 +118,8 @@ export async function lockSocialProfile(
     headers: { Authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) throw new Error('social_browser_profile_busy');
+  if (response.status === 409) throw new SocialProfileBusyError();
+  if (!response.ok) throw new Error('social_browser_unavailable');
   return async () => {
     await fetch(new URL(`/profiles/${accountId}/unlock`, url), {
       method: 'POST',

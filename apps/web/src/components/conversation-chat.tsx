@@ -7,7 +7,11 @@ import { cn } from '@/lib/utils';
 import { normalizedDraft, sameDraft } from '@/lib/draft-state';
 import type { getConversationChat } from '@sonar/db/inbound';
 import { uk } from '@/i18n/uk';
-import { channelLabel, contactLabel } from '@/lib/outreach-labels';
+import {
+  channelLabel,
+  contactLabel,
+  socialUnavailableNotice,
+} from '@/lib/outreach-labels';
 import { useInboxPolling } from './use-inbox-polling';
 import { inboxReadSnapshot } from '@/lib/inbox-read';
 import { isNearBottom, newMessageCount } from '@/lib/inbox-scroll';
@@ -330,7 +334,11 @@ export function ConversationChat({
       conversation?.campaignSendMode === 'approval';
     if (
       await act(
-        pendingDraft.status === 'awaiting_approval' ? 'approve' : 'send',
+        conversation?.channel === 'social' && !data.socialAvailable
+          ? 'manual'
+          : pendingDraft.status === 'awaiting_approval'
+            ? 'approve'
+            : 'send',
         { messageId: pendingDraft.id, expected: changed ? submitted : base },
       )
     ) {
@@ -535,6 +543,15 @@ export function ConversationChat({
             compact && 'space-y-1 p-2',
           )}
         >
+          {social && !data.socialAvailable && (
+            <Callout tone="wait">
+              {socialUnavailableNotice(
+                conversation.contactValue,
+                data.socialUnavailableReasonUk,
+                data.socialUnavailableKind,
+              )}
+            </Callout>
+          )}
           <details className="group/reply">
             <summary className="cursor-pointer text-sm text-muted-foreground">
               {uk.inbound.replyOptions}

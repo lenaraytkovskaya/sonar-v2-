@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <!-- Semantic reconstruction from the supplied 2026-11-19 screenshots.
+       Labels/layout are observed; DOM roles are fixture assumptions. Values are synthetic. -->
+  <nav><a href="/direct/inbox/" aria-label="Messages">Messages</a></nav>
+  <aside>
+    <input placeholder="Search" />
+    <h2>Messages</h2>
+    <a href="/direct/requests/">Requests</a>
+    <div role="list" aria-label="Messages">
+      <a href="/direct/t/900000000000005/" role="listitem">
+        <span>example_peer</span><span>Synthetic preview · 4d</span>
+      </a>
+    </div>
+  </aside>
+  <main>
+    <header><a href="/example_peer/">example_peer</a></header>
+    <div data-pagelet="IGDMessagesList">
+      <span>Nov 7, 2026, 9:41 PM</span>
+      <div aria-label="You sent"><span>Synthetic outgoing text</span></div>
+      <span>Sat 1:23AM</span>
+      <div role="article" aria-roledescription="message">
+        Synthetic incoming text
+      </div>
+      <time datetime="2026-11-15T00:35:00Z">Sun 12:35AM</time>
+    </div>
+    <textarea placeholder="Message…"></textarea>
+  </main>
+</html>

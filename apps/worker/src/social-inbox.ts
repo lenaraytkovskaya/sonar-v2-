@@ -2,8 +2,12 @@ import type {
   SocialInboxBatch,
   SocialInboxCheckpoint,
 } from '@sonar/core/social-inbox';
-import { nextSocialInboxPollAt } from '@sonar/core/social-inbox-schedule';
 import {
+  nextSocialInboxFailureAt,
+  nextSocialInboxPollAt,
+} from '@sonar/core/social-inbox-schedule';
+import {
+  SocialProfileBusyError,
   resolveSocialSession,
   safeSocialSessionDiagnostic,
   SocialSendError,
@@ -37,6 +41,89 @@ export class SocialInboxAdapterError extends Error {
 export type SocialInboxAccount = SocialSessionAccount & {
   session: ReturnType<typeof resolveSocialSession>;
 };
+const inboxStages = [
+  'sync',
+  'navigation',
+  'http',
+  'auth',
+  'restore',
+  'identity',
+  'capture_auth',
+  'actor',
+  'persist',
+] as const;
+const inboxKinds = [
+  'timeout',
+  'network',
+  'browser',
+  'unknown_auth',
+  'login_required',
+  'cookies_invalid',
+  'captcha',
+  'checkpoint',
+  'action_blocked',
+  'rate_limit',
+  'unsupported_dom',
+  'history_locked',
+  'missing_adapter',
+  'proxy',
+  'unexpected',
+] as const;
+function inboxFailureDetails(error: unknown) {
+  const value = (error && typeof error === 'object' ? error : {}) as {
+    stage?: unknown;
+    errorKind?: unknown;
+    code?: unknown;
+    reason?: unknown;
+    diagnostic?: { stage?: unknown };
+  };
+  const stageValue = value.stage ?? value.diagnostic?.stage ?? 'sync';
+  const stage = inboxStages.includes(stageValue as (typeof inboxStages)[number])
+    ? (stageValue as (typeof inboxStages)[number])
+    : 'sync';
+  const kindValue =
+    error instanceof SocialSessionCheckError
+      ? error.reason
+      : error instanceof SocialInboxAdapterError
+        ? error.code
+        : error instanceof SocialSendError
+          ? error.code === 'rate_limit'
+            ? 'rate_limit'
+            : socialSessionCheckReason(error)
+          : (value.errorKind ?? value.code ?? value.reason ?? 'unexpected');
+  const kind = inboxKinds.includes(kindValue as (typeof inboxKinds)[number])
+    ? (kindValue as (typeof inboxKinds)[number])
+    : 'unexpected';
+  const stageUk: Record<(typeof inboxStages)[number], string> = {
+    sync: 'синхронізація',
+    navigation: 'відкриття сторінки',
+    http: 'HTTP-відповідь',
+    auth: 'перевірка сесії',
+    restore: 'відновлення історії',
+    identity: 'перевірка акаунта',
+    capture_auth: 'перевірка під час читання',
+    actor: 'перевірка відправника',
+    persist: 'збереження порції',
+  };
+  const kindUk: Record<(typeof inboxKinds)[number], string> = {
+    timeout: 'тайм-аут',
+    network: 'мережа',
+    browser: 'браузер',
+    unknown_auth: 'сесію не підтверджено',
+    login_required: 'потрібен вхід',
+    cookies_invalid: 'некоректна сесія',
+    captcha: 'CAPTCHA',
+    checkpoint: 'перевірка особи',
+    action_blocked: 'дію заблоковано',
+    rate_limit: 'обмеження частоти',
+    unsupported_dom: 'структура сторінки',
+    history_locked: 'історія недоступна',
+    missing_adapter: 'адаптер відсутній',
+    proxy: 'проксі',
+    unexpected: 'неочікувана помилка',
+  };
+  return { stage, kind, reasonUk: `${stageUk[stage]}: ${kindUk[kind]}.` };
+}
 /** Adapter must await persistBatch BEFORE scrolling/navigating. IDs must come from
  * observed provider evidence. complete means ALL available history since watermark
  * was traversed, with no PIN/missing-history warnings or unstable IDs. Never use
@@ -77,13 +164,22 @@ export async function runSocialInboxSync(
       "select pg_try_advisory_lock(hashtextextended('channel-account:'||$1::text,0)) as locked",
       [input.accountId],
     );
-    if (!lock.locked)
+    if (!lock.locked) {
+      const {
+        rows: [busySetting],
+      } = await c.query(
+        "select value from settings where key='social.profile.busy_retry_seconds'",
+      );
+      const retrySeconds = Number(busySetting?.value);
+      if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+        throw new Error('Invalid social.profile.busy_retry_seconds');
       return {
         status: 'deferred',
-        runAt: new Date(now.getTime() + 1000),
-        reasonCode: 'social_account_busy',
-        reasonUk: 'Акаунт виконує іншу дію. Синхронізація після звільнення.',
+        runAt: new Date(now.getTime() + retrySeconds * 1000),
+        reasonCode: 'social_profile_busy',
+        reasonUk: 'Браузер акаунта зайнятий.',
       };
+    }
     locked = true;
     const {
       rows: [account],
@@ -130,7 +226,7 @@ export async function runSocialInboxSync(
         };
     }
     const { rows: settings } = await c.query(
-      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.max_threads','social.inbox.max_messages','social.inbox.quiet_hours','social.inbox.timezone','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
+      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.max_threads','social.inbox.max_messages','social.inbox.quiet_hours','social.inbox.timezone','social.inbox.failure_backoff_base_seconds','social.inbox.failure_backoff_max_seconds','social.inbox.facebook.enabled','social.inbox.instagram.enabled','social.inbox.linkedin.enabled')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
@@ -166,6 +262,23 @@ export async function runSocialInboxSync(
         reasonCode: 'social_inbox_settings_invalid',
         reasonUk:
           'Налаштуйте інтервал та окремий денний ліміт синхронізації соцмереж.',
+      };
+    const failureBase = Number(
+      config['social.inbox.failure_backoff_base_seconds'],
+    );
+    const failureMax = Number(
+      config['social.inbox.failure_backoff_max_seconds'],
+    );
+    if (
+      !Number.isSafeInteger(failureBase) ||
+      failureBase < 1 ||
+      !Number.isSafeInteger(failureMax) ||
+      failureMax < failureBase
+    )
+      return {
+        status: 'paused',
+        reasonCode: 'social_inbox_settings_invalid',
+        reasonUk: 'Перевірте відступ повтору синхронізації вхідних.',
       };
     const quietHours = String(config['social.inbox.quiet_hours']);
     let nextPollAt: string;
@@ -280,18 +393,51 @@ export async function runSocialInboxSync(
     accepting = false;
     await pending.writing;
     const complete =
-      result.complete && !result.reason && conflicts.length === 0;
+      result.complete &&
+      !result.reason &&
+      !(result.skipped?.length ?? 0) &&
+      conflicts.length === 0;
+    const priorFailures = Number(
+      (account.settings.inboxSync as { failureCount?: unknown } | undefined)
+        ?.failureCount,
+    );
+    const failureCount = complete
+      ? 0
+      : Math.max(0, Number.isSafeInteger(priorFailures) ? priorFailures : 0) +
+        1;
+    const scheduledPollAt = complete
+      ? nextPollAt
+      : nextSocialInboxFailureAt(
+          now,
+          poll,
+          failureCount,
+          failureBase,
+          failureMax,
+          quietHours,
+          undefined,
+          String(config['social.inbox.timezone'] ?? 'Europe/Kyiv'),
+        ).toISOString();
     await c.query(
       "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||$2::jsonb) where id=$1",
       [
         account.id,
         JSON.stringify({
-          ...(!manual ? { nextPollAt } : {}),
+          ...(!manual ? { nextPollAt: scheduledPollAt } : {}),
           checkedAt: now.toISOString(),
           errorUk: null,
           complete,
+          failureCount,
           created,
           reason: result.reason ?? null,
+          ...(!complete
+            ? {
+                lastFailure: {
+                  at: now.toISOString(),
+                  stage: result.reason ? 'sync' : 'persist',
+                  kind: result.reason ?? 'incomplete',
+                },
+              }
+            : { lastFailure: null }),
           ...(complete
             ? {
                 watermark: checkpoint.cycleStartedAt,
@@ -317,12 +463,22 @@ export async function runSocialInboxSync(
     accepting = false;
     await pending.writing?.catch(() => {});
     await c.query('rollback');
-    if (error instanceof SocialInboxAdapterError)
+    if (error instanceof SocialProfileBusyError) {
+      const {
+        rows: [busySetting],
+      } = await c.query(
+        "select value from settings where key='social.profile.busy_retry_seconds'",
+      );
+      const retrySeconds = Number(busySetting?.value);
+      if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+        throw new Error('Invalid social.profile.busy_retry_seconds');
       return {
-        status: 'paused',
-        reasonCode: `social_inbox_${error.code}`,
-        reasonUk: error.reasonUk,
+        status: 'deferred',
+        runAt: new Date(now.getTime() + retrySeconds * 1000),
+        reasonCode: 'social_profile_busy',
+        reasonUk: 'Браузер акаунта зайнятий.',
       };
+    }
     if (error instanceof SocialSendError) {
       const reason =
         error instanceof SocialSessionCheckError
@@ -335,7 +491,16 @@ export async function runSocialInboxSync(
         error instanceof SocialSessionCheckError
           ? safeSocialSessionDiagnostic(error.diagnostic)
           : undefined;
-      if (error.code === 'session_invalid' || error.code === 'rate_limit')
+      const authSignal =
+        error instanceof SocialSessionCheckError &&
+        [
+          'login_required',
+          'cookies_invalid',
+          'captcha',
+          'checkpoint',
+          'action_blocked',
+        ].includes(reason);
+      if (authSignal)
         await pauseSocialFetchSession(
           c,
           input.accountId,
@@ -343,13 +508,7 @@ export async function runSocialInboxSync(
           now,
           taskId ? `inbox:${taskId}` : undefined,
         );
-      if (
-        !manual &&
-        (error.code === 'session_invalid' ||
-          error.code === 'rate_limit' ||
-          (error instanceof SocialSessionCheckError &&
-            ['captcha', 'checkpoint', 'login_required'].includes(error.reason)))
-      ) {
+      if (!manual && authSignal) {
         await c.query(
           "update channel_accounts set settings=settings||jsonb_build_object('inboxPollingEnabled',false,'inboxSync',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('checkedAt',$2::text,'errorUk',$3::text)) where id=$1 and channel in ('instagram','facebook')",
           [
@@ -359,18 +518,66 @@ export async function runSocialInboxSync(
           ],
         );
       }
-      return {
-        status: 'paused',
-        reasonCode: `social_inbox_${reason}`,
-        reasonUk: socialSessionCheckReasons[reason],
-        ...(diagnostic ? { result: { diagnostic } } : {}),
-      };
+      if (authSignal)
+        return {
+          status: 'paused',
+          reasonCode: `social_inbox_${reason}`,
+          reasonUk: socialSessionCheckReasons[reason],
+          ...(diagnostic ? { result: { diagnostic } } : {}),
+        };
     }
+    const details = inboxFailureDetails(error);
+    const { rows: settingRows } = await c.query(
+      "select key,value from settings where key in ('social.inbox.poll_seconds','social.inbox.quiet_hours','social.inbox.timezone','social.inbox.failure_backoff_base_seconds','social.inbox.failure_backoff_max_seconds')",
+    );
+    const failureConfig = Object.fromEntries(
+      settingRows.map((setting) => [setting.key, setting.value]),
+    );
+    const {
+      rows: [syncState],
+    } = await c.query(
+      "select settings->'inboxSync' as state from channel_accounts where id=$1",
+      [input.accountId],
+    );
+    const previousFailureCount = Number(syncState?.state?.failureCount);
+    const nextFailureCount =
+      Math.max(
+        0,
+        Number.isSafeInteger(previousFailureCount) ? previousFailureCount : 0,
+      ) + 1;
+    const failedAt = nextSocialInboxFailureAt(
+      now,
+      Number(failureConfig['social.inbox.poll_seconds']),
+      nextFailureCount,
+      Number(failureConfig['social.inbox.failure_backoff_base_seconds']),
+      Number(failureConfig['social.inbox.failure_backoff_max_seconds']),
+      String(failureConfig['social.inbox.quiet_hours'] ?? '00:00-07:00'),
+      undefined,
+      String(failureConfig['social.inbox.timezone'] ?? 'Europe/Kyiv'),
+    );
+    await c.query(
+      "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||$2::jsonb) where id=$1",
+      [
+        input.accountId,
+        JSON.stringify({
+          failureCount: nextFailureCount,
+          nextPollAt: failedAt.toISOString(),
+          checkedAt: now.toISOString(),
+          lastFailure: {
+            at: now.toISOString(),
+            stage: details.stage,
+            kind: details.kind,
+          },
+          errorUk: `Не вдалося синхронізувати соцмережу (${details.reasonUk}). Збережені порції залишено; повтор заплановано.`,
+          complete: false,
+        }),
+      ],
+    );
     return {
       status: 'failed',
-      reasonCode: 'social_inbox_failed',
-      reasonUk:
-        'Не вдалося синхронізувати соцмережу. Збережені порції залишено; повторіть із точки продовження.',
+      reasonCode: `social_inbox_${details.stage}_${details.kind}`,
+      reasonUk: `Не вдалося синхронізувати соцмережу (${details.reasonUk}). Збережені порції залишено; повтор заплановано.`,
+      result: { stage: details.stage, kind: details.kind },
     };
   } finally {
     if (locked) await releaseSocialFetchSession(c, input.accountId);

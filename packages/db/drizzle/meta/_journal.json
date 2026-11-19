@@ -449,6 +449,13 @@
       "when": 1795000009000,
       "tag": "0063_social_browser_locale",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1795000010000,
+      "tag": "0064_social_cycle_reliability",
+      "breakpoints": true
     }
   ]
 }

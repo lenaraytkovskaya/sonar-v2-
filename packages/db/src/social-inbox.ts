@@ -591,7 +591,7 @@ export async function reconcileSocialInbox(now = new Date()) {
       and not exists(select 1 from pgboss.job j where j.name='social.inbox.sync' and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active'))
       and pg_try_advisory_xact_lock(hashtextextended('channel-account:'||(t.payload->>'accountId'),0))`);
     const { rows: accounts } = await c.query(
-      `select id,settings from channel_accounts a where channel in ('instagram','facebook') and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false' and settings->>'inboxPollingEnabled'='true' and exists(select 1 from settings s where s.key='social.inbox.'||a.channel||'.enabled' and s.value='true'::jsonb)`,
+      `select id,settings from channel_accounts a where channel in ('instagram','facebook','linkedin') and status='active' and settings->>'sessionStatus'='valid' and coalesce(settings->>'enabled','true')<>'false' and settings->>'inboxPollingEnabled'='true' and exists(select 1 from settings s where s.key='social.inbox.'||a.channel||'.enabled' and s.value='true'::jsonb)`,
     );
     let count = 0;
     for (const account of accounts) {

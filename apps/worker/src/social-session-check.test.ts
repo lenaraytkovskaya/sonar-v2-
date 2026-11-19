@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import {
+  SocialProfileBusyError,
   SocialSessionCheckError,
   socialSessionCheckReasons,
 } from '@sonar/core/social-session';
@@ -93,5 +94,14 @@ it('passes only the safe worker diagnostic to the paused account outcome', async
   expect(await runSocialSessionCheck({ accountId: 'synthetic' })).toEqual({
     valid: false,
     reason: 'login_required',
+  });
+});
+
+it('preserves profile lock contention as a deferrable busy result', async () => {
+  check.mockRejectedValueOnce(new SocialProfileBusyError());
+  expect(await runSocialSessionCheck({ accountId: 'synthetic' })).toEqual({
+    valid: false,
+    busy: true,
+    reason: 'unknown_auth',
   });
 });

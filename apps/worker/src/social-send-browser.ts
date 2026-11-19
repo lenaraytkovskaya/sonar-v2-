@@ -6,6 +6,7 @@ import {
   type Page,
 } from 'playwright';
 import {
+  SocialProfileBusyError,
   SocialSendError,
   socialActionBlockedPattern,
   generateSocialDevice,
@@ -1968,6 +1969,7 @@ export function createSocialSendBrowser(
           { kind: 'check', stage: () => stage },
         );
       } catch (error) {
+        if (error instanceof SocialProfileBusyError) throw error;
         if (error instanceof SocialSessionCheckError) throw error;
         throw new SocialSessionCheckError(
           socialSessionCheckReason(error, 'browser'),
@@ -2109,6 +2111,8 @@ export function createSocialSendBrowser(
           { kind: 'send', stage: () => 'send' },
         );
       } catch (error) {
+        if (error instanceof SocialProfileBusyError) throw error;
+        if (error instanceof SocialSessionCheckError) throw error;
         if (account.channel === 'instagram') {
           if (error instanceof SocialSendError && 'stage' in error) throw error;
           throw stagedFailure('session', 'unexpected', 'session_invalid');

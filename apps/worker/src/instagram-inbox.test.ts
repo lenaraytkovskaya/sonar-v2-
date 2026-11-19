@@ -893,6 +893,21 @@ it('never treats PRIMARY-only evidence as account-wide completion', async () => 
   expect(result.complete).toBe(false);
   expect(result.skipped).toContain('general_folder_unsupported');
 });
+it('accepts the personal inbox Messages/Requests layout without optional General tabs', async () => {
+  const f = browser([fixture()]);
+  Object.assign(f.page, {
+    evaluate: vi.fn(async () => ({
+      messages: true,
+      requests: true,
+      primary: false,
+      general: false,
+      outgoing: 0,
+      timestamps: 0,
+      threadUrls: [],
+    })),
+  });
+  expect((await f.run()).skipped).not.toContain('general_folder_unsupported');
+});
 it('does not close an unproven history gap with an unrelated terminal response', async () => {
   const first = fixture();
   thread(first).slide_messages.page_info = {

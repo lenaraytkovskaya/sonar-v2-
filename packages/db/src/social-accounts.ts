@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { recordHealthEvent, enableAccountHealth } from './account-health.js';
+import {
+  recordHealthEvent,
+  enableAccountHealth,
+  resumePausedSends,
+} from './account-health.js';
 import { queueAutomaticSocialRelogin } from './social-login.js';
 export {
   saveSocialCredentials,
@@ -1093,20 +1097,40 @@ export async function withSocialSessionCheck(
     valid: boolean;
     reason?: SocialSessionCheckReason;
     diagnostic?: SocialSessionCheckDiagnostic;
+    busy?: boolean;
   }>,
   now = new Date(),
   mode: 'check' | 'keepalive' = 'check',
+  taskId?: string,
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
   let locked = false;
   let inTransaction = false;
   try {
     // Keep the common account lock across the callback, without a SQL transaction.
-    await c.query(
-      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+    const {
+      rows: [lease],
+    } = await c.query(
+      "select pg_try_advisory_lock(hashtextextended('channel-account:'||$1::text,0)) as locked",
       [id],
     );
-    locked = true;
+    locked = lease.locked === true;
+    if (!locked) {
+      const {
+        rows: [setting],
+      } = await c.query(
+        "select value from settings where key='social.profile.busy_retry_seconds'",
+      );
+      const retrySeconds = Number(setting?.value);
+      if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+        throw new Error('Invalid social.profile.busy_retry_seconds');
+      return {
+        status: 'deferred',
+        runAt: new Date(now.getTime() + retrySeconds * 1000),
+        reasonCode: 'social_profile_busy',
+        reasonUk: 'Браузер акаунта зайнятий.',
+      };
+    }
     await c.query('begin');
     inTransaction = true;
     const account = await lock(c, id);
@@ -1169,6 +1193,22 @@ export async function withSocialSessionCheck(
         const result = await check(account, session!);
         valid = result.valid;
         diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
+        if (result.busy) {
+          const {
+            rows: [setting],
+          } = await c.query(
+            "select value from settings where key='social.profile.busy_retry_seconds'",
+          );
+          const retrySeconds = Number(setting?.value);
+          if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+            throw new Error('Invalid social.profile.busy_retry_seconds');
+          return {
+            status: 'deferred',
+            runAt: new Date(now.getTime() + retrySeconds * 1000),
+            reasonCode: 'social_profile_busy',
+            reasonUk: 'Браузер акаунта зайнятий.',
+          };
+        }
         if (!valid)
           reason =
             result.reason &&
@@ -1183,7 +1223,7 @@ export async function withSocialSessionCheck(
     if (
       mode === 'keepalive' &&
       reason &&
-      ['timeout', 'network', 'browser'].includes(reason)
+      ['timeout', 'network', 'browser', 'rate_limit'].includes(reason)
     ) {
       const { rows } = await c.query(
         "select key,value from settings where key in ('social.keepalive.retry_seconds','social.keepalive.interval_seconds')",
@@ -1225,7 +1265,73 @@ export async function withSocialSessionCheck(
         },
       };
     }
-    if (!valid) {
+    let timeoutCount = 0;
+    let timeoutLimit = 0;
+    if (!valid && mode === 'check') {
+      const { rows: settings } = await c.query(
+        "select key,value from settings where key in ('social.session.check.timeout_limit','social.session.check.retry_seconds')",
+      );
+      const config = Object.fromEntries(
+        settings.map((setting) => [setting.key, setting.value]),
+      );
+      timeoutLimit = Number(config['social.session.check.timeout_limit']);
+      const retrySeconds = Number(config['social.session.check.retry_seconds']);
+      if (
+        !Number.isSafeInteger(timeoutLimit) ||
+        timeoutLimit < 1 ||
+        !Number.isSafeInteger(retrySeconds) ||
+        retrySeconds < 1
+      )
+        throw new Error('Invalid social.session.check retry settings');
+      timeoutCount =
+        reason === 'timeout'
+          ? Math.max(
+              0,
+              Number(account.settings.sessionCheckTimeoutCount) || 0,
+            ) + 1
+          : 0;
+      await c.query(
+        "update channel_accounts set settings=settings||jsonb_build_object('sessionCheckTimeoutCount',$2::int) where id=$1",
+        [id, timeoutCount],
+      );
+      if (reason !== 'timeout' || timeoutCount < timeoutLimit) {
+        const {
+          rows: [pending],
+        } = await c.query(
+          "select id from tasks where type='social.session.check' and payload->>'accountId'=$1 and status in ('queued','running') and id<>coalesce($2::uuid,'00000000-0000-0000-0000-000000000000'::uuid) limit 1",
+          [id, taskId ?? null],
+        );
+        if (!pending)
+          await enqueueTask(
+            'social.session.check',
+            `social.session.check:${id}:retry:${now.getTime()}`,
+            { accountId: id },
+            c,
+            new Date(now.getTime() + retrySeconds * 1000),
+          );
+      } else {
+        await c.query(
+          `update tasks set status='paused',finished_at=$2::timestamptz,
+          reason_code='social_session_timeout',reason_uk=$3
+          where type='social.session.check' and payload->>'accountId'=$1
+            and status='queued' and id<>coalesce($4::uuid,'00000000-0000-0000-0000-000000000000'::uuid)`,
+          [id, now.toISOString(), reasonUk, taskId ?? null],
+        );
+      }
+    }
+    const authFailure =
+      !!reason &&
+      [
+        'login_required',
+        'cookies_invalid',
+        'captcha',
+        'checkpoint',
+        'action_blocked',
+      ].includes(reason);
+    if (
+      !valid &&
+      (authFailure || (timeoutLimit > 0 && timeoutCount >= timeoutLimit))
+    ) {
       await c.query('begin');
       inTransaction = true;
       await pauseSocialFetchSession(c, id, reason ?? 'unknown_auth', now);
@@ -1240,7 +1346,9 @@ export async function withSocialSessionCheck(
       }
       await c.query('commit');
       inTransaction = false;
-    } else
+    } else if (valid) {
+      await c.query('begin');
+      inTransaction = true;
       await c.query(
         'update channel_accounts set status=$2,settings=settings||$3::jsonb where id=$1',
         [
@@ -1260,6 +1368,7 @@ export async function withSocialSessionCheck(
             loginRecoveryPending: false,
             checkedAt: now.toISOString(),
             sessionCheckReason: null,
+            sessionCheckTimeoutCount: 0,
             reasonUk:
               account.settings.healthAutoPaused === true
                 ? account.settings.reasonUk
@@ -1267,6 +1376,14 @@ export async function withSocialSessionCheck(
           },
         ],
       );
+      if (
+        account.settings.enabled !== false &&
+        account.settings.healthAutoPaused !== true
+      )
+        await resumePausedSends(c, id, true);
+      await c.query('commit');
+      inTransaction = false;
+    }
     if (
       valid &&
       (account.settings.sessionLossActive ||
@@ -1303,12 +1420,19 @@ export async function withSocialSessionCheck(
     }
     return valid
       ? { status: 'done', result: { valid: true } }
-      : {
-          status: 'paused',
-          result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
-          reasonCode: `social_session_${reason}`,
-          reasonUk: reasonUk!,
-        };
+      : authFailure || (timeoutLimit > 0 && timeoutCount >= timeoutLimit)
+        ? {
+            status: 'paused',
+            result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
+            reasonCode: `social_session_${reason}`,
+            reasonUk: reasonUk!,
+          }
+        : {
+            status: 'failed',
+            result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
+            reasonCode: `social_session_${reason}`,
+            reasonUk: reasonUk!,
+          };
   } catch (error) {
     if (inTransaction) await c.query('rollback');
     throw error;

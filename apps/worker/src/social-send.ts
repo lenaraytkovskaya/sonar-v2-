@@ -1,4 +1,5 @@
 import {
+  SocialProfileBusyError,
   resolveSocialSession,
   SocialSendError,
   socialSessionCheckReason,
@@ -80,27 +81,40 @@ export async function runSocialSend(
     'social',
   );
 }
-export async function runSocialSessionCheck(input: { accountId: string }) {
-  return withSocialSessionCheck(input.accountId, async (account, session) => {
-    try {
-      await socialSendBrowser.check(
-        account,
-        session ?? resolveSocialSession(account),
-        await timeout(),
-      );
-      return { valid: true };
-    } catch (error) {
-      return {
-        valid: false,
-        reason: socialSessionCheckReason(error),
-        ...(error instanceof SocialSessionCheckError && error.diagnostic
-          ? { diagnostic: error.diagnostic }
-          : {}),
-      };
-    }
-  });
+export async function runSocialSessionCheck(
+  input: { accountId: string },
+  taskId?: string,
+) {
+  return withSocialSessionCheck(
+    input.accountId,
+    async (account, session) => {
+      try {
+        await socialSendBrowser.check(
+          account,
+          session ?? resolveSocialSession(account),
+          await timeout(),
+        );
+        return { valid: true };
+      } catch (error) {
+        return {
+          valid: false,
+          ...(error instanceof SocialProfileBusyError ? { busy: true } : {}),
+          reason: socialSessionCheckReason(error),
+          ...(error instanceof SocialSessionCheckError && error.diagnostic
+            ? { diagnostic: error.diagnostic }
+            : {}),
+        };
+      }
+    },
+    new Date(),
+    'check',
+    taskId,
+  );
 }
-export async function runSocialSessionKeepalive(input: { accountId: string }) {
+export async function runSocialSessionKeepalive(
+  input: { accountId: string },
+  taskId?: string,
+) {
   return withSocialSessionCheck(
     input.accountId,
     async (account, session) => {
@@ -121,11 +135,16 @@ export async function runSocialSessionKeepalive(input: { accountId: string }) {
         );
         return { valid: true };
       } catch (error) {
-        return { valid: false, reason: socialSessionCheckReason(error) };
+        return {
+          valid: false,
+          ...(error instanceof SocialProfileBusyError ? { busy: true } : {}),
+          reason: socialSessionCheckReason(error),
+        };
       }
     },
     new Date(),
     'keepalive',
+    taskId,
   );
 }
 export async function registerSocialSessionTasks() {
@@ -133,7 +152,8 @@ export async function registerSocialSessionTasks() {
   await boss.createQueue('social.session.keepalive');
   await runTask(
     'social.session.keepalive',
-    (payload) => runSocialSessionKeepalive(payload as { accountId: string }),
+    (payload, taskId) =>
+      runSocialSessionKeepalive(payload as { accountId: string }, taskId),
     async () => {
       await reconcileSocialSessionKeepalive();
     },
@@ -144,8 +164,8 @@ export async function registerSocialSessionTasks() {
   });
   await boss.schedule('social.session.keepalive.reconcile', '* * * * *');
   await reconcileSocialSessionKeepalive();
-  await runTask('social.session.check', (payload) =>
-    runSocialSessionCheck(payload as { accountId: string }),
+  await runTask('social.session.check', (payload, taskId) =>
+    runSocialSessionCheck(payload as { accountId: string }, taskId),
   );
 }
 export const closeSocialSendBrowser = () => socialSendBrowser.close();

@@ -458,7 +458,9 @@ export async function getConversationChat(
   const conversation =
     conversations.find((c) => c.id === conversationId) ?? null;
   const { rows: messages } = await sonarPool.query<OutreachMessage>(
-    `select id,conversation_id as "conversationId",channel,direction,source,subject,body,status,to_value as "toValue",reason_uk as "reasonUk",provider_id as "providerId",created_at as "createdAt",sent_at as "sentAt",classification,needs_human as "needsHuman",read_at as "readAt",(social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages where conversation_id=$1 and ($2::int is null or direction='in' or status in ('sent','delivered','read')) order by ${messageHistoryOrder('desc')} limit $2`,
+    `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,case when m.status='queued' and send_task.status='paused' then 'paused' else m.status::text end as status,m.to_value as "toValue",case when m.status='queued' and send_task.status='paused' then send_task.reason_uk else m.reason_uk end as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m
+    left join lateral(select t.status,t.reason_uk from tasks t where t.type='message.send' and t.payload->>'messageId'=m.id::text order by t.created_at desc,t.id desc limit 1) send_task on true
+    where m.conversation_id=$1 and ($2::int is null or m.direction='in' or m.status in ('sent','delivered','read') or (m.status='queued' and send_task.status='paused')) order by ${messageHistoryOrder('desc', true)} limit $2`,
     [conversationId, historyLimit ?? null],
   );
   messages.reverse();
@@ -477,18 +479,28 @@ export async function getConversationChat(
     (target.network !== 'linkedin' || target.kind === 'company')
       ? target.network
       : null;
-  const socialAvailable = network
-    ? ((
-        await sonarPool.query(
-          "select exists(select 1 from channel_accounts a join conversations v on v.id=$2 where a.channel=$1 and a.status='active' and a.settings->>'sessionStatus'='valid' and (v.provider_thread_id is null or v.account_id=a.id)) as available",
+  const socialAccount = network
+    ? (
+        await sonarPool.query<{
+          available: boolean;
+          reasonUk: string | null;
+          unavailableKind: string;
+        }>(
+          `select (a.status='active' and coalesce(a.settings->>'sessionStatus','')='valid' and coalesce(a.settings->>'enabled','true')<>'false') as available,
+          a.settings->>'reasonUk' as "reasonUk",case when a.status<>'active' or a.settings->>'enabled'='false' then 'disabled' else 'session' end as "unavailableKind"
+        from channel_accounts a join conversations v on v.id=$2 where a.channel=$1 and (v.provider_thread_id is null or v.account_id=a.id)
+        order by (a.status='active' and coalesce(a.settings->>'sessionStatus','')='valid' and coalesce(a.settings->>'enabled','true')<>'false') desc,a.created_at,a.id limit 1`,
           [network, conversationId],
         )
-      ).rows[0].available as boolean)
-    : false;
+      ).rows[0]
+    : undefined;
+  const socialAvailable = socialAccount?.available === true;
   return {
     conversation,
     messages,
     socialAvailable,
+    socialUnavailableReasonUk: socialAccount?.reasonUk ?? null,
+    socialUnavailableKind: socialAccount?.unavailableKind ?? 'missing',
     blocked: conversation
       ? await isContactBlocked(sonarPool, conversation.companyId, recipient)
       : false,

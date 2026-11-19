@@ -70,6 +70,7 @@ beforeAll(async () => {
     'ai.inbound',
     'message.send',
     'social.inbox.sync',
+    'social.session.check',
   ])
     await admin.createQueue(name);
   originalSettings = (
@@ -1107,7 +1108,10 @@ it.skipIf(!enabled)(
           },
           now,
         ),
-      ).toMatchObject({ status: 'paused', reasonCode: `social_inbox_${code}` });
+      ).toMatchObject({
+        status: 'failed',
+        reasonCode: `social_inbox_sync_${code}`,
+      });
       expect(
         (
           await db.sonarPool.query(
@@ -1138,6 +1142,7 @@ it.skipIf(!enabled)(
         'update channel_accounts set settings=settings||\'{"sessionStatus":"valid"}\'::jsonb where id=$1',
         [account],
       );
+      const authSignal = reason !== 'rate_limit';
       expect(
         await worker.runSocialInboxSync(
           { accountId: account },
@@ -1149,8 +1154,10 @@ it.skipIf(!enabled)(
           now,
         ),
       ).toMatchObject({
-        status: 'paused',
-        reasonCode: `social_inbox_${reason}`,
+        status: authSignal ? 'paused' : 'failed',
+        reasonCode: authSignal
+          ? `social_inbox_${reason}`
+          : `social_inbox_sync_${reason}`,
       });
       expect(
         (
@@ -1160,10 +1167,10 @@ it.skipIf(!enabled)(
           )
         ).rows[0],
       ).toMatchObject({
-        status: 'paused',
+        status: authSignal ? 'paused' : 'active',
         settings: {
-          sessionStatus: reason === 'rate_limit' ? 'unconfirmed' : 'invalid',
-          inboxPollingEnabled: false,
+          sessionStatus: authSignal ? 'invalid' : 'valid',
+          inboxPollingEnabled: !authSignal,
         },
       });
     }
@@ -1182,6 +1189,114 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
+  'schedules incomplete and failed syncs with polling delay, capped backoff, and safe failure details',
+  async () => {
+    await resetGate();
+    await db.sonarPool.query(
+      "delete from pgboss.job where name='social.inbox.sync' and data->>'taskId' in (select id::text from tasks where type='social.inbox.sync' and payload->>'accountId'=$1)",
+      [account],
+    );
+    await db.sonarPool.query(
+      "delete from tasks where type='social.inbox.sync' and payload->>'accountId'=$1",
+      [account],
+    );
+    await db.sonarPool.query(
+      "update channel_accounts set settings=settings||jsonb_build_object('inboxSync',$2::jsonb) where id=$1",
+      [account, { failureCount: 0, nextPollAt: new Date(now.getTime() - 1) }],
+    );
+    await db.sonarPool.query(
+      'update channel_accounts set settings=settings||\'{"inboxPollingEnabled":false}\'::jsonb where id=$1',
+      [other],
+    );
+    const timing = (
+      await db.sonarPool.query(
+        "select (select value::int from settings where key='social.inbox.poll_seconds') as poll,(select value::int from settings where key='social.inbox.failure_backoff_base_seconds') as base,(select value::int from settings where key='social.inbox.failure_backoff_max_seconds') as max",
+      )
+    ).rows[0];
+    try {
+      expect(
+        await worker.runSocialInboxSync(
+          { accountId: account },
+          {
+            sync: async () => ({
+              complete: false,
+              reason: 'unsupported_dom',
+              skipped: ['requests_unverified'],
+            }),
+          },
+          now,
+        ),
+      ).toMatchObject({ status: 'done', result: { complete: false } });
+      const first = await checkpoint();
+      const firstDelay = Date.parse(first.nextPollAt) - now.getTime();
+      const firstNominal = Math.max(timing.poll, timing.base);
+      expect(first.failureCount).toBe(1);
+      expect(firstDelay).toBeGreaterThanOrEqual(firstNominal * 0.7 * 1000);
+      expect(firstDelay).toBeLessThanOrEqual(firstNominal * 1.3 * 1000);
+      expect(await inbox.reconcileSocialInbox(now)).toBe(1);
+      expect(await inbox.reconcileSocialInbox(now)).toBe(0);
+      const firstJob = (
+        await db.sonarPool.query(
+          "select j.start_after from pgboss.job j join tasks t on t.id::text=j.data->>'taskId' where j.name='social.inbox.sync' and t.payload->>'accountId'=$1 and t.status='queued'",
+          [account],
+        )
+      ).rows[0];
+      expect(firstJob.start_after).toEqual(new Date(first.nextPollAt));
+      expect(firstJob.start_after.getTime()).toBeGreaterThan(now.getTime());
+      await db.sonarPool.query(
+        "delete from pgboss.job where name='social.inbox.sync' and data->>'taskId' in (select id::text from tasks where type='social.inbox.sync' and payload->>'accountId'=$1)",
+        [account],
+      );
+      await db.sonarPool.query(
+        "delete from tasks where type='social.inbox.sync' and payload->>'accountId'=$1",
+        [account],
+      );
+      await resetGate();
+      const secondNow = new Date(Date.parse(first.nextPollAt) + 1000);
+      expect(
+        await worker.runSocialInboxSync(
+          { accountId: account },
+          {
+            sync: async () => {
+              throw new worker.SocialInboxAdapterError(
+                'unsupported_dom',
+                'Структуру сторінки не підтверджено.',
+              );
+            },
+          },
+          secondNow,
+        ),
+      ).toMatchObject({
+        status: 'failed',
+        reasonCode: 'social_inbox_sync_unsupported_dom',
+        result: { stage: 'sync', kind: 'unsupported_dom' },
+      });
+      const second = await checkpoint();
+      const secondDelay = Date.parse(second.nextPollAt) - secondNow.getTime();
+      const secondNominal = Math.min(
+        timing.max,
+        Math.max(timing.poll, timing.base * 2),
+      );
+      expect(second.failureCount).toBe(2);
+      expect(second.lastFailure).toMatchObject({
+        stage: 'sync',
+        kind: 'unsupported_dom',
+      });
+      expect(secondDelay).toBeGreaterThanOrEqual(secondNominal * 0.7 * 1000);
+      expect(secondDelay).toBeLessThanOrEqual(secondNominal * 1.3 * 1000);
+    } finally {
+      await db.sonarPool.query(
+        "delete from pgboss.job where name='social.inbox.sync' and data->>'taskId' in (select id::text from tasks where type='social.inbox.sync' and payload->>'accountId'=$1)",
+        [account],
+      );
+      await db.sonarPool.query(
+        "delete from tasks where type='social.inbox.sync' and payload->>'accountId'=$1",
+        [account],
+      );
+    }
+  },
+);
+it.skipIf(!enabled)(
   'shares account lock with send and separate action counters, and reconciles one scheduled job per account',
   async () => {
     await resetGate();
@@ -1196,7 +1311,7 @@ it.skipIf(!enabled)(
         await worker.runSocialInboxSync({ accountId: account }, adapter, now),
       ).toMatchObject({
         status: 'deferred',
-        reasonCode: 'social_account_busy',
+        reasonCode: 'social_profile_busy',
       });
       expect(adapter.sync).not.toHaveBeenCalled();
     } finally {
@@ -1739,7 +1854,7 @@ it.skipIf(!enabled)(
       now,
     );
     expect(result).toMatchObject({
-      status: 'paused',
+      status: 'failed',
       result: { valid: false, diagnostic },
     });
     expect(JSON.stringify(result)).not.toMatch(/private|token|secret|rawUrl/);
@@ -1750,6 +1865,123 @@ it.skipIf(!enabled)(
       'update channel_accounts set status=\'active\',settings=settings||\'{"sessionStatus":"valid"}\'::jsonb where id=$1',
       [account],
     );
+  },
+);
+it.skipIf(!enabled)(
+  'defers sync, session check, and keepalive while the shared account lock is busy',
+  async () => {
+    const { withSocialSessionCheck } = await import('./social-accounts.js');
+    await resetGate();
+    const holder = await db.sonarPool.connect();
+    const check = vi.fn(async () => ({ valid: true }));
+    const adapter = { sync: vi.fn(async () => ({ complete: true })) };
+    await holder.query(
+      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+      [account],
+    );
+    try {
+      expect(
+        await withSocialSessionCheck(account, check, now, 'check'),
+      ).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'social_profile_busy',
+        reasonUk: 'Браузер акаунта зайнятий.',
+        runAt: new Date(now.getTime() + 5000),
+      });
+      expect(
+        await withSocialSessionCheck(account, check, now, 'keepalive'),
+      ).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'social_profile_busy',
+      });
+      expect(
+        await worker.runSocialInboxSync({ accountId: account }, adapter, now),
+      ).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'social_profile_busy',
+      });
+      expect(check).not.toHaveBeenCalled();
+      expect(adapter.sync).not.toHaveBeenCalled();
+      expect(
+        (
+          await db.sonarPool.query(
+            "select status,settings->>'sessionStatus' as session from channel_accounts where id=$1",
+            [account],
+          )
+        ).rows[0],
+      ).toEqual({ status: 'active', session: 'valid' });
+    } finally {
+      await holder.query(
+        "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
+        [account],
+      );
+      holder.release();
+    }
+  },
+);
+it.skipIf(!enabled)(
+  'fails and retries session check timeouts, pausing only at the configured consecutive limit',
+  async () => {
+    const { withSocialSessionCheck } = await import('./social-accounts.js');
+    const id = randomUUID();
+    const {
+      rows: [source],
+    } = await db.sonarPool.query(
+      'select channel,daily_limit,settings from channel_accounts where id=$1',
+      [account],
+    );
+    await db.sonarPool.query(
+      "insert into channel_accounts(id,channel,name,address,status,daily_limit,settings) values($1,$2,'Timeout check','', 'active',$3,($4::jsonb-'socialAction')||'{\"sessionStatus\":\"valid\",\"sessionCheckTimeoutCount\":0}'::jsonb)",
+      [id, source.channel, source.daily_limit, JSON.stringify(source.settings)],
+    );
+    const runAt = new Date('2026-11-14T12:00:00Z');
+    const check = async () => ({ valid: false, reason: 'timeout' as const });
+    try {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const outcome = await withSocialSessionCheck(
+          id,
+          check,
+          new Date(runAt.getTime() + (attempt - 1) * 120000),
+        );
+        expect(outcome).toMatchObject({
+          status: attempt === 3 ? 'paused' : 'failed',
+          reasonCode: 'social_session_timeout',
+        });
+      }
+      const {
+        rows: [saved],
+      } = await db.sonarPool.query(
+        'select status,settings from channel_accounts where id=$1',
+        [id],
+      );
+      expect(saved).toMatchObject({
+        status: 'paused',
+        settings: {
+          sessionStatus: 'unconfirmed',
+          sessionCheckTimeoutCount: 3,
+          sessionLossActive: false,
+        },
+      });
+      const { rows: retries } = await db.sonarPool.query(
+        "select status,reason_code from tasks where type='social.session.check' and payload->>'accountId'=$1",
+        [id],
+      );
+      expect(retries).toEqual([
+        { status: 'paused', reason_code: 'social_session_timeout' },
+      ]);
+    } finally {
+      await db.sonarPool.query(
+        "delete from pgboss.job where name='social.session.check' and data->>'taskId' in (select id::text from tasks where type='social.session.check' and payload->>'accountId'=$1)",
+        [id],
+      );
+      await db.sonarPool.query(
+        "delete from tasks where type='social.session.check' and payload->>'accountId'=$1",
+        [id],
+      );
+      await db.sonarPool.query('delete from channel_accounts where id=$1', [
+        id,
+      ]);
+    }
   },
 );
 it.skipIf(!enabled)(

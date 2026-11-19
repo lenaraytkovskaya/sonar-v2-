@@ -51,6 +51,9 @@ it.skipIf(!enabled)(
   async () => {
     const { sonarPool } = await import('./index.js');
     const accounts = await import('./social-accounts.js');
+    const { boss } = await import('./tasks.js');
+    await boss.start();
+    await boss.createQueue('social.session.check');
     const actor = randomUUID(),
       other = randomUUID();
     const oldSecret = process.env.AUTH_SECRET,
@@ -258,6 +261,11 @@ it.skipIf(!enabled)(
           for (const reason of Object.keys(
             socialSessionCheckReasons,
           ) as (keyof typeof socialSessionCheckReasons)[]) {
+            await sonarPool.query(
+              `update channel_accounts set status='active',settings=(settings-'healthPauseUntil')||
+                '{"enabled":true,"healthAutoPaused":false,"sessionStatus":"valid","sessionCheckTimeoutCount":0}'::jsonb where id=$1`,
+              [saved.id],
+            );
             const outcome = await checkSession(saved.id, async () => ({
               valid: false,
               reason,
@@ -283,8 +291,15 @@ it.skipIf(!enabled)(
                   : {}),
               },
             }));
+            const authSignal = [
+              'login_required',
+              'cookies_invalid',
+              'captcha',
+              'checkpoint',
+              'action_blocked',
+            ].includes(reason);
             expect(outcome).toMatchObject({
-              status: 'paused',
+              status: authSignal ? 'paused' : 'failed',
               reasonCode: `social_session_${reason}`,
               reasonUk: socialSessionCheckReasons[reason],
               result: { valid: false, diagnostic },
@@ -297,19 +312,25 @@ it.skipIf(!enabled)(
                 (row) => row.id === saved.id,
               ),
             ).toMatchObject({
-              status: 'paused',
-              sessionStatus: [
-                'login_required',
-                'cookies_invalid',
-                'captcha',
-                'checkpoint',
-              ].includes(reason)
-                ? 'invalid'
-                : 'unconfirmed',
-              sessionCheckReason: reason,
-              reasonUk: expect.stringContaining(
-                socialSessionCheckReasons[reason],
-              ),
+              status: authSignal ? 'paused' : 'active',
+              sessionStatus: authSignal
+                ? [
+                    'login_required',
+                    'cookies_invalid',
+                    'captcha',
+                    'checkpoint',
+                  ].includes(reason)
+                  ? 'invalid'
+                  : 'unconfirmed'
+                : 'valid',
+              ...(authSignal
+                ? {
+                    sessionCheckReason: reason,
+                    reasonUk: expect.stringContaining(
+                      socialSessionCheckReasons[reason],
+                    ),
+                  }
+                : {}),
             });
             expect(
               (
@@ -319,37 +340,6 @@ it.skipIf(!enabled)(
                 )
               ).rows[0].settings.storageStateEncrypted,
             ).toBe(stored.settings.storageStateEncrypted);
-            if (
-              [
-                'captcha',
-                'checkpoint',
-                'action_blocked',
-                'rate_limit',
-              ].includes(reason)
-            ) {
-              await expect(
-                accounts.updateSocialAccount(
-                  saved.id,
-                  { enabled: true },
-                  actor,
-                ),
-              ).resolves.toBe(true);
-              expect(
-                (
-                  await sonarPool.query(
-                    'select settings from channel_accounts where id=$1',
-                    [saved.id],
-                  )
-                ).rows[0].settings.healthAutoPaused,
-              ).toBe(false);
-            } else
-              await expect(
-                accounts.updateSocialAccount(
-                  saved.id,
-                  { enabled: true },
-                  actor,
-                ),
-              ).rejects.toThrow('Спочатку перевірте сесію');
           }
           const unsafe = await checkSession(saved.id, async () => {
             throw Error('https://user:secret@proxy.test/?cookies=secret');
@@ -403,7 +393,7 @@ it.skipIf(!enabled)(
           .join(',');
         check.mockClear();
         expect(await checkSession(saved.id, check)).toMatchObject({
-          status: 'paused',
+          status: 'failed',
         });
         expect(check).not.toHaveBeenCalled();
         expect(
@@ -411,9 +401,9 @@ it.skipIf(!enabled)(
             (row) => row.id === saved.id,
           ),
         ).toMatchObject({
-          status: 'paused',
-          sessionStatus: 'unconfirmed',
-          sessionCheckReason: 'proxy',
+          status: 'active',
+          sessionStatus: 'valid',
+          sessionCheckReason: null,
           proxyIndex: 0,
         });
         process.env.SOCIAL_PROXY_URLS = process.env
