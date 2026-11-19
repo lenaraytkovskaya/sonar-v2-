@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 let db: typeof import('./index.js'), email: typeof import('./email.js');
 let inbound: typeof import('./inbound.js'), admin: import('pg-boss').PgBoss;
+let TaskFailure: typeof import('./tasks.js').TaskFailure;
 beforeAll(async () => {
   if (!enabled) return;
   db = await import('./index.js');
   email = await import('./email.js');
   inbound = await import('./inbound.js');
+  ({ TaskFailure } = await import('./tasks.js'));
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
   await admin.start();
@@ -124,6 +126,45 @@ it.skipIf(!enabled)(
           'viber',
         ),
       ).toMatchObject({ status: 'done' });
+      const timeoutMessage = await email.createCompanyMessage(
+        {
+          channel: 'viber',
+          companyId: ids.company,
+          campaignId: ids.campaign,
+          accountId: account.id,
+          toAddress: '+48500100200',
+          body: 'Stub timeout Viber fixture',
+          submit: true,
+          idempotencyKey: randomUUID(),
+        },
+        ids.user,
+      );
+      const timeoutReason =
+        'Міст Viber не відповів за 240 с. Перевірте з’єднання з Viber Desktop і повторіть завдання.';
+      expect(
+        await email.sendEmailMessage(
+          timeoutMessage.id,
+          randomUUID(),
+          async () => {
+            throw new TaskFailure('viber_bridge_timeout', timeoutReason);
+          },
+          new Date('2026-11-18T10:00:00Z'),
+          () => 0,
+          'viber',
+        ),
+      ).toMatchObject({
+        status: 'paused',
+        reasonCode: 'viber_delivery_uncertain',
+        reasonUk: timeoutReason,
+      });
+      expect(
+        (
+          await db.sonarPool.query(
+            'select reason_uk from messages where id=$1',
+            [timeoutMessage.id],
+          )
+        ).rows[0].reason_uk,
+      ).toBe(timeoutReason);
       const receivedAt = new Date('2026-11-18T10:01:00Z');
       const incoming = {
         channel: 'viber' as const,
