@@ -426,7 +426,14 @@
       "idx": 60,
       "version": "7",
       "when": 1795000006000,
-      "tag": "0060_stuck_task_reconciler",
+      "tag": "0060_social_browser_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1795000007000,
+      "tag": "0061_stuck_task_reconciler",
       "breakpoints": true
     }
   ]

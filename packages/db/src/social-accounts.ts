@@ -51,6 +51,7 @@ export interface SocialAccount {
   nextSendAt: Date | null;
   proxyIndex: number;
   ownerName: string | null;
+  ownsAccount: boolean;
   hasOwnProxy: boolean;
   hasCredentials: boolean;
   hasTotpSecret: boolean;
@@ -504,7 +505,7 @@ export async function listSocialAccounts(
     a.next_send_at as "nextSendAt",
     (a.settings->>'credentialsEncrypted' is not null) as "hasCredentials",coalesce(a.settings->>'hasTotpSecret','false')='true' as "hasTotpSecret",coalesce(a.settings->>'loginBlocked','false')='true' as "loginBlocked",case when a.settings->>'loginChallengeKind' in ('email','sms') and (a.settings->>'loginChallengeExpiresAt')::timestamptz>now() then a.settings->>'loginChallengeKind' when a.settings->>'sessionCheckReason'='captcha' then 'captcha' else null end as "loginChallengeKind",case when (a.settings->>'loginChallengeExpiresAt')::timestamptz>now() then a.settings->>'loginChallengeExpiresAt' else null end as "loginChallengeExpiresAt",
     (a.settings->>'ownProxyEncrypted' is not null) as "hasOwnProxy",coalesce(a.settings->>'sessionLossActive','false')='true' as "sessionLossActive", a.settings->>'sessionLostEventId' as "sessionLostEventId",a.settings->>'sessionLostAt' as "sessionLostAt",a.settings->>'sessionLostReasonUk' as "sessionLostReasonUk",
-    coalesce(a.settings->>'keepaliveEnabled','true')<>'false' as "keepaliveEnabled",a.settings->>'lastKeepaliveAt' as "lastKeepaliveAt",a.settings->>'nextKeepaliveAt' as "nextKeepaliveAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",
+    coalesce(a.settings->>'keepaliveEnabled','true')<>'false' as "keepaliveEnabled",a.settings->>'lastKeepaliveAt' as "lastKeepaliveAt",a.settings->>'nextKeepaliveAt' as "nextKeepaliveAt",(a.settings->>'proxyIndex')::int as "proxyIndex",u.name as "ownerName",coalesce(a.owner_id=$1::uuid,false) as "ownsAccount",
     coalesce(a.owner_id=$1::uuid and a.channel in ('instagram','facebook') and a.status='active' and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false',false) as "canSyncInbox",
     coalesce(a.settings->>'inboxPollingEnabled'='true',false) as "inboxPollingEnabled",
     (a.settings->'inboxSync'->>'complete')::boolean as "inboxSyncComplete",

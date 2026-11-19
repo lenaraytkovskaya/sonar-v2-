@@ -78,6 +78,8 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:-}
       VIBER_BRIDGE_URL: http://viber:3000
       VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
+      SOCIAL_BROWSER_URL: http://social-browser:3000
+      SOCIAL_BROWSER_KEY: ${SOCIAL_BROWSER_KEY:-}
       RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
@@ -91,6 +93,7 @@ services:
     ports: ['127.0.0.1:58000:3000']
     depends_on:
       migrate: { condition: service_completed_successfully }
+      social-browser: { condition: service_started }
   worker:
     build:
       {
@@ -109,6 +112,8 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:-}
       VIBER_BRIDGE_URL: http://viber:3000
       VIBER_BRIDGE_KEY: ${VIBER_BRIDGE_KEY:-}
+      SOCIAL_BROWSER_URL: http://social-browser:3000
+      SOCIAL_BROWSER_KEY: ${SOCIAL_BROWSER_KEY:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET (at least 32 characters)}
@@ -123,7 +128,24 @@ services:
       REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Set REGISTRY_DATABASE_URL}
     depends_on:
       migrate: { condition: service_completed_successfully }
+      social-browser: { condition: service_started }
     stop_grace_period: 30s
+  social-browser:
+    build:
+      context: ..
+      dockerfile: docker/social-browser.Dockerfile
+    init: true
+    stop_grace_period: 60s
+    environment:
+      SOCIAL_BROWSER_KEY: ${SOCIAL_BROWSER_KEY:-}
+      SOCIAL_BROWSER_DATA: /data/profiles
+    volumes:
+      - social-browser:/data
+    expose:
+      - '3000'
+      - '9400-9499'
+    shm_size: 1gb
+    restart: unless-stopped
   viber:
     build:
       context: ..
@@ -155,3 +177,4 @@ volumes:
     name: sonar-server_postgres
   waha:
   viber:
+  social-browser:
