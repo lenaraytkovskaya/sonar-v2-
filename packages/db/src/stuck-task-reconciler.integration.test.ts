@@ -8,6 +8,11 @@ const types = [
   'company.analyze',
   'viber.inbox.sync',
   'company.score',
+  'google.batch',
+  'google.company',
+  'social.fetch',
+  'social.session.check',
+  'social.session.keepalive',
 ];
 let sonarPool: typeof import('./index.js').sonarPool;
 let admin: import('pg-boss').PgBoss;
@@ -39,6 +44,36 @@ async function createStuckTask(
     [id, type, idempotencyKey, result, stale],
   );
   return { id, idempotencyKey };
+}
+
+async function createParentTask(
+  type: string,
+  payload: object,
+  status: 'queued' | 'running' | 'done' | 'failed' | 'paused' = 'running',
+) {
+  const { id } = await createStuckTask(type, null, undefined, false);
+  await sonarPool.query('update tasks set payload=$2,status=$3 where id=$1', [
+    id,
+    payload,
+    status,
+  ]);
+  return id;
+}
+
+async function createChildTask(
+  type: string,
+  payload: object,
+  result: object | null = null,
+  batchId: string | null = null,
+) {
+  const id = randomUUID();
+  ids.push(id);
+  await sonarPool.query(
+    `insert into tasks(id,type,idempotency_key,status,payload,result,batch_id,started_at,updated_at)
+     values($1,$2,$3,'running',$4,$5,$6,now()-interval '2 days',now()-interval '2 days')`,
+    [id, type, `reconcile:${type}:${id}`, payload, result, batchId],
+  );
+  return id;
 }
 
 it.skipIf(!enabled)(
@@ -180,6 +215,136 @@ it.skipIf(!enabled)(
     await sonarPool.query('delete from tasks where id=any($1::uuid[])', [
       taskIds,
     ]);
+  },
+);
+
+it.skipIf(!enabled)(
+  'leaves parent-managed Google and social request receipts running under active parent jobs',
+  async () => {
+    const batchId = randomUUID();
+    const batchParent = await createParentTask('google.batch', { batchId });
+    const companyParent = await createParentTask('google.company', {
+      companyId: randomUUID(),
+    });
+    const socialParent = await createParentTask('social.fetch', {
+      companyId: randomUUID(),
+    });
+    const childIds = [
+      await createChildTask('google.request', {}, null, batchId),
+      await createChildTask('google.resolve', { parentId: companyParent }),
+      await createChildTask('social.request', { parentId: socialParent }),
+    ];
+    for (const [type, taskId] of [
+      ['google.batch', batchParent],
+      ['google.company', companyParent],
+      ['social.fetch', socialParent],
+    ]) {
+      await admin.send(type, { taskId });
+      await sonarPool.query(
+        "update pgboss.job set state='active' where name=$1 and data->>'taskId'=$2",
+        [type, taskId],
+      );
+    }
+
+    const summary = await reconcileStuckTasks();
+    const { rows } = await sonarPool.query(
+      'select id,status from tasks where id=any($1::uuid[])',
+      [childIds],
+    );
+
+    expect(rows).toHaveLength(childIds.length);
+    expect(rows.every((row) => row.status === 'running')).toBe(true);
+    expect(summary.reconciled).toBe(0);
+  },
+);
+
+it.skipIf(!enabled)(
+  'pauses orphaned parent-managed receipts and preserves pending billing data',
+  async () => {
+    const batchId = randomUUID();
+    await createParentTask('google.batch', { batchId }, 'done');
+    const companyParent = await createParentTask(
+      'google.company',
+      { companyId: randomUUID() },
+      'failed',
+    );
+    const socialParent = await createParentTask(
+      'social.fetch',
+      { companyId: randomUUID() },
+      'paused',
+    );
+    const googleBilling = {
+      billingPending: true,
+      billingEstimate: 0.02,
+      billingService: 'google_places',
+      billingAt: new Date().toISOString(),
+    };
+    const socialBilling = {
+      billingPending: true,
+      billingEstimate: 0.01,
+      billingService: 'iproyal',
+      billingAt: new Date().toISOString(),
+    };
+    const childIds = [
+      await createChildTask('google.request', {}, googleBilling, batchId),
+      await createChildTask('google.resolve', {
+        parentId: companyParent,
+      }),
+      await createChildTask(
+        'social.request',
+        { parentId: socialParent },
+        socialBilling,
+      ),
+    ];
+
+    const summary = await reconcileStuckTasks();
+    const { rows } = await sonarPool.query(
+      'select id,type,status,reason_code,reason_uk,result from tasks where id=any($1::uuid[])',
+      [childIds],
+    );
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+
+    expect(rows).toHaveLength(childIds.length);
+    expect(
+      rows.every(
+        (row) =>
+          row.status === 'paused' &&
+          row.reason_code === 'task_interrupted' &&
+          row.reason_uk ===
+            'Задачу перервано (перезапуск сервера). Результат невідомий — перевірте вручну перед повтором.',
+      ),
+    ).toBe(true);
+    expect(byId[childIds[0]].result).toEqual(googleBilling);
+    expect(byId[childIds[2]].result).toEqual(socialBilling);
+    expect(summary.byType).toMatchObject({
+      'google.request': { queued: 0, paused: 1 },
+      'google.resolve': { queued: 0, paused: 1 },
+      'social.request': { queued: 0, paused: 1 },
+    });
+  },
+);
+
+it.skipIf(!enabled).each(['social.session.check', 'social.session.keepalive'])(
+  'pauses interrupted %s tasks without scheduling them again',
+  async (type) => {
+    const { id } = await createStuckTask(type);
+
+    const summary = await reconcileStuckTasks();
+    const { rows } = await sonarPool.query(
+      'select status,reason_code from tasks where id=$1',
+      [id],
+    );
+    const { rows: jobs } = await sonarPool.query(
+      "select id from pgboss.job where name=$1 and data->>'taskId'=$2",
+      [type, id],
+    );
+
+    expect(rows[0]).toEqual({
+      status: 'paused',
+      reason_code: 'task_interrupted',
+    });
+    expect(jobs).toHaveLength(0);
+    expect(summary.byType[type]).toEqual({ queued: 0, paused: 1 });
   },
 );
 

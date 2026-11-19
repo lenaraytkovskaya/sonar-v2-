@@ -533,8 +533,6 @@ const replayableInterruptedTaskTypes = new Set([
   'google.batch',
   'google.company',
   'social.fetch',
-  'social.session.check',
-  'social.session.keepalive',
   'telegram.sync',
   'viber.inbox.sync',
   'email.receive',
@@ -554,6 +552,12 @@ const taskTypesWithPrivateReconciliation = new Set([
   'social.inbox.sync',
   'social.session.login',
 ]);
+// These receipts run inside a parent task and never have their own pg-boss job.
+const taskTypesManagedByParent = [
+  'google.request',
+  'google.resolve',
+  'social.request',
+];
 
 type StuckTaskReconcileSummary = {
   reconciled: number;
@@ -589,6 +593,7 @@ export async function reconcileStuckTasks(
        left join settings task_settings on task_settings.key='tasks.'||t.type
        where t.status='running'
          and not (t.type=any($4::text[]))
+         and not (t.type=any($5::text[]))
          and (
            t.updated_at <= $1::timestamptz - (
              $2::integer + coalesce(
@@ -610,6 +615,7 @@ export async function reconcileStuckTasks(
         staleBufferSeconds,
         defaultExpireInSeconds,
         [...taskTypesWithPrivateReconciliation],
+        taskTypesManagedByParent,
       ],
     );
 
@@ -692,6 +698,42 @@ export async function reconcileStuckTasks(
       count(task.type, 'queued');
       reconciledTaskIds.push(task.id);
       reconciled++;
+    }
+
+    // Parent handlers own these child receipts. Once their parent is no longer
+    // queued or running, preserve the result and reservation but stop the orphan.
+    const { rows: orphanChildren } = await client.query(
+      `select c.id,c.type
+       from tasks c
+       where c.status='running' and c.type=any($1::text[])
+         and not exists (
+           select 1 from tasks p
+           where p.status in ('queued','running') and (
+             (c.type='google.request' and p.type='google.batch'
+               and p.payload->>'batchId'=c.batch_id::text)
+             or (c.type='google.resolve' and p.type='google.company'
+               and p.id::text=c.payload->>'parentId')
+             or (c.type='social.request' and p.type='social.fetch'
+               and p.id::text=c.payload->>'parentId')
+           )
+         )
+       order by c.updated_at,c.created_at,c.id
+       for update of c skip locked`,
+      [taskTypesManagedByParent],
+    );
+    if (orphanChildren.length) {
+      const { rows: pausedChildren } = await client.query(
+        `update tasks set status='paused',reason_code='task_interrupted',
+           reason_uk=$2,finished_at=now()
+         where id=any($1::uuid[]) and status='running'
+         returning id,type`,
+        [orphanChildren.map((child) => child.id), taskInterruptedReasonUk],
+      );
+      for (const child of pausedChildren) {
+        count(child.type, 'paused');
+        reconciledTaskIds.push(child.id);
+        reconciled++;
+      }
     }
 
     const byType: StuckTaskReconcileSummary['byType'] = Object.fromEntries(
