@@ -64,9 +64,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           return route.fulfill({
             status: options.rateLimit ? 429 : 200,
             contentType: 'text/html',
-            body: options.capturedMenu
-              ? capturedMenu + '<nav><a href="/direct/inbox/">Inbox</a></nav>'
-              : html,
+            body:
+              options.splash ||
+              (options.delayedSplash && !url.searchParams.has('loaded'))
+                ? `<div aria-label="Instagram logo">Instagram</div><p>from Meta</p>${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
+                : options.capturedMenu
+                  ? capturedMenu +
+                    '<nav><a href="/direct/inbox/">Inbox</a></nav>'
+                  : html,
           });
         if (url.hostname !== 'ig.me') return route.abort('blockedbyclient');
         if (options.deepLinkSuccess)
@@ -74,6 +79,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             status: 200,
             contentType: 'text/html',
             body: '<script>location.href="https://www.instagram.com/direct/t/fixture-thread/"</script>',
+          });
+        if (options.splashDeepLink)
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/html',
+            body: '<div aria-label="Instagram logo">Instagram</div><p>from Meta</p><script>location.replace("https://www.instagram.com/direct/t/fixture-thread/")</script>',
           });
         return route.fulfill({
           status: 404,
@@ -212,6 +223,47 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'www.instagram.com/direct/t/fixture-thread/',
         ]);
         expect(f.events).toEqual(['direct-open', 'mark', 'send']);
+      } finally {
+        await f.close();
+      }
+    });
+    it('waits through the Instagram splash after ig.me redirects into the app', async () => {
+      const f = await fixture({
+        splashDeepLink: true,
+        directConversation: true,
+      });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.events).toEqual(['direct-open', 'mark', 'send']);
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
+    it('waits for the app shell to replace a delayed profile splash', async () => {
+      const f = await fixture({ delayedSplash: true, timeoutMs: 1000 });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.events).toEqual(['open', 'mark', 'send']);
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
+    it('reports a persistent splash as a navigation timeout without dispatch', async () => {
+      const f = await fixture({ splash: true, timeoutMs: 120 });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          stage: 'navigation',
+          errorKind: 'timeout',
+          reasonUk: expect.stringContaining('не завершив завантаження'),
+        });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.events).not.toContain('send');
       } finally {
         await f.close();
       }
@@ -395,6 +447,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { menuItem: true },
       { menuLink: true },
       { directAvailable: true },
+      { englishMenuLabel: true },
       { existingMenu: true },
       { existingMenu: true, harmlessMenu: true, sanitizedMenu: true },
       { existingMenu: true, sanitizedMenu: true },

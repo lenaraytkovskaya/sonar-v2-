@@ -81,10 +81,13 @@ async function conversation(
         !node.closest('[hidden], [aria-hidden="true"], [inert]');
       const all = (node: ParentNode, selector: string) =>
         Array.from(node.querySelectorAll(selector)).filter(visible);
-      const regionSelector = '[aria-label^="Messages in conversation with "]';
+      const regionSelector =
+        '[aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="log"]';
       const composerSelector =
-        '[contenteditable="true"][role="textbox"][data-lexical-editor="true"][aria-label^="Write to "]';
-      const composerContainer = '[aria-label="Thread composer"]';
+        '[contenteditable="true"][role="textbox"][data-lexical-editor="true"], [contenteditable="true"][role="textbox"][aria-placeholder="Aa"]';
+      const composerContainers =
+        '[aria-label="Thread composer"], [aria-label="Засіб створення повідомлення"], [aria-label="Область створення повідомлення"], [aria-label="Область ввода сообщения"]';
+      const composerContainer = composerContainers;
       const branch = (scope: Element, node: Element) => {
         while (node.parentElement && node.parentElement !== scope)
           node = node.parentElement;
@@ -95,19 +98,22 @@ async function conversation(
           normalize(node.getAttribute('aria-label') || node.textContent),
         );
         return (
-          labels.includes('Chat settings') ||
-          (labels.includes('Minimise chat') && labels.includes('Close chat'))
+          labels.some((label) =>
+            /^(?:chat settings|налаштування чату|настройки чата)$/i.test(label),
+          ) ||
+          (labels.some((label) =>
+            /^(?:minimise chat|minimize chat|згорнути чат|свернуть чат)$/i.test(
+              label,
+            ),
+          ) &&
+            labels.some((label) =>
+              /^(?:close chat|закрити чат|закрыть чат)$/i.test(label),
+            ))
         );
       };
       const chatControls = (scope: Element) =>
         all(scope, 'button, [role="button"]').filter((node) =>
-          [
-            'Chat settings',
-            'Minimise chat',
-            'Close chat',
-            'Start a voice call',
-            'Start a video call',
-          ].includes(
+          /^(?:chat settings|налаштування чату|настройки чата|minimise chat|minimize chat|згорнути чат|свернуть чат|close chat|закрити чат|закрыть чат|start a voice call|почати голосовий виклик|начать голосовой вызов|start a video call|почати відеодзвінок|начать видеозвонок)$/i.test(
             normalize(node.getAttribute('aria-label') || node.textContent),
           ),
         );
@@ -142,11 +148,15 @@ async function conversation(
           (child) =>
             child !== branch(scope, region) &&
             child !== branch(scope, composer) &&
-            headerControls(child),
+            (headerControls(child) ||
+              (all(child, 'button, [role="button"]').length > 0 &&
+                all(child, 'a[href]').some(
+                  (link) => identity(link) === recipient,
+                ))),
         );
       const sendSelector =
-        '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"]';
-      const composerActionSelector = `${sendSelector}, [role="button"][aria-label="Send a Like"], button[aria-label="Send a Like"]`;
+        '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"], [role="button"][aria-label="Натисніть Enter, щоб надіслати"], button[aria-label="Натисніть Enter, щоб надіслати"], [role="button"][aria-label="Нажмите Enter, чтобы отправить"], button[aria-label="Нажмите Enter, чтобы отправить"], [role="button"][aria-label="Send"], button[aria-label="Send"], [role="button"][aria-label="Надіслати"], button[aria-label="Надіслати"], [role="button"][aria-label="Отправить"], button[aria-label="Отправить"]';
+      const composerActionSelector = `${sendSelector}, [role="button"][aria-label="Send a Like"], button[aria-label="Send a Like"], [role="button"][aria-label="Надіслати вподобайку"], button[aria-label="Надіслати вподобайку"], [role="button"][aria-label="Надіслать отметку Нравится"], button[aria-label="Надіслать отметку Нравится"]`;
       // The live third branch is unobserved. Accept incidental branches only
       // when all chat semantics stay exclusively in the immediate header/body.
       // Reuse this predicate through dispatch; never search a higher ancestor.
@@ -281,20 +291,49 @@ async function conversation(
               break;
             }
             const region = regions[0]!;
-            const name = normalize(
-              editor.getAttribute('aria-label')?.slice('Write to '.length) ??
-                '',
+            const composer =
+              editor.closest(composerContainer) ??
+              (editor.getAttribute('aria-placeholder') === 'Aa'
+                ? editor.parentElement
+                : null);
+            const editorLabel = normalize(editor.getAttribute('aria-label'));
+            const editorName = /^(?:write to|напишіть|напишите)\s+(.+)$/i.exec(
+              editorLabel,
+            )?.[1];
+            const regionLabel = normalize(region.getAttribute('aria-label'));
+            const regionName =
+              /^(?:messages in conversation with|повідомлення в розмові з|сообщения в переписке с)\s+(.+)$/i.exec(
+                regionLabel,
+              )?.[1];
+            const localRecipientLinks = all(scope, 'a[href]').filter(
+              (link) => identity(link) === recipient,
             );
+            const name = normalize(
+              editorName ||
+                regionName ||
+                (localRecipientLinks.length === 1
+                  ? localRecipientLinks[0]!.getAttribute('aria-label') ||
+                    localRecipientLinks[0]!.textContent
+                  : ''),
+            );
+            const regionNameMatches =
+              !regionLabel ||
+              Boolean(regionName && normalize(regionName) === name);
             if (
               !name ||
-              normalize(region.getAttribute('aria-label')) !==
-                `Messages in conversation with ${name}`
+              !regionNameMatches ||
+              (editorName &&
+                regionName &&
+                normalize(editorName) !== normalize(regionName))
             ) {
               reject('name_mismatch');
               break;
             }
-            const composer = editor.closest(composerContainer);
             if (!composer || !scope.contains(composer)) {
+              reject('composer_scope');
+              break;
+            }
+            if (!composer.contains(editor)) {
               reject('composer_scope');
               break;
             }
@@ -418,7 +457,13 @@ async function conversation(
           headersIn(scope, region, composer).length === 1 &&
           headersIn(scope, region, composer)[0] === header &&
           header.parentElement === scope &&
-          headerControls(header) &&
+          (headerControls(header) ||
+            (all(header, 'button, [role="button"]').length > 0 &&
+              all(header, 'a[href]').some(
+                (anchor) =>
+                  identity(anchor) === recipient &&
+                  namesRecipient(anchor, name),
+              ))) &&
           header.contains(link) &&
           all(header, 'a[href]').filter(
             (anchor) => identity(anchor) === recipient,
@@ -429,7 +474,6 @@ async function conversation(
           !header.contains(region) &&
           !header.contains(composer) &&
           composer.contains(editor) &&
-          editor.closest(composerContainer) === composer &&
           scope.isConnected &&
           region.isConnected &&
           editor.isConnected &&
@@ -446,9 +490,17 @@ async function conversation(
           !scope.closest(forbidden) &&
           identity(link) === recipient &&
           namesRecipient(link, name) &&
-          editor.getAttribute('aria-label') === `Write to ${name}` &&
-          region.getAttribute('aria-label') ===
-            `Messages in conversation with ${name}` &&
+          (!editor.getAttribute('aria-label') ||
+            editor.getAttribute('aria-label') === `Write to ${name}` ||
+            editor.getAttribute('aria-label') === `Напишіть ${name}` ||
+            editor.getAttribute('aria-label') === `Напишите ${name}`) &&
+          (!region.getAttribute('aria-label') ||
+            region.getAttribute('aria-label') ===
+              `Messages in conversation with ${name}` ||
+            region.getAttribute('aria-label') ===
+              `Повідомлення в розмові з ${name}` ||
+            region.getAttribute('aria-label') ===
+              `Сообщения в переписке с ${name}`) &&
           all(scope, composerSelector).length === 1 &&
           all(scope, composerSelector)[0] === editor &&
           all(scope, regionSelector).length === 1 &&

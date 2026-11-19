@@ -13,7 +13,7 @@ const observedChat = readFileSync(
   'utf8',
 );
 const markup = `
-<style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
+<style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"], [role="log"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
 <nav aria-label="Account"><a href="/100000000000009/">Synthetic self</a></nav>
 <main><h1>Synthetic recipient</h1><button id="open">Message</button></main>
 <div id="chats"></div>
@@ -56,6 +56,19 @@ function chat(id, target, name) {
     captured.querySelector('[aria-label^="Messages in conversation"]').setAttribute('aria-label', 'Messages in conversation with ' + name);
     return captured;
   }
+  if (o.e2eeAa) {
+    const headerTarget = o.wrongRecipient ? '100000000000002' : target;
+    scope.innerHTML = '<div><a href="https://www.facebook.com/' + headerTarget + '/">' + name + '</a>' +
+      '<button role="button" aria-label="Налаштування чату"></button><button aria-label="Почати голосовий виклик"></button>' +
+      '<button aria-label="Почати відеодзвінок"></button><button aria-label="Згорнути чат"></button><button aria-label="Закрити чат"></button></div>' +
+      '<div role="log"><section aria-label="End-to-end encryption"><h2>Restore messages</h2><p>Personal chats are secured with end-to-end encryption.</p><button>Restore now</button></section></div>' +
+      '<div><div contenteditable="true" role="textbox" aria-placeholder="Aa"><p></p></div>' +
+      '<button role="button" aria-label="Send a Like"></button></div>';
+    scope.querySelector('section button').addEventListener('click', () => {
+      void window.fixtureEvent('restore');
+    });
+    return scope;
+  }
   // Header-like generic container, deliberately not a header element.
   scope.innerHTML = '<div><a href="https://www.facebook.com/' + target + '/">' + name + '</a>' +
     '<div role="button" aria-label="Chat settings" aria-haspopup="menu"></div>' +
@@ -80,7 +93,7 @@ function chat(id, target, name) {
   }
   return scope;
 }
-const region = scope => scope.querySelector('[aria-label^="Messages in conversation"]');
+const region = scope => scope.querySelector('[aria-label^="Messages in conversation"], [aria-label^="Повідомлення в розмові"], [aria-label^="Сообщения в переписке"], [role="log"]');
 function wire(scope) {
   const editor = scope.querySelector('[contenteditable]');
   const button = scope.querySelector('[aria-label="Send a Like"], [aria-label="Press Enter to send"]');
@@ -151,7 +164,7 @@ document.querySelector('#open').onclick = () => {
     if (o.noRegion) region(scope).remove();
     if (o.hiddenRegion) region(scope).hidden = true;
     if (o.nameMismatch) region(scope).setAttribute('aria-label', 'Messages in conversation with Different Name');
-    if (o.noComposerScope) editor.parentElement.removeAttribute('aria-label');
+    if (o.noComposerScope) { editor.parentElement.removeAttribute('aria-label'); editor.removeAttribute('aria-placeholder'); }
     if (o.forbiddenScope) { const aside = document.createElement('aside'); scope.replaceWith(aside); aside.append(scope); }
     if (o.duplicateHeader) scope.prepend(scope.firstElementChild.cloneNode(true));
     if (o.zeroHeaders) { for (const button of scope.querySelectorAll('button, [role="button"]')) button.remove(); }
@@ -852,12 +865,17 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { wrappedChatBody: true, parentHiddenExtras: true },
       { avatarLink: true, wrappedChatBody: true, neighbour: true },
       { avatarLink: true, wrappedChatBody: true, company: true },
+      { e2eeAa: true },
     ])(
       'sends once to a bound direct profile/Page and confirms a distinct outgoing (%j)',
       async (options) => {
         const f = await fixture(options);
         try {
-          const result = await f.send();
+          const result = await f.send().catch((error: unknown) => {
+            throw new Error(
+              (error as { reasonUk?: string }).reasonUk ?? 'send failed',
+            );
+          });
           expect(result).toMatchObject({
             outcome: 'facebook_dispatched_unconfirmed',
             dialogUrl: f.target,
@@ -982,6 +1000,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ].map((key) => ({ observed: true, [key]: true })),
       { observed: true, wrongRecipient: true },
       { observed: true, wrongRecipient: true, neighbour: true },
+      { e2eeAa: true, wrongRecipient: true },
       { observed: true, outsideProfileHeader: true, wrongRecipient: true },
       { observed: true, globalLinkOnly: true },
       { observed: true, outsideHeaderLink: true },
