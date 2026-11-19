@@ -75,6 +75,9 @@ export const tasks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
     dismissedAt: timestamp('dismissed_at', { withTimezone: true }),

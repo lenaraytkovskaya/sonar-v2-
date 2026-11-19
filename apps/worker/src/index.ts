@@ -38,6 +38,7 @@ import {
   TaskFailure,
   closeTaskQueue,
   recordWorkerHeartbeat,
+  reconcileStuckTasks,
 } from '@sonar/db/tasks';
 let stopping = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -82,6 +83,12 @@ const started = (async () => {
   await registerSocialCredentialLoginTasks();
   await registerSocialSessionTasks();
   await registerSiteTasks();
+  await boss.createQueue('sonar.tasks.reconcile');
+  await boss.work('sonar.tasks.reconcile', async () => {
+    await reconcileStuckTasks();
+  });
+  await boss.schedule('sonar.tasks.reconcile', '* * * * *');
+  await reconcileStuckTasks();
   await boss.createQueue('sonar.account-health.resume');
   await boss.createQueue('sonar.account-health.cleanup');
   await boss.work('sonar.account-health.resume', async () => {

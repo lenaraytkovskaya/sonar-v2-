@@ -519,6 +519,238 @@ export class TaskFailure extends Error {
     super(code);
   }
 }
+const taskInterruptedReasonUk =
+  'Задачу перервано (перезапуск сервера). Результат невідомий — перевірте вручну перед повтором.';
+const replayableInterruptedTaskTypes = new Set([
+  'system.registry_ping',
+  'site.scan',
+  'registry.match',
+  'registry.phones.sync',
+  'prozorro.sync',
+  'prozorro.lookup',
+  'company.score',
+  'company.analyze',
+  'google.batch',
+  'google.company',
+  'social.fetch',
+  'telegram.sync',
+  'viber.inbox.sync',
+  'email.receive',
+  'whatsapp.receive',
+  'telegram.receive',
+  'whatsapp.identity.repair',
+  'ai.models',
+  'ai.assist',
+  'ai.drafts',
+  'ai.inbound',
+  'ai.reply',
+  'form.reply.match',
+]);
+// These task types have domain-specific recovery and locks; let those reconcilers own them.
+const taskTypesWithPrivateReconciliation = new Set([
+  'prozorro.company',
+  'social.inbox.sync',
+  'social.session.login',
+]);
+// These receipts run inside a parent task and never have their own pg-boss job.
+const taskTypesManagedByParent = [
+  'google.request',
+  'google.resolve',
+  'social.request',
+];
+
+type StuckTaskReconcileSummary = {
+  reconciled: number;
+  byType: Record<string, { queued: number; paused: number }>;
+};
+
+export async function reconcileStuckTasks(
+  now = new Date(),
+): Promise<StuckTaskReconcileSummary> {
+  return transaction<StuckTaskReconcileSummary>(async (client) => {
+    const { rows: locks } = await client.query(
+      "select pg_try_advisory_xact_lock(hashtextextended('tasks.stuck-reconcile',0)) as locked",
+    );
+    if (!locks[0]?.locked) return { reconciled: 0, byType: {} };
+
+    const { rows: settings } = await client.query(
+      "select value from settings where key='tasks.reconciler'",
+    );
+    const config = settings[0]?.value ?? {};
+    const staleBufferSeconds = Number(config.staleBufferSeconds);
+    const defaultExpireInSeconds = Number(config.defaultExpireInSeconds);
+    if (
+      !Number.isSafeInteger(staleBufferSeconds) ||
+      staleBufferSeconds < 0 ||
+      !Number.isSafeInteger(defaultExpireInSeconds) ||
+      defaultExpireInSeconds < 1
+    )
+      return { reconciled: 0, byType: {} };
+
+    const { rows: candidates } = await client.query(
+      `select t.id,t.type,t.payload,t.result
+       from tasks t
+       left join settings task_settings on task_settings.key='tasks.'||t.type
+       where t.status='running'
+         and not (t.type=any($4::text[]))
+         and not (t.type=any($5::text[]))
+         and (
+           t.updated_at <= $1::timestamptz - (
+             $2::integer + coalesce(
+               case when task_settings.value->>'expireInSeconds' ~ '^[0-9]+$'
+                 then (task_settings.value->>'expireInSeconds')::integer end,
+               $3::integer
+             )
+           ) * interval '1 second'
+           or not exists (
+             select 1 from pgboss.job j
+             where j.name=t.type and j.data->>'taskId'=t.id::text
+               and j.state in ('created','retry','active')
+           )
+         )
+       order by t.updated_at,t.created_at,t.id
+       for update of t skip locked`,
+      [
+        now,
+        staleBufferSeconds,
+        defaultExpireInSeconds,
+        [...taskTypesWithPrivateReconciliation],
+        taskTypesManagedByParent,
+      ],
+    );
+
+    const counts = new Map<string, { queued: number; paused: number }>();
+    const reconciledTaskIds: string[] = [];
+    const count = (type: string, status: 'queued' | 'paused') => {
+      const entry = counts.get(type) ?? { queued: 0, paused: 0 };
+      entry[status]++;
+      counts.set(type, entry);
+    };
+    let reconciled = 0;
+
+    for (const task of candidates) {
+      const { rows: children } = await client.query(
+        `select id,type,status,result from tasks c
+         where c.status in ('queued','running') and (
+           ($2='google.batch' and c.type='google.request' and c.batch_id::text=$3)
+           or ($2='google.company' and c.type='google.resolve' and c.payload->>'parentId'=$1)
+           or ($2='social.fetch' and c.type='social.request' and c.payload->>'parentId'=$1)
+         )
+         for update`,
+        [task.id, task.type, task.payload?.batchId ?? null],
+      );
+      const hasPendingBilling =
+        task.result?.billingPending === true ||
+        children.some((child) => child.result?.billingPending === true);
+      const hasUnknownResolution = children.some(
+        (child) =>
+          child.type === 'google.resolve' && child.status === 'running',
+      );
+      const shouldPause =
+        task.type === 'message.send' ||
+        hasPendingBilling ||
+        hasUnknownResolution ||
+        !replayableInterruptedTaskTypes.has(task.type);
+
+      if (shouldPause) {
+        const { rows: updated } = await client.query(
+          `update tasks set status='paused',reason_code='task_interrupted',
+             reason_uk=$2,finished_at=now()
+           where id=$1 and status='running' returning id`,
+          [task.id, taskInterruptedReasonUk],
+        );
+        if (!updated.length) continue;
+        count(task.type, 'paused');
+        reconciledTaskIds.push(task.id);
+        reconciled++;
+        if (children.length) {
+          const { rows: childUpdates } = await client.query(
+            `update tasks set status='paused',reason_code='task_interrupted',
+               reason_uk=$2,finished_at=now()
+             where id=any($1::uuid[]) and status in ('queued','running')
+             returning id,type`,
+            [children.map((child) => child.id), taskInterruptedReasonUk],
+          );
+          for (const child of childUpdates) {
+            count(child.type, 'paused');
+            reconciledTaskIds.push(child.id);
+            reconciled++;
+          }
+        }
+        continue;
+      }
+
+      const { rows: updated } = await client.query(
+        `update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null
+         where id=$1 and status='running' returning id`,
+        [task.id],
+      );
+      if (!updated.length) continue;
+      if (children.length) {
+        await client.query(
+          `update tasks set status='queued',reason_code=null,reason_uk=null,finished_at=null
+           where id=any($1::uuid[]) and status='running'
+             and coalesce(result->>'billingPending','false')<>'true'`,
+          [children.map((child) => child.id)],
+        );
+      }
+      await dispatch(client, task.id, task.type);
+      count(task.type, 'queued');
+      reconciledTaskIds.push(task.id);
+      reconciled++;
+    }
+
+    // Parent handlers own these child receipts. Once their parent is no longer
+    // queued or running, preserve the result and reservation but stop the orphan.
+    const { rows: orphanChildren } = await client.query(
+      `select c.id,c.type
+       from tasks c
+       where c.status='running' and c.type=any($1::text[])
+         and not exists (
+           select 1 from tasks p
+           where p.status in ('queued','running') and (
+             (c.type='google.request' and p.type='google.batch'
+               and p.payload->>'batchId'=c.batch_id::text)
+             or (c.type='google.resolve' and p.type='google.company'
+               and p.id::text=c.payload->>'parentId')
+             or (c.type='social.request' and p.type='social.fetch'
+               and p.id::text=c.payload->>'parentId')
+           )
+         )
+       order by c.updated_at,c.created_at,c.id
+       for update of c skip locked`,
+      [taskTypesManagedByParent],
+    );
+    if (orphanChildren.length) {
+      const { rows: pausedChildren } = await client.query(
+        `update tasks set status='paused',reason_code='task_interrupted',
+           reason_uk=$2,finished_at=now()
+         where id=any($1::uuid[]) and status='running'
+         returning id,type`,
+        [orphanChildren.map((child) => child.id), taskInterruptedReasonUk],
+      );
+      for (const child of pausedChildren) {
+        count(child.type, 'paused');
+        reconciledTaskIds.push(child.id);
+        reconciled++;
+      }
+    }
+
+    const byType: StuckTaskReconcileSummary['byType'] = Object.fromEntries(
+      [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)),
+    );
+    if (reconciled)
+      await logActivity(
+        'task.reconciled',
+        'task',
+        null,
+        null,
+        { reconciled, byType, taskIds: reconciledTaskIds },
+        client,
+      );
+    return { reconciled, byType };
+  });
+}
 export type TaskOutcome =
   | { status: 'done'; result: object }
   | {
@@ -541,10 +773,10 @@ export async function executeTask(
     result?: object,
     code?: string,
     reason?: string,
-  ) => Promise<void>,
+  ) => Promise<void | boolean>,
   retry: boolean,
 ) {
-  await save('running');
+  if ((await save('running')) === false) return;
   try {
     const outcome = await handler();
     if (outcome.status === 'done') await save('done', outcome.result);
@@ -659,16 +891,38 @@ export async function runTask(
           return outcome;
         },
         async (status, result, code, reason) => {
-          await sonarPool.query(
+          if (status === 'running') {
+            const { rows: started } = await sonarPool.query(
+              `update tasks set status='running',
+                 result=case when type='social.inbox.sync' then '{}'::jsonb else result end,
+                 reason_code=null,reason_uk=null,attempts=attempts+1,
+                 started_at=clock_timestamp(),finished_at=null
+               where id=$1 and status in ('queued','running')
+               returning attempts`,
+              [task.id],
+            );
+            if (!started[0]) return false;
+            task.attempts = started[0].attempts;
+            return true;
+          }
+          const { rows: saved } = await sonarPool.query(
             `update tasks set status=$2::text::task_status,
-    result=case when type='social.inbox.sync' and $2::text='running' then '{}'::jsonb else coalesce($3::jsonb,result) end,
-    reason_code=$4, reason_uk=$5,
-    attempts=attempts+case when $2::text='running' then 1 else 0 end,
-    started_at=case when $2::text='running' then now() else started_at end,
-    finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end where id=$1 and not (type='message.send' and status='paused' and reason_code='account_health_paused' and $2::text<>'paused')`,
-            [task.id, status, result ?? null, code ?? null, reason ?? null],
+               result=coalesce($3::jsonb,result),reason_code=$4,reason_uk=$5,
+               finished_at=case when $2::text in ('done','skipped','failed','paused') then now() else null end
+             where id=$1 and status='running' and attempts=$6 returning id`,
+            [
+              task.id,
+              status,
+              result ?? null,
+              code ?? null,
+              reason ?? null,
+              task.attempts,
+            ],
           );
-          if (['done', 'skipped', 'failed', 'paused'].includes(status))
+          if (
+            saved.length &&
+            ['done', 'skipped', 'failed', 'paused'].includes(status)
+          )
             await afterTerminal?.(task.payload);
         },
         job.retryCount < job.retryLimit,

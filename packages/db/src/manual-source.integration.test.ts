@@ -7,6 +7,8 @@ let save: typeof import('./manual-source.js').saveManualSource;
 let admin: import('pg-boss').PgBoss;
 let userId: string;
 let campaignId: string;
+let monthlyBudgetSetting: { value: unknown } | null = null;
+let monthlyBudgetCaptured = false;
 const companies: string[] = [];
 const request = (
   source: ManualSourceInput['source'],
@@ -31,6 +33,14 @@ describe.skipIf(!enabled)('manual source transactions', () => {
   beforeAll(async () => {
     db = await import('./index.js');
     save = (await import('./manual-source.js')).saveManualSource;
+    const { rows: budgetSettings } = await db.sonarPool.query(
+      "select value from settings where key='budget.monthly_usd'",
+    );
+    monthlyBudgetSetting = budgetSettings[0] ?? null;
+    monthlyBudgetCaptured = true;
+    await db.sonarPool.query(
+      "insert into settings(key,value) values('budget.monthly_usd','100'::jsonb) on conflict(key) do update set value=excluded.value",
+    );
     const { PgBoss } = await import('pg-boss');
     admin = new PgBoss(process.env.DATABASE_URL!);
     await admin.start();
@@ -759,6 +769,17 @@ describe.skipIf(!enabled)('manual source transactions', () => {
       userId,
     ]);
     await db.sonarPool.query('delete from users where id=$1', [userId]);
+    if (monthlyBudgetCaptured) {
+      if (monthlyBudgetSetting)
+        await db.sonarPool.query(
+          "update settings set value=$1 where key='budget.monthly_usd'",
+          [monthlyBudgetSetting.value],
+        );
+      else
+        await db.sonarPool.query(
+          "delete from settings where key='budget.monthly_usd'",
+        );
+    }
     await admin.stop();
     await (await import('./tasks.js')).closeTaskQueue();
     await Promise.all([db.sonarPool.end(), db.registryPool.end()]);
