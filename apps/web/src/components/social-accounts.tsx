@@ -24,6 +24,17 @@ import {
 } from './account-health';
 
 type Account = Awaited<ReturnType<typeof listSocialAccounts>>[number];
+/** A later successful session check makes an older inbox error stale. */
+export function inboxErrorSuperseded(
+  account: Pick<Account, 'sessionStatus' | 'checkedAt' | 'inboxSyncCheckedAt'>,
+) {
+  return (
+    account.sessionStatus === 'valid' &&
+    !!account.checkedAt &&
+    !!account.inboxSyncCheckedAt &&
+    Date.parse(account.checkedAt) > Date.parse(account.inboxSyncCheckedAt)
+  );
+}
 function ownerDeviceDescription(account: Account) {
   const device = account.device;
   if (account.deviceSource !== 'owner_browser' || !device) return;
@@ -552,13 +563,14 @@ export function SocialAccounts({
                   </span>
                 </Callout>
               )}
-              {account.deviceSource !== 'owner_browser' && (
-                <Callout tone="wait">
-                  <span className="text-xs">
-                    {uk.socialAccounts.deviceUnconfirmed}
-                  </span>
-                </Callout>
-              )}
+              {account.deviceSource !== 'owner_browser' &&
+                !account.browserProfile && (
+                  <Callout tone="wait">
+                    <span className="text-xs">
+                      {uk.socialAccounts.deviceUnconfirmed}
+                    </span>
+                  </Callout>
+                )}
               {account.loginBlocked && (
                 <Callout tone="err">{uk.socialAccounts.loginBlocked}</Callout>
               )}
@@ -588,7 +600,7 @@ export function SocialAccounts({
                   )}
                 </Callout>
               )}
-              {account.inboxSyncErrorUk && (
+              {account.inboxSyncErrorUk && !inboxErrorSuperseded(account) && (
                 <Callout tone="err">
                   {account.inboxSyncErrorUk}
                   {account.failureShotKinds.includes('inbox') && (
