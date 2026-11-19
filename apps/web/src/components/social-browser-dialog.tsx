@@ -251,7 +251,15 @@ export function SocialBrowserDialog({
             {error}
           </p>
         )}
-        <div className="flex justify-end">
+        <div className="flex justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!ready}
+            onClick={() => void act({ action: 'reload' })}
+          >
+            {uk.socialAccounts.browserReload}
+          </Button>
           <Button
             type="button"
             disabled={!ready}

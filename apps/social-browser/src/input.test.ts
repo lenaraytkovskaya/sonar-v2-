@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { parseBrowserAction } from './input.js';
 
 describe('browser input validation', () => {
+  it('accepts a reload action without parameters', () => {
+    expect(parseBrowserAction({ type: 'reload' })).toEqual({ type: 'reload' });
+  });
+
   it('accepts bounded pointer and wheel input', () => {
     expect(
       parseBrowserAction({ type: 'click', x: 1280, y: 800 }),
