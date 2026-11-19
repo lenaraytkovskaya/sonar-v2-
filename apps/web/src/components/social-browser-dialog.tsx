@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { mapBrowserPoint } from '@/lib/social-browser-input';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 
@@ -14,9 +15,13 @@ export function SocialBrowserDialog({
   onDone: () => void;
 }) {
   const [error, setError] = useState('');
-  const [text, setText] = useState('');
   const [ready, setReady] = useState(false);
   const base = `/api/social-accounts/${accountId}/browser`;
+  const openRequest = useRef<Promise<void> | null>(null);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastMoveAt = useRef(0);
+  const pendingMove = useRef<{ x: number; y: number } | null>(null);
+  const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const send = useCallback(
     async (body: object) => {
       const response = await fetch(base, {
@@ -33,9 +38,26 @@ export function SocialBrowserDialog({
     },
     [base],
   );
+  const act = useCallback(
+    async (body: object) => {
+      try {
+        await send(body);
+        setError('');
+      } catch (reason) {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : uk.socialAccounts.browserUnavailable,
+        );
+      }
+    },
+    [send],
+  );
   useEffect(() => {
     let active = true;
-    void send({ action: 'open' })
+    if (releaseTimer.current) clearTimeout(releaseTimer.current);
+    openRequest.current ??= send({ action: 'open' });
+    void openRequest.current
       .then(() => {
         if (active) setReady(true);
       })
@@ -49,12 +71,92 @@ export function SocialBrowserDialog({
       });
     return () => {
       active = false;
+      if (moveTimer.current) clearTimeout(moveTimer.current);
+      releaseTimer.current = setTimeout(() => {
+        void (openRequest.current ?? Promise.resolve())
+          .catch(() => {})
+          .then(() =>
+            fetch(base, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'close' }),
+              keepalive: true,
+            }),
+          )
+          .catch(() => {});
+      }, 0);
     };
-  }, [send]);
-  const act = async (body: object) => {
-    setError('');
+  }, [base, send]);
+
+  const point = (clientX: number, clientY: number, element: HTMLDivElement) => {
+    const rect = element.getBoundingClientRect();
+    return mapBrowserPoint(clientX, clientY, rect);
+  };
+  const mouse = (type: string, x: number, y: number) =>
+    void act({ action: 'mouse', type, x, y });
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const next = point(event.clientX, event.clientY, event.currentTarget);
+    pendingMove.current = next;
+    const now = performance.now();
+    const remaining = 32 - (now - lastMoveAt.current);
+    if (remaining <= 0) {
+      lastMoveAt.current = now;
+      mouse('move', next.x, next.y);
+    } else if (!moveTimer.current) {
+      moveTimer.current = setTimeout(() => {
+        moveTimer.current = null;
+        const latest = pendingMove.current;
+        if (latest) {
+          lastMoveAt.current = performance.now();
+          mouse('move', latest.x, latest.y);
+        }
+      }, remaining);
+    }
+  };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const key = event.key;
+    if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'a') {
+      event.preventDefault();
+      void act({ action: 'key', selectAll: true });
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'v') {
+      event.preventDefault();
+      void navigator.clipboard
+        .readText()
+        .then((text) => act({ action: 'text', text: text.slice(0, 4096) }))
+        .catch(() => setError(uk.socialAccounts.browserClipboardUnavailable));
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (Array.from(key).length === 1 && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void act({ action: 'text', text: key });
+      return;
+    }
+    const keys = [
+      'Enter',
+      'Tab',
+      'Backspace',
+      'Delete',
+      'Escape',
+      'ArrowUp',
+      'ArrowDown',
+      'ArrowLeft',
+      'ArrowRight',
+      'Home',
+      'End',
+    ];
+    if (keys.includes(key)) {
+      event.preventDefault();
+      void act({ action: 'key', key });
+    }
+  };
+  const close = async (done: boolean) => {
     try {
-      await send(body);
+      await send({ action: 'close' });
+      if (done) onDone();
+      else onClose();
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -63,15 +165,7 @@ export function SocialBrowserDialog({
       );
     }
   };
-  const refresh = useCallback(() => `${base}?t=${Date.now()}`, [base]);
-  const [screenUrl, setScreenUrl] = useState('');
-  useEffect(() => {
-    if (!ready) return;
-    const update = () => setScreenUrl(refresh());
-    update();
-    const timer = setInterval(update, 2500);
-    return () => clearInterval(timer);
-  }, [ready, refresh]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3"
@@ -87,85 +181,82 @@ export function SocialBrowserDialog({
           <h2 id="social-browser-title" className="text-lg font-semibold">
             {uk.socialAccounts.browserTitle}
           </h2>
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void close(false)}
+          >
             {uk.crud.close}
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
           {uk.socialAccounts.browserHelp}
         </p>
-        <div className="min-h-64 overflow-hidden rounded-lg border border-border bg-black">
-          {ready && screenUrl ? (
+        <div
+          className="aspect-[8/5] w-full touch-none overflow-hidden rounded-lg border border-border bg-black"
+          onPointerMove={onPointerMove}
+          onPointerDown={(event) => {
+            event.currentTarget.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const { x, y } = point(
+              event.clientX,
+              event.clientY,
+              event.currentTarget,
+            );
+            mouse('down', x, y);
+          }}
+          onPointerUp={(event) => {
+            const { x, y } = point(
+              event.clientX,
+              event.clientY,
+              event.currentTarget,
+            );
+            mouse('up', x, y);
+          }}
+          onWheel={(event) => {
+            event.preventDefault();
+            const { x, y } = point(
+              event.clientX,
+              event.clientY,
+              event.currentTarget,
+            );
+            void act({
+              action: 'wheel',
+              x,
+              y,
+              deltaX: event.deltaX,
+              deltaY: event.deltaY,
+            });
+          }}
+          onKeyDown={onKeyDown}
+          tabIndex={0}
+          aria-label={uk.socialAccounts.browserTitle}
+        >
+          {ready ? (
             <img
-              className="block max-h-[62vh] w-full object-contain"
-              src={screenUrl}
+              className="block size-full select-none object-fill"
+              src={base}
               alt={uk.socialAccounts.browserTitle}
-              onClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const scale = Math.min(rect.width / 1280, rect.height / 800);
-                const width = 1280 * scale;
-                const height = 800 * scale;
-                const left = rect.left + (rect.width - width) / 2;
-                const top = rect.top + (rect.height - height) / 2;
-                void act({
-                  action: 'click',
-                  x: ((event.clientX - left) / width) * 1280,
-                  y: ((event.clientY - top) / height) * 800,
-                });
-              }}
+              draggable={false}
+              onError={() => setError(uk.socialAccounts.browserUnavailable)}
             />
           ) : (
-            <div className="p-8 text-center text-sm text-white">
-              {ready
-                ? uk.socialAccounts.browserLoading
-                : uk.socialAccounts.browserStarting}
+            <div className="flex size-full items-center justify-center text-sm text-white">
+              {error || uk.socialAccounts.browserStarting}
             </div>
           )}
         </div>
-        <form
-          className="flex flex-wrap gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const value = text;
-            setText('');
-            if (value) void act({ action: 'text', text: value });
-          }}
-        >
-          <input
-            aria-label={uk.socialAccounts.browserTextLabel}
-            autoComplete="off"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            className="min-h-11 min-w-48 flex-1 rounded-lg border border-border bg-background px-3"
-          />
-          <Button type="submit">{uk.socialAccounts.browserType}</Button>
-          {(['Tab', 'Enter', 'Backspace', 'Escape'] as const).map((key) => (
-            <Button
-              key={key}
-              type="button"
-              variant="outline"
-              onClick={() => void act({ action: 'key', key })}
-            >
-              {key}
-            </Button>
-          ))}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setScreenUrl(refresh());
-            }}
-          >
-            {uk.socialAccounts.browserRefresh}
-          </Button>
-        </form>
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
           </p>
         )}
         <div className="flex justify-end">
-          <Button type="button" disabled={!ready} onClick={onDone}>
+          <Button
+            type="button"
+            disabled={!ready}
+            onClick={() => void close(true)}
+          >
             {uk.socialAccounts.browserDone}
           </Button>
         </div>
