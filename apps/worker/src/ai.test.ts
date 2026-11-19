@@ -27,12 +27,13 @@ const suggestion = {
 };
 const migration = readFileSync(
   new URL(
-    '../../../packages/db/drizzle/0009_campaign_suggestions.sql',
+    '../../../packages/db/drizzle/0057_campaign_niche_offer.sql',
     import.meta.url,
   ),
   'utf8',
 );
 const instruction = migration.split('$prompt$')[1];
+const campaignOfferInstruction = migration.split('$prompt$')[3];
 beforeEach(() => vi.clearAllMocks());
 it.each(['Обладнання для СТО.', '', '   ', undefined])(
   'passes authoritative company.about separately from recipient context (%s)',
@@ -78,9 +79,9 @@ it.each(['Обладнання для СТО.', '', '   ', undefined])(
       status: 'done',
       result: {
         suggestion: {
-          offer: '',
+          offer: about?.trim() ? suggestion.offer : '',
           outreach_goal: suggestion.outreach_goal,
-          needs_about: false,
+          needs_about: !about?.trim(),
         },
       },
     });
@@ -90,19 +91,17 @@ it.each(['Обладнання для СТО.', '', '   ', undefined])(
 );
 it('migration specifies geography, business-only queries and factual first-message contract', () => {
   for (const rule of [
-    '5-10',
-    'business categories and synonyms ONLY',
+    '10-20 strings',
     'NEVER include geography',
-    'center plus 8-15',
-    '15-25',
-    'FIRST outreach message',
+    '8-15 largest cities',
+    '15-25 largest cities',
     'company.about',
     'needs_about=true',
-    'never repeat it as the offer',
-    'invent sender',
+    "Never copy the sender's industry",
+    'recipient niche',
   ])
     expect(instruction).toContain(rule);
-  expect(migration).toContain("jsonb_set(value, '{campaign}'");
+  expect(migration).toContain("'{campaign}'");
   expect(migration).toContain("WHERE key='ai.actions'");
 });
 it('campaign assistant fills the whole form and leaves the outreach message empty', () => {
@@ -121,6 +120,72 @@ it('campaign assistant fills the whole form and leaves the outreach message empt
     'budget_usd=0',
   ])
     expect(sql).toContain(rule);
+});
+it('drafts a niche offer from the sender profile and campaign context with the cheap model', async () => {
+  const about = 'Ми надаємо послуги з онлайн-маркетингу для автосервісів.';
+  const campaign = JSON.stringify({
+    language: 'uk',
+    cities: ['Львів'],
+    queries: ['стоматологія', 'стоматологічна клініка'],
+    outreach_goal: 'Запропонувати більше записів онлайн.',
+  });
+  query.mockResolvedValue({
+    rows: Object.entries({
+      'ai.actions': { campaign_offer: campaignOfferInstruction },
+      'company.about': about,
+      'ai.models': [
+        { id: 'stub', promptUsd: 0, completionUsd: 0, requestUsd: 0 },
+      ],
+      'ai.model.cheap': 'stub',
+      'ai.max_tokens': { campaign: 2000 },
+    }).map(([key, value]) => ({ key, value })),
+  });
+  const complete = vi.fn(async () => ({
+    text: 'Допомагаємо стоматологіям залучати пацієнтів онлайн.',
+    costUsd: 0.001,
+    units: 10,
+    id: 'stub',
+    model: 'stub',
+  }));
+  const result = await runAiAssist(
+    { action: 'campaign_offer', text: '', context: campaign },
+    'task',
+    { complete, models: vi.fn() },
+  );
+  const userMessage = (
+    complete.mock.calls[0] as unknown as [string, { content: string }[]]
+  )[1][1]!.content;
+  expect(userMessage).toContain(about);
+  expect(userMessage).toContain('стоматологія');
+  expect(campaignOfferInstruction).toContain(
+    'Do not repeat an industry mentioned in company.about',
+  );
+  expect(result).toMatchObject({
+    status: 'done',
+    result: { text: 'Допомагаємо стоматологіям залучати пацієнтів онлайн.' },
+  });
+  expect(budgeted).toHaveBeenCalledTimes(1);
+});
+it('asks for company.about before any paid campaign offer suggestion', async () => {
+  query.mockResolvedValue({
+    rows: Object.entries({
+      'ai.actions': { campaign_offer: 'Draft only a campaign proposition.' },
+      'company.about': '  ',
+      'ai.models': [],
+      'ai.model.cheap': 'stub',
+      'ai.max_tokens': { campaign: 2000 },
+    }).map(([key, value]) => ({ key, value })),
+  });
+  const complete = vi.fn();
+  expect(
+    await runAiAssist(
+      { action: 'campaign_offer', text: '', context: '{}' },
+      'task',
+      { complete, models: vi.fn() },
+    ),
+  ).toMatchObject({ status: 'skipped', reasonCode: 'company_about_missing' });
+  expect(complete).not.toHaveBeenCalled();
+  expect(budgeted).not.toHaveBeenCalled();
 });
 it.each(['inbound', 'reply'])(
   'keeps %s instructions in system role and charges the cheap model',

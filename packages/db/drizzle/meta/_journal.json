@@ -400,6 +400,20 @@
       "when": 1795000002000,
       "tag": "0056_viber_desktop",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1795000003000,
+      "tag": "0057_campaign_niche_offer",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1795000004000,
+      "tag": "0058_campaign_offer_analysis_version",
+      "breakpoints": true
     }
   ]
 }

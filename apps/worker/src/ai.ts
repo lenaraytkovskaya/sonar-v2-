@@ -36,6 +36,20 @@ export async function runAiAssist(
     "select key,value from settings where key like 'ai.%' or key in ('company.about','contact.name')",
   );
   const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const instruction = config['ai.actions']?.[input.action];
+  if (typeof instruction !== 'string')
+    throw new TaskFailure('action_invalid', 'Невідома дія ШІ-помічника.');
+  const about =
+    typeof config['company.about'] === 'string'
+      ? config['company.about'].trim()
+      : '';
+  if (input.action === 'campaign_offer' && !about)
+    return {
+      status: 'skipped',
+      reasonCode: 'company_about_missing',
+      reasonUk:
+        'Заповніть загальний профіль відправника в Налаштуваннях → ШІ → «Про нас», перш ніж створювати пропозицію.',
+    };
   const model = (config['ai.models'] as TextModel[] | undefined)?.find(
     (m) => m.id === config['ai.model.cheap'],
   );
@@ -45,17 +59,15 @@ export async function runAiAssist(
       reasonCode: 'model_missing',
       reasonUk: 'Виберіть дешеву модель у налаштуваннях ШІ.',
     };
-  const instruction = config['ai.actions']?.[input.action];
-  if (typeof instruction !== 'string')
-    throw new TaskFailure('action_invalid', 'Невідома дія ШІ-помічника.');
-  const about =
-    typeof config['company.about'] === 'string'
-      ? config['company.about'].trim()
-      : '';
   const context =
     input.action === 'campaign'
       ? JSON.stringify({ 'company.about': about, context: input.context ?? '' })
-      : (input.context ?? about);
+      : input.action === 'campaign_offer'
+        ? JSON.stringify({
+            'company.about': about,
+            campaign: input.context ?? '',
+          })
+        : (input.context ?? about);
   const conversationAction = ['inbound', 'reply'].includes(input.action);
   const messages = [
     {
@@ -82,14 +94,14 @@ export async function runAiAssist(
         : `${instruction} ${input.instruction ?? ''}\nContext: ${context}\nText: ${input.text}`,
     },
   ];
-  const limitAction = [
-    'campaign',
-    'company_filters',
-    'inbound',
-    'reply',
-  ].includes(input.action)
-    ? input.action
-    : 'rewrite';
+  const limitAction =
+    input.action === 'campaign_offer'
+      ? 'campaign'
+      : ['campaign', 'company_filters', 'inbound', 'reply'].includes(
+            input.action,
+          )
+        ? input.action
+        : 'rewrite';
   const maxTokens = Number(config['ai.max_tokens']?.[limitAction]);
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 10000)
     throw new TaskFailure('ai_config_invalid', 'Перевірте налаштування ШІ.');
@@ -124,8 +136,9 @@ export async function runAiAssist(
           result: {
             suggestion: (() => {
               const suggestion = parseCampaignSuggestion(response.text);
-              // The outreach message is written separately; collecting companies needs none.
-              return { ...suggestion, offer: '', needs_about: false };
+              return about
+                ? { ...suggestion, needs_about: false }
+                : { ...suggestion, offer: '', needs_about: true };
             })(),
             costUsd: response.costUsd,
           },

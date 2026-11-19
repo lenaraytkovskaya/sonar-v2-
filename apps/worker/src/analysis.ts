@@ -26,11 +26,16 @@ export async function runCompanyAnalysis(
   const {
     rows: [existing],
   } = await sonarPool.query(
-    'select id,result,cost_usd from analyses where company_id=$1 and campaign_id=$2 and version=$3',
+    'select id,result,cost_usd,(select offer from campaigns where id=$2) as campaign_offer from analyses where company_id=$1 and campaign_id=$2 and version=$3',
     [input.companyId, input.campaignId, input.version],
   );
   if (existing) {
-    await enqueueOutreachDrafts(input.companyId, input.campaignId, existing.id);
+    if (existing.campaign_offer?.trim())
+      await enqueueOutreachDrafts(
+        input.companyId,
+        input.campaignId,
+        existing.id,
+      );
     return {
       status: 'done',
       result: {
@@ -160,7 +165,7 @@ export async function runCompanyAnalysis(
     }
     let result;
     try {
-      result = parseAnalysis(response.text, data.contacts, data.about);
+      result = parseAnalysis(response.text, data.contacts, data.offer);
     } catch {
       throw new TaskFailure(
         'analysis_schema_invalid',
@@ -184,12 +189,13 @@ export async function runCompanyAnalysis(
           result,
         ],
       );
-      await enqueueOutreachDrafts(
-        input.companyId,
-        input.campaignId,
-        saved.id,
-        tx,
-      );
+      if (data.offer?.trim())
+        await enqueueOutreachDrafts(
+          input.companyId,
+          input.campaignId,
+          saved.id,
+          tx,
+        );
       await tx.query('commit');
       savedId = saved.id;
     } catch (error) {

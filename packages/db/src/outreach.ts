@@ -272,12 +272,13 @@ export async function enqueueOutreachDrafts(
     const {
       rows: [campaign],
     } = await c.query(
-      `select a.channels,a.status,a.min_score::float8,s.score::float8 from campaigns a join analyses an on an.campaign_id=a.id join campaign_companies cc on cc.campaign_id=a.id and cc.company_id=an.company_id left join company_scores s on s.company_id=an.company_id and s.campaign_id=a.id where a.id=$2 and an.company_id=$1 and an.id=$3`,
+      `select a.channels,a.status,a.offer,a.min_score::float8,s.score::float8 from campaigns a join analyses an on an.campaign_id=a.id join campaign_companies cc on cc.campaign_id=a.id and cc.company_id=an.company_id left join company_scores s on s.company_id=an.company_id and s.campaign_id=a.id where a.id=$2 and an.company_id=$1 and an.id=$3`,
       [companyId, campaignId, analysisId],
     );
     if (
       !campaign ||
       campaign.status !== 'active' ||
+      !campaign.offer?.trim() ||
       !Object.values(campaign.channels).some((enabled) => enabled === true) ||
       campaign.score === null ||
       campaign.score < campaign.min_score ||
@@ -313,11 +314,13 @@ export async function enqueueDraft(
     const {
       rows: [campaign],
     } = await c.query(
-      `select a.channels,a.min_score::float8,s.score::float8,(select id from analyses where company_id=$1 and campaign_id=a.id order by created_at desc,id desc limit 1) as analysis_id from campaigns a join campaign_companies cc on cc.campaign_id=a.id left join company_scores s on s.company_id=cc.company_id and s.campaign_id=a.id where a.id=$2 and cc.company_id=$1`,
+      `select a.channels,a.offer,a.min_score::float8,s.score::float8,(select id from analyses where company_id=$1 and campaign_id=a.id order by created_at desc,id desc limit 1) as analysis_id from campaigns a join campaign_companies cc on cc.campaign_id=a.id left join company_scores s on s.company_id=cc.company_id and s.campaign_id=a.id where a.id=$2 and cc.company_id=$1`,
       [input.companyId, input.campaignId],
     );
     if (!campaign?.analysis_id)
       invalid('Спочатку виконайте ШІ-аналіз компанії в цій кампанії.');
+    if (!campaign.offer?.trim())
+      invalid('Заповніть пропозицію кампанії перед створенням чернетки.');
     if (campaign.score === null || campaign.score < campaign.min_score)
       invalid('Оцінка компанії нижча за поріг кампанії.');
     const [contact] = await eligibleContacts(
