@@ -62,6 +62,7 @@ export interface OutreachConversation {
   lastMessage: string | null;
   lastStatus: string | null;
   lastReasonUk?: string | null;
+  lastSource?: string | null;
   lastAt: Date | null;
 }
 export interface DraftInput {
@@ -76,12 +77,15 @@ const invalid = (reason: string): never => {
 };
 const editable = ['draft', 'awaiting_approval', 'awaiting_manual'];
 const automatic = ['email', 'telegram', 'whatsapp', 'viber'];
-const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
+const conversationSelect = `select v.id,v.company_id as "companyId",co.name as "companyName",v.campaign_id as "campaignId",a.name as "campaignName",v.contact_id as "contactId",coalesce(ct.value,v.peer_value,m.to_value,'') as "contactValue",v.channel,v.status,m.body as "lastMessage",m.status as "lastStatus",m.reason_uk as "lastReasonUk",m.source as "lastSource",m.created_at as "lastAt",coalesce(a.send_mode,'manual') as "campaignSendMode",
   (select count(*)::int from messages where conversation_id=v.id and direction='in' and read_at is null) as "unreadCount",
   exists(select 1 from messages where conversation_id=v.id and needs_human) as "needsHuman"
   from (select * from conversations where merged_into_id is null) v left join companies co on co.id=v.company_id left join campaigns a on a.id=v.campaign_id left join contacts ct on ct.id=v.contact_id
-  left join lateral(select body,status,reason_uk,created_at,to_value from messages where conversation_id=v.id order by ${messageHistoryOrder('desc')} limit 1) m on true`;
-const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,m.status,m.to_value as "toValue",m.reason_uk as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id`;
+  left join lateral(select m.body,case when m.status='queued' and send_task.status='paused' then 'paused' else m.status::text end as status,case when m.status='queued' and send_task.status='paused' then send_task.reason_uk else m.reason_uk end as reason_uk,m.source,m.created_at,m.to_value from messages m
+    left join lateral(select t.status,t.reason_uk from tasks t where t.type='message.send' and t.payload->>'messageId'=m.id::text order by t.created_at desc,t.id desc limit 1) send_task on true
+    where conversation_id=v.id order by ${messageHistoryOrder('desc', true)} limit 1) m on true`;
+const messageSelect = `select m.id,m.conversation_id as "conversationId",m.channel,m.direction,m.source,m.subject,m.body,case when m.status='queued' and send_task.status='paused' then 'paused' else m.status::text end as status,m.to_value as "toValue",case when m.status='queued' and send_task.status='paused' then send_task.reason_uk else m.reason_uk end as "reasonUk",m.provider_id as "providerId",m.created_at as "createdAt",m.sent_at as "sentAt",m.classification,m.needs_human as "needsHuman",m.read_at as "readAt",(m.social_meta->'occurredAt'='null'::jsonb) as "providerTimestampUnknown" from messages m join conversations v on v.id=m.conversation_id
+  left join lateral(select t.status,t.reason_uk from tasks t where t.type='message.send' and t.payload->>'messageId'=m.id::text order by t.created_at desc,t.id desc limit 1) send_task on true`;
 
 export async function getInbox(
   filters: {

@@ -74,6 +74,13 @@ export class SocialSendError extends Error {
     this.name = 'SocialSendError';
   }
 }
+/** The profile lock is held by another worker operation or the owner's viewer. */
+export class SocialProfileBusyError extends Error {
+  constructor() {
+    super('social_browser_profile_busy');
+    this.name = 'SocialProfileBusyError';
+  }
+}
 // Fixed reasons are safe to persist; raw browser errors must never reach the UI/DB.
 export const socialSessionCheckReasons = {
   login_required:

@@ -50,6 +50,7 @@ type DeliveryContext = {
   toValue: string;
   reasonUk?: string | null;
   providerId?: string | null;
+  source?: string | null;
 };
 export const facebookDispatched = (status: string, message?: DeliveryContext) =>
   status === 'sent' &&
@@ -71,11 +72,31 @@ export const facebookHistoryLink = (
   }
 };
 export const messageStatus = (status: string, message?: DeliveryContext) =>
-  facebookDispatched(status, message)
-    ? uk.outreach.facebookDispatched
-    : (uk.email.statuses[status as keyof typeof uk.email.statuses] ??
-      (status === 'skipped'
-        ? uk.outreach.skipped
-        : status === 'received'
-          ? uk.inbound.received
-          : status));
+  status === 'paused'
+    ? uk.outreach.sendPaused(
+        message?.reasonUk ?? uk.outreach.sendPausedFallback,
+      )
+    : status === 'sent' &&
+        message?.source === 'manual' &&
+        ['social', 'form', 'call'].includes(message.channel)
+      ? uk.outreach.manuallyMarked
+      : facebookDispatched(status, message)
+        ? uk.outreach.facebookDispatched
+        : (uk.email.statuses[status as keyof typeof uk.email.statuses] ??
+          (status === 'skipped'
+            ? uk.outreach.skipped
+            : status === 'received'
+              ? uk.inbound.received
+              : status));
+export function socialUnavailableNotice(
+  value: string,
+  reasonUk?: string | null,
+  kind = 'missing',
+) {
+  const reasons = uk.socialAccounts.unavailableReasons;
+  const reason =
+    reasonUk?.trim() ||
+    reasons[kind as keyof typeof reasons] ||
+    reasons.missing;
+  return uk.socialAccounts.unavailable(channelLabel('social', value), reason);
+}

@@ -12,6 +12,9 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
   async () => {
     const { sonarPool } = await import('./index.js');
     const accounts = await import('./social-accounts.js');
+    const { boss } = await import('./tasks.js');
+    await boss.start();
+    await boss.createQueue('social.session.check');
     const actor = randomUUID();
     const ids: string[] = [];
     const oldSecret = process.env.AUTH_SECRET;

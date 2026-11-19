@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { nextSocialInboxPollAt } from './social-inbox-schedule.js';
+import {
+  nextSocialInboxFailureAt,
+  nextSocialInboxPollAt,
+} from './social-inbox-schedule.js';
 
 describe('nextSocialInboxPollAt', () => {
   it('uses the normal interval with up to thirty percent jitter', () => {
@@ -53,5 +56,47 @@ describe('nextSocialInboxPollAt', () => {
         'America/Los_Angeles',
       ).toISOString(),
     ).toBe('2026-07-01T00:03:00.000Z');
+  });
+
+  it('backs off failed syncs from the polling floor and caps the delay', () => {
+    const now = new Date('2026-07-01T10:00:00.000Z');
+    const schedule = (failureCount: number, random = 0.5) =>
+      nextSocialInboxFailureAt(
+        now,
+        180,
+        failureCount,
+        300,
+        1200,
+        '00:00-07:00',
+        () => random,
+      );
+    expect(schedule(1).toISOString()).toBe('2026-07-01T10:05:00.000Z');
+    expect(schedule(2).toISOString()).toBe('2026-07-01T10:10:00.000Z');
+    expect(schedule(5, 1).toISOString()).toBe('2026-07-01T10:20:00.000Z');
+    expect(schedule(20, 0).toISOString()).toBe('2026-07-01T10:14:00.000Z');
+  });
+
+  it('keeps failure retries on the quiet-hours cadence', () => {
+    const now = new Date('2026-07-01T00:00:00.000Z'); // 03:00 in Kyiv
+    expect(
+      nextSocialInboxFailureAt(
+        now,
+        180,
+        1,
+        300,
+        1200,
+        '00:00-07:00',
+        () => 0.5,
+      ).toISOString(),
+    ).toBe('2026-07-01T01:00:00.000Z');
+  });
+
+  it('rejects invalid backoff settings', () => {
+    expect(() =>
+      nextSocialInboxFailureAt(new Date(), 60, 0, 30, 120),
+    ).toThrow();
+    expect(() =>
+      nextSocialInboxFailureAt(new Date(), 60, 1, 120, 60),
+    ).toThrow();
   });
 });

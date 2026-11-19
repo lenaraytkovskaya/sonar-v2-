@@ -96,13 +96,27 @@ export async function recordHealthEvent(
   return rows[0]?.id ?? null;
 }
 
-async function resumePausedSends(c: PoolClient, accountId: string) {
+export async function resumePausedSends(
+  c: PoolClient,
+  accountId: string,
+  includeSocialSessionPauses = false,
+) {
   const { rows } = await c.query(
     `select t.idempotency_key,t.payload from tasks t
     join messages m on m.id::text=t.payload->>'messageId'
-    where t.type='message.send' and t.status='paused' and t.reason_code='account_health_paused'
+    left join channel_accounts a on a.id=m.account_id
+    where t.type='message.send' and t.status='paused'
+    and (t.reason_code='account_health_paused' or ($2::boolean and a.channel in ('instagram','facebook','linkedin') and (t.reason_code=any($3::text[]) or t.reason_code like 'social_session_%')))
     and m.account_id=$1 and m.status='queued' order by t.created_at,t.id`,
-    [accountId],
+    [
+      accountId,
+      includeSocialSessionPauses,
+      [
+        'social_session_invalid',
+        'social_session_timeout',
+        'social_account_inactive',
+      ],
+    ],
   );
   const { enqueueTask } = await import('./tasks.js');
   for (const task of rows)
@@ -136,12 +150,20 @@ export async function enableAccountHealth(
   const {
     rows: [account],
   } = await c.query(
-    'select channel,settings from channel_accounts where id=$1 for update',
+    'select channel,status,settings from channel_accounts where id=$1 for update',
     [accountId],
   );
   if (!account) throw new Error('Акаунт каналу не знайдено.');
-  if (account.settings.healthAutoPaused !== true) return;
   const canResume = sessionCanResume(account.channel, account.settings);
+  if (account.settings.healthAutoPaused !== true) {
+    if (
+      canResume &&
+      account.status === 'active' &&
+      account.settings.enabled !== false
+    )
+      await resumePausedSends(c, accountId, true);
+    return;
+  }
   await c.query(
     `update channel_accounts set status=case when $2 then 'active' else 'paused' end,settings=(settings-'healthPauseUntil')||jsonb_build_object('healthAutoPaused',false,'enabled',true,'reasonUk',case when $2 then null else coalesce(settings->>'sessionLostReasonUk','Потрібна перевірка сесії акаунта.') end) where id=$1`,
     [accountId, canResume],

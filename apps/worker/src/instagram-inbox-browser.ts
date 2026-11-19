@@ -22,6 +22,7 @@ import {
 import {
   parseInstagramInbox,
   parseInstagramRequests,
+  readInstagramInboxDom,
   type InstagramInboxPage,
 } from './instagram-inbox-parser.js';
 
@@ -460,9 +461,10 @@ export async function captureInstagramInbox(
     }
     await drain();
     if (seenMailbox && !invalid && Date.now() < deadline) {
+      const dom = await readInstagramInboxDom(page).catch(() => null);
       const generalTabs = page
-        .getByRole('tab', { name: /^(General|Загальні)$/i })
-        .or(page.getByRole('button', { name: /^(General|Загальні)$/i }));
+        .getByRole('tab', { name: /^(General|Загальні|Общие)$/i })
+        .or(page.getByRole('button', { name: /^(General|Загальні|Общие)$/i }));
       if ((await generalTabs.count()) === 1) {
         scope = 'general';
         const before = revision;
@@ -493,7 +495,8 @@ export async function captureInstagramInbox(
           });
           if (!(await waitForCapture(previous))) break;
         }
-      } else skipped.add('general_folder_unsupported');
+      } else if (!dom?.messages || !dom.requests || dom.general)
+        skipped.add('general_folder_unsupported');
     }
     if (seenMailbox && !invalid && Date.now() < deadline) {
       const before = revision;

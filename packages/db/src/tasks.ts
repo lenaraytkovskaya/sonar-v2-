@@ -766,6 +766,60 @@ export type TaskOutcome =
       reasonUk: string;
       result?: object;
     };
+const socialLogStages = new Set([
+  'navigation',
+  'http',
+  'auth',
+  'restore',
+  'identity',
+  'capture_auth',
+  'actor',
+  'persist',
+  'sync',
+  'profile_lock',
+  'session',
+  'profile',
+  'messagebutton',
+  'dialog',
+  'composer',
+  'attempt',
+  'confirmation',
+  'task',
+  'unknown',
+]);
+function logSocialTaskOutcome(
+  type: string,
+  accountId: unknown,
+  status: string,
+  reasonCode?: unknown,
+  stageValue?: unknown,
+) {
+  const safeType = /^[a-z0-9_.-]{1,100}$/.test(type) ? type : 'social.task';
+  const safeAccount =
+    typeof accountId === 'string' && /^[0-9a-f-]{36}$/i.test(accountId)
+      ? accountId
+      : null;
+  const safeReason =
+    typeof reasonCode === 'string' && /^[a-z0-9_.-]{1,100}$/.test(reasonCode)
+      ? reasonCode
+      : null;
+  const stage =
+    typeof stageValue === 'string' && socialLogStages.has(stageValue)
+      ? stageValue
+      : status === 'done'
+        ? 'task'
+        : 'unknown';
+  console.info(
+    JSON.stringify({
+      event: 'social_task_outcome',
+      type: safeType,
+      accountId: safeAccount,
+      status,
+      reasonCode: safeReason,
+      stage,
+    }),
+  );
+}
 export async function executeTask(
   handler: () => Promise<TaskOutcome>,
   save: (
@@ -871,10 +925,73 @@ export async function runTask(
         )
           return;
       }
+      let socialOutcome = task.type.startsWith('social.');
+      let socialAccountId: unknown = task.payload.accountId;
+      if (task.type === 'message.send') {
+        const {
+          rows: [message],
+        } = await sonarPool.query(
+          `select v.channel,m.account_id as "accountId" from messages m
+          join conversations v on v.id=m.conversation_id where m.id=$1`,
+          [task.payload.messageId],
+        );
+        socialOutcome = message?.channel === 'social';
+        socialAccountId = message?.accountId;
+      }
       await executeTask(
         async () => {
           if (task.type !== type) throw new Error('Unknown task type');
-          const outcome = await handler(task.payload, task.id);
+          let outcome: TaskOutcome;
+          try {
+            outcome = await handler(task.payload, task.id);
+          } catch (error) {
+            if (socialOutcome) {
+              const value = (
+                error && typeof error === 'object' ? error : {}
+              ) as {
+                stage?: unknown;
+                diagnostic?: { stage?: unknown };
+              };
+              logSocialTaskOutcome(
+                type,
+                socialAccountId,
+                'failed',
+                error instanceof TaskFailure ? error.code : 'operation_failed',
+                value.stage ?? value.diagnostic?.stage,
+              );
+            }
+            throw error;
+          }
+          if (socialOutcome) {
+            const value = outcome as TaskOutcome & {
+              reasonCode?: string;
+              result?: Record<string, unknown>;
+            };
+            const diagnostic =
+              value.result?.diagnostic &&
+              typeof value.result.diagnostic === 'object'
+                ? (value.result.diagnostic as Record<string, unknown>)
+                : undefined;
+            const stage =
+              value.result?.stage ??
+              diagnostic?.stage ??
+              /^\[([a-z_]+)\//.exec(
+                'reasonUk' in outcome ? outcome.reasonUk : '',
+              )?.[1] ??
+              (value.reasonCode === 'social_profile_busy'
+                ? 'profile_lock'
+                : typeof value.reasonCode === 'string' &&
+                    value.reasonCode.startsWith('social_session_')
+                  ? 'auth'
+                  : undefined);
+            logSocialTaskOutcome(
+              type,
+              socialAccountId,
+              outcome.status,
+              'reasonCode' in outcome ? outcome.reasonCode : null,
+              stage,
+            );
+          }
           if (
             type === 'prozorro.company' &&
             'reasonCode' in outcome &&
