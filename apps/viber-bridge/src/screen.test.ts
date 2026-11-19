@@ -24,7 +24,9 @@ import {
   isOutgoingBubbleColor,
   inboundBubbleMessage,
   inboundBubbleRegionsFromOcr,
+  inboundOcrFallbackText,
   copyMenuPoint,
+  copyMenuSearchRegion,
   exactOptionPoint,
   clipboardChanged,
   normalizeMessageText,
@@ -213,6 +215,31 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     text: 'перше повідомлення\nз двох рядків',
     at: '2026-11-18T17:12:00.000Z',
   });
+  const ocrLines = [
+    { text: 'перше повідомлення', left: 0, top: 0, right: 90 },
+    { text: 'з двох рядків', left: 0, top: 15, right: 80 },
+    { text: '17:12', left: 0, top: 32, right: 30 },
+  ];
+  const fallbackText = inboundOcrFallbackText(ocrLines);
+  expect(fallbackText).toBe('перше повідомлення\nз двох рядків');
+  const fallback = inboundBubbleMessage(ocrLines, {
+    threadId: 'screen:+380638215990',
+    from: '+380637058571',
+    since: new Date('2026-11-18T17:11:00Z'),
+    reference: new Date('2026-11-18T17:20:00Z'),
+    region: bubbles[0]!,
+    copiedText: fallbackText,
+  });
+  const copiedLater = inboundBubbleMessage(ocrLines, {
+    threadId: 'screen:+380638215990',
+    from: '+380637058571',
+    since: new Date('2026-11-18T17:11:00Z'),
+    reference: new Date('2026-11-18T17:20:00Z'),
+    region: bubbles[0]!,
+    copiedText: 'перше повідомлення\nз двох рядків',
+    dedupeText: fallbackText,
+  });
+  expect(fallback?.providerMessageId).toBe(copiedLater?.providerMessageId);
   expect(
     inboundBubbleMessage(
       [
@@ -348,6 +375,16 @@ it('selects only an exact localized Copy menu item and requires clipboard change
     copyMenuPoint([{ text: 'й! Copy message', left: 20, top: 30, right: 120 }]),
   ).toEqual({ x: 70, y: 40 });
   expect(
+    copyMenuPoint([
+      { text: '[] Copy message', left: 410, top: 455, right: 530 },
+    ]),
+  ).toEqual({ x: 470, y: 465 });
+  expect(
+    copyMenuPoint([
+      { text: 'Delete for myself', left: 410, top: 695, right: 570 },
+    ]),
+  ).toBeNull();
+  expect(
     copyMenuPoint([{ text: 'Copy link', left: 1, top: 2, right: 60 }]),
   ).toBeNull();
   expect(
@@ -368,6 +405,22 @@ it('selects only an exact localized Copy menu item and requires clipboard change
   expect(clipboardChanged('', 'exact copied text')).toBe(true);
   expect(clipboardChanged('', '')).toBe(false);
   expect(clipboardChanged('old', 'old')).toBe(false);
+});
+
+it('searches all sides of the context click and clips the OCR crop to screen bounds', () => {
+  expect(copyMenuSearchRegion(640, 455, 1280, 900)).toEqual({
+    left: 290,
+    top: 105,
+    width: 700,
+    height: 700,
+    crop: '700x700+290+105',
+  });
+  expect(copyMenuSearchRegion(50, 880, 1280, 900)).toMatchObject({
+    left: 0,
+    top: 530,
+    width: 400,
+    height: 370,
+  });
 });
 
 it('requires exact copied outgoing text after whitespace normalization and a sent time', () => {
@@ -620,4 +673,38 @@ it('includes an anonymized real Viber chat screenshot for timestamp OCR', async 
     '18:59',
     '19:17',
   ]);
+});
+
+it('finds Copy in a live test Viber menu below the cursor without selecting Delete', async () => {
+  const image = await readFile(
+    fileURLToPath(
+      new URL('./fixtures/viber-copy-menu-bottom.png', import.meta.url),
+    ),
+  );
+  expect(image.readUInt32BE(16)).toBe(360);
+  expect(image.readUInt32BE(20)).toBe(320);
+  const tsv = await readFile(
+    fileURLToPath(
+      new URL('./fixtures/viber-copy-menu-bottom.tsv', import.meta.url),
+    ),
+    'utf8',
+  );
+  const lines = groupOcrLines(parseTsvWords(tsv));
+  const point = copyMenuPoint(lines);
+  expect(point).not.toBeNull();
+  const screenPoint = { x: point!.x + 305, y: point!.y + 570 };
+  expect(screenPoint.x).toBeGreaterThan(440);
+  expect(screenPoint.x).toBeLessThan(640);
+  expect(screenPoint.y).toBeGreaterThan(620);
+  expect(screenPoint.y).toBeLessThan(700);
+  expect(lines.some((line) => line.text.includes('Copy message'))).toBe(true);
+  expect(lines.some((line) => line.text.includes('Delete for myself'))).toBe(
+    true,
+  );
+  expect(copyMenuSearchRegion(440, 620, 1280, 900)).toMatchObject({
+    left: 90,
+    top: 270,
+    width: 700,
+    height: 630,
+  });
 });

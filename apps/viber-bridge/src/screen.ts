@@ -75,9 +75,10 @@ export function copyMenuPoint(
   const line = lines.find((candidate) => {
     const words = candidate.text.toLocaleLowerCase().match(/[\p{L}]+/gu) ?? [];
     return labels.some((label) => {
-      const offset = words.length === label.length + 1 && words[0]!.length <= 1;
-      const actual = offset ? words.slice(1) : words;
+      const actual = words.slice(-label.length);
+      const prefix = words.slice(0, -label.length);
       return (
+        prefix.every((word) => word.length <= 3) &&
         actual.length === label.length &&
         actual.every((word, index) => word === label[index])
       );
@@ -396,6 +397,7 @@ export function inboundBubbleMessage(
     reference: Date;
     region: BubbleRegion;
     copiedText?: string;
+    dedupeText?: string;
   },
 ) {
   if (input.region.side !== 'left') return null;
@@ -421,8 +423,39 @@ export function inboundBubbleMessage(
     text,
     at: at.toISOString(),
     threadId: input.threadId,
-    providerMessageId: `screen:${screenMessageId(input.threadId, text, `${dayTime} ${visibleTime}`)}`,
+    providerMessageId: `screen:${screenMessageId(input.threadId, input.dedupeText ?? text, `${dayTime} ${visibleTime}`)}`,
   };
+}
+
+export function copyMenuSearchRegion(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius = 350,
+) {
+  const left = Math.max(0, Math.floor(x - radius));
+  const top = Math.max(0, Math.floor(y - radius));
+  const right = Math.min(width, Math.ceil(x + radius));
+  const bottom = Math.min(height, Math.ceil(y + radius));
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top,
+    crop: `${right - left}x${bottom - top}+${left}+${top}`,
+  };
+}
+
+export function inboundOcrFallbackText(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+) {
+  return lines
+    .filter((line) => !visibleTimestampLine(line.text))
+    .map((line) => line.text.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 }
 
 export function messageTimeAtOrAfter(value: string, startedAt: Date) {

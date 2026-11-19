@@ -27,7 +27,9 @@ import {
   messageBubbleRegions,
   inboundBubbleRegionsFromOcr,
   inboundBubbleMessage,
+  inboundOcrFallbackText,
   copyMenuPoint,
+  copyMenuSearchRegion,
   clipboardChanged,
   exactOptionPoint,
 } from './screen.js';
@@ -199,49 +201,38 @@ if (!key) {
       throw Error('needs_attention');
     }
     try {
-      await clickAt(
-        Math.round((bubble.left + bubble.right) / 2),
-        Math.round((bubble.top + bubble.bottom) / 2),
-        3,
-      );
+      const clickX = Math.round((bubble.left + bubble.right) / 2);
+      const clickY = Math.round((bubble.top + bubble.bottom) / 2);
+      await clickAt(clickX, clickY, 3);
       await delay(1000);
       const image = await screen();
-      const menuLeft = Math.max(0, Math.min(bubble.left + 80, 980));
-      const menuWidth = Math.min(300, 1280 - menuLeft);
-      let point: { x: number; y: number } | null = null;
-      for (const menuTop of [
-        Math.max(0, bubble.top + 20),
-        Math.max(0, bubble.top - 350),
-      ]) {
-        const menuHeight = Math.min(450, 900 - menuTop);
-        const result = await ocr(
-          image,
-          `${menuWidth}x${menuHeight}+${menuLeft}+${menuTop}`,
-          '6',
-          true,
-        );
-        const localPoint = copyMenuPoint(
-          groupOcrLines(parseTsvWords(result.stdout)),
-        );
-        if (localPoint) {
-          point = {
-            x: localPoint.x + menuLeft,
-            y: localPoint.y + menuTop,
-          };
-          break;
-        }
+      const search = copyMenuSearchRegion(clickX, clickY, 1280, 900);
+      const firstScan = await ocr(image, search.crop, '6');
+      let menuLines = groupOcrLines(parseTsvWords(firstScan.stdout));
+      let localPoint = copyMenuPoint(menuLines);
+      if (!localPoint) {
+        const secondScan = await ocr(image, search.crop, '6', true);
+        menuLines = groupOcrLines(parseTsvWords(secondScan.stdout));
+        localPoint = copyMenuPoint(menuLines);
       }
+      const point = localPoint
+        ? { x: localPoint.x + search.left, y: localPoint.y + search.top }
+        : null;
       if (!point) {
         console.log(
           'viber_copy_menu_missing',
           JSON.stringify({
             bubble,
-            menuLeft,
-            menuTops: [
-              Math.max(0, bubble.top + 20),
-              Math.max(0, bubble.top - 350),
-            ],
-            menuWidth,
+            menuItems: menuLines
+              .map((line) => line.text.trim())
+              .filter(
+                (text) =>
+                  text.length <= 80 &&
+                  /\b(reply|copy|select|translate|chatgpt|pin|forward|delete|відповісти|копіювати|виділити|перекласти|закріпити|переслати|удалить|копировать|выделить|перевести|переслать|закрепить)\b/iu.test(
+                    text,
+                  ),
+              )
+              .slice(0, 12),
           }),
         );
         await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
@@ -261,6 +252,7 @@ if (!key) {
         throw Error('needs_attention');
       }
       attentionReason = '';
+      await screen();
       return after;
     } catch (error) {
       if (!(error instanceof Error && error.message === 'needs_attention')) {
@@ -277,6 +269,11 @@ if (!key) {
       await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
         timeout: 3000,
       }).catch(() => {});
+      const closedMenuImage = await screen().catch(() => null);
+      if (closedMenuImage && attentionReason)
+        await writeFile(join(data, 'attention.jpg'), closedMenuImage, {
+          mode: 0o600,
+        }).catch(() => {});
     }
   };
   const inspectChatLayout = async (image: Buffer) => {
@@ -720,30 +717,26 @@ if (!key) {
             ),
           );
         }
-        if (
-          !inboundBubbleMessage(bubbleLines, {
-            threadId,
-            from,
-            since: frontier,
-            reference,
-            region: bubble,
-            copiedText: 'probe',
-          })
-        )
-          continue;
+        const ocrText = inboundOcrFallbackText(bubbleLines);
+        const candidate = inboundBubbleMessage(bubbleLines, {
+          threadId,
+          from,
+          since: frontier,
+          reference,
+          region: bubble,
+          copiedText: ocrText,
+        });
+        if (!candidate) continue;
         let copiedText: string;
         try {
           copiedText = await copyBubble(bubble);
         } catch {
           attentionReason = '';
           console.log(
-            'viber_inbound_bubble_skipped',
-            JSON.stringify({
-              threadId,
-              reason: 'copy_unavailable',
-              top: bubble.top,
-            }),
+            'viber_inbound_ocr_fallback',
+            JSON.stringify({ threadId, top: bubble.top }),
           );
+          found.push(candidate);
           continue;
         }
         const message = inboundBubbleMessage(bubbleLines, {
@@ -753,6 +746,7 @@ if (!key) {
           reference,
           region: bubble,
           copiedText,
+          dedupeText: ocrText,
         });
         if (message) found.push(message);
       }

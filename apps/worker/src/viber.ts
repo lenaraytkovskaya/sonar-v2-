@@ -1,7 +1,13 @@
 import { sendEmailMessage, type ChannelSender } from '@sonar/db/email';
 import { recordInbound } from '@sonar/db/inbound';
 import { sonarPool } from '@sonar/db';
-import { boss, enqueueTask, runTask, type TaskOutcome } from '@sonar/db/tasks';
+import {
+  boss,
+  enqueueTask,
+  runTask,
+  TaskFailure,
+  type TaskOutcome,
+} from '@sonar/db/tasks';
 
 type ViberInbound = {
   from: string;
@@ -28,8 +34,20 @@ async function bridge(path: string, init?: RequestInit) {
     headers: { Authorization: `Bearer ${key}`, ...init?.headers },
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok)
-    throw new ViberBridgeError(`Viber bridge HTTP ${response.status}`);
+  if (!response.ok) {
+    const result = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      reason?: string;
+    };
+    const reasonUk =
+      result.reason ??
+      (result.error === 'needs_attention'
+        ? 'Viber Desktop потребує уваги. Відкрийте дозволений чат, усуньте повідомлення про помилку та повторіть синхронізацію.'
+        : result.error === 'bridge_operation_failed'
+          ? 'Не вдалося прочитати вхідні повідомлення Viber. Перевірте стан Viber Desktop і повторіть синхронізацію.'
+          : `Міст Viber повернув помилку HTTP ${response.status}. Перевірте з’єднання та повторіть синхронізацію.`);
+    throw new TaskFailure('viber_bridge_failed', reasonUk);
+  }
   return response;
 }
 
