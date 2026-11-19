@@ -1723,8 +1723,8 @@ export async function sendEmailMessage(
           );
           return terminal('skipped', error.code, error.reasonUk);
         }
-        if (error.retryable) {
-          // Provider HTTP failures retry; ambiguous transport failures pause.
+        if (error.retryable && error.code !== 'send_ambiguous') {
+          // Explicit rate limits retry; ambiguous delivery results pause.
           const runAt = new Date(
             Math.max(
               nextSendAt.getTime(),

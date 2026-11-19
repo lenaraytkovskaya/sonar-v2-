@@ -145,17 +145,19 @@ export async function createManualCompany(
   return transaction(async (c) => {
     const {
       rows: [campaign],
-    } = await c.query('select id from campaigns where id=$1 for key share', [
-      data.campaignId,
-    ]);
+    } = await c.query(
+      'select id,country_code from campaigns where id=$1 for key share',
+      [data.campaignId],
+    );
     if (!campaign) fail('campaignNotFound');
+    const countryCode = data.countryCode ?? campaign.country_code;
     // Serialize manual creation so concurrent requests cannot create duplicate domains/names.
     await c.query("select pg_advisory_xact_lock(hashtext('manual.company'))");
     const {
       rows: [duplicate],
     } = await c.query(
       `select id from companies where ($1::text is not null and lower(domain)=$1) or (lower(name)=lower($2) and lower(coalesce(city,''))=lower($3) and country_code=$4) limit 1`,
-      [domain, data.name, data.city ?? '', data.countryCode],
+      [domain, data.name, data.city ?? '', countryCode],
     );
     if (duplicate) fail('duplicateCompany');
     const {
@@ -168,7 +170,7 @@ export async function createManualCompany(
         website,
         domain,
         data.city || null,
-        data.countryCode,
+        countryCode,
       ],
     );
     await c.query(

@@ -302,6 +302,15 @@ export async function retryTask(
       original.type.startsWith('whatsapp.account.')
     )
       return false;
+    if (original.type.startsWith('social.session.')) {
+      const {
+        rows: [owned],
+      } = await client.query(
+        'select id from channel_accounts where id=$1 and owner_id=$2',
+        [original.payload.accountId, userId],
+      );
+      if (!owned) return false;
+    }
     if (original.type === 'social.inbox.sync') {
       if (original.status === 'done') return false;
       if (original.payload.mode === 'manual') {

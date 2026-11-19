@@ -418,7 +418,7 @@ describe('WhatsApp WAHA Core adapter', () => {
     expect(inactive).toHaveBeenCalledTimes(1);
   });
   it.each([429, 500, 503])(
-    'retries explicit HTTP %s with non-JSON body',
+    'handles explicit HTTP %s with non-JSON body safely',
     async (status) => {
       const network = fake(
         working,
@@ -429,18 +429,28 @@ describe('WhatsApp WAHA Core adapter', () => {
         }),
       );
       await expect(adapter(network).send(input)).rejects.toMatchObject({
-        retryable: true,
-        ...(status === 429 ? { retryAfterSeconds: 43 } : {}),
+        ...(status === 429
+          ? { retryable: true, retryAfterSeconds: 43 }
+          : {
+              code: 'send_ambiguous',
+              reasonUk:
+                'Результат відправки WhatsApp невідомий — перевірте чат вручну',
+              retryable: false,
+            }),
       });
     },
   );
-  it('pauses ambiguous send transport failure but retries pre-send network failure', async () => {
+  it('pauses ambiguous send failures but retries pre-send network failure', async () => {
     const contact = { numberExists: true, chatId: '380671234567@c.us' };
     await expect(
       adapter(fake(working, contact, new Error('private credentials'))).send(
         input,
       ),
-    ).rejects.toMatchObject({ code: 'send_ambiguous', retryable: false });
+    ).rejects.toMatchObject({
+      code: 'send_ambiguous',
+      reasonUk: 'Результат відправки WhatsApp невідомий — перевірте чат вручну',
+      retryable: false,
+    });
     await expect(
       adapter(fake(new Error('offline'))).send(input),
     ).rejects.toMatchObject({ code: 'waha_unreachable', retryable: true });

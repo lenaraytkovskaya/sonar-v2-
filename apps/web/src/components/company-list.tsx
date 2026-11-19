@@ -12,6 +12,11 @@ import { Card, PageHeader } from './shared';
 import { runAiJob } from '@/lib/ai-job';
 import { ManualEntry } from './manual-entry';
 type Row = CompanyCardRow;
+const sortLabels = {
+  quality: uk.company.qualityDescending,
+  score: uk.company.scoreDescending,
+  newest: uk.company.newest,
+};
 function params(filters: CompanyFilters) {
   return new URLSearchParams(
     Object.entries(filters)
@@ -43,7 +48,9 @@ export function CompanyList({
       total: number;
       pageSize: number;
     }>({ companies: [], total: 0, pageSize: 25 }),
-    [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>([]),
+    [campaigns, setCampaigns] = useState<
+      { id: string; name: string; countryCode: string }[]
+    >([]),
     [error, setError] = useState(''),
     [description, setDescription] = useState(''),
     [preview, setPreview] = useState<CompanyFilters | null>(null),
@@ -89,7 +96,18 @@ export function CompanyList({
     fetch('/api/campaigns', { signal: controller.signal })
       .then(async (r) => {
         if (!r.ok) throw Error();
-        setCampaigns((await r.json()).campaigns);
+        const rows = (await r.json()).campaigns as {
+          id: string;
+          name: string;
+          country_code: string;
+        }[];
+        setCampaigns(
+          rows.map((campaign) => ({
+            id: campaign.id,
+            name: campaign.name,
+            countryCode: campaign.country_code,
+          })),
+        );
       })
       .catch(() => {
         if (!controller.signal.aborted) setError(uk.ai.error);
@@ -243,7 +261,14 @@ export function CompanyList({
                       ? uk.company.platformOptions[
                           value as keyof typeof uk.company.platformOptions
                         ]
-                      : String(value)}
+                      : key === 'status'
+                        ? (uk.company.statuses[
+                            value as keyof typeof uk.company.statuses
+                          ] ?? String(value))
+                        : key === 'sort'
+                          ? (sortLabels[value as keyof typeof sortLabels] ??
+                            String(value))
+                          : String(value)}
                 </p>
               ))}
               <Button

@@ -1,9 +1,31 @@
 import { apiUser } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
 
+async function ownsViberChannel(userId: string) {
+  const { sonarPool } = await import('@sonar/db');
+  let { rows } = await sonarPool.query(
+    `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
+    [userId],
+  );
+  if (!rows.length) {
+    await sonarPool.query(
+      `update channel_accounts set owner_id=$1 where channel='viber' and owner_id is null
+        and (select count(*) from users)=1`,
+      [userId],
+    );
+    ({ rows } = await sonarPool.query(
+      `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
+      [userId],
+    ));
+  }
+  return rows.length > 0;
+}
+
 export async function GET(request: Request) {
-  if (!(await apiUser(request)))
-    return Response.json({ error: uk.unauthorized }, { status: 401 });
+  const user = await apiUser(request);
+  if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
+  if (!(await ownsViberChannel(user.id)))
+    return Response.json({ error: uk.unauthorized }, { status: 403 });
   const url = process.env.VIBER_BRIDGE_URL,
     key = process.env.VIBER_BRIDGE_KEY;
   if (!url || !key)
@@ -63,23 +85,7 @@ export async function POST(request: Request) {
       { error: uk.viber.screenUnavailable },
       { status: 400 },
     );
-  const { sonarPool } = await import('@sonar/db');
-  let { rows } = await sonarPool.query(
-    `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
-    [user.id],
-  );
-  if (!rows.length) {
-    await sonarPool.query(
-      `update channel_accounts set owner_id=$1 where channel='viber' and owner_id is null
-        and (select count(*) from users)=1`,
-      [user.id],
-    );
-    ({ rows } = await sonarPool.query(
-      `select 1 from channel_accounts where channel='viber' and owner_id=$1 limit 1`,
-      [user.id],
-    ));
-  }
-  if (!rows.length)
+  if (!(await ownsViberChannel(user.id)))
     return Response.json({ error: uk.unauthorized }, { status: 403 });
   const url = process.env.VIBER_BRIDGE_URL,
     key = process.env.VIBER_BRIDGE_KEY;
