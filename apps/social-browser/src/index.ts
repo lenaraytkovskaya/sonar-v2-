@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import {
   createServer as createTcpServer,
   connect as connectTcp,
@@ -200,6 +200,13 @@ async function startProfile(input: Record<string, unknown>) {
   }
   const path = `${root}/${id}`;
   await mkdir(path, { recursive: true });
+  // A container restart can leave Chromium singleton files behind; this service
+  // is the only Chromium owner of the profile dir and the profile is not running.
+  await Promise.all(
+    ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].map((name) =>
+      rm(`${path}/${name}`, { force: true }),
+    ),
+  );
   const context = await chromium.launchPersistentContext(path, {
     headless: false,
     viewport: { width: 1280, height: 800 },
@@ -444,6 +451,16 @@ const server = createServer(async (request, response) => {
     return json(response, 405, { error: 'method_not_allowed' });
   } catch (error) {
     const code = error instanceof Error ? error.message : '';
+    // One short line for diagnosis; no request bodies, typed text or credentials.
+    console.error(
+      'social-browser request failed',
+      request.method,
+      (request.url ?? '').split('?')[0],
+      code
+        .split('\n')[0]!
+        .replace(/\/\/[^@/\s]+@/g, '//***@')
+        .slice(0, 300),
+    );
     const status =
       code === 'profile_limit'
         ? 429
