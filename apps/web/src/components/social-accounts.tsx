@@ -11,6 +11,7 @@ import { Input } from './ui/input';
 import { AiAssist } from './ai-assist';
 import { LocalTime } from './local-time';
 import { SocialLoginDialog } from './social-login-dialog';
+import { SocialBrowserDialog } from './social-browser-dialog';
 import { FriendlyError } from './friendly-error';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
@@ -126,6 +127,7 @@ export function SocialAccounts({
   const [current, setCurrent] = useState(accounts);
   const [open, setOpen] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState<string>();
+  const [browserAccountId, setBrowserAccountId] = useState<string>();
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [dailyLimit, setDailyLimit] = useState('20');
@@ -310,6 +312,16 @@ export function SocialAccounts({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {account.ownsAccount && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={() => setBrowserAccountId(account.id)}
+                    >
+                      {uk.socialAccounts.openBrowser}
+                    </Button>
+                  )}
                   {account.hasCredentials ? (
                     <Button
                       type="button"
@@ -927,6 +939,16 @@ export function SocialAccounts({
         <p role="status" className="text-sm">
           {notice}
         </p>
+      )}
+      {browserAccountId && (
+        <SocialBrowserDialog
+          accountId={browserAccountId}
+          onClose={() => setBrowserAccountId(undefined)}
+          onDone={() => {
+            setBrowserAccountId(undefined);
+            void mutate('POST', { action: 'check', id: browserAccountId });
+          }}
+        />
       )}
     </Section>
   );

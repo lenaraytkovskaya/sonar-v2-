@@ -299,6 +299,7 @@ async function handle(request: Request, method: string) {
       sessionLostEventId: account.sessionLostEventId,
       sessionLostReasonUk: account.sessionLostReasonUk,
       ownerName: account.ownerName,
+      ownsAccount: account.ownsAccount,
       canSyncInbox: account.canSyncInbox,
       inboxPollingEnabled: account.inboxPollingEnabled,
       inboxSyncComplete: account.inboxSyncComplete,
