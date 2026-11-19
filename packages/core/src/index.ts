@@ -14,6 +14,7 @@ export function normalizePhone(
 }
 
 export * from './budget.js';
+export * from './manual-expenses.js';
 export * from './openrouter.js';
 export * from './campaign.js';
 export * from './google.js';

@@ -24,6 +24,10 @@
       "types": "./dist/metrics.d.ts",
       "default": "./dist/metrics.js"
     },
+    "./manual-expenses": {
+      "types": "./dist/manual-expenses.d.ts",
+      "default": "./dist/manual-expenses.js"
+    },
     "./campaigns": {
       "types": "./dist/campaigns.d.ts",
       "default": "./dist/campaigns.js"
