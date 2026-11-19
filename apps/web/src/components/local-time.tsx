@@ -1,9 +1,50 @@
 'use client';
+import React from 'react';
 import { useEffect, useState } from 'react';
 
+export type LocalTimeFormat = {
+  dateOnly?: boolean;
+  timeOnly?: boolean;
+  monthDay?: boolean;
+};
+
+export function formatLocalTime(
+  value: string | Date,
+  {
+    dateOnly = false,
+    timeOnly = false,
+    monthDay = false,
+  }: LocalTimeFormat = {},
+  timeZone?: string,
+) {
+  const date = new Date(value);
+  if (timeOnly)
+    return date.toLocaleTimeString('uk-UA', {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...(timeZone ? { timeZone } : {}),
+    });
+  return monthDay
+    ? date.toLocaleDateString('uk-UA', {
+        day: 'numeric',
+        month: 'long',
+        ...(timeZone ? { timeZone } : {}),
+      })
+    : dateOnly
+      ? date.toLocaleDateString('uk-UA', timeZone ? { timeZone } : {})
+      : date.toLocaleString('uk-UA', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          ...(timeZone ? { timeZone } : {}),
+        });
+}
+
 /**
- * Server components render in the server's time zone (UTC); this re-renders the
- * timestamp in the viewer's own zone after hydration.
+ * Keep server and hydration markup identical; show the browser-local time once
+ * the viewer's time zone is available.
  */
 export function LocalTime({
   value,
@@ -16,27 +57,11 @@ export function LocalTime({
   timeOnly?: boolean;
   monthDay?: boolean;
 }) {
-  const format = () => {
-    const date = new Date(value);
-    if (timeOnly)
-      return date.toLocaleTimeString('uk-UA', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    return monthDay
-      ? date.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })
-      : dateOnly
-        ? date.toLocaleDateString('uk-UA')
-        : date.toLocaleString('uk-UA', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-  };
-  const [text, setText] = useState(format);
-  useEffect(() => setText(format()), [value, dateOnly, timeOnly, monthDay]);
+  const [text, setText] = useState('');
+  useEffect(
+    () => setText(formatLocalTime(value, { dateOnly, timeOnly, monthDay })),
+    [value, dateOnly, timeOnly, monthDay],
+  );
   return (
     <time dateTime={new Date(value).toISOString()} suppressHydrationWarning>
       {text}

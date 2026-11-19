@@ -80,8 +80,10 @@ export function ViberAccounts({
       if (!response.ok) throw Error(data.error ?? uk.email.error);
       if (data.accounts?.[0]) setLimit(String(data.accounts[0].dailyLimit));
       if (data.accounts?.[0]) setAccountStatus(data.accounts[0].status);
+      return true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : uk.email.error);
+      return false;
     } finally {
       setPending(false);
     }
@@ -201,7 +203,17 @@ export function ViberAccounts({
             {accountStatus === 'paused' ? uk.viber.resume : uk.viber.pause}
           </Button>
         )}
-        <Button variant="outline" onClick={() => setScreen((value) => !value)}>
+        <Button
+          variant="outline"
+          disabled={pending}
+          onClick={() => {
+            if (screen) setScreen(false);
+            else
+              void update({ claimOwner: true }).then((claimed) => {
+                if (claimed) setScreen(true);
+              });
+          }}
+        >
           {uk.viber.connect}
         </Button>
         <Button

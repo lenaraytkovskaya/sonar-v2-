@@ -156,14 +156,16 @@ export function visibleInboundMessages(
   },
 ) {
   const central = input.left + (input.right - input.left) / 2;
-  const body = lines.filter(
-    (line) =>
-      line.top > input.headerBottom &&
-      line.top < input.height - 90 &&
-      line.left >= input.left &&
-      line.left < central &&
-      line.right <= input.right,
-  );
+  const body = lines
+    .filter(
+      (line) =>
+        line.top > input.headerBottom &&
+        line.top < input.height - 90 &&
+        line.left >= input.left &&
+        line.left < central &&
+        line.right <= input.right,
+    )
+    .sort((a, b) => a.top - b.top || a.left - b.left);
   const result: {
     from: string;
     text: string;
@@ -171,16 +173,15 @@ export function visibleInboundMessages(
     threadId: string;
     providerMessageId: string;
   }[] = [];
+  const seen = new Set<string>();
   let previousTimeIndex = -1;
   for (let index = 0; index < body.length; index++) {
     const visibleTime = visibleTimeText(body[index]!.text);
     if (!visibleTime) continue;
     const reference = input.reference ?? new Date();
-    const at = visibleMessageTimestamp(
-      visibleTime,
-      reference,
-      daySeparatorAt(lines, body[index]!.top, reference),
-    );
+    const day = daySeparatorAt(lines, body[index]!.top, reference);
+    if (!day) continue;
+    const at = visibleMessageTimestamp(visibleTime, reference, day);
     const start = Math.max(previousTimeIndex + 1, index - 5);
     const text = body
       .slice(start, index)
@@ -193,12 +194,19 @@ export function visibleInboundMessages(
       .trim();
     previousTimeIndex = index;
     if (!at || at < input.since || !text) continue;
+    const providerMessageId = screenMessageId(
+      input.threadId,
+      text,
+      visibleTime,
+    );
+    if (seen.has(providerMessageId)) continue;
+    seen.add(providerMessageId);
     result.push({
       from: input.from,
       text,
       at: at.toISOString(),
       threadId: input.threadId,
-      providerMessageId: screenMessageId(input.threadId, text, visibleTime),
+      providerMessageId,
     });
   }
   return result;
@@ -432,6 +440,7 @@ export function inboundBubbleMessage(
     .find((line) => visibleTimestampLine(line.text));
   if (!timeLine) return null;
   const visibleTime = visibleTimestampLine(timeLine.text)!;
+  if (!input.daySeparator) return null;
   const at = visibleMessageTimestamp(
     visibleTime,
     input.reference,
@@ -609,11 +618,23 @@ export function daySeparatorAt(
   top: number,
   reference: Date,
 ) {
-  return [...lines]
+  const ordered = [...lines].sort((a, b) => a.top - b.top);
+  const above = ordered
     .filter((line) => line.top < top)
-    .sort((a, b) => b.top - a.top)
+    .reverse()
     .map((line) => visibleDateSeparator(line.text, reference))
     .find((date) => date !== undefined);
+  if (above) return above;
+
+  const below = ordered
+    .filter((line) => line.top > top)
+    .map((line) => visibleDateSeparator(line.text, reference))
+    .find((date) => date !== undefined);
+  if (!below) return undefined;
+  // A divider below this bubble starts the next day in Viber's chronological
+  // layout, so the bubble belongs to the preceding calendar day.
+  below.setDate(below.getDate() - 1);
+  return below;
 }
 
 export function messageTimeAtOrAfter(value: string, startedAt: Date) {
@@ -641,6 +662,7 @@ export function visibleMessageTimestamp(
   if (!match) return null;
   const visible = new Date(daySeparator ?? reference);
   visible.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  if (daySeparator) return visible > reference ? null : visible;
   // Explicit dividers determine the day; without one use today, falling back to
   // yesterday for clock times later than the current local time.
   if (visible > reference) visible.setDate(visible.getDate() - 1);

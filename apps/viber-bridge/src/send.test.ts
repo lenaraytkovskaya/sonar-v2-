@@ -137,9 +137,9 @@ it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', as
     `create table Contact(ContactID integer,Number text);
     create table Events(EventID integer,ChatID integer,ContactID integer,TimeStamp integer,Direction integer);
     create table Messages(EventID integer,Body text);
-    insert into Contact values(1,'380671234567');
-    insert into Events values(10,2,1,1700000000000,0),(11,2,1,1700000001000,1);
-    insert into Messages values(10,'Вхідне'),(11,'Вихідне');`,
+    insert into Contact values(1,'380671234567'),(2,'380638215990');
+    insert into Events values(10,2,1,1700000000000,0),(11,2,1,1700000001000,1),(12,3,2,1700000002000,1);
+    insert into Messages values(10,'Вхідне'),(11,'Вихідне'),(12,'Дозволений тестовий чат');`,
   );
   fixture.close();
   const original = await readFile(path);
@@ -161,6 +161,19 @@ it('reads a synthetic Viber SQLite snapshot and leaves the source unchanged', as
       threadId: '2',
       outgoing: true,
     },
+    {
+      from: '+380638215990',
+      text: 'Дозволений тестовий чат',
+      at: '2023-11-14T22:13:22.000Z',
+      providerMessageId: '12',
+      threadId: '3',
+      outgoing: true,
+    },
   ]);
+  expect(
+    await readMessages(path, new Date('2023-01-01T00:00:00Z'), [
+      '+380638215990',
+    ]),
+  ).toEqual([rows[2]]);
   expect(await readFile(path)).toEqual(original);
 });

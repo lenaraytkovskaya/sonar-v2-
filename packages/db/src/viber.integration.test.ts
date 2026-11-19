@@ -5,11 +5,13 @@ const enabled = process.env.RUN_DB_TESTS === '1';
 let db: typeof import('./index.js'), email: typeof import('./email.js');
 let inbound: typeof import('./inbound.js'), admin: import('pg-boss').PgBoss;
 let TaskFailure: typeof import('./tasks.js').TaskFailure;
+let viber: typeof import('./viber.js');
 beforeAll(async () => {
   if (!enabled) return;
   db = await import('./index.js');
   email = await import('./email.js');
   inbound = await import('./inbound.js');
+  viber = await import('./viber.js');
   ({ TaskFailure } = await import('./tasks.js'));
   const { PgBoss } = await import('pg-boss');
   admin = new PgBoss(process.env.DATABASE_URL!);
@@ -17,6 +19,71 @@ beforeAll(async () => {
   await admin.createQueue('message.send');
   await admin.createQueue('ai.inbound');
 });
+
+it.skipIf(!enabled)(
+  'assigns an unowned Viber account explicitly to the CRM owner only',
+  async () => {
+    const ownerId = randomUUID();
+    const otherId = randomUUID();
+    const {
+      rows: [account],
+    } = await db.sonarPool.query<{
+      id: string;
+      owner_id: string | null;
+    }>(
+      "select id,owner_id from channel_accounts where channel='viber' limit 1",
+    );
+    expect(account).toBeTruthy();
+    const originalOwner = account!.owner_id;
+    try {
+      await db.sonarPool.query(
+        "insert into users(id,email,name,password_hash,created_at) values($1,$2,'Viber CRM owner','stub','1970-01-01'),($3,$4,'Other user','stub','1970-01-02')",
+        [
+          ownerId,
+          `${ownerId}@invalid.test`,
+          otherId,
+          `${otherId}@invalid.test`,
+        ],
+      );
+      await db.sonarPool.query(
+        'update channel_accounts set owner_id=null where id=$1',
+        [account!.id],
+      );
+      await expect(viber.claimViberAccount(otherId)).rejects.toThrow(
+        'Лише власник CRM може призначити власника каналу Viber.',
+      );
+      await expect(viber.claimViberAccount(ownerId)).resolves.toMatchObject({
+        id: account!.id,
+        ownerId,
+      });
+      await expect(viber.claimViberAccount(otherId)).rejects.toThrow(
+        'Канал Viber доступний лише призначеному власнику.',
+      );
+      await expect(
+        viber.updateViberAccount(otherId, { dailyLimit: 20 }),
+      ).rejects.toThrow('Канал Viber доступний лише призначеному власнику.');
+      const {
+        rows: [assigned],
+      } = await db.sonarPool.query<{ owner_id: string }>(
+        'select owner_id from channel_accounts where id=$1',
+        [account!.id],
+      );
+      expect(assigned?.owner_id).toBe(ownerId);
+    } finally {
+      await db.sonarPool.query(
+        'update channel_accounts set owner_id=$2 where id=$1',
+        [account!.id, originalOwner],
+      );
+      await db.sonarPool.query(
+        'delete from activity_log where user_id=any($1::uuid[]) and entity_id=$2',
+        [[ownerId, otherId], account!.id],
+      );
+      await db.sonarPool.query('delete from users where id=any($1::uuid[])', [
+        [ownerId, otherId],
+      ]);
+    }
+  },
+);
 
 it.skipIf(!enabled)(
   'routes phone outreach and deduplicates Viber inbound on the shared channel path',
