@@ -175,15 +175,20 @@ export function visibleInboundMessages(
   for (let index = 0; index < body.length; index++) {
     const visibleTime = visibleTimeText(body[index]!.text);
     if (!visibleTime) continue;
+    const reference = input.reference ?? new Date();
     const at = visibleMessageTimestamp(
       visibleTime,
-      input.reference ?? new Date(),
+      reference,
+      daySeparatorAt(lines, body[index]!.top, reference),
     );
     const start = Math.max(previousTimeIndex + 1, index - 5);
     const text = body
       .slice(start, index)
       .map((line) => line.text)
-      .filter((line) => !visibleTimeText(line))
+      .filter(
+        (line) =>
+          !visibleTimeText(line) && !visibleDateSeparator(line, reference),
+      )
       .join(' ')
       .trim();
     previousTimeIndex = index;
@@ -205,6 +210,7 @@ export type BubbleRegion = {
   right: number;
   bottom: number;
   side: 'left' | 'right' | 'center';
+  daySeparator?: Date;
 };
 
 /** Viber uses a blue-violet fill for sent message bubbles. */
@@ -335,6 +341,7 @@ export function inboundBubbleRegionsFromOcr(
     bounds: { left: number; right: number };
     headerBottom: number;
     height: number;
+    reference?: Date;
   },
 ): BubbleRegion[] {
   const center =
@@ -351,15 +358,27 @@ export function inboundBubbleRegionsFromOcr(
     .sort((a, b) => a.top - b.top || a.left - b.left);
   const regions: BubbleRegion[] = [];
   let previousTimestampIndex = -1;
+  let previousDateSeparatorIndex = -1;
   for (let index = 0; index < body.length; index++) {
+    if (
+      visibleDateSeparator(body[index]!.text, input.reference ?? new Date())
+    ) {
+      previousDateSeparatorIndex = index;
+      continue;
+    }
     if (!visibleTimestampLine(body[index]!.text)) continue;
     const timestamp = body[index]!;
-    const start = Math.max(previousTimestampIndex + 1, index - 5);
+    const start = Math.max(
+      previousTimestampIndex + 1,
+      previousDateSeparatorIndex + 1,
+      index - 5,
+    );
     const messageLines = body
       .slice(start, index)
       .filter(
         (line) =>
           !visibleTimestampLine(line.text) &&
+          !visibleDateSeparator(line.text, input.reference ?? new Date()) &&
           timestamp.top - line.top <= 100 &&
           line.text.trim().length > 0,
       );
@@ -381,6 +400,11 @@ export function inboundBubbleRegionsFromOcr(
       ),
       bottom: Math.min(input.height - 90, timestamp.top + 18),
       side: 'left' as const,
+      daySeparator: daySeparatorAt(
+        lines,
+        timestamp.top,
+        input.reference ?? new Date(),
+      ),
     };
     if (region.right - region.left >= 80 && region.bottom - region.top >= 24)
       regions.push(region);
@@ -398,6 +422,7 @@ export function inboundBubbleMessage(
     region: BubbleRegion;
     copiedText?: string;
     dedupeText?: string;
+    daySeparator?: Date;
   },
 ) {
   if (input.region.side !== 'left') return null;
@@ -407,7 +432,11 @@ export function inboundBubbleMessage(
     .find((line) => visibleTimestampLine(line.text));
   if (!timeLine) return null;
   const visibleTime = visibleTimestampLine(timeLine.text)!;
-  const at = visibleMessageTimestamp(visibleTime, input.reference);
+  const at = visibleMessageTimestamp(
+    visibleTime,
+    input.reference,
+    input.daySeparator,
+  );
   const text = input.copiedText ?? '';
   // Visible Viber timestamps are minute-precision; overlap the frontier minute
   // so a later message in the same minute is not silently skipped.
@@ -417,13 +446,14 @@ export function inboundBubbleMessage(
     !normalizeMessageText(text)
   )
     return null;
-  const dayTime = at.toISOString().slice(0, 10);
   return {
     from: input.from,
     text,
     at: at.toISOString(),
     threadId: input.threadId,
-    providerMessageId: `screen:${screenMessageId(input.threadId, input.dedupeText ?? text, `${dayTime} ${visibleTime}`)}`,
+    // Date inference can change when a separator becomes visible after scrolling.
+    // Keep the provider ID independent of that inferred date to avoid re-imports.
+    providerMessageId: `screen:${screenMessageId(input.threadId, input.dedupeText ?? text, visibleTime)}`,
   };
 }
 
@@ -451,33 +481,170 @@ export function inboundOcrFallbackText(
   lines: readonly { text: string; left: number; top: number; right: number }[],
 ) {
   return lines
-    .filter((line) => !visibleTimestampLine(line.text))
+    .filter(
+      (line) =>
+        !visibleTimestampLine(line.text) &&
+        !/\b(?:block|report(?:\s+spam)?|spam|unblock|видалити|заблокувати|поскаржитися|спам|блокировать|пожаловаться)\b/iu.test(
+          line.text,
+        ),
+    )
     .map((line) => line.text.trim())
     .filter(Boolean)
     .join('\n')
     .trim();
 }
 
-export function messageTimeAtOrAfter(value: string, startedAt: Date) {
-  const visible = visibleMessageTimestamp(value, startedAt);
-  if (!visible) return true;
-  return visible.getTime() >= Math.floor(startedAt.getTime() / 60_000) * 60_000;
+const monthNumbers = new Map<string, number>([
+  ['january', 0],
+  ['jan', 0],
+  ['січня', 0],
+  ['січень', 0],
+  ['января', 0],
+  ['январь', 0],
+  ['february', 1],
+  ['feb', 1],
+  ['лютого', 1],
+  ['лютий', 1],
+  ['февраля', 1],
+  ['февраль', 1],
+  ['march', 2],
+  ['mar', 2],
+  ['березня', 2],
+  ['березень', 2],
+  ['марта', 2],
+  ['март', 2],
+  ['april', 3],
+  ['apr', 3],
+  ['квітня', 3],
+  ['квітень', 3],
+  ['апреля', 3],
+  ['апрель', 3],
+  ['may', 4],
+  ['травня', 4],
+  ['травень', 4],
+  ['мая', 4],
+  ['june', 5],
+  ['jun', 5],
+  ['червня', 5],
+  ['червень', 5],
+  ['июня', 5],
+  ['июнь', 5],
+  ['july', 6],
+  ['jul', 6],
+  ['липня', 6],
+  ['липень', 6],
+  ['июля', 6],
+  ['июль', 6],
+  ['august', 7],
+  ['aug', 7],
+  ['серпня', 7],
+  ['серпень', 7],
+  ['августа', 7],
+  ['август', 7],
+  ['september', 8],
+  ['sep', 8],
+  ['вересня', 8],
+  ['вересень', 8],
+  ['сентября', 8],
+  ['сентябрь', 8],
+  ['october', 9],
+  ['oct', 9],
+  ['жовтня', 9],
+  ['жовтень', 9],
+  ['октября', 9],
+  ['октябрь', 9],
+  ['november', 10],
+  ['nov', 10],
+  ['листопада', 10],
+  ['листопад', 10],
+  ['ноября', 10],
+  ['ноябрь', 10],
+  ['december', 11],
+  ['dec', 11],
+  ['грудня', 11],
+  ['грудень', 11],
+  ['декабря', 11],
+  ['декабрь', 11],
+]);
+
+/** Parses Viber's date dividers in English, Ukrainian, and Russian. */
+export function visibleDateSeparator(value: string, reference: Date) {
+  const normalized = value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[,.]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (/^(today|сьогодні|сегодня)$/u.test(normalized))
+    return new Date(reference);
+  if (/^(yesterday|вчора|вчера)$/u.test(normalized)) {
+    const day = new Date(reference);
+    day.setDate(day.getDate() - 1);
+    return day;
+  }
+  const match = normalized.match(/^(\d{1,2})\s+([\p{L}]+)(?:\s+(\d{4}))?$/u);
+  if (!match) return undefined;
+  const month = monthNumbers.get(match[2]!);
+  if (month === undefined) return undefined;
+  const day = Number(match[1]);
+  const years = match[3]
+    ? [Number(match[3])]
+    : [reference.getFullYear(), reference.getFullYear() - 1];
+  const candidates = years
+    .map(() => new Date(reference.getFullYear(), month, day, 0, 0, 0, 0))
+    .filter((date, index) => {
+      date.setFullYear(years[index]!);
+      return date.getMonth() === month && date.getDate() === day;
+    })
+    .sort(
+      (a, b) =>
+        Math.abs(a.getTime() - reference.getTime()) -
+        Math.abs(b.getTime() - reference.getTime()),
+    );
+  return candidates[0];
 }
 
-export function visibleMessageTimestamp(value: string, reference: Date) {
+export function daySeparatorAt(
+  lines: readonly { text: string; top: number }[],
+  top: number,
+  reference: Date,
+) {
+  return [...lines]
+    .filter((line) => line.top < top)
+    .sort((a, b) => b.top - a.top)
+    .map((line) => visibleDateSeparator(line.text, reference))
+    .find((date) => date !== undefined);
+}
+
+export function messageTimeAtOrAfter(value: string, startedAt: Date) {
   const match = value.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-  if (!match) return null;
+  if (!match) return true;
   const possibilities = [-1, 0, 1].map((offset) => {
-    const visible = new Date(reference);
+    const visible = new Date(startedAt);
     visible.setDate(visible.getDate() + offset);
     visible.setHours(Number(match[1]), Number(match[2]), 0, 0);
     return visible.getTime();
   });
-  const nearest = possibilities.sort(
+  const visible = possibilities.sort(
     (a, b) =>
-      Math.abs(a - reference.getTime()) - Math.abs(b - reference.getTime()),
+      Math.abs(a - startedAt.getTime()) - Math.abs(b - startedAt.getTime()),
   )[0]!;
-  return new Date(nearest);
+  return visible >= Math.floor(startedAt.getTime() / 60_000) * 60_000;
+}
+
+export function visibleMessageTimestamp(
+  value: string,
+  reference: Date,
+  daySeparator?: Date,
+) {
+  const match = value.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (!match) return null;
+  const visible = new Date(daySeparator ?? reference);
+  visible.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  // Explicit dividers determine the day; without one use today, falling back to
+  // yesterday for clock times later than the current local time.
+  if (visible > reference) visible.setDate(visible.getDate() - 1);
+  return visible;
 }
 
 export type Rgb = readonly [number, number, number];

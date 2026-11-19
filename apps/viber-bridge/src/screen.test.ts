@@ -32,6 +32,8 @@ import {
   normalizeMessageText,
   visibleTimeText,
   visibleTimestampLine,
+  visibleDateSeparator,
+  visibleMessageTimestamp,
 } from './screen.js';
 
 function syntheticBubblePixels() {
@@ -156,6 +158,58 @@ it('recovers a compact OCR timestamp when the colon is unreadable', () => {
   expect(visibleTimestampLine('Зустріч о 18:45')).toBeUndefined();
 });
 
+it('assigns Viber message times to visible day separators and never returns future times', () => {
+  const reference = new Date('2026-11-19T18:00:00');
+  const expectedYesterday = new Date(reference);
+  expectedYesterday.setDate(expectedYesterday.getDate() - 1);
+  expectedYesterday.setHours(18, 45, 0, 0);
+  const yesterdayLabels = ['Yesterday', 'Вчора', 'Вчера'];
+  for (const label of yesterdayLabels) {
+    const separator = visibleDateSeparator(label, reference)!;
+    expect(
+      visibleMessageTimestamp('18:45', reference, separator)?.getTime(),
+    ).toBe(expectedYesterday.getTime());
+  }
+  for (const label of ['Today', 'Сьогодні', 'Сегодня']) {
+    const separator = visibleDateSeparator(label, reference)!;
+    expect(
+      visibleMessageTimestamp('17:12', reference, separator)?.getDate(),
+    ).toBe(reference.getDate());
+  }
+  for (const label of ['18 November', '18 листопада', '18 ноября']) {
+    const separator = visibleDateSeparator(label, reference)!;
+    expect(
+      visibleMessageTimestamp('18:45', reference, separator)?.getDate(),
+    ).toBe(18);
+  }
+  const noDividerFuture = visibleMessageTimestamp('19:17', reference)!;
+  expect(noDividerFuture.getDate()).toBe(18);
+  expect(noDividerFuture.getTime()).toBeLessThanOrEqual(reference.getTime());
+  expect(visibleMessageTimestamp('17:12', reference)?.getDate()).toBe(19);
+});
+
+it('applies the nearest visible date divider to an inbound message', () => {
+  const incoming = visibleInboundMessages(
+    [
+      { text: '18 листопада', left: 300, top: 150, right: 470 },
+      { text: 'Вчорашнє повідомлення', left: 180, top: 170, right: 390 },
+      { text: '18:45', left: 180, top: 195, right: 220 },
+    ],
+    {
+      threadId: 'screen:380637058571',
+      from: '+380637058571',
+      since: new Date('2026-11-18T18:00:00'),
+      reference: new Date('2026-11-19T18:00:00'),
+      left: 145,
+      right: 1135,
+      headerBottom: 140,
+      height: 900,
+    },
+  );
+  expect(incoming[0]?.at).toBe(new Date(2026, 10, 18, 18, 45).toISOString());
+  expect(incoming[0]?.text).toBe('Вчорашнє повідомлення');
+});
+
 it('keeps a chat timestamp when sidebar text shares the same OCR row', () => {
   const words = [
     { text: '17:12', left: 915, top: 302, width: 30, height: 12 },
@@ -222,6 +276,13 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   ];
   const fallbackText = inboundOcrFallbackText(ocrLines);
   expect(fallbackText).toBe('перше повідомлення\nз двох рядків');
+  expect(
+    inboundOcrFallbackText([
+      ...ocrLines,
+      { text: 'Report spam', left: 0, top: 40, right: 80 },
+      { text: 'Block and', left: 0, top: 50, right: 80 },
+    ]),
+  ).toBe('перше повідомлення\nз двох рядків');
   const fallback = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
     from: '+380637058571',
