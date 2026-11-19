@@ -65,6 +65,7 @@ export type FacebookDispatchResult = {
 };
 
 export class SocialSendError extends Error {
+  taskResult?: object;
   constructor(
     public code:
       'session_invalid' | 'rate_limit' | 'unavailable' | 'delivery_uncertain',

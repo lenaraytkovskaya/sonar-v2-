@@ -304,9 +304,30 @@ async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
       recognizedProfiles,
       mismatchedProfiles,
     });
-  return dialog;
+  return { dialog, headers };
 }
-async function instagramComposer(page: Page, dialog: Locator) {
+type ComposerDiagnostic = {
+  counts: Record<string, number>;
+  attrs: Array<Record<string, string | number[] | null>>;
+};
+function composerFailure(
+  diagnostic: ComposerDiagnostic | undefined,
+  kind: SendErrorKind,
+) {
+  const error = stagedFailure('composer', kind);
+  if (diagnostic) {
+    error.reasonUk += ` [composer_counts=${JSON.stringify(diagnostic.counts)}; composer_attrs=${JSON.stringify(diagnostic.attrs)}]`;
+    Object.assign(error, { taskResult: { composer: diagnostic } });
+  }
+  error.message = error.reasonUk;
+  return error;
+}
+async function instagramComposer(
+  page: Page,
+  dialog: Locator,
+  headers: Locator,
+  timeoutMs: number,
+) {
   const outsideNavigation = page.locator(
     `:not(:is(aside, nav, ${conversationHeaderElements}, [role="complementary"], [role="navigation"]) *)`,
   );
@@ -315,25 +336,125 @@ async function instagramComposer(page: Page, dialog: Locator) {
     .or(dialog.getByPlaceholder(composerLabel))
     .filter({ visible: true })
     .and(outsideNavigation);
-  const candidates = dialog
-    .locator(
-      '[contenteditable="true"][role="textbox"][aria-placeholder]:not([aria-readonly="true"])',
-    )
+  const pool = dialog
+    .locator('textarea, input, [contenteditable][role="textbox"]')
+    .or(named)
     .filter({ visible: true })
     .and(outsideNavigation);
-  let matchingCandidate: Locator | undefined;
-  for (let index = 0; index < (await candidates.count()); index++) {
-    const candidate = candidates.nth(index);
-    if (
-      composerLabel.test(
-        (await candidate.getAttribute('aria-placeholder')) ?? '',
-      )
-    )
-      matchingCandidate = matchingCandidate
-        ? matchingCandidate.or(candidate)
-        : candidate;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const nodes = await pool.elementHandles();
+    const result = await page.evaluate(
+      ({ elements: rawElements, header, boundary, namedNodes, pattern }) => {
+        const elements = rawElements as Element[];
+        const label = new RegExp(pattern, 'i');
+        const knownUi =
+          /^(?:search|пошук|your note|ваша нотатка|what's new\.{3}|що нового\.{3})$/i;
+        const safeLabel = (value: string | null) =>
+          value === null || label.test(value) || knownUi.test(value)
+            ? value
+            : '[redacted]';
+        const headerRect = header.getBoundingClientRect();
+        const counts = { named: 0, lexical: 0, panel: 0, eligible: 0 };
+        const eligible: number[] = [];
+        const possible: number[] = [];
+        const attrs = elements.slice(0, 8).map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            role: ['textbox', 'searchbox'].includes(
+              element.getAttribute('role') ?? '',
+            )
+              ? element.getAttribute('role')
+              : null,
+            contenteditable: ['true', 'false', 'plaintext-only'].includes(
+              element.getAttribute('contenteditable') ?? '',
+            )
+              ? element.getAttribute('contenteditable')
+              : null,
+            'aria-label': safeLabel(element.getAttribute('aria-label')),
+            'aria-placeholder': safeLabel(
+              element.getAttribute('aria-placeholder'),
+            ),
+            rect: [rect.x, rect.y, rect.width, rect.height].map(Math.round),
+          };
+        });
+        elements.forEach((element, index) => {
+          const namedMatch = namedNodes.includes(element);
+          const lexicalMatch =
+            element.matches('[contenteditable="true"][role="textbox"]') &&
+            label.test(element.getAttribute('aria-placeholder') ?? '');
+          if (namedMatch) counts.named++;
+          if (lexicalMatch) counts.lexical++;
+          const rect = element.getBoundingClientRect();
+          let panel = header.parentElement;
+          while (panel && !panel.contains(element)) panel = panel.parentElement;
+          const panelRect = panel?.getBoundingClientRect();
+          // Use the header's shared column when present; a main spanning both
+          // columns cannot widen the confirmed header's horizontal bounds.
+          const paneRect =
+            panel !== boundary && panelRect ? panelRect : headerRect;
+          const inPane =
+            rect.top >= headerRect.bottom - 1 &&
+            rect.left >= paneRect.left - 1 &&
+            rect.right <= paneRect.right + 1;
+          const lowerEditor =
+            inPane &&
+            panelRect &&
+            rect.bottom >=
+              panelRect.bottom - Math.min(160, panelRect.height * 0.25);
+          if (lowerEditor) counts.panel++;
+          const labels = ['aria-label', 'aria-placeholder', 'placeholder']
+            .map((attribute) => element.getAttribute(attribute))
+            .filter(Boolean);
+          const safeSemantics = labels.every((value) => label.test(value!));
+          const editable =
+            element.getAttribute('aria-readonly') !== 'true' &&
+            !element.matches(':disabled, [readonly]') &&
+            ((element instanceof HTMLTextAreaElement &&
+              [null, 'textbox'].includes(element.getAttribute('role'))) ||
+              (element instanceof HTMLInputElement &&
+                ['text', 'email', 'tel', 'url'].includes(element.type) &&
+                [null, 'textbox'].includes(element.getAttribute('role'))) ||
+              (element instanceof HTMLElement &&
+                element.isContentEditable &&
+                element.getAttribute('role') === 'textbox'));
+          if (editable && safeSemantics && inPane) possible.push(index);
+          if (
+            editable &&
+            safeSemantics &&
+            inPane &&
+            (namedMatch || lexicalMatch || lowerEditor)
+          )
+            eligible.push(index);
+        });
+        // Geometry may identify a lower editor, but must never resolve two
+        // otherwise plausible editors by picking whichever is closer to bottom.
+        const selected = eligible.length ? possible : [];
+        counts.eligible = selected.length;
+        return { eligible: selected, counts, attrs };
+      },
+      {
+        elements: nodes,
+        header: (await headers.elementHandle())!,
+        boundary: (await dialog.elementHandle())!,
+        namedNodes: await named.elementHandles(),
+        pattern: composerLabel.source,
+      },
+    );
+    const diagnostic = { counts: result.counts, attrs: result.attrs };
+    const selected =
+      result.eligible.length === 1 ? nodes[result.eligible[0]!] : undefined;
+    await Promise.all(
+      nodes.filter((node) => node !== selected).map((node) => node.dispose()),
+    );
+    if (selected) return { composer: selected, diagnostic };
+    if (result.eligible.length > 1 || Date.now() >= deadline)
+      throw composerFailure(
+        diagnostic,
+        result.eligible.length > 1 ? 'unconfirmed' : 'timeout',
+      );
+    await page.waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
   }
-  return matchingCandidate ? named.or(matchingCandidate) : named;
 }
 async function tryInstagramDirectChat(
   page: Page,
@@ -357,13 +478,14 @@ async function tryInstagramDirectChat(
       { timeout: timeoutMs },
     );
     await assertSession();
-    const dialog = await instagramDialog(page, handle, 'initial');
-    const composer = await instagramComposer(page, dialog);
-    return (
-      (await composer.count()) === 1 &&
-      (await composer.isEditable()) &&
-      (await composer.isEnabled())
+    const { dialog, headers } = await instagramDialog(page, handle, 'initial');
+    const { composer } = await instagramComposer(
+      page,
+      dialog,
+      headers,
+      timeoutMs,
     );
+    return (await composer.isEditable()) && (await composer.isEnabled());
   } catch {
     return false;
   }
@@ -572,6 +694,7 @@ async function sendInstagram(
 ) {
   let stage: SendStage = 'navigation';
   let attempted = false;
+  let composerDiagnostic: ComposerDiagnostic | undefined;
   let restriction: 'session_invalid' | 'rate_limit' | undefined;
   page.on('response', (response) => {
     if (![401, 403, 429].includes(response.status())) return;
@@ -994,19 +1117,28 @@ async function sendInstagram(
     }
     await assertSession();
     stage = 'dialog';
-    let dialog = await instagramDialog(page, target.handle, 'initial');
+    let { dialog, headers } = await instagramDialog(
+      page,
+      target.handle,
+      'initial',
+    );
     const dialogUrl = page.url();
     let dialogNode = await dialog.elementHandle();
     stage = 'composer';
-    let composerNode = await (
-      await instagramComposer(page, dialog)
-    ).elementHandle();
-    if (!composerNode) throw stagedFailure(stage, 'unconfirmed');
+    const initialComposer = await instagramComposer(
+      page,
+      dialog,
+      headers,
+      timeoutMs,
+    );
+    composerDiagnostic = initialComposer.diagnostic;
+    let composerNode = initialComposer.composer;
     await composerNode.fill(body);
     const verifyDialog = async (phase: Exclude<DialogPhase, 'initial'>) => {
       await assertSession();
       stage = 'dialog';
-      const current = await instagramDialog(page, target.handle, phase);
+      const { dialog: current, headers: currentHeaders } =
+        await instagramDialog(page, target.handle, phase);
       const currentNode = await current.elementHandle();
       if (!currentNode) throw stagedFailure(stage, 'unconfirmed');
       const containerChanged = !(await currentNode.evaluate(
@@ -1025,10 +1157,15 @@ async function sendInstagram(
           originalUrl: dialogUrl,
           currentUrl,
         });
-      const currentComposer = await (
-        await instagramComposer(page, current)
-      ).elementHandle();
-      if (!currentComposer) throw stagedFailure('composer', 'unconfirmed');
+      stage = 'composer';
+      const selection = await instagramComposer(
+        page,
+        current,
+        currentHeaders,
+        timeoutMs,
+      );
+      composerDiagnostic = selection.diagnostic;
+      const currentComposer = selection.composer;
       const sameComposer = await currentComposer.evaluate(
         (node, original) => node === original,
         composerNode,
@@ -1063,9 +1200,10 @@ async function sendInstagram(
           },
         ))
       )
-        throw stagedFailure('composer', 'mismatch');
+        throw composerFailure(composerDiagnostic, 'mismatch');
       if (phase === 'after_fill') {
         dialog = current;
+        headers = currentHeaders;
         dialogNode = currentNode;
         composerNode = currentComposer;
       }
@@ -1139,13 +1277,16 @@ async function sendInstagram(
             kind === 'timeout' ? kind : 'unconfirmed',
             'session_invalid',
           );
+    if (stage === 'composer' && !(error instanceof SocialSendError))
+      error = composerFailure(composerDiagnostic, kind);
     if (attempted || stage === 'attempt') {
       if (
         error instanceof SocialSendError &&
         'stage' in error &&
-        error.stage === 'dialog' &&
-        'errorKind' in error &&
-        error.errorKind === 'mismatch'
+        (error.stage === 'composer' ||
+          (error.stage === 'dialog' &&
+            'errorKind' in error &&
+            error.errorKind === 'mismatch'))
       ) {
         // Preserve safe mismatch diagnostics without making a durable attempt retryable.
         error.code = 'delivery_uncertain';

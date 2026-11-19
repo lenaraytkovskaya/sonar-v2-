@@ -532,12 +532,18 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
       const failedSend = await create();
       expect(
         await send(failedSend.id, async () => {
-          throw new SocialSendError(
-            'unavailable',
-            'Сторінка LinkedIn не приймає повідомлень',
+          throw Object.assign(
+            new SocialSendError(
+              'unavailable',
+              'Поле повідомлення Instagram неоднозначне',
+            ),
+            { taskResult: { composer: { counts: { eligible: 2 } } } },
           );
         }),
-      ).toMatchObject({ status: 'skipped' });
+      ).toMatchObject({
+        status: 'skipped',
+        result: { composer: { counts: { eligible: 2 } } },
+      });
       await reset();
       const automatic = await create();
       await sonarPool.query(

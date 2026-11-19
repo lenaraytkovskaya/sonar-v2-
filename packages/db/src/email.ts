@@ -1750,6 +1750,7 @@ export async function sendEmailMessage(
           code === 'unavailable' ? 'skipped' : 'paused',
           `social_${code}`,
           reason,
+          error instanceof SocialSendError ? error.taskResult : undefined,
         );
       }
       if (error instanceof WhatsAppSendError) {
