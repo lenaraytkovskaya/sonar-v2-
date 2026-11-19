@@ -143,7 +143,6 @@ services:
       - social-browser:/data
     expose:
       - '3000'
-      - '9400-9499'
     shm_size: 1gb
     restart: unless-stopped
   viber:

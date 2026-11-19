@@ -21,5 +21,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends xvfb && \
 RUN chmod -R a+rX /root/.cache/ms-playwright && chmod o+x /root /root/.cache
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 USER node
-EXPOSE 3000 9400-9499
+EXPOSE 3000
 CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x800x24 -nolisten tcp & xvfb_pid=$!; while [ ! -S /tmp/.X11-unix/X99 ]; do sleep 0.1; done; node dist/index.js & app_pid=$!; trap 'kill -TERM \"$app_pid\" 2>/dev/null; wait \"$app_pid\"; kill -TERM \"$xvfb_pid\" 2>/dev/null; wait \"$xvfb_pid\" 2>/dev/null' TERM INT; wait \"$app_pid\""]
