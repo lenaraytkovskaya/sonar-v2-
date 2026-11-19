@@ -327,6 +327,66 @@ export function messageBubbleRegions(
     );
 }
 
+/** Infers inbound bubble bounds from left-aligned OCR text and its timestamp. */
+export function inboundBubbleRegionsFromOcr(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  input: {
+    bounds: { left: number; right: number };
+    headerBottom: number;
+    height: number;
+  },
+): BubbleRegion[] {
+  const center =
+    input.bounds.left + (input.bounds.right - input.bounds.left) / 2;
+  const body = [...lines]
+    .filter(
+      (line) =>
+        line.top > input.headerBottom &&
+        line.top < input.height - 90 &&
+        line.left >= input.bounds.left &&
+        line.left < center &&
+        line.right <= center,
+    )
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+  const regions: BubbleRegion[] = [];
+  let previousTimestampIndex = -1;
+  for (let index = 0; index < body.length; index++) {
+    if (!visibleTimestampLine(body[index]!.text)) continue;
+    const timestamp = body[index]!;
+    const start = Math.max(previousTimestampIndex + 1, index - 5);
+    const messageLines = body
+      .slice(start, index)
+      .filter(
+        (line) =>
+          !visibleTimestampLine(line.text) &&
+          timestamp.top - line.top <= 100 &&
+          line.text.trim().length > 0,
+      );
+    previousTimestampIndex = index;
+    if (messageLines.length === 0) continue;
+    const region = {
+      left: Math.max(
+        input.bounds.left,
+        Math.min(...messageLines.map((line) => line.left)) - 14,
+      ),
+      top: Math.max(
+        input.headerBottom,
+        Math.min(...messageLines.map((line) => line.top)) - 10,
+      ),
+      right: Math.min(
+        center,
+        Math.max(timestamp.right, ...messageLines.map((line) => line.right)) +
+          14,
+      ),
+      bottom: Math.min(input.height - 90, timestamp.top + 18),
+      side: 'left' as const,
+    };
+    if (region.right - region.left >= 80 && region.bottom - region.top >= 24)
+      regions.push(region);
+  }
+  return regions;
+}
+
 export function inboundBubbleMessage(
   lines: readonly { text: string; left: number; top: number; right: number }[],
   input: {
@@ -445,10 +505,10 @@ export function safeLayoutClick(
     Number.isFinite(y) &&
     !forbidden.some(
       (box) =>
-        x >= box.left - 8 &&
-        x <= box.right + 8 &&
-        y >= box.top - 8 &&
-        y <= box.bottom + 8,
+        x >= box.left - 40 &&
+        x <= box.right + 40 &&
+        y >= box.top - 40 &&
+        y <= box.bottom + 40,
     )
   );
 }
