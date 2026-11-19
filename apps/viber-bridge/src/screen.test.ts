@@ -4,6 +4,7 @@ import { deflateSync } from 'node:zlib';
 import { expect, it } from 'vitest';
 import {
   groupOcrLines,
+  groupOcrLinesWithinBounds,
   classifyViberModal,
   chatColumnBounds,
   chatHeaderMatchesRecipient,
@@ -20,17 +21,19 @@ import {
   verticalColorBoundaries,
   visibleInboundMessages,
   messageBubbleRegions,
+  isOutgoingBubbleColor,
   inboundBubbleMessage,
   copyMenuPoint,
   exactOptionPoint,
   clipboardChanged,
   normalizeMessageText,
   visibleTimeText,
+  visibleTimestampLine,
 } from './screen.js';
 
 function syntheticBubblePixels() {
   const width = 640;
-  const height = 400;
+  const height = 500;
   const pixels = new Uint8Array(width * height * 3);
   const paint = (
     left: number,
@@ -47,6 +50,7 @@ function syntheticBubblePixels() {
   paint(55, 220, 260, 295, [255, 255, 255]);
   paint(360, 125, 610, 200, [117, 71, 174]);
   paint(220, 75, 420, 105, [190, 190, 190]); // centered encryption notice
+  paint(320, 310, 480, 370, [117, 71, 174]); // outgoing bubble left of midpoint.
   return { width, height, pixels };
 }
 
@@ -144,6 +148,26 @@ it('recovers a compact OCR timestamp when the colon is unreadable', () => {
   expect(visibleTimeText('1917')).toBe('19:17');
   expect(visibleTimeText('V6 1917')).toBe('19:17');
   expect(visibleTimeText('2561')).toBeUndefined();
+  expect(visibleTimestampLine('1712')).toBe('17:12');
+  expect(visibleTimestampLine('18:45 ✓✓')).toBe('18:45');
+  expect(visibleTimestampLine('Зустріч о 18:45')).toBeUndefined();
+});
+
+it('keeps a chat timestamp when sidebar text shares the same OCR row', () => {
+  const words = [
+    { text: '17:12', left: 915, top: 302, width: 30, height: 12 },
+    { text: 'Chats', left: 22, top: 302, width: 35, height: 12 },
+    { text: 'ChatGPT', left: 1030, top: 302, width: 55, height: 12 },
+  ];
+  expect(groupOcrLines(words)[0]?.left).toBe(22);
+  expect(groupOcrLinesWithinBounds(words, { left: 299, right: 980 })).toEqual([
+    { text: '17:12', left: 915, top: 302, right: 945 },
+  ]);
+  expect(
+    visibleTimeText(
+      groupOcrLinesWithinBounds(words, { left: 299, right: 980 })[0]!.text,
+    ),
+  ).toBe('17:12');
 });
 
 it('does not trust a URI-opened chat header without the recipient number', () => {
@@ -165,7 +189,10 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     ['left', 125],
     ['right', 125],
     ['left', 220],
+    ['right', 310],
   ]);
+  expect(isOutgoingBubbleColor([117, 71, 174])).toBe(true);
+  expect(isOutgoingBubbleColor([209, 237, 248])).toBe(false);
   const first = inboundBubbleMessage(
     [
       { text: 'перше повідомлення', left: 0, top: 0, right: 90 },
@@ -499,6 +526,13 @@ it('includes synthetic outgoing-chat and unread-list PNG screenshots', async () 
   }
 });
 
+it('detects the ChatGPT panel boundary while keeping it outside the chat column', () => {
+  expect(chatColumnBounds(1280, [299, 978, 980, 1000, 1260], true)).toEqual({
+    left: 299,
+    right: 980,
+  });
+});
+
 it('keeps the anonymized test Viber chat crop as a fixture', async () => {
   const image = await readFile(
     fileURLToPath(
@@ -507,4 +541,34 @@ it('keeps the anonymized test Viber chat crop as a fixture', async () => {
   );
   expect(image.readUInt32BE(16)).toBe(680);
   expect(image.readUInt32BE(20)).toBe(625);
+});
+
+it('includes an anonymized real Viber chat screenshot for timestamp OCR', async () => {
+  const image = await readFile(
+    fileURLToPath(
+      new URL('./fixtures/viber-ocr-times-live.png', import.meta.url),
+    ),
+  );
+  expect(image.subarray(0, 8)).toEqual(
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+  );
+  expect(image.readUInt32BE(16)).toBe(680);
+  expect(image.readUInt32BE(20)).toBe(638);
+  const ocrTsv = await readFile(
+    fileURLToPath(
+      new URL('./fixtures/viber-ocr-times-live.tsv', import.meta.url),
+    ),
+    'utf8',
+  );
+  const times = groupOcrLines(parseTsvWords(ocrTsv))
+    .map((line) => visibleTimeText(line.text))
+    .filter((time): time is string => Boolean(time));
+  expect([...new Set(times)].sort()).toEqual([
+    '17:12',
+    '17:48',
+    '17:49',
+    '18:45',
+    '18:59',
+    '19:17',
+  ]);
 });

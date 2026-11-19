@@ -55,6 +55,12 @@ export function visibleTimeText(value: string) {
   return compact ? `${compact[1]}:${compact[2]}` : undefined;
 }
 
+export function visibleTimestampLine(value: string) {
+  const compact = value.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '');
+  if (!/^(?:[01]?\d|2[0-3]):?[0-5]\d$/u.test(compact)) return undefined;
+  return visibleTimeText(compact);
+}
+
 export function copyMenuPoint(
   lines: readonly { text: string; left: number; top: number; right: number }[],
 ) {
@@ -200,6 +206,11 @@ export type BubbleRegion = {
   side: 'left' | 'right' | 'center';
 };
 
+/** Viber uses a blue-violet fill for sent message bubbles. */
+export function isOutgoingBubbleColor([red, green, blue]: Rgb) {
+  return blue - red >= 18 && blue - green >= 18 && red - green >= -10;
+}
+
 /** Finds large, solid-color bubble backgrounds in an ImageMagick RGB crop. */
 export function messageBubbleRegions(
   pixels: Uint8Array,
@@ -277,8 +288,14 @@ export function messageBubbleRegions(
         const boxHeight = maxY - minY + 1;
         if (write < 1500 || boxWidth < 100 || boxHeight < 28) continue;
         const chatWidth = bounds.right - bounds.left;
-        const side =
-          minX <= bounds.left + chatWidth * 0.2
+        const rgb = [
+          ((color >> 8) & 15) * 17,
+          ((color >> 4) & 15) * 17,
+          (color & 15) * 17,
+        ] as const;
+        const side = isOutgoingBubbleColor(rgb)
+          ? 'right'
+          : minX <= bounds.left + chatWidth * 0.2
             ? 'left'
             : maxX >= bounds.right - chatWidth * 0.2
               ? 'right'
@@ -325,9 +342,9 @@ export function inboundBubbleMessage(
   const ordered = [...lines].sort((a, b) => a.top - b.top || a.left - b.left);
   const timeLine = [...ordered]
     .reverse()
-    .find((line) => visibleTimeText(line.text));
+    .find((line) => visibleTimestampLine(line.text));
   if (!timeLine) return null;
-  const visibleTime = visibleTimeText(timeLine.text)!;
+  const visibleTime = visibleTimestampLine(timeLine.text)!;
   const at = visibleMessageTimestamp(visibleTime, input.reference);
   const text = input.copiedText ?? '';
   // Visible Viber timestamps are minute-precision; overlap the frontier minute
@@ -490,6 +507,18 @@ export function groupOcrLines(words: OcrWord[]) {
     top: Math.min(...line.map((word) => word.top)),
     right: Math.max(...line.map((word) => word.left + word.width)),
   }));
+}
+
+export function groupOcrLinesWithinBounds(
+  words: readonly OcrWord[],
+  bounds: { left: number; right: number },
+) {
+  return groupOcrLines(
+    words.filter(
+      (word) =>
+        word.left >= bounds.left && word.left + word.width < bounds.right,
+    ),
+  );
 }
 
 export type ViberModal =

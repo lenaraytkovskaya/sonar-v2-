@@ -13,6 +13,7 @@ import {
   chatColumnBounds,
   desktopPresenceState,
   groupOcrLines,
+  groupOcrLinesWithinBounds,
   parseTsvWords,
   phoneFromOcrLines,
   screenClickPoint,
@@ -22,6 +23,7 @@ import {
   visibleInboundMessages,
   visibleMessageTimestamp,
   visibleTimeText,
+  visibleTimestampLine,
   messageBubbleRegions,
   inboundBubbleMessage,
   copyMenuPoint,
@@ -141,7 +143,7 @@ if (!key) {
     image: Buffer,
     crop?: string,
     psm = '11',
-    preprocess = true,
+    preprocess = false,
   ) => {
     const source = join(data, 'ocr-source.jpg');
     const target = join(data, 'ocr-target.png');
@@ -217,6 +219,7 @@ if (!key) {
           image,
           `${menuWidth}x${menuHeight}+${menuLeft}+${menuTop}`,
           '6',
+          true,
         );
         const localPoint = copyMenuPoint(
           groupOcrLines(parseTsvWords(result.stdout)),
@@ -360,12 +363,14 @@ if (!key) {
     }
     const chatgptSidebarOpen = words.some(
       (word) =>
-        word.left > width * 0.68 &&
+        word.left > width * 0.74 &&
         word.top > 26 &&
+        word.top < height * 0.25 &&
         /^chatgpt$/i.test(word.text),
     );
     const profileOpen = profileSidebarOpen || chatgptSidebarOpen;
     const bounds = chatColumnBounds(width, boundaries, profileOpen);
+    const chatLines = groupOcrLinesWithinBounds(words, bounds);
     const blockedWords = words
       .filter((word) => /^(block|report|spam)$/i.test(word.text))
       .map((word) => ({
@@ -379,6 +384,7 @@ if (!key) {
       height,
       words,
       lines,
+      chatLines,
       allText,
       profileOpen,
       chatgptSidebarOpen,
@@ -456,7 +462,7 @@ if (!key) {
       );
     };
     const visible = phoneFromOcrLines(
-      layout.lines,
+      layout.chatLines,
       (line) =>
         line.top < 210 &&
         line.left >= layout.bounds.left &&
@@ -497,7 +503,10 @@ if (!key) {
     }
     const profileNumber = current.profileOpen
       ? phoneFromOcrLines(
-          current.lines,
+          groupOcrLinesWithinBounds(current.words, {
+            left: current.bounds.right,
+            right: current.width,
+          }),
           (line) =>
             line.top < current.height * 0.55 &&
             line.left >= current.bounds.right - 5,
@@ -650,7 +659,7 @@ if (!key) {
     const scanCurrent = async (hint = '') => {
       let layout = await inspectChatLayout(await screen());
       let from = phoneFromOcrLines(
-        layout.lines,
+        layout.chatLines,
         (line) =>
           line.top < 210 &&
           line.left >= layout.bounds.left &&
@@ -659,13 +668,16 @@ if (!key) {
       if (!from && hint) from = hint;
       if (!from && layout.profileOpen)
         from = phoneFromOcrLines(
-          layout.lines,
+          groupOcrLinesWithinBounds(layout.words, {
+            left: layout.bounds.right,
+            right: layout.width,
+          }),
           (line) =>
             line.top < layout.height * 0.55 &&
             line.left >= layout.bounds.right - 5,
         );
-      if (!from) {
-        const x = Math.min(layout.width - 35, layout.bounds.right - 38);
+      if (!from && !layout.profileOpen) {
+        const x = Math.min(layout.width - 35, layout.bounds.right - 28);
         if (safeLayoutClick(x, 45, layout.blockedWords)) {
           await run('xdotool', ['mousemove', String(x), '45', 'click', '1']);
           await delay(300);
@@ -674,7 +686,10 @@ if (!key) {
       }
       if (!from)
         from = phoneFromOcrLines(
-          layout.lines,
+          groupOcrLinesWithinBounds(layout.words, {
+            left: layout.bounds.right,
+            right: layout.width,
+          }),
           (line) =>
             line.top < layout.height * 0.55 &&
             line.left >= layout.bounds.right - 5,
@@ -687,7 +702,7 @@ if (!key) {
       if (!frontier) return;
       const headerBottom = Math.max(
         140,
-        ...layout.lines
+        ...layout.chatLines
           .filter((line) => line.top < layout.height * 0.16)
           .map((line) => line.top + 28),
       );
@@ -710,6 +725,14 @@ if (!key) {
         const crop = `${bubble.right - bubble.left}x${bubble.bottom - bubble.top}+${bubble.left}+${bubble.top}`;
         const result = await ocr(image, crop, '6');
         const bubbleLines = groupOcrLines(parseTsvWords(result.stdout));
+        if (!bubbleLines.some((line) => visibleTimestampLine(line.text))) {
+          const timeResult = await ocr(image, crop, '6', true);
+          bubbleLines.push(
+            ...groupOcrLines(parseTsvWords(timeResult.stdout)).filter((line) =>
+              visibleTimestampLine(line.text),
+            ),
+          );
+        }
         if (
           !inboundBubbleMessage(bubbleLines, {
             threadId,
@@ -759,7 +782,7 @@ if (!key) {
       let layout = await inspectChatLayout(await screen());
       if (
         !hint &&
-        layout.lines.some(
+        layout.chatLines.some(
           (line) =>
             line.top < layout.height * 0.55 && /my\s+notes/i.test(line.text),
         )
@@ -768,7 +791,7 @@ if (!key) {
       let from =
         hint ||
         phoneFromOcrLines(
-          layout.lines,
+          layout.chatLines,
           (line) =>
             line.top < 210 &&
             line.left >= layout.bounds.left &&
@@ -776,20 +799,26 @@ if (!key) {
         );
       if (!from && layout.profileOpen)
         from = phoneFromOcrLines(
-          layout.lines,
+          groupOcrLinesWithinBounds(layout.words, {
+            left: layout.bounds.right,
+            right: layout.width,
+          }),
           (line) =>
             line.top < layout.height * 0.55 &&
             line.left >= layout.bounds.right - 5,
         );
-      if (!from) {
-        const x = Math.min(layout.width - 35, layout.bounds.right - 38);
+      if (!from && !layout.profileOpen) {
+        const x = Math.min(layout.width - 35, layout.bounds.right - 28);
         if (safeLayoutClick(x, 45, layout.blockedWords)) {
           await run('xdotool', ['mousemove', String(x), '45', 'click', '1']);
           await delay(300);
           layout = await inspectChatLayout(await screen());
         }
         from = phoneFromOcrLines(
-          layout.lines,
+          groupOcrLinesWithinBounds(layout.words, {
+            left: layout.bounds.right,
+            right: layout.width,
+          }),
           (line) =>
             line.top < layout.height * 0.55 &&
             line.left >= layout.bounds.right - 5,
@@ -801,29 +830,33 @@ if (!key) {
       visited.add(threadId);
       const headerBottom = Math.max(
         140,
-        ...layout.lines
+        ...layout.chatLines
           .filter((line) => line.top < layout.height * 0.16)
           .map((line) => line.top + 28),
       );
-      const lines = layout.lines.filter(
+      const lines = layout.chatLines.filter(
         (line) =>
           line.top > headerBottom &&
           line.top < layout.height - 100 &&
-          line.left >
-            layout.bounds.left +
-              (layout.bounds.right - layout.bounds.left) * 0.42 &&
+          line.left >= layout.bounds.left &&
           line.right < layout.bounds.right,
       );
       const source = join(data, 'layout-source.jpg');
-      const { stdout: rawPixels } = await run(
-        'convert',
-        [source, '-depth', '8', 'rgb:-'],
-        {
+      const image = await readFile(source);
+      const [rawPixelResult, thresholdTimeResult] = await Promise.all([
+        run('convert', [source, '-depth', '8', 'rgb:-'], {
           encoding: 'buffer',
           timeout: 10000,
           maxBuffer: 5 * 1024 * 1024,
-        },
-      );
+        }),
+        ocr(
+          image,
+          `${layout.bounds.right - layout.bounds.left}x${layout.height}+${layout.bounds.left}+0`,
+          '11',
+          true,
+        ),
+      ]);
+      const rawPixels = rawPixelResult.stdout;
       const bubbles = messageBubbleRegions(
         rawPixels,
         layout.width,
@@ -831,12 +864,37 @@ if (!key) {
         layout.bounds,
         headerBottom,
       );
+      const thresholdTimeLines = groupOcrLines(
+        parseTsvWords(thresholdTimeResult.stdout).map((word) => ({
+          ...word,
+          left: word.left + layout.bounds.left,
+        })),
+      ).filter(
+        (line) =>
+          line.top > headerBottom &&
+          line.top < layout.height - 100 &&
+          visibleTimestampLine(line.text),
+      );
+      const scanLines = [...lines];
+      for (const line of thresholdTimeLines) {
+        const time = visibleTimestampLine(line.text);
+        if (
+          time &&
+          !scanLines.some(
+            (candidate) =>
+              visibleTimestampLine(candidate.text) === time &&
+              Math.abs(candidate.top - line.top) <= 14,
+          )
+        )
+          scanLines.push(line);
+      }
+      scanLines.sort((a, b) => a.top - b.top || a.left - b.left);
       let timeLines = 0;
       let recentTimeLines = 0;
       let matchedBubbles = 0;
       const copied = new Set<string>();
-      for (let index = 0; index < lines.length; index++) {
-        const visibleTime = visibleTimeText(lines[index]!.text);
+      for (let index = scanLines.length - 1; index >= 0; index--) {
+        const visibleTime = visibleTimestampLine(scanLines[index]!.text);
         if (!visibleTime) continue;
         timeLines++;
         const at = visibleMessageTimestamp(visibleTime, new Date());
@@ -846,7 +904,11 @@ if (!key) {
           .filter(
             (bubble) =>
               bubble.side === 'right' &&
-              bubble.top < lines[index]!.top &&
+              bubble.top < scanLines[index]!.top &&
+              scanLines[index]!.top - bubble.bottom >= -36 &&
+              scanLines[index]!.top - bubble.bottom <= 48 &&
+              scanLines[index]!.left >= bubble.left - 24 &&
+              scanLines[index]!.left <= bubble.right + 24 &&
               !copied.has(`${bubble.left}:${bubble.top}`),
           )
           .sort((a, b) => b.top - a.top)[0];
@@ -865,7 +927,9 @@ if (!key) {
         'viber_outgoing_scan',
         JSON.stringify({
           bounds: layout.bounds,
-          lineCount: lines.length,
+          lineCount: scanLines.length,
+          totalLineCount: layout.lines.length,
+          chatLineCount: scanLines.length,
           bubbleCount: bubbles.length,
           timeLines,
           recentTimeLines,
@@ -885,7 +949,9 @@ if (!key) {
     } finally {
       await returnToMyNotes().catch(() => false);
     }
-    return result;
+    return result.sort(
+      (left, right) => Date.parse(left.at) - Date.parse(right.at),
+    );
   };
   const send = createSend(join(data, 'receipts'), {
     messages,
