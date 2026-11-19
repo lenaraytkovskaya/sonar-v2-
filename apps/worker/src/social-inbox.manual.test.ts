@@ -74,7 +74,7 @@ it.each([
   ['facebook', 'unknown_auth'],
   ['facebook', 'login_required'],
 ] as const)(
-  'persists only safe paused %s inbox diagnostics for %s',
+  'pauses only confirmed %s authentication failures and persists safe details for %s',
   async (channel, reason) => {
     query.mockReset().mockImplementation(async (sql: string) => ({
       rows: sql.includes('pg_try_advisory_lock')
@@ -97,6 +97,16 @@ it.each([
                 { key: 'social.inbox.max_threads', value: 50 },
                 { key: 'social.inbox.max_messages', value: 100 },
                 { key: 'social.inbox.quiet_hours', value: '00:00-07:00' },
+                { key: 'social.inbox.timezone', value: 'Europe/Kyiv' },
+                {
+                  key: 'social.inbox.failure_backoff_base_seconds',
+                  value: 300,
+                },
+                {
+                  key: 'social.inbox.failure_backoff_max_seconds',
+                  value: 3600,
+                },
+                { key: 'social.inbox.linkedin.enabled', value: false },
               ]
             : [],
     }));
@@ -175,22 +185,33 @@ it.each([
         },
       },
     );
-    expect(result).toMatchObject({
-      status: 'paused',
-      reasonCode: `social_inbox_${reason}`,
-      result: { diagnostic },
-    });
+    const authSignal = reason === 'login_required';
+    expect(result).toMatchObject(
+      authSignal
+        ? {
+            status: 'paused',
+            reasonCode: 'social_inbox_login_required',
+            result: { diagnostic },
+          }
+        : {
+            status: 'failed',
+            reasonCode: 'social_inbox_actor_unknown_auth',
+            result: { stage: 'actor', kind: 'unknown_auth' },
+          },
+    );
     expect(result).not.toHaveProperty('result.diagnostic.actor.viewerId');
     expect(JSON.stringify(result)).not.toMatch(
       /private|secret|https|rawId|rawUrl/,
     );
     const update = query.mock.calls.find(([sql]) =>
       sql.startsWith("update channel_accounts set status='paused'"),
-    )!;
-    expect(JSON.parse(update[1][1])).toEqual({
-      reasonUk: error.reasonUk,
-      sessionCheckReason: reason,
-      ...(reason === 'login_required' ? { sessionStatus: 'invalid' } : {}),
-    });
+    );
+    if (authSignal) {
+      expect(JSON.parse(update![1][1])).toEqual({
+        reasonUk: error.reasonUk,
+        sessionCheckReason: reason,
+        sessionStatus: 'invalid',
+      });
+    } else expect(update).toBeUndefined();
   },
 );

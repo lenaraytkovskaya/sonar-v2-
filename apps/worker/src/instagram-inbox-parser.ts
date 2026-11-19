@@ -6,6 +6,71 @@ import type {
   SocialActorFieldKind,
   SocialActorFields,
 } from '@sonar/core/social-session';
+import type { Page } from 'playwright';
+
+/** Screenshot-derived UI markers aid traversal; they never prove message identity. */
+export async function readInstagramInboxDom(page: Page) {
+  return page.evaluate(() => {
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility === 'visible' &&
+      !node.closest('[hidden],[aria-hidden="true"],[inert]');
+    const labels = {
+      messages: /^(?:Messages|Повідомлення|Сообщения)$/i,
+      requests: /^(?:Requests|Запити|Запросы)(?:\s*\(\d+\))?$/i,
+      primary: /^(?:Primary|Основні|Основные)$/i,
+      general: /^(?:General|Загальні|Общие)$/i,
+      outgoing: /^(?:You sent|Ви надіслали|Вы отправили)(?:\b|:|\s|$)/i,
+      timestamp:
+        /^(?:\d+[mhdw]|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:day)?\s+\d{1,2}:\d{2}\s*(?:AM|PM)|[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM)|(?:Today|Yesterday|Сьогодні|Вчора|Сегодня|Вчера)(?:\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?)?)$/i,
+    };
+    const markers = {
+      messages: false,
+      requests: false,
+      primary: false,
+      general: false,
+      outgoing: 0,
+      timestamps: 0,
+    };
+    const threadUrls = new Set<string>();
+    const nodes = document.querySelectorAll(
+      'a[href],button,[role="button"],[role="tab"],[role="heading"],h1,h2,h3,[aria-label],time,span',
+    );
+    for (const node of Array.from(nodes).slice(0, 1000)) {
+      if (!visible(node)) continue;
+      const label = (
+        node.getAttribute('aria-label') ??
+        node.textContent ??
+        ''
+      ).trim();
+      for (const key of ['messages', 'requests', 'primary', 'general'] as const)
+        if (labels[key].test(label)) markers[key] = true;
+      if (labels.outgoing.test(label)) markers.outgoing++;
+      if (
+        labels.timestamp.test(label) ||
+        (node.tagName === 'TIME' &&
+          Number.isFinite(Date.parse(node.getAttribute('datetime') ?? '')))
+      )
+        markers.timestamps++;
+      if (node.tagName !== 'A') continue;
+      try {
+        const url = new URL(node.getAttribute('href')!, location.href);
+        if (
+          url.origin === 'https://www.instagram.com' &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash &&
+          /^\/direct\/t\/\d+\/?$/.test(url.pathname)
+        )
+          threadUrls.add(url.href);
+      } catch {
+        /* Ignore malformed and foreign links. */
+      }
+    }
+    return { ...markers, threadUrls: [...threadUrls] };
+  });
+}
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)

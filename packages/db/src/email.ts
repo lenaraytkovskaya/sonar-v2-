@@ -5,7 +5,9 @@ import {
   whatsappConversation,
 } from './whatsapp-identity.js';
 import {
+  SocialProfileBusyError,
   SocialSendError,
+  SocialSessionCheckError,
   facebookDispatchReason,
   type FacebookDispatchResult,
   type SocialStorageState,
@@ -918,11 +920,33 @@ export async function sendEmailMessage(
         'message_missing',
         'Повідомлення не знайдено.',
       );
-    // Session lock spans the durable first-attempt commit and the provider call.
-    await c.query(
-      "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+    // Social browser work must defer when the shared profile is already leased.
+    const {
+      rows: [accountLease],
+    } = await c.query(
+      `${channel === 'social' ? 'select pg_try_advisory_lock' : 'select pg_advisory_lock'}(hashtextextended('channel-account:'||$1::text,0)) as locked`,
       [identity.account_id],
     );
+    if (channel === 'social' && accountLease.locked !== true) {
+      const {
+        rows: [setting],
+      } = await c.query(
+        "select value from settings where key='social.profile.busy_retry_seconds'",
+      );
+      const retrySeconds = Number(setting?.value);
+      if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+        throw new Error('Invalid social.profile.busy_retry_seconds');
+      const runAt = new Date(now.getTime() + retrySeconds * 1000);
+      await c.query(
+        "update messages set status='queued',scheduled_at=$2,reason_uk='Браузер акаунта зайнятий.' where id=$1 and status='queued'",
+        [messageId, runAt],
+      );
+      return deferred(
+        runAt,
+        'social_profile_busy',
+        'Браузер акаунта зайнятий.',
+      );
+    }
     locked = true;
     accountLockId = identity.account_id;
     companyLockId =
@@ -1544,6 +1568,35 @@ export async function sendEmailMessage(
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
       return await recordDelivery(providerId);
     } catch (error) {
+      if (channel === 'social' && error instanceof SocialProfileBusyError) {
+        const {
+          rows: [setting],
+        } = await c.query(
+          "select value from settings where key='social.profile.busy_retry_seconds'",
+        );
+        const retrySeconds = Number(setting?.value);
+        if (!Number.isSafeInteger(retrySeconds) || retrySeconds < 1)
+          throw new Error('Invalid social.profile.busy_retry_seconds');
+        return finish(
+          deferred(
+            new Date(now.getTime() + retrySeconds * 1000),
+            'social_profile_busy',
+            'Браузер акаунта зайнятий.',
+          ),
+        );
+      }
+      const socialAuthReason =
+        channel === 'social' &&
+        error instanceof SocialSessionCheckError &&
+        [
+          'login_required',
+          'cookies_invalid',
+          'captcha',
+          'checkpoint',
+          'action_blocked',
+        ].includes(error.reason)
+          ? error.reason
+          : null;
       // A post-send contact cleanup error still carries a durable delivery receipt.
       if (
         error instanceof TelegramSendError &&
@@ -1571,6 +1624,7 @@ export async function sendEmailMessage(
             : 'Не вдалося надіслати повідомлення через акаунт.';
         const socialReason =
           channel === 'social' ? socialSessionCheckReason(error) : null;
+        const realSocialAuth = socialAuthReason !== null;
         const kind =
           socialReason === 'captcha' ||
           socialReason === 'checkpoint' ||
@@ -1584,8 +1638,7 @@ export async function sendEmailMessage(
                   /flood_wait/i.test(error.code)) ||
                 (error instanceof EmailSendError && error.code === 'resend_429')
               ? 'rate_limited'
-              : (error instanceof SocialSendError &&
-                    error.code === 'session_invalid') ||
+              : realSocialAuth ||
                   (error instanceof WhatsAppSendError &&
                     error.sessionInactive) ||
                   (error instanceof TelegramSendError &&
@@ -1619,11 +1672,7 @@ export async function sendEmailMessage(
           account.id,
         ]);
         if (healthAccount?.settings.healthAutoPaused === true) {
-          if (
-            channel === 'social' &&
-            error instanceof SocialSendError &&
-            error.code === 'session_invalid'
-          )
+          if (channel === 'social' && realSocialAuth)
             await pauseSocialFetchSession(
               c,
               account.id,
@@ -1657,11 +1706,28 @@ export async function sendEmailMessage(
             : 'Перевірте чат вручну';
         const code =
           error instanceof SocialSendError ? error.code : 'delivery_uncertain';
-        if (code === 'session_invalid')
+        if (
+          error instanceof SocialSessionCheckError &&
+          error.reason !== 'rate_limit' &&
+          error.reason !== 'login_required' &&
+          error.reason !== 'cookies_invalid' &&
+          error.reason !== 'captcha' &&
+          error.reason !== 'checkpoint' &&
+          error.reason !== 'action_blocked'
+        ) {
+          await transaction(async (tx) => {
+            await tx.query(
+              "update messages set status='queued',reason_uk=$2 where id=$1",
+              [messageId, reason],
+            );
+          });
+          return terminal('paused', `social_session_${error.reason}`, reason);
+        }
+        if (code === 'session_invalid' && socialAuthReason)
           await pauseSocialFetchSession(
             c,
             account.id,
-            socialSessionCheckReason(error, 'login_required'),
+            socialAuthReason,
             now,
             `send:${taskId}`,
           );

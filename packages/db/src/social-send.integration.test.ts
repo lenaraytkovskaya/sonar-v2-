@@ -167,9 +167,27 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         "update campaigns set status='active' where id=$1",
         [campaign],
       );
-      expect(
-        await Promise.all([send(first.id, sender), send(first.id, sender)]),
-      ).toMatchObject([{ status: 'done' }, { status: 'done' }]);
+      const holder = await sonarPool.connect();
+      await holder.query(
+        "select pg_advisory_lock(hashtextextended('channel-account:'||$1::text,0))",
+        [account],
+      );
+      try {
+        expect(await send(first.id, sender)).toMatchObject({
+          status: 'deferred',
+          reasonCode: 'social_profile_busy',
+        });
+        expect(sender).not.toHaveBeenCalled();
+      } finally {
+        await holder.query(
+          "select pg_advisory_unlock(hashtextextended('channel-account:'||$1::text,0))",
+          [account],
+        );
+        holder.release();
+      }
+      expect(await send(first.id, sender)).toMatchObject({ status: 'done' });
+      expect(sender).toHaveBeenCalledTimes(1);
+      expect(await send(first.id, sender)).toMatchObject({ status: 'done' });
       expect(sender).toHaveBeenCalledTimes(1);
       expect(
         (
@@ -321,10 +339,10 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           throw new SocialSessionCheckError('network');
         });
         expect(await send(message.id, transport)).toMatchObject({
-          status: attempted ? 'paused' : 'skipped',
+          status: 'paused',
           reasonCode: attempted
             ? 'social_delivery_uncertain'
-            : 'social_unavailable',
+            : 'social_session_network',
         });
         expect(
           (
@@ -345,7 +363,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
             )
           ).rows[0],
         ).toEqual({
-          status: 'failed',
+          status: attempted ? 'failed' : 'queued',
           first_attempt_at: attempted ? now : null,
         });
         if (attempted) {
@@ -410,10 +428,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
       const offline = await create();
       expect(
         await send(offline.id, async () => {
-          throw new SocialSendError(
-            'session_invalid',
-            'Увійдіть знову (оновіть cookies)',
-          );
+          throw new SocialSessionCheckError('login_required');
         }),
       ).toMatchObject({ status: 'paused' });
       expect(
@@ -436,7 +451,64 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         false,
       );
       await expect(create()).rejects.toThrow('активний акаунт');
-      expect((await create(randomUUID(), 'manual')).status).toBe('sent');
+      const unavailable = await getConversationChat(conversationId);
+      expect(unavailable.socialUnavailableReasonUk).toBeTruthy();
+      const manualMark = await create(randomUUID(), 'manual');
+      expect(manualMark.status).toBe('sent');
+      expect(
+        (await getConversationChat(conversationId)).messages.find(
+          (m) => m.id === manualMark.id,
+        ),
+      ).toMatchObject({ status: 'sent', source: 'manual' });
+      expect(
+        (
+          await sonarPool.query(
+            'select account_id,source from messages where id=$1',
+            [manualMark.id],
+          )
+        ).rows[0],
+      ).toEqual({ account_id: null, source: 'manual' });
+      await reset();
+      const resumeMessages = [offline, await create(), await create()];
+      for (const [message, reason] of resumeMessages.map(
+        (message, index) =>
+          [
+            message,
+            [
+              'social_session_invalid',
+              'social_session_timeout',
+              'social_account_inactive',
+            ][index],
+          ] as const,
+      )) {
+        await sonarPool.query(
+          "update tasks set status='paused',reason_code=$2,reason_uk='Перевірте сесію.' where type='message.send' and payload->>'messageId'=$1",
+          [message.id, reason],
+        );
+        expect(
+          (await getConversationChat(conversationId)).messages.find(
+            (m) => m.id === message.id,
+          ),
+        ).toMatchObject({ status: 'paused', reasonUk: 'Перевірте сесію.' });
+      }
+      await sonarPool.query(
+        'update channel_accounts set status=\'paused\',settings=settings||\'{"sessionStatus":"unconfirmed"}\'::jsonb where id=$1',
+        [account],
+      );
+      const { withSocialSessionCheck } = await import('./social-accounts.js');
+      expect(
+        await withSocialSessionCheck(
+          account,
+          async () => ({ valid: true }),
+          new Date(now.getTime() + 120000),
+        ),
+      ).toMatchObject({ status: 'done', result: { valid: true } });
+      const { rows: resumed } = await sonarPool.query(
+        "select payload->>'messageId' as id,status from tasks where type='message.send' and payload->>'messageId'=any($1::text[]) order by payload->>'messageId'",
+        [resumeMessages.map((message) => message.id)],
+      );
+      expect(resumed).toHaveLength(3);
+      expect(resumed.every((task) => task.status === 'queued')).toBe(true);
       await reset();
       expect(await send(offline.id, sender)).toMatchObject({ status: 'done' });
       await reset();
@@ -457,9 +529,9 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         reasonCode: 'social_delivery_uncertain',
       });
       expect(checkpointSend).toHaveBeenCalledTimes(1);
-      const unavailable = await create();
+      const failedSend = await create();
       expect(
-        await send(unavailable.id, async () => {
+        await send(failedSend.id, async () => {
           throw new SocialSendError(
             'unavailable',
             'Сторінка LinkedIn не приймає повідомлень',

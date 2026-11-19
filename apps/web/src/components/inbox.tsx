@@ -227,6 +227,7 @@ export function Inbox({
                         channel: row.channel,
                         toValue: row.contactValue,
                         reasonUk: row.lastReasonUk,
+                        source: row.lastSource,
                       })}
                     </StatusBadge>
                   )}

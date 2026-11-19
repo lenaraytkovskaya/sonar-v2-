@@ -5,6 +5,7 @@ import {
   socialNetwork,
   messageStatus,
   facebookHistoryLink,
+  socialUnavailableNotice,
 } from './outreach-labels';
 import { uk } from '../i18n/uk';
 
@@ -77,4 +78,46 @@ it('shows the honest FB outcome and stored link while leaving verified channels 
     }),
   ).toBeNull();
   expect(facebookHistoryLink('failed', message)).toBeNull();
+});
+
+it('distinguishes legacy manual social marks from provider delivery and exposes pauses', () => {
+  const message = {
+    channel: 'social',
+    toValue: 'https://www.instagram.com/example/',
+    source: 'manual',
+  };
+  expect(messageStatus('sent', message)).toBe('Позначено вручну');
+  expect(messageStatus('sent', { ...message, source: 'reply' })).toBe(
+    'Надіслано',
+  );
+  expect(messageStatus('sent', { ...message, channel: 'email' })).toBe(
+    'Надіслано',
+  );
+  expect(
+    messageStatus('paused', {
+      ...message,
+      reasonUk: 'Потрібна перевірка сесії.',
+    }),
+  ).toBe('Пауза: Потрібна перевірка сесії.');
+  expect(messageStatus('queued', message)).toBe('У черзі');
+});
+
+it('makes unavailable account manual mode explicit with the network and cause', () => {
+  expect(
+    socialUnavailableNotice(
+      'https://www.instagram.com/example/',
+      'Потрібен вхід.',
+    ),
+  ).toBe(
+    'Акаунт Instagram недоступний (Потрібен вхід.) — Sonar не надішле. Надішліть вручну та позначте.',
+  );
+  for (const kind of ['missing', 'disabled', 'session'])
+    expect(
+      socialUnavailableNotice('https://www.facebook.com/example/', null, kind),
+    ).toContain(
+      uk.socialAccounts.unavailableReasons[
+        kind as keyof typeof uk.socialAccounts.unavailableReasons
+      ],
+    );
+  expect(uk.outreach.manualSent).toBe('Позначити надісланим');
 });

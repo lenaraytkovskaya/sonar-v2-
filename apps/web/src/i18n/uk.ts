@@ -397,6 +397,13 @@ export const uk = {
       'Немає активного акаунта цієї соцмережі. Надішліть повідомлення вручну у профілі та позначте результат.',
     browser:
       'Повідомлення буде надіслано через активний акаунт цієї соцмережі в черзі.',
+    unavailable: (network: string, reason: string) =>
+      `Акаунт ${network} недоступний (${reason}) — Sonar не надішле. Надішліть вручну та позначте.`,
+    unavailableReasons: {
+      missing: 'акаунт не підключено',
+      disabled: 'акаунт на паузі або вимкнений',
+      session: 'сесію не підтверджено',
+    },
     useText: 'Використати в повідомленні',
     needsLogin: 'Потрібен вхід',
     statuses: { active: 'Активний', paused: 'Пауза', disabled: 'Пауза' },
@@ -571,6 +578,9 @@ export const uk = {
     facebookDispatched: 'Відправлено, перевірте в чаті',
     verifyFacebook: 'Відкрити чат або профіль для перевірки',
     manualSent: 'Позначити надісланим',
+    manuallyMarked: 'Позначено вручну',
+    sendPaused: (reason: string) => `Пауза: ${reason}`,
+    sendPausedFallback: 'надсилання призупинено',
     manualHint:
       'Надішліть текст у відкритому профілі або формі та позначте результат.',
     skip: 'Пропустити',
