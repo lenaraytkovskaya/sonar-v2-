@@ -415,7 +415,10 @@
           : document.createElement(f.menuLink ? 'a' : 'button');
         if (f.menuLink) action.href = '#';
         if (f.menuItem) action.setAttribute('role', 'menuitem');
-        if (!capturedPopup) action.textContent = 'Надіслати повідомлення';
+        if (!capturedPopup)
+          action.textContent = f.englishMenuLabel
+            ? 'Message'
+            : 'Надіслати повідомлення';
         action.onclick = (event) => {
           popup.remove();
           openConversation(event);

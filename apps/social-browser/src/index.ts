@@ -195,6 +195,8 @@ async function startProfile(input: Record<string, unknown>) {
   const context = await chromium.launchPersistentContext(path, {
     headless: false,
     viewport: { width: 1280, height: 800 },
+    locale: 'uk-UA',
+    extraHTTPHeaders: { 'Accept-Language': 'uk,ru;q=0.9,en;q=0.8' },
     ...(proxy ? { proxy } : {}),
     args: [
       `--remote-debugging-port=${port}`,
