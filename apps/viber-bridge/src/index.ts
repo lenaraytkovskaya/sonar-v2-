@@ -10,6 +10,7 @@ import { createMissingKeyServer } from './missing-key.js';
 import {
   classifyViberModal,
   chatHeaderMatchesRecipient,
+  daySeparatorAt,
   chatColumnBounds,
   desktopPresenceState,
   groupOcrLines,
@@ -674,13 +675,46 @@ if (!key) {
       visited.add(threadId);
       const frontier = afterByRecipient.get(from);
       if (!frontier) return;
-      const headerBottom = Math.max(
+      let headerBottom = Math.max(
         layout.bannerBottom,
         140,
         ...layout.chatLines
           .filter((line) => line.top < layout.height * 0.16)
           .map((line) => line.top + 28),
       );
+      const firstMessageLine = layout.chatLines
+        .filter(
+          (line) =>
+            line.top > headerBottom &&
+            line.top < layout.height - 100 &&
+            visibleTimestampLine(line.text),
+        )
+        .sort((a, b) => a.top - b.top)[0];
+      if (firstMessageLine && firstMessageLine.top < headerBottom + 55) {
+        // A bubble against the contact banner can receive the context click on
+        // the banner edge. Move it fully into the chat before trying Copy.
+        await run('xdotool', [
+          'mousemove',
+          String(Math.round((layout.bounds.left + layout.bounds.right) / 2)),
+          String(Math.round(layout.height / 2)),
+          'click',
+          '--repeat',
+          '3',
+          '--delay',
+          '80',
+          '4',
+        ]);
+        await delay(300);
+        layout = await inspectChatLayout(await screen());
+        headerBottom = Math.max(
+          layout.bannerBottom,
+          140,
+          ...layout.chatLines
+            .filter((line) => line.top < layout.height * 0.16)
+            .map((line) => line.top + 28),
+        );
+      }
+      const reference = new Date();
       const source = join(data, 'layout-source.jpg');
       const { stdout: rawPixels } = await run(
         'convert',
@@ -698,12 +732,21 @@ if (!key) {
         bounds: layout.bounds,
         headerBottom,
         height: layout.height,
+        reference,
       });
       const bubbles =
         ocrBubbles.length > 0
           ? ocrBubbles
-          : pixelBubbles.filter((bubble) => bubble.side === 'left');
-      const reference = new Date();
+          : pixelBubbles
+              .filter((bubble) => bubble.side === 'left')
+              .map((bubble) => ({
+                ...bubble,
+                daySeparator: daySeparatorAt(
+                  layout.chatLines,
+                  bubble.top,
+                  reference,
+                ),
+              }));
       const image = await readFile(source);
       for (const bubble of bubbles) {
         const crop = `${bubble.right - bubble.left}x${bubble.bottom - bubble.top}+${bubble.left}+${bubble.top}`;
@@ -725,6 +768,9 @@ if (!key) {
           reference,
           region: bubble,
           copiedText: ocrText,
+          daySeparator:
+            bubble.daySeparator ??
+            daySeparatorAt(layout.chatLines, bubble.top, reference),
         });
         if (!candidate) continue;
         let copiedText: string;
@@ -747,6 +793,9 @@ if (!key) {
           region: bubble,
           copiedText,
           dedupeText: ocrText,
+          daySeparator:
+            bubble.daySeparator ??
+            daySeparatorAt(layout.chatLines, bubble.top, reference),
         });
         if (message) found.push(message);
       }
