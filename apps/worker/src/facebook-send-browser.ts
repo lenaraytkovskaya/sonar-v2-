@@ -70,9 +70,10 @@ async function conversation(
   recipient: string,
   body: string,
   observe: (observation: Observation) => void,
+  openedProfile?: { url: string; name: string },
 ) {
   const finder = await page.evaluateHandle(
-    ({ recipient, body }) => {
+    ({ recipient, body, openedProfile }) => {
       const normalize = (text: string | null) =>
         (text ?? '').replace(/\s+/g, ' ').trim();
       const visible = (node: Element) =>
@@ -119,9 +120,9 @@ async function conversation(
         );
       const forbidden =
         'nav, [role="navigation"], aside, [role="complementary"]';
-      const identity = (anchor: Element) => {
+      const identityUrl = (href: string) => {
         try {
-          const url = new URL(anchor.getAttribute('href')!, location.href);
+          const url = new URL(href, location.href);
           if (
             url.protocol !== 'https:' ||
             !/^(www\.)?facebook\.com$/.test(url.hostname) ||
@@ -136,6 +137,8 @@ async function conversation(
           return null;
         }
       };
+      const identity = (anchor: Element) =>
+        identityUrl(anchor.getAttribute('href')!);
       const namesRecipient = (link: Element, name: string) => {
         const text = normalize(link.textContent);
         const label = normalize(link.getAttribute('aria-label'));
@@ -143,6 +146,30 @@ async function conversation(
         // to the composer/log name. Reject contradictory labels or text.
         return (label || text) === name && (!text || text === name);
       };
+      const profileHeaderNames = (header: Element, name: string) =>
+        all(header, 'button, [role="button"]').filter(
+          (button) => normalize((button as HTMLElement).innerText) === name,
+        );
+      const profileBindingValid = (header: Element, name: string) =>
+        Boolean(
+          openedProfile &&
+          location.href === openedProfile.url &&
+          pageKind() === 'profile' &&
+          identityUrl(location.href) === recipient &&
+          name === openedProfile.name &&
+          all(document, 'main h1, [role="main"] h1').length === 1 &&
+          normalize(
+            all(document, 'main h1, [role="main"] h1')[0]!.textContent,
+          ) === name &&
+          all(document, composerSelector).length === 1 &&
+          all(document, regionSelector).length === 1 &&
+          headerControls(header) &&
+          chatControls(document.documentElement).every((node) =>
+            header.contains(node),
+          ) &&
+          header.querySelectorAll('a[href]').length === 0 &&
+          profileHeaderNames(header, name).length === 1,
+        );
       const headersIn = (scope: Element, region: Element, composer: Element) =>
         Array.from(scope.children).filter(
           (child) =>
@@ -314,7 +341,7 @@ async function conversation(
                 (localRecipientLinks.length === 1
                   ? localRecipientLinks[0]!.getAttribute('aria-label') ||
                     localRecipientLinks[0]!.textContent
-                  : ''),
+                  : (openedProfile?.name ?? '')),
             );
             const regionNameMatches =
               !regionLabel ||
@@ -383,13 +410,16 @@ async function conversation(
             observation.nameMatch = links.some((link) =>
               namesRecipient(link, name),
             );
+            const profileBound = profileBindingValid(header, name);
+            if (profileBound) observation.nameMatch = true;
             if (
-              recipientLinks.length !== 1 ||
-              links.filter((link) => identity(link) === recipient).length !==
-                1 ||
-              links.some(
-                (link) => identity(link) && identity(link) !== recipient,
-              )
+              !profileBound &&
+              (recipientLinks.length !== 1 ||
+                links.filter((link) => identity(link) === recipient).length !==
+                  1 ||
+                links.some(
+                  (link) => identity(link) && identity(link) !== recipient,
+                ))
             ) {
               reject(
                 links.some(
@@ -408,7 +438,10 @@ async function conversation(
               composer,
               header,
               editor,
-              link: recipientLinks[0]!,
+              link: profileBound
+                ? profileHeaderNames(header, name)[0]!
+                : recipientLinks[0]!,
+              profileBound,
               name,
             });
             break;
@@ -432,6 +465,7 @@ async function conversation(
           header,
           editor,
           link,
+          profileBound,
           name,
         } = candidates[0]!;
         const sendButtons = () => all(composer, sendSelector);
@@ -465,12 +499,14 @@ async function conversation(
                   namesRecipient(anchor, name),
               ))) &&
           header.contains(link) &&
-          all(header, 'a[href]').filter(
-            (anchor) => identity(anchor) === recipient,
-          ).length === 1 &&
-          !all(header, 'a[href]').some(
-            (anchor) => identity(anchor) && identity(anchor) !== recipient,
-          ) &&
+          (profileBound
+            ? profileBindingValid(header, name)
+            : all(header, 'a[href]').filter(
+                (anchor) => identity(anchor) === recipient,
+              ).length === 1 &&
+              !all(header, 'a[href]').some(
+                (anchor) => identity(anchor) && identity(anchor) !== recipient,
+              )) &&
           !header.contains(region) &&
           !header.contains(composer) &&
           composer.contains(editor) &&
@@ -488,8 +524,9 @@ async function conversation(
           !region.contains(link) &&
           !editor.contains(link) &&
           !scope.closest(forbidden) &&
-          identity(link) === recipient &&
-          namesRecipient(link, name) &&
+          (profileBound
+            ? profileHeaderNames(header, name)[0] === link
+            : identity(link) === recipient && namesRecipient(link, name)) &&
           (!editor.getAttribute('aria-label') ||
             editor.getAttribute('aria-label') === `Write to ${name}` ||
             editor.getAttribute('aria-label') === `Напишіть ${name}` ||
@@ -750,7 +787,7 @@ async function conversation(
       };
       return { find, diagnostic: () => observation };
     },
-    { recipient, body },
+    { recipient, body, openedProfile },
   );
   try {
     await page.waitForFunction((finder) => finder.find() !== null, finder);
@@ -924,10 +961,48 @@ export async function sendFacebook(
       .filter({ visible: true });
     await actions.waitFor({ state: 'visible' });
     if ((await actions.count()) !== 1) throw unavailable('action_count');
+    // Only this run's profile action can supply identity when the popup header
+    // exposes a name button instead of a canonical recipient link.
+    const actionIsButton = await actions.evaluate((action) =>
+      action.matches('button, [role="button"]'),
+    );
+    const openedProfile = await page.evaluate((actionIsButton) => {
+      const visible = (node: Element) =>
+        node.getClientRects().length > 0 &&
+        getComputedStyle(node).visibility === 'visible' &&
+        !node.closest('[hidden], [aria-hidden="true"], [inert]');
+      const headings = Array.from(
+        document.querySelectorAll('main h1, [role="main"] h1'),
+      ).filter(visible);
+      const editors = Array.from(
+        document.querySelectorAll(
+          '[contenteditable="true"][role="textbox"][data-lexical-editor="true"], [contenteditable="true"][role="textbox"][aria-placeholder="Aa"]',
+        ),
+      ).filter(visible);
+      const regions = Array.from(
+        document.querySelectorAll(
+          '[aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="log"]',
+        ),
+      ).filter(visible);
+      const name = headings[0]?.textContent?.replace(/\s+/g, ' ').trim();
+      return actionIsButton &&
+        headings.length === 1 &&
+        name &&
+        editors.length === 0 &&
+        regions.length === 0
+        ? { url: location.href, name }
+        : undefined;
+    }, actionIsButton);
     await actions.click();
     await check();
     phase = 'first_lookup';
-    let state = await conversation(page, target.handle, body, observe);
+    let state = await conversation(
+      page,
+      target.handle,
+      body,
+      observe,
+      openedProfile,
+    );
     try {
       if (
         !(await state.evaluate((state) => state?.valid(false) && state.empty()))
@@ -941,7 +1016,13 @@ export async function sendFacebook(
       await editor.fill(body);
       // Lexical may rerender during fill. Rebind only before the durable marker.
       await state.dispose();
-      state = await conversation(page, target.handle, body, observe);
+      state = await conversation(
+        page,
+        target.handle,
+        body,
+        observe,
+        openedProfile,
+      );
       if (!(await state.evaluate((state) => state?.valid(true))))
         throw unavailable();
       facts.inputExactMatch = await state.evaluate((state) =>

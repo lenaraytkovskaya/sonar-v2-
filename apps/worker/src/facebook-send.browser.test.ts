@@ -13,6 +13,7 @@ const observedChat = readFileSync(
   'utf8',
 );
 const markup = `
+<meta charset="utf-8">
 <style>[contenteditable] { min-height: 24px; } [aria-label^="Messages in conversation"], [role="log"] { min-height: 30px; } [role="button"] { min-height: 18px; min-width: 18px; }</style>
 <nav aria-label="Account"><a href="/100000000000009/">Synthetic self</a></nav>
 <main><h1>Synthetic recipient</h1><button id="open">Message</button></main>
@@ -56,9 +57,12 @@ function chat(id, target, name) {
     captured.querySelector('[aria-label^="Messages in conversation"]').setAttribute('aria-label', 'Messages in conversation with ' + name);
     return captured;
   }
-  if (o.e2eeAa) {
+  if (o.e2eeAa || o.headerNameButton) {
     const headerTarget = o.wrongRecipient ? '100000000000002' : target;
-    scope.innerHTML = '<div><a href="https://www.facebook.com/' + headerTarget + '/">' + name + '</a>' +
+    const recipientHeader = o.headerNameButton
+      ? '<span><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></span><button data-fixture-recipient><span>' + (o.headerNameMismatch ? 'Other Recipient' : name) + '</span><svg aria-hidden="true"><path d="M0 0 L4 4 L8 0" /></svg></button>'
+      : '<a href="https://www.facebook.com/' + headerTarget + '/">' + name + '</a>';
+    scope.innerHTML = '<div>' + recipientHeader +
       '<button role="button" aria-label="Налаштування чату"></button><button aria-label="Почати голосовий виклик"></button>' +
       '<button aria-label="Почати відеодзвінок"></button><button aria-label="Згорнути чат"></button><button aria-label="Закрити чат"></button></div>' +
       '<div role="log"><section aria-label="End-to-end encryption"><h2>Restore messages</h2><p>Personal chats are secured with end-to-end encryption.</p><button>Restore now</button></section></div>' +
@@ -67,6 +71,12 @@ function chat(id, target, name) {
     scope.querySelector('section button').addEventListener('click', () => {
       void window.fixtureEvent('restore');
     });
+    if (o.headerNameButton) {
+      const restore = scope.querySelector('section');
+      const content = document.createElement('div');
+      while (scope.children[1]) content.append(scope.children[1]);
+      scope.append(content, restore);
+    }
     return scope;
   }
   // Header-like generic container, deliberately not a header element.
@@ -130,13 +140,18 @@ function wire(scope) {
 }
 document.querySelector('#open').onclick = () => {
   window.fixtureEvent('open');
-  if (o.unavailable) return;
+  if (o.unavailable || o.preopenedProfilePopup) return;
+  if (o.preopenedRegionOnly) document.querySelector('#preexisting-region').remove();
   const show = () => {
     const scope = chat('target', o.wrongRecipient ? '100000000000002' : recipient, label);
     if (o.oldOnly || o.sameTimestamp || o.rerenderAfterSend) region(scope).append(row());
     if (o.saturatedCounts) for (let i = 0; i < 100; i++) region(scope).append(row());
 
     document.querySelector('#chats').append(scope); wire(scope);
+    if (o.secondPopup || o.secondPopupHeaderOnly) {
+      const other = chat('neighbour', '100000000000002', 'Other Recipient'); scope.after(other);
+      if (o.secondPopupHeaderOnly) while (other.children[1]) other.children[1].remove(); else wire(other);
+    }
     if (o.noSettingsLabel) scope.querySelector('[aria-label="Chat settings"]').removeAttribute('aria-label');
     if (o.headerProfilePhp) scope.querySelector('a').href = '/profile.php?id=' + recipient;
     if (o.outsideProfileLink) {
@@ -242,6 +257,9 @@ document.querySelector('#open').onclick = () => {
   };
   if (o.delayedChat) setTimeout(show, 40); else show();
 };
+if (o.headerNameButton) document.querySelector('main h1').textContent = '  Synthetic   Recipient  ';
+if (o.preopenedRegionOnly) document.querySelector('#chats').innerHTML = '<div id="preexisting-region" role="log">Existing conversation</div>';
+if (o.preopenedProfilePopup) { const scope = chat('target', recipient, label); document.querySelector('#chats').append(scope); wire(scope); }
 if (o.neighbour) { const other = chat('neighbour', '100000000000002', 'Other Recipient'); document.querySelector('#chats').append(other); wire(other); }
 if (o.checkpoint) document.body.insertAdjacentHTML('beforeend', '<form action="/checkpoint/"><button>Continue</button></form>');
 if (o.noAction) document.querySelector('#open').remove();
@@ -303,6 +321,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
       const events: string[] = [];
       const dispatchPhases: string[] = [];
+      const popupChildren: number[] = [];
       const requests: string[] = [];
       const target = options.company
         ? 'https://www.facebook.com/synthetic_company/'
@@ -355,6 +374,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       );
       const mark = vi.fn(async () => {
         events.push('mark');
+        if (options.headerNameButton)
+          popupChildren.push(await page.locator('#target > *').count());
         marked = true;
         if (
           options.markerNetwork ||
@@ -379,6 +400,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 }
               ).fixtureDispatch(event.type);
               const editor = scope.querySelector('[contenteditable]')!;
+              if (options.clickHeaderName)
+                scope.querySelector('[data-fixture-recipient]')!.textContent =
+                  'Other Recipient';
+              if (options.clickSecondPopup) scope.after(scope.cloneNode(true));
               if (options.clickRecipient || options.documentCaptureRecipient) {
                 scope
                   .querySelector('a')!
@@ -475,6 +500,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             document.querySelector<HTMLAnchorElement>('#target a')!.href =
               '/100000000000002/';
           });
+        if (options.markerHeaderName || options.markerSecondPopup)
+          await page.evaluate((options) => {
+            const scope = document.querySelector('#target')!;
+            if (options.markerHeaderName)
+              scope.querySelector('[data-fixture-recipient]')!.textContent =
+                'Other Recipient';
+            if (options.markerSecondPopup) scope.after(scope.cloneNode(true));
+          }, options);
         if (options.markerExtraHeader)
           await page.evaluate(() => {
             const scope = document.querySelector('#target')!;
@@ -499,6 +532,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       return {
         events,
         dispatchPhases,
+        popupChildren,
         requests,
         mark,
         target,
@@ -831,6 +865,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { headerNameButton: true },
+      { headerNameButton: true, company: true },
       { observed: true, incidentalBranch: true },
       { observed: true, incidentalBranch: true, neighbour: true },
       { observed: true, incidentalBranch: true, pendingSettles: true },
@@ -900,6 +936,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               },
             });
           expect(f.mark).toHaveBeenCalledOnce();
+          if (options.headerNameButton) expect(f.popupChildren).toEqual([3]);
           expect(f.requests).toEqual([f.target]);
           expect(f.dispatchPhases).toEqual(
             options.clickStable || options.clickIncidental
@@ -981,6 +1018,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { headerNameButton: true, headerNameMismatch: true },
+      { headerNameButton: true, secondPopup: true },
+      { headerNameButton: true, secondPopupHeaderOnly: true },
+      { headerNameButton: true, preopenedProfilePopup: true },
+      { headerNameButton: true, preopenedRegionOnly: true },
+      { headerNameButton: true, directPage: true },
       ...[
         'extraBranchHeader',
         'extraBranchProfile',
@@ -1088,6 +1131,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { headerNameButton: true, markerHeaderName: true },
+      { headerNameButton: true, markerSecondPopup: true },
+      { headerNameButton: true, clickHeaderName: true },
+      { headerNameButton: true, clickSecondPopup: true },
       { observed: true, markerExtraHeader: true },
       { observed: true, clickExtraHeader: true },
       { observed: true, clickExtraProfile: true },
