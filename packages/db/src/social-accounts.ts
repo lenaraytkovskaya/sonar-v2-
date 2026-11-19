@@ -28,6 +28,7 @@ import {
   socialSessionCheckReasons,
   type SocialSessionCheckReason,
 } from '@sonar/core/social-session';
+import { isSocialQuietHours } from '@sonar/core/social-inbox-schedule';
 import type { SocialNetwork } from '@sonar/core';
 import { decryptTelegramSession } from '@sonar/core/telegram';
 import { sonarPool } from './index.js';
@@ -63,6 +64,8 @@ export interface SocialAccount {
   keepaliveEnabled: boolean;
   device: SocialDevice | null;
   deviceSource: string | null;
+  proxyPublicIp: string | null;
+  proxyPublicIpCheckedAt: string | null;
   lastKeepaliveAt: string | null;
   nextKeepaliveAt: string | null;
   canSyncInbox: boolean;
@@ -163,6 +166,22 @@ export async function prepareSocialSession(
         "update channel_accounts set settings=jsonb_set(settings,'{failureShots}',coalesce(settings->'failureShots','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb)) where id=$1",
         [account.id, kind, JSON.stringify(shot)],
       );
+    },
+    proxyPublicIp:
+      typeof account.settings.proxyPublicIp === 'string'
+        ? account.settings.proxyPublicIp
+        : undefined,
+    proxyPublicIpCheckedAt:
+      typeof account.settings.proxyPublicIpCheckedAt === 'string'
+        ? account.settings.proxyPublicIpCheckedAt
+        : undefined,
+    persistProxyPublicIp: async (ip: string, checkedAt: string) => {
+      await c.query(
+        "update channel_accounts set settings=settings||jsonb_build_object('proxyPublicIp',$2::text,'proxyPublicIpCheckedAt',$3::text) where id=$1",
+        [account.id, ip, checkedAt],
+      );
+      account.settings.proxyPublicIp = ip;
+      account.settings.proxyPublicIpCheckedAt = checkedAt;
     },
   };
 }
@@ -309,6 +328,11 @@ export async function pauseSocialFetchSession(
     'captcha',
     'checkpoint',
   ].includes(reason);
+  const {
+    rows: [automatic],
+  } = await c.query(
+    "select value from settings where key='social.auto_password_login'",
+  );
   await c.query(
     `update channel_accounts set status=case when status='disabled' then status else 'paused' end,
     settings=settings||$2::jsonb||case when settings->>'healthAutoPaused'='true' then jsonb_build_object('reasonUk',settings->>'reasonUk') else '{}'::jsonb end||case when $3::boolean and coalesce(settings->>'sessionLossActive','false')<>'true'
@@ -317,7 +341,8 @@ export async function pauseSocialFetchSession(
       id,
       {
         loginRecoveryPending:
-          reason === 'login_required' || reason === 'cookies_invalid',
+          automatic?.value === true &&
+          (reason === 'login_required' || reason === 'cookies_invalid'),
         sessionStatus: lost ? 'invalid' : 'unconfirmed',
         checkedAt: now.toISOString(),
         sessionCheckReason: reason,
@@ -487,7 +512,7 @@ export async function listSocialAccounts(
     a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
     a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
     case when $1::uuid is null or a.owner_id=$1::uuid then coalesce(array(select key from jsonb_each(coalesce(a.settings->'failureShots','{}'::jsonb)) shot(key,value) order by (value->>'at')::timestamptz desc),array[]::text[]) else array[]::text[] end as "failureShotKinds",
-    a.settings->'device' as device,a.settings->>'deviceSource' as "deviceSource",
+    a.settings->'device' as device,a.settings->>'deviceSource' as "deviceSource",a.settings->>'proxyPublicIp' as "proxyPublicIp",a.settings->>'proxyPublicIpCheckedAt' as "proxyPublicIpCheckedAt",
     (select count(*)::int from messages m where m.account_id=a.id and m.sent_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC') as "sentToday"
     from channel_accounts a left join users u on u.id=a.owner_id where a.channel in ('facebook','instagram','linkedin') order by a.name,a.id`,
     [userId ?? null],
@@ -604,6 +629,9 @@ export async function saveSocialAccount(
     const settings = {
       ...existing?.settings,
       ...pinned,
+      ...(proxyChanged
+        ? { proxyPublicIp: null, proxyPublicIpCheckedAt: null }
+        : {}),
       device:
         ownerDevice ??
         existing?.settings.device ??
@@ -613,6 +641,9 @@ export async function saveSocialAccount(
             deviceSource: 'owner_browser',
             deviceUpdatedAt: new Date().toISOString(),
           }
+        : {}),
+      ...(stateJson && !ownerDevice
+        ? { deviceSource: 'unconfirmed', device: null }
         : {}),
       ...(input.keepaliveEnabled !== undefined
         ? { keepaliveEnabled: input.keepaliveEnabled }
@@ -797,12 +828,20 @@ export async function updateSocialAccount(
         ? { keepaliveEnabled: input.keepaliveEnabled }
         : {}),
       ...pinned,
+      ...(proxyChanged
+        ? { proxyPublicIp: null, proxyPublicIpCheckedAt: null }
+        : {}),
       ...(ownerDevice
         ? {
             device: ownerDevice,
             deviceSource: 'owner_browser',
             deviceUpdatedAt: new Date().toISOString(),
           }
+        : {}),
+      ...((input.storageStateJson !== undefined ||
+        input.cookiesJson !== undefined) &&
+      !ownerDevice
+        ? { deviceSource: 'unconfirmed', device: null }
         : {}),
       ...(input.storageStateJson !== undefined ||
       input.cookiesJson !== undefined
@@ -1188,8 +1227,15 @@ export async function withSocialSessionCheck(
       await c.query('begin');
       inTransaction = true;
       await pauseSocialFetchSession(c, id, reason ?? 'unknown_auth', now);
-      if (reason === 'login_required' || reason === 'cookies_invalid')
-        await queueAutomaticSocialRelogin(c, id, now);
+      if (reason === 'login_required' || reason === 'cookies_invalid') {
+        const {
+          rows: [setting],
+        } = await c.query(
+          "select value from settings where key='social.auto_password_login'",
+        );
+        if (setting?.value === true)
+          await queueAutomaticSocialRelogin(c, id, now);
+      }
       await c.query('commit');
       inTransaction = false;
     } else
@@ -1272,7 +1318,7 @@ export async function withSocialSessionCheck(
 
 async function nextSocialKeepalive(c: PoolClient, now: Date) {
   const { rows } = await c.query(
-    "select key,value from settings where key in ('social.keepalive.interval_seconds','social.keepalive.jitter_seconds')",
+    "select key,value from settings where key in ('social.keepalive.interval_seconds','social.keepalive.jitter_seconds','social.inbox.quiet_hours','social.inbox.timezone')",
   );
   const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   const interval = settings['social.keepalive.interval_seconds'];
@@ -1285,10 +1331,17 @@ async function nextSocialKeepalive(c: PoolClient, now: Date) {
     jitter >= interval
   )
     throw new Error('Invalid social keepalive schedule');
-  return new Date(
+  let next = new Date(
     now.getTime() +
       (interval + Math.floor(Math.random() * (2 * jitter + 1)) - jitter) * 1000,
   );
+  const quietHours = String(
+    settings['social.inbox.quiet_hours'] ?? '00:00-07:00',
+  );
+  const timeZone = String(settings['social.inbox.timezone'] ?? 'Europe/Kyiv');
+  while (isSocialQuietHours(next, quietHours, timeZone))
+    next = new Date(next.getTime() + 3600000);
+  return next;
 }
 /** Reconcile durable single-flight jobs after restarts; disabled accounts never open browsers. */
 export async function reconcileSocialSessionKeepalive(now = new Date()) {

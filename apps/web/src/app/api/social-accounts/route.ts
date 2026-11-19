@@ -294,6 +294,8 @@ async function handle(request: Request, method: string) {
       keepaliveEnabled: account.keepaliveEnabled,
       device: account.device,
       deviceSource: account.deviceSource,
+      proxyPublicIp: account.proxyPublicIp,
+      proxyPublicIpCheckedAt: account.proxyPublicIpCheckedAt,
       sessionLostEventId: account.sessionLostEventId,
       sessionLostReasonUk: account.sessionLostReasonUk,
       ownerName: account.ownerName,

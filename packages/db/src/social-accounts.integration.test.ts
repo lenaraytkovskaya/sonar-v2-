@@ -34,6 +34,28 @@ it.skipIf(!enabled)(
         "insert into users(id,email,name,password_hash) values($1,$2,'Social account test','unused'),($3,$4,'Other actor','unused')",
         [actor, `${actor}@example.test`, other, `${other}@example.test`],
       );
+      const unconfirmed = await accounts.saveSocialAccount(
+        {
+          network: 'facebook',
+          name: 'Imported without browser details',
+          dailyLimit: 20,
+          cookiesJson: JSON.stringify([
+            {
+              name: 'session',
+              value: 'private-unconfirmed-cookie',
+              domain: '.facebook.com',
+              session: true,
+            },
+          ]),
+        },
+        actor,
+      );
+      created.push(unconfirmed.id);
+      expect(
+        (await accounts.listSocialAccounts(actor)).find(
+          (row) => row.id === unconfirmed.id,
+        )?.deviceSource,
+      ).toBe('unconfirmed');
       for (const network of ['instagram', 'facebook', 'linkedin'] as const) {
         const ownerBrowser = {
           userAgent:
@@ -351,6 +373,7 @@ it.skipIf(!enabled)(
           status: 'paused',
           sessionStatus: 'unconfirmed',
           sessionCheckReason: 'proxy',
+          proxyIndex: 0,
         });
         process.env.SOCIAL_PROXY_URLS = process.env
           .SOCIAL_PROXY_URLS!.split(',')

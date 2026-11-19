@@ -185,11 +185,17 @@ export async function queueAutomaticSocialRelogin(
   now: Date,
 ) {
   const row = await account(c, id);
+  const {
+    rows: [automatic],
+  } = await c.query(
+    "select value from settings where key='social.auto_password_login'",
+  );
   // Consume durable S1 intent under the account lock, including ineligible accounts.
   await c.query(
     "update channel_accounts set settings=settings-'loginRecoveryPending' where id=$1",
     [id],
   );
+  if (automatic?.value !== true) return false;
   if (
     row.status === 'disabled' ||
     row.settings.enabled === false ||

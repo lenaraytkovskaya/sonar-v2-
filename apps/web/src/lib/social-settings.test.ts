@@ -5,6 +5,7 @@ const valid = () => ({
   'social.inbox.enabled': true,
   'social.inbox.facebook.enabled': true,
   'social.inbox.instagram.enabled': true,
+  'social.auto_password_login': false,
   ...Object.fromEntries(
     Object.entries(socialFields).map(([key, range]) => [key, range.min]),
   ),

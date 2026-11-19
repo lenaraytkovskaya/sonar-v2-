@@ -1,18 +1,21 @@
-const formatter = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Europe/Kyiv',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
-
-function minutesInKyiv(date: Date) {
+function minutesInZone(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
   const parts = formatter.formatToParts(date);
   const hour = Number(parts.find((part) => part.type === 'hour')?.value);
   const minute = Number(parts.find((part) => part.type === 'minute')?.value);
   return hour * 60 + minute;
 }
 
-function insideQuietHours(date: Date, range: string) {
+export function isSocialQuietHours(
+  date: Date,
+  range = '00:00-07:00',
+  timeZone = 'Europe/Kyiv',
+) {
   const match = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/.exec(range);
   if (!match) throw new Error('Invalid social.inbox.quiet_hours');
   const [, startHour, startMinute, endHour, endMinute] = match;
@@ -26,7 +29,7 @@ function insideQuietHours(date: Date, range: string) {
     start === end
   )
     throw new Error('Invalid social.inbox.quiet_hours');
-  const current = minutesInKyiv(date);
+  const current = minutesInZone(date, timeZone);
   return start < end
     ? current >= start && current < end
     : current >= start || current < end;
@@ -37,10 +40,13 @@ export function nextSocialInboxPollAt(
   intervalSeconds: number,
   quietHours = '00:00-07:00',
   random = Math.random,
+  timeZone = 'Europe/Kyiv',
 ) {
   if (!Number.isSafeInteger(intervalSeconds) || intervalSeconds < 1)
     throw new Error('Invalid social.inbox.poll_seconds');
-  const interval = insideQuietHours(now, quietHours) ? 3600 : intervalSeconds;
+  const interval = isSocialQuietHours(now, quietHours, timeZone)
+    ? 3600
+    : intervalSeconds;
   const jitter = Math.round(interval * 0.3 * (random() * 2 - 1));
   return new Date(now.getTime() + Math.max(1, interval + jitter) * 1000);
 }

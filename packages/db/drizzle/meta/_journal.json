@@ -414,6 +414,13 @@
       "when": 1795000004000,
       "tag": "0058_campaign_offer_analysis_version",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1795000005000,
+      "tag": "0059_social_session_stability",
+      "breakpoints": true
     }
   ]
 }

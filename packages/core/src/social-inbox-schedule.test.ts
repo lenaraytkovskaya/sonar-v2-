@@ -31,5 +31,27 @@ describe('nextSocialInboxPollAt', () => {
     expect(() =>
       nextSocialInboxPollAt(new Date(), 60, '25:00-07:00'),
     ).toThrow();
+    expect(() =>
+      nextSocialInboxPollAt(
+        new Date(),
+        60,
+        '00:00-07:00',
+        undefined,
+        'Mars/Phobos',
+      ),
+    ).toThrow();
+  });
+
+  it('uses the configured timezone for quiet hours', () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    expect(
+      nextSocialInboxPollAt(
+        now,
+        180,
+        '00:00-07:00',
+        () => 0.5,
+        'America/Los_Angeles',
+      ).toISOString(),
+    ).toBe('2026-07-01T00:03:00.000Z');
   });
 });

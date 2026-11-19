@@ -638,6 +638,10 @@ export function SettingsPanel({ section }: { section?: string }) {
                     />
                   </SettingRow>
                   {socialGeneralKeys.map(socialNumberRow)}
+                  {socialToggleRow(
+                    'social.auto_password_login',
+                    uk.social.settings['social.auto_password_login'],
+                  )}
                 </div>
                 {(['facebook', 'instagram', 'linkedin'] as const).map(
                   (network) => (
