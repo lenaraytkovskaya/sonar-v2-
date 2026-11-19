@@ -421,6 +421,13 @@
       "when": 1795000005000,
       "tag": "0059_social_session_stability",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795000006000,
+      "tag": "0060_social_browser_profiles",
+      "breakpoints": true
     }
   ]
 }

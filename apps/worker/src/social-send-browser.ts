@@ -17,6 +17,10 @@ import {
 import { isIP } from 'node:net';
 import { socialTarget, type SocialNetwork } from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
+import {
+  connectSocialProfile,
+  lockSocialProfile,
+} from './social-profile-browser.js';
 import { sendFacebook } from './facebook-send-browser.js';
 
 export type SocialSessionAccount = {
@@ -1662,7 +1666,10 @@ export function createSocialSendBrowser(
     }),
 ) {
   let browser: Promise<Browser> | undefined;
-  const contexts = new Map<string, { key: string; context: BrowserContext }>();
+  const contexts = new Map<
+    string,
+    { key: string; context: BrowserContext; remote?: Browser }
+  >();
   const pending = new Map<string, Promise<unknown>>();
   async function serialized<T>(id: string, operation: () => Promise<T>) {
     const previous = pending.get(id) ?? Promise.resolve();
@@ -1683,88 +1690,116 @@ export function createSocialSendBrowser(
     failure?: { kind: FailureShotKind; stage?: () => string },
   ) {
     return serialized(account.id, async () => {
-      const key = JSON.stringify([
-        account.channel,
-        account.settings.storageStateEncrypted ??
-          account.settings.cookiesEncrypted,
-        session.proxy,
-        account.settings.device,
-      ]);
+      const profileMode = account.settings.browserProfile === true;
+      const key = profileMode
+        ? 'persistent-profile'
+        : JSON.stringify([
+            account.channel,
+            account.settings.storageStateEncrypted ??
+              account.settings.cookiesEncrypted,
+            session.proxy,
+            account.settings.device,
+          ]);
       let cached = contexts.get(account.id);
-      if (cached?.key !== key) {
-        await cached?.context.close();
+      const profileConnection = profileMode
+        ? await connectSocialProfile(account, session)
+        : undefined;
+      if (
+        cached?.key !== key ||
+        (profileMode && cached?.remote !== profileConnection?.browser)
+      ) {
+        await cached?.context.close().catch(() => {});
         contexts.delete(account.id);
-        browser ??= launch().catch((error) => {
-          browser = undefined;
-          throw new SocialSessionCheckError(
-            socialSessionCheckReason(error, 'browser'),
-          );
-        });
-        const running = await browser;
-        const device = session.device?.userAgent
-          ? session.device
-          : generateSocialDevice(
-              account.channel,
-              running.version?.() ?? '0.0.0.0',
+        if (profileMode) {
+          cached = {
+            key,
+            context: profileConnection!.context,
+            remote: profileConnection!.browser,
+          };
+          contexts.set(account.id, cached);
+        } else {
+          browser ??= launch().catch((error) => {
+            browser = undefined;
+            throw new SocialSessionCheckError(
+              socialSessionCheckReason(error, 'browser'),
             );
-        if (!session.device?.userAgent) await session.persistDevice?.(device);
-        session.device = device;
-        const context = await running.newContext({
-          ...device,
-          ...(session.storageState
-            ? { storageState: session.storageState }
-            : {}),
-          proxy: session.proxy,
-          serviceWorkers: 'block',
-          acceptDownloads: false,
-        });
-        try {
-          if (
-            device.hardwareConcurrency !== undefined ||
-            device.deviceMemory !== undefined ||
-            device.languages ||
-            device.userAgentData
-          )
-            await context.addInitScript(
-              (fingerprint) => {
-                const overrides: Record<string, unknown> = {
-                  ...(fingerprint.hardwareConcurrency !== undefined
-                    ? { hardwareConcurrency: fingerprint.hardwareConcurrency }
-                    : {}),
-                  ...(fingerprint.deviceMemory !== undefined
-                    ? { deviceMemory: fingerprint.deviceMemory }
-                    : {}),
-                  ...(fingerprint.languages
-                    ? { languages: fingerprint.languages }
-                    : {}),
-                  ...(fingerprint.userAgentData
-                    ? { userAgentData: fingerprint.userAgentData }
-                    : {}),
-                };
-                for (const [key, value] of Object.entries(overrides))
-                  Object.defineProperty(Navigator.prototype, key, {
-                    configurable: true,
-                    get: () => value,
-                  });
-              },
-              {
-                hardwareConcurrency: device.hardwareConcurrency,
-                deviceMemory: device.deviceMemory,
-                languages: device.languages,
-                userAgentData: device.userAgentData,
-              },
+          });
+          const running = await browser;
+          const device = session.device?.userAgent
+            ? session.device
+            : generateSocialDevice(
+                account.channel,
+                running.version?.() ?? '0.0.0.0',
+              );
+          if (!session.device?.userAgent) await session.persistDevice?.(device);
+          session.device = device;
+          const context = await running.newContext({
+            ...device,
+            ...(session.storageState
+              ? { storageState: session.storageState }
+              : {}),
+            proxy: session.proxy,
+            serviceWorkers: 'block',
+            acceptDownloads: false,
+          });
+          try {
+            if (
+              device.hardwareConcurrency !== undefined ||
+              device.deviceMemory !== undefined ||
+              device.languages ||
+              device.userAgentData
+            )
+              await context.addInitScript(
+                (fingerprint) => {
+                  const overrides: Record<string, unknown> = {
+                    ...(fingerprint.hardwareConcurrency !== undefined
+                      ? { hardwareConcurrency: fingerprint.hardwareConcurrency }
+                      : {}),
+                    ...(fingerprint.deviceMemory !== undefined
+                      ? { deviceMemory: fingerprint.deviceMemory }
+                      : {}),
+                    ...(fingerprint.languages
+                      ? { languages: fingerprint.languages }
+                      : {}),
+                    ...(fingerprint.userAgentData
+                      ? { userAgentData: fingerprint.userAgentData }
+                      : {}),
+                  };
+                  for (const [key, value] of Object.entries(overrides))
+                    Object.defineProperty(Navigator.prototype, key, {
+                      configurable: true,
+                      get: () => value,
+                    });
+                },
+                {
+                  hardwareConcurrency: device.hardwareConcurrency,
+                  deviceMemory: device.deviceMemory,
+                  languages: device.languages,
+                  userAgentData: device.userAgentData,
+                },
+              );
+            if (!session.storageState)
+              await context.addCookies(session.cookies);
+          } catch (error) {
+            await context.close().catch(() => {});
+            throw new SocialSessionCheckError(
+              socialSessionCheckReason(error, 'browser'),
             );
-          if (!session.storageState) await context.addCookies(session.cookies);
-        } catch (error) {
-          await context.close().catch(() => {});
-          throw new SocialSessionCheckError(
-            socialSessionCheckReason(error, 'browser'),
-          );
+          }
+          cached = { key, context };
+          contexts.set(account.id, cached);
         }
-        cached = { key, context };
-        contexts.set(account.id, cached);
       }
-      const page = await cached.context.newPage();
+      const releaseProfile = profileMode
+        ? await lockSocialProfile(account.id)
+        : undefined;
+      let page: Page;
+      try {
+        page = await cached.context.newPage();
+      } catch (error) {
+        await releaseProfile?.();
+        throw error;
+      }
       page.setDefaultTimeout(timeoutMs);
       try {
         if (session.persistProxyPublicIp) {
@@ -1796,7 +1831,7 @@ export function createSocialSendBrowser(
           }
         }
         const result = await fn(page);
-        if (session.persistStorageState) {
+        if (session.persistStorageState && !profileMode) {
           const save = async () => {
             const state = await cached.context.storageState();
             if (state.cookies.length)
@@ -1817,6 +1852,7 @@ export function createSocialSendBrowser(
         throw error;
       } finally {
         await page.close().catch(() => {});
+        await releaseProfile?.();
       }
     });
   }
@@ -2045,7 +2081,9 @@ export function createSocialSendBrowser(
     async close() {
       await Promise.allSettled([...pending.values()]);
       await Promise.allSettled(
-        [...contexts.values()].map((value) => value.context.close()),
+        [...contexts.values()].map((value) =>
+          value.remote ? Promise.resolve() : value.context.close(),
+        ),
       );
       contexts.clear();
       if (browser) await (await browser).close();
