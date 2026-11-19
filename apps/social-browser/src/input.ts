@@ -15,6 +15,7 @@ export const allowedKeys = new Set([
 ]);
 
 export type BrowserAction =
+  | { type: 'reload' }
   | {
       type: 'move' | 'down' | 'up' | 'click' | 'doubleClick';
       x: number;
@@ -38,6 +39,7 @@ export function parseBrowserAction(
   input: Record<string, unknown>,
 ): BrowserAction | null {
   const type = input.type;
+  if (type === 'reload') return { type };
   if (type === 'text') {
     return typeof input.text === 'string' && input.text.length <= 4096
       ? { type, text: input.text }

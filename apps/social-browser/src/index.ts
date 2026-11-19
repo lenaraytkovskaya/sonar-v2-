@@ -6,7 +6,7 @@ import {
   connect as connectTcp,
   type Server as TcpServer,
 } from 'node:net';
-import { chromium, type BrowserContext } from 'playwright';
+import { chromium, type BrowserContext, type Page } from 'playwright';
 import { parseBrowserAction, viewport } from './input.js';
 
 type Profile = {
@@ -21,6 +21,7 @@ type Profile = {
   forwarder: TcpServer;
 };
 const profiles = new Map<string, Profile>();
+const webAuthnSetup = new WeakMap<Page, Promise<void>>();
 const firstPort = Number(process.env.SOCIAL_BROWSER_CDP_PORT ?? 9300);
 const portRange = Number(process.env.SOCIAL_BROWSER_CDP_PORTS ?? 100);
 const firstConnectPort = Number(
@@ -36,6 +37,29 @@ const home: Record<string, string> = {
   instagram: 'https://www.instagram.com/accounts/login/',
   linkedin: 'https://www.linkedin.com/login',
 };
+function disableWebAuthn(context: BrowserContext, page: Page) {
+  const existing = webAuthnSetup.get(page);
+  if (existing) return existing;
+  const setup = (async () => {
+    try {
+      const session = await context.newCDPSession(page);
+      await session.send('WebAuthn.enable', { enableUI: false });
+      await session.send('WebAuthn.addVirtualAuthenticator', {
+        options: {
+          protocol: 'ctap2',
+          transport: 'internal',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: false,
+        },
+      });
+    } catch {
+      console.warn('WebAuthn virtual authenticator unavailable');
+    }
+  })();
+  webAuthnSetup.set(page, setup);
+  return setup;
+}
 const safeId = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 const json = (
@@ -182,6 +206,10 @@ async function startProfile(input: Record<string, unknown>) {
   });
   const page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(15000);
+  context.on('page', (next) => void disableWebAuthn(context, next));
+  await Promise.all(
+    context.pages().map((current) => disableWebAuthn(context, current)),
+  );
   await page
     .goto(home[network]!, { waitUntil: 'domcontentloaded', timeout: 30000 })
     .catch(() => {});
@@ -398,6 +426,8 @@ const server = createServer(async (request, response) => {
       if (action.type === 'text') await page.keyboard.insertText(action.text);
       if (action.type === 'key')
         await page.keyboard.press(action.selectAll ? 'Control+A' : action.key);
+      if (action.type === 'reload')
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
       return json(response, 200, { accepted: true });
     }
     return json(response, 405, { error: 'method_not_allowed' });
