@@ -175,7 +175,7 @@ it.skipIf(!enabled)(
       const nextInput = { ...input, version: 'test-2' };
       expect(await runCompanyAnalysis(nextInput, next.id, api)).toMatchObject({
         status: 'done',
-        result: { language: 'pl', first_message: '' },
+        result: { language: 'pl', first_message: 'Must be cleared' },
       });
       await runCompanyAnalysis(nextInput, next.id, api);
       expect(paid).toHaveBeenCalledTimes(2);

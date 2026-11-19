@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   campaignSchema,
+  campaignOfferRequired,
   parseCampaignSuggestion,
   cleanCampaignQueries,
   applyCampaignSuggestion,
@@ -41,6 +42,24 @@ it('validates form limits, real ISO country and supported batch sizes', () => {
     expect(campaignSchema.safeParse({ ...form, ...change }).success).toBe(
       false,
     );
+});
+it('requires an offer only when a sending channel is enabled', () => {
+  expect(campaignOfferRequired(form.channels, '  ')).toBe(true);
+  expect(campaignOfferRequired(form.channels, 'Dental clinic growth')).toBe(
+    false,
+  );
+  expect(
+    campaignOfferRequired(
+      {
+        email: false,
+        telegram: false,
+        whatsapp: false,
+        viber: false,
+        forms: false,
+      },
+      '',
+    ),
+  ).toBe(false);
 });
 it('accepts structured AI JSON and rejects prose, markdown and incomplete suggestions', () => {
   expect(parseCampaignSuggestion(JSON.stringify(suggestion))).toEqual({

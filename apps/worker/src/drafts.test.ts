@@ -265,7 +265,7 @@ it('generates short body-only drafts for messengers, forms and social contacts',
   }
 });
 
-it('can draft a goal-based introduction without company description or offer', async () => {
+it('skips a draft without a campaign offer before any paid request', async () => {
   const source = {
     ...data(),
     about: '',
@@ -273,28 +273,14 @@ it('can draft a goal-based introduction without company description or offer', a
     outreachGoal: 'Познайомитися і запитати про співпрацю',
   };
   snapshot.mockResolvedValue(source);
-  const draft = {
-    subject: 'Współpraca',
-    body: 'Dzień dobry! Czy możemy porozmawiać o współpracy?',
-  };
   const api = client();
-  api.complete.mockResolvedValueOnce({
-    ...response,
-    text: JSON.stringify(draft),
-  });
   expect(await runOutreachDraft(input, 'task', api)).toMatchObject({
-    status: 'done',
+    status: 'skipped',
+    reasonCode: 'campaign_offer_missing',
   });
-  const messages = (
-    api.complete.mock.calls[0] as unknown as [string, { content: string }[]]
-  )[1];
-  expect(messages[0]!.content).toContain('Mention only sourced facts');
-  expect(JSON.parse(messages[1]!.content).untrusted_data).toMatchObject({
-    about: '',
-    offer: '',
-    outreachGoal: source.outreachGoal,
-  });
-  expect(save).toHaveBeenCalledWith(input, draft, 'task');
+  expect(api.complete).not.toHaveBeenCalled();
+  expect(budgeted).not.toHaveBeenCalled();
+  expect(save).not.toHaveBeenCalled();
 });
 
 it('diagnoses paid schema failures without logging the model response or retrying', async () => {

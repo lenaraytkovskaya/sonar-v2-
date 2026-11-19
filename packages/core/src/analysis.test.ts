@@ -8,10 +8,13 @@ const value = {
   fit: 75,
   fit_reason: 'Відповідає пропозиції.',
 };
-it('keeps company-language outreach and clears it when sender about is blank', () => {
+it('keeps company-language outreach when an offer exists and clears it when missing', () => {
   expect(
-    parseAnalysis(JSON.stringify(value), [{ kind: 'email' }], 'Обладнання')
-      .first_message,
+    parseAnalysis(
+      JSON.stringify(value),
+      [{ kind: 'email' }],
+      'Пропозиція для стоматологій',
+    ).first_message,
   ).toBe('Dzień dobry!');
   expect(
     parseAnalysis(JSON.stringify(value), [{ kind: 'email' }], '  ')

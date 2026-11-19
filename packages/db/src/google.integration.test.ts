@@ -14,12 +14,15 @@ it.skipIf(!enabled)(
     const { rows: original } = await sonarPool.query(
       "select key,value from settings where key='budget.monthly_usd'",
     );
-    const campaign = async (budget = 0.5) => {
+    const campaign = async (
+      budget = 0.5,
+      channels: Record<string, boolean> = {},
+    ) => {
       const {
         rows: [c],
       } = await sonarPool.query(
-        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,'{}','{}') returning id`,
-        [prefix, budget],
+        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,$3,'{}') returning id`,
+        [prefix, budget, JSON.stringify(channels)],
       );
       campaigns.push(c.id);
       return c.id;
@@ -39,6 +42,25 @@ it.skipIf(!enabled)(
         "insert into companies(place_id,name) values($1,'Known')",
         [place(100).id],
       );
+      const blockedCampaign = await campaign(0.5, { email: true });
+      await expect(
+        createBatch(blockedCampaign, null, randomUUID(), false, false),
+      ).rejects.toThrow('Заповніть пропозицію кампанії');
+      expect(
+        (
+          await sonarPool.query(
+            'select count(*)::int as count from batches where campaign_id=$1',
+            [blockedCampaign],
+          )
+        ).rows[0].count,
+      ).toBe(0);
+      await sonarPool.query(
+        "update campaigns set offer='Пропозиція для ніші' where id=$1",
+        [blockedCampaign],
+      );
+      expect(
+        await createBatch(blockedCampaign, null, randomUUID(), false, false),
+      ).toHaveProperty('id');
       const c = await campaign();
       const b = await createBatch(c, null, randomUUID(), false, false);
       const search = vi.fn(async (input: { pageToken?: string }) =>

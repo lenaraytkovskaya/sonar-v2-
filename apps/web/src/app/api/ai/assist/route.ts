@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       'translate',
       'custom',
       'campaign',
+      'campaign_offer',
       'company_filters',
     ].includes(data.action) ||
     typeof data.text !== 'string' ||

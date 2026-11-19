@@ -128,7 +128,7 @@ export function CompanyAnalysis({
               </Button>
             </>
           ) : (
-            <p className="text-muted-foreground">{uk.analysis.noDraft}</p>
+            <p className="text-muted-foreground">{uk.campaign.offerRequired}</p>
           )}
           <p className="text-sm text-muted-foreground">
             {uk.analysis.model}: {analysis.model} · {uk.analysis.cost}: $

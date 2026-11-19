@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
+  campaignOfferRequired,
   applyCampaignSuggestion,
   campaignSuggestionSchema,
   type CampaignInput,
@@ -170,6 +171,8 @@ export function CampaignPanel({
     setPending(true);
     setMessage('');
     try {
+      if (kind === 'start' && campaignOfferRequired(form.channels, form.offer))
+        throw Error(uk.campaign.offerRequired);
       const data = campaignSchema.parse({
         ...form,
         budget_usd: Number(form.budget_usd),
@@ -238,14 +241,20 @@ export function CampaignPanel({
       const r = await runAiJob('/api/ai/assist', {
         action: 'campaign',
         text: description,
+        context: JSON.stringify({
+          language: form.language_code,
+          cities: form.cities,
+          queries: form.queries,
+          outreach_goal: form.outreach_goal,
+        }),
       });
-      const next = applyCampaignSuggestion(
-        form,
-        campaignSuggestionSchema.parse(r.suggestion),
-      );
+      const suggestion = campaignSuggestionSchema.parse(r.suggestion);
+      const next = applyCampaignSuggestion(form, suggestion);
       setForm(next);
       setSource('ai');
-      setMessage(uk.campaign.filled);
+      setMessage(
+        suggestion.needs_about ? uk.campaign.needsAbout : uk.campaign.filled,
+      );
     } catch (e) {
       setMessage(
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
@@ -491,8 +500,18 @@ export function CampaignPanel({
               onChange={(e) => update('offer', e.target.value)}
             />
           </label>
+          <p className="text-sm text-muted-foreground">
+            {uk.campaign.offerNeedsAbout}
+          </p>
           <AiAssist
             text={form.offer}
+            campaignOfferContext={JSON.stringify({
+              name: form.name,
+              language: form.language_code,
+              cities: form.cities,
+              queries: form.queries,
+              outreach_goal: form.outreach_goal,
+            })}
             onApply={(v) => {
               update('offer', v);
               setSource('ai');

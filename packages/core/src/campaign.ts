@@ -63,6 +63,12 @@ export const campaignSuggestionSchema = campaignSchema
   });
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type CampaignSuggestion = z.infer<typeof campaignSuggestionSchema>;
+export function campaignOfferRequired(
+  channels: CampaignInput['channels'],
+  offer: string,
+): boolean {
+  return Object.values(channels).some(Boolean) && !offer.trim();
+}
 export function parseCampaignSuggestion(raw: string) {
   return campaignSuggestionSchema.parse(JSON.parse(raw));
 }

@@ -20,6 +20,7 @@ import { Input } from './ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 type Action = keyof typeof uk.ai.actions;
+type RequestAction = Action | 'campaign_offer';
 const icons: Record<Action, typeof Wand2> = {
   improve: Wand2,
   shorter: Minimize2,
@@ -39,11 +40,13 @@ export function AiAssist({
   onApply,
   floating = false,
   disabled = false,
+  campaignOfferContext,
 }: {
   text: string;
   onApply: (text: string) => void;
   floating?: boolean;
   disabled?: boolean;
+  campaignOfferContext?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -51,13 +54,13 @@ export function AiAssist({
   const applyButton = useRef<HTMLButtonElement>(null);
   const busy = useRef(false);
   const [menu, setMenu] = useState(false),
-    [action, setAction] = useState<Action | null>(null),
+    [action, setAction] = useState<RequestAction | null>(null),
     [instruction, setInstruction] = useState(''),
     [preview, setPreview] = useState(''),
     [error, setError] = useState(''),
     [pending, setPending] = useState(false);
-  const empty = !text.trim();
-  const run = async (chosen: Action, extra = instruction) => {
+  const empty = !text.trim() && campaignOfferContext === undefined;
+  const run = async (chosen: RequestAction, extra = instruction) => {
     if (busy.current || disabled) return;
     busy.current = true;
     setAction(chosen);
@@ -70,6 +73,9 @@ export function AiAssist({
         action: chosen,
         text,
         instruction: extra,
+        ...(chosen === 'campaign_offer'
+          ? { context: campaignOfferContext }
+          : {}),
       });
       setPreview(result.text);
     } catch (error) {
@@ -86,7 +92,12 @@ export function AiAssist({
     setInstruction('');
     trigger.current?.focus();
   };
-  const asking = action && needsInstruction(action) && !pending && !preview;
+  const asking =
+    action &&
+    action !== 'campaign_offer' &&
+    needsInstruction(action) &&
+    !pending &&
+    !preview;
   useEffect(() => {
     if (asking) instructionInput.current?.focus();
   }, [asking]);
@@ -103,25 +114,36 @@ export function AiAssist({
   return (
     <div ref={container} className="mt-1.5" aria-busy={pending}>
       <Popover open={menu} onOpenChange={setMenu}>
-        <PopoverTrigger asChild>
-          <button
-            ref={trigger}
+        {campaignOfferContext === undefined ? (
+          <PopoverTrigger asChild>
+            <button
+              ref={trigger}
+              type="button"
+              disabled={empty || pending || disabled}
+              title={empty ? uk.ai.emptyHint : uk.ai.assist}
+              className={cn(
+                'inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-accent transition-colors',
+                'hover:bg-chip disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              {pending ? (
+                <Loader2 aria-hidden className="size-3.5 animate-spin" />
+              ) : (
+                <Sparkles aria-hidden className="size-3.5" />
+              )}
+              {pending ? uk.ai.pending : uk.ai.short}
+            </button>
+          </PopoverTrigger>
+        ) : (
+          <Button
             type="button"
+            variant="outline"
             disabled={empty || pending || disabled}
-            title={empty ? uk.ai.emptyHint : uk.ai.assist}
-            className={cn(
-              'inline-flex min-h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-accent transition-colors',
-              'hover:bg-chip disabled:cursor-not-allowed disabled:opacity-50',
-            )}
+            onClick={() => void run('campaign_offer', '')}
           >
-            {pending ? (
-              <Loader2 aria-hidden className="size-3.5 animate-spin" />
-            ) : (
-              <Sparkles aria-hidden className="size-3.5" />
-            )}
-            {pending ? uk.ai.pending : uk.ai.short}
-          </button>
-        </PopoverTrigger>
+            {pending ? uk.ai.pending : uk.ai.draftCampaignOffer}
+          </Button>
+        )}
         <PopoverContent
           className="w-56 p-1"
           onCloseAutoFocus={(event) => {
@@ -225,7 +247,9 @@ export function AiAssist({
               <p className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
                 <Sparkles aria-hidden className="size-3 text-accent" />
                 {action
-                  ? uk.ai.actions[action].replace('…', '')
+                  ? action === 'campaign_offer'
+                    ? uk.ai.draftCampaignOffer
+                    : uk.ai.actions[action].replace('…', '')
                   : uk.ai.preview}
               </p>
               <p className="whitespace-pre-wrap text-sm">{preview}</p>

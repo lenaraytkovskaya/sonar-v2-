@@ -22,7 +22,7 @@ export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 export function parseAnalysis(
   text: string,
   contacts: { kind: string }[],
-  about: string,
+  offer: string,
 ): AnalysisResult {
   // Models often wrap JSON in a markdown fence; accept that and nothing else.
   const json = text
@@ -35,5 +35,5 @@ export function parseAnalysis(
     !contacts.some((c) => c.kind === result.best_channel)
   )
     throw new Error('Analysis selected an unavailable channel');
-  return { ...result, ...(!about.trim() ? { first_message: '' } : {}) };
+  return { ...result, ...(!offer.trim() ? { first_message: '' } : {}) };
 }
