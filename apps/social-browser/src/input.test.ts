@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBrowserAction } from './input.js';
+import { browserLocale, parseBrowserAction } from './input.js';
 
 describe('browser input validation', () => {
   it('accepts a reload action without parameters', () => {
@@ -37,5 +37,22 @@ describe('browser input validation', () => {
         deltaY: 2001,
       }),
     ).toBeNull();
+  });
+});
+
+describe('browser locale', () => {
+  it('defaults to English for missing or invalid values', () => {
+    expect(browserLocale(undefined)).toEqual({
+      locale: 'en-US',
+      acceptLanguage: 'en-US,en;q=0.9',
+    });
+    expect(browserLocale('en-US; drop')).toMatchObject({ locale: 'en-US' });
+  });
+
+  it('keeps a configured language with English as a fallback', () => {
+    expect(browserLocale('uk-UA')).toEqual({
+      locale: 'uk-UA',
+      acceptLanguage: 'uk-UA,uk;q=0.9,en;q=0.8',
+    });
   });
 });

@@ -15,7 +15,7 @@ function serviceUrl() {
 async function settings() {
   const { sonarPool } = await import('@sonar/db');
   const { rows } = await sonarPool.query(
-    "select key,value from settings where key in ('social.browser.max_profiles','social.browser.idle_ms')",
+    "select key,value from settings where key in ('social.browser.max_profiles','social.browser.idle_ms','social.browser.locale')",
   );
   const values = Object.fromEntries(
     rows.map((row) => [row.key, Number(row.value)]),
@@ -31,14 +31,15 @@ async function settings() {
     idleMs > 86400000
   )
     throw new Error('social_browser_settings_invalid');
-  return { maxProfiles, idleMs };
+  const locale = rows.find((row) => row.key === 'social.browser.locale')?.value;
+  return { maxProfiles, idleMs, locale };
 }
 export async function connectSocialProfile(
   account: SocialSessionAccount,
   session: SocialBrowserSession,
 ): Promise<{ browser: Browser; context: BrowserContext }> {
   const { url, key } = serviceUrl();
-  const { maxProfiles, idleMs } = await settings();
+  const { maxProfiles, idleMs, locale } = await settings();
   const response = await fetch(new URL('/profiles', url), {
     method: 'POST',
     headers: {
@@ -51,6 +52,7 @@ export async function connectSocialProfile(
       proxy: session.proxy,
       maxProfiles,
       idleMs,
+      locale,
     }),
     signal: AbortSignal.timeout(35000),
   });
