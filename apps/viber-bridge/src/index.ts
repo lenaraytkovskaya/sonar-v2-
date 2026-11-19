@@ -749,6 +749,20 @@ if (!key) {
               }));
       const image = await readFile(source);
       for (const bubble of bubbles) {
+        const daySeparator =
+          bubble.daySeparator ??
+          daySeparatorAt(layout.chatLines, bubble.top, reference);
+        if (!daySeparator) {
+          console.log(
+            'viber_inbound_skipped',
+            JSON.stringify({
+              threadId,
+              reason: 'date_unknown',
+              top: bubble.top,
+            }),
+          );
+          continue;
+        }
         const crop = `${bubble.right - bubble.left}x${bubble.bottom - bubble.top}+${bubble.left}+${bubble.top}`;
         const result = await ocr(image, crop, '6');
         const bubbleLines = groupOcrLines(parseTsvWords(result.stdout));
@@ -768,9 +782,7 @@ if (!key) {
           reference,
           region: bubble,
           copiedText: ocrText,
-          daySeparator:
-            bubble.daySeparator ??
-            daySeparatorAt(layout.chatLines, bubble.top, reference),
+          daySeparator,
         });
         if (!candidate) continue;
         let copiedText: string;
@@ -793,9 +805,7 @@ if (!key) {
           region: bubble,
           copiedText,
           dedupeText: ocrText,
-          daySeparator:
-            bubble.daySeparator ??
-            daySeparatorAt(layout.chatLines, bubble.top, reference),
+          daySeparator,
         });
         if (message) found.push(message);
       }
@@ -1327,11 +1337,17 @@ if (!key) {
       if (req.method === 'GET' && url.pathname === '/outgoing') {
         const since = new Date(url.searchParams.get('since') || '');
         if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
+        const requestedRecipients = url.searchParams.getAll('to');
+        const recipients = requestedRecipients.filter((value) =>
+          /^\+[1-9]\d{6,14}$/.test(value),
+        );
+        if (requestedRecipients.length > 0 && recipients.length === 0)
+          throw Error('invalid_recipient');
         const account = await database();
         let outgoing;
         try {
           outgoing = account
-            ? (await readMessages(account.path, since))
+            ? (await readMessages(account.path, since, recipients))
                 .filter((message) => message.outgoing)
                 .map((message) => ({
                   from: message.from,

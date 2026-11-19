@@ -33,6 +33,7 @@ import {
   visibleTimeText,
   visibleTimestampLine,
   visibleDateSeparator,
+  daySeparatorAt,
   visibleMessageTimestamp,
 } from './screen.js';
 
@@ -202,6 +203,46 @@ it('interprets visible Viber times in the configured local timezone', () => {
   }
 });
 
+it('uses a date divider below a bubble to infer the preceding day', () => {
+  const reference = new Date('2026-11-19T18:00:00');
+  const separator = daySeparatorAt(
+    [{ text: 'Today', top: 300 }],
+    240,
+    reference,
+  );
+  expect(separator?.getDate()).toBe(18);
+  expect(
+    visibleMessageTimestamp('18:45', reference, separator)?.getDate(),
+  ).toBe(18);
+  expect(daySeparatorAt([], 240, reference)).toBeUndefined();
+});
+
+it('imports visible bubbles in chronological order and skips unknown dates', () => {
+  const input = {
+    threadId: 'screen:380637058571',
+    from: '+380637058571',
+    since: new Date('2026-11-18T00:00:00'),
+    reference: new Date('2026-11-19T18:00:00'),
+    left: 145,
+    right: 1135,
+    headerBottom: 140,
+    height: 900,
+  };
+  const lines = [
+    { text: 'Previous day message', left: 180, top: 170, right: 360 },
+    { text: '23:59', left: 180, top: 195, right: 220 },
+    { text: 'Today', left: 300, top: 240, right: 350 },
+    { text: 'Today message', left: 180, top: 260, right: 330 },
+    { text: '10:01', left: 180, top: 285, right: 220 },
+  ];
+  const messages = visibleInboundMessages(lines, input);
+  expect(messages.map((message) => message.at)).toEqual([
+    new Date('2026-11-18T23:59:00').toISOString(),
+    new Date('2026-11-19T10:01:00').toISOString(),
+  ]);
+  expect(visibleInboundMessages(lines.slice(0, 2), input)).toHaveLength(0);
+});
+
 it('applies the nearest visible date divider to an inbound message', () => {
   const incoming = visibleInboundMessages(
     [
@@ -277,6 +318,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       reference: new Date('2026-11-18T17:20:00Z'),
       region: bubbles[0]!,
       copiedText: 'перше повідомлення\nз двох рядків',
+      daySeparator: new Date(2026, 10, 18),
     },
   );
   expect(first).toMatchObject({
@@ -304,6 +346,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     reference: new Date('2026-11-18T17:20:00Z'),
     region: bubbles[0]!,
     copiedText: fallbackText,
+    daySeparator: new Date(2026, 10, 18),
   });
   const copiedLater = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
@@ -313,6 +356,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     region: bubbles[0]!,
     copiedText: 'перше повідомлення\nз двох рядків',
     dedupeText: fallbackText,
+    daySeparator: new Date(2026, 10, 18),
   });
   expect(fallback?.providerMessageId).toBe(copiedLater?.providerMessageId);
   expect(
@@ -369,6 +413,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
         reference: new Date('2026-11-18T17:20:00Z'),
         region: bubbles[2]!,
         copiedText: 'друге повідомлення',
+        daySeparator: new Date(2026, 10, 18),
       },
     ),
   ).toMatchObject({
@@ -392,6 +437,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       reference: new Date('2026-11-18T17:20:00Z'),
       region: bubbles[0]!,
       copiedText: 'same minute',
+      daySeparator: new Date(2026, 10, 18),
     }),
   ).toMatchObject({ text: 'same minute', at: '2026-11-18T17:12:00.000Z' });
 });
@@ -615,6 +661,7 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
   ).toBe(true);
   const incoming = visibleInboundMessages(
     [
+      { text: 'Today', left: 300, top: 150, right: 350 },
       { text: 'відповідь у', left: 180, top: 170, right: 260 },
       { text: 'два рядки', left: 180, top: 185, right: 255 },
       { text: '15:02', left: 180, top: 205, right: 215 },

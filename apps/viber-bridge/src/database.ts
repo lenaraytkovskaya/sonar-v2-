@@ -29,8 +29,19 @@ export async function accountDatabase(root: string) {
 export async function readMessages(
   path: string,
   since: Date,
+  recipients: readonly string[] = [],
 ): Promise<ViberMessage[]> {
   if (!Number.isFinite(since.getTime())) throw Error('invalid_since');
+  const recipientNumbers = [
+    ...new Set(
+      recipients
+        .filter((value) => /^\+?[1-9]\d{6,14}$/.test(value))
+        .map((value) => value.replace(/^\+/, '')),
+    ),
+  ];
+  const recipientFilter = recipientNumbers.length
+    ? `and replace(c.Number,'+','') in (${recipientNumbers.map((value) => `'${value}'`).join(',')})`
+    : '';
   const temporary = await mkdtemp(join(tmpdir(), 'sonar-viber-'));
   const copy = join(temporary, 'snapshot.db');
   try {
@@ -44,7 +55,7 @@ export async function readMessages(
       c.Number as phone,m.Body as text,e.TimeStamp as time,e.Direction as direction
       from Events e join Messages m on m.EventID=e.EventID
       join Contact c on c.ContactID=e.ContactID
-      where e.TimeStamp>=${since.getTime()} and e.Direction in (0,1) and m.Body<>''
+      where e.TimeStamp>=${since.getTime()} and e.Direction in (0,1) and m.Body<>'' ${recipientFilter}
       order by e.TimeStamp,e.EventID limit 10001`;
     const { stdout } = await run(
       'sqlite3',

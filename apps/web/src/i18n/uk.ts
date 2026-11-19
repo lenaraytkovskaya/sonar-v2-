@@ -905,6 +905,8 @@ export const uk = {
   viber: {
     title: 'Viber Desktop',
     connect: 'Підключити',
+    screenForbidden:
+      'Екран Viber доступний призначеному власнику каналу. Для першого підключення увійдіть як власник CRM і натисніть «Підключити».',
     disconnected: 'Не запущено',
     needsAttention: 'Потрібна увага',
     repairRequired:

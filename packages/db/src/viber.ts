@@ -208,10 +208,11 @@ export async function updateViberAccount(
       rows: [account],
     } = await c.query(
       `update channel_accounts set daily_limit=coalesce($1,daily_limit),status=case when $2::boolean is null then status when $2 then 'paused' else 'active' end
-        where channel='viber' returning id,daily_limit as "dailyLimit",status`,
-      [update.dailyLimit ?? null, update.paused ?? null],
+        where channel='viber' and owner_id=$3 returning id,daily_limit as "dailyLimit",status`,
+      [update.dailyLimit ?? null, update.paused ?? null, userId],
     );
-    if (!account) throw new Error('Акаунт Viber не знайдено.');
+    if (!account)
+      throw new Error('Канал Viber доступний лише призначеному власнику.');
     await logActivity(
       'viber.settings.updated',
       'channel_account',
@@ -221,5 +222,52 @@ export async function updateViberAccount(
       c,
     );
     return account;
+  });
+}
+
+/** Assigns an unowned Viber channel only when the CRM owner explicitly connects it. */
+export async function claimViberAccount(userId: string) {
+  return transaction(async (c) => {
+    const {
+      rows: [account],
+    } = await c.query<{ id: string; owner_id: string | null }>(
+      `select id,owner_id from channel_accounts where channel='viber' order by created_at,id limit 1 for update`,
+    );
+    if (!account) throw new Error('Акаунт Viber не знайдено.');
+    if (account.owner_id) {
+      if (account.owner_id !== userId)
+        throw new Error('Канал Viber доступний лише призначеному власнику.');
+      return { id: account.id, ownerId: account.owner_id };
+    }
+
+    // This CRM has no role field. The earliest created user is its owner until
+    // an explicit role model is introduced.
+    const {
+      rows: [crmOwner],
+    } = await c.query<{ id: string }>(
+      'select id from users order by created_at,id limit 1',
+    );
+    if (!crmOwner || crmOwner.id !== userId)
+      throw new Error(
+        'Лише власник CRM може призначити власника каналу Viber.',
+      );
+
+    const {
+      rows: [claimed],
+    } = await c.query<{ id: string }>(
+      `update channel_accounts set owner_id=$2 where id=$1 and owner_id is null returning id`,
+      [account.id, userId],
+    );
+    if (!claimed)
+      throw new Error('Канал Viber доступний лише призначеному власнику.');
+    await logActivity(
+      'viber.owner.assigned',
+      'channel_account',
+      account.id,
+      userId,
+      { ownerId: userId },
+      c,
+    );
+    return { id: claimed.id, ownerId: userId };
   });
 }

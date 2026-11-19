@@ -37,24 +37,33 @@ export async function POST(request: Request) {
   const data = await request.json().catch(() => null);
   if (
     !data ||
-    Object.keys(data).some((key) => !['dailyLimit', 'paused'].includes(key)) ||
+    Object.keys(data).some(
+      (key) => !['dailyLimit', 'paused', 'claimOwner'].includes(key),
+    ) ||
     Object.keys(data).length === 0 ||
+    (data.claimOwner !== undefined && typeof data.claimOwner !== 'boolean') ||
+    (data.claimOwner === true && Object.keys(data).length !== 1) ||
     (data.dailyLimit !== undefined && !Number.isInteger(data.dailyLimit)) ||
     (data.paused !== undefined && typeof data.paused !== 'boolean')
   )
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { updateViberAccount, listViberAccounts } =
+  const { claimViberAccount, updateViberAccount, listViberAccounts } =
     await import('@sonar/db/viber');
   try {
-    await updateViberAccount(user.id, data);
+    if (data.claimOwner === true) await claimViberAccount(user.id);
+    else await updateViberAccount(user.id, data);
     return Response.json(
       { accounts: await listViberAccounts() },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (error) {
+    const forbidden =
+      error instanceof Error &&
+      (error.message.startsWith('Канал Viber доступний лише') ||
+        error.message.startsWith('Лише власник CRM'));
     return Response.json(
       { error: error instanceof Error ? error.message : uk.ai.invalid },
-      { status: 400 },
+      { status: forbidden ? 403 : 400 },
     );
   }
 }
