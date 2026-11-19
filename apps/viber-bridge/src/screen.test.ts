@@ -23,6 +23,7 @@ import {
   messageBubbleRegions,
   isOutgoingBubbleColor,
   inboundBubbleMessage,
+  inboundBubbleRegionsFromOcr,
   copyMenuPoint,
   exactOptionPoint,
   clipboardChanged,
@@ -293,6 +294,46 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   ).toMatchObject({ text: 'same minute', at: '2026-11-18T17:12:00.000Z' });
 });
 
+it('infers inbound bubbles from left-column text and timestamps when colors blend into wallpaper', () => {
+  expect(
+    inboundBubbleRegionsFromOcr(
+      [
+        {
+          text: 'Sonar 2.9.5 test: exact text',
+          left: 318,
+          top: 477,
+          right: 558,
+        },
+        {
+          text: 'Second line / second line',
+          left: 328,
+          top: 495,
+          right: 520,
+        },
+        { text: '21:29', left: 549, top: 523, right: 576 },
+        {
+          text: 'Sonar 2.9.6 test: confirmation',
+          left: 318,
+          top: 590,
+          right: 557,
+        },
+        {
+          text: 'Second row / line two',
+          left: 328,
+          top: 610,
+          right: 515,
+        },
+        { text: '09:47', left: 549, top: 643, right: 576 },
+        { text: '18:45', left: 770, top: 350, right: 800 },
+      ],
+      { bounds: { left: 299, right: 980 }, headerBottom: 140, height: 900 },
+    ),
+  ).toEqual([
+    { left: 304, top: 467, right: 590, bottom: 541, side: 'left' },
+    { left: 304, top: 580, right: 590, bottom: 661, side: 'left' },
+  ]);
+});
+
 it('selects only an exact localized Copy menu item and requires clipboard change', () => {
   expect(
     copyMenuPoint([
@@ -404,6 +445,14 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
   const block = [{ left: 980, top: 85, right: 1040, bottom: 110 }];
   expect(safeLayoutClick(1120, 90, block)).toBe(true);
   expect(safeLayoutClick(1010, 98, block)).toBe(false);
+  const forbiddenActions = [
+    { left: 410, top: 191, right: 450, bottom: 207 }, // banner: Block
+    { left: 1030, top: 186, right: 1075, bottom: 204 }, // banner: Report spam
+    { left: 1030, top: 374, right: 1080, bottom: 394 }, // panel: Clear chat
+  ];
+  expect(safeLayoutClick(430, 198, forbiddenActions)).toBe(false);
+  expect(safeLayoutClick(1080, 410, forbiddenActions)).toBe(false);
+  expect(safeLayoutClick(1110, 450, forbiddenActions)).toBe(true);
   expect(
     chatHeaderMatchesRecipient(
       'Olena Kovalenko\n+380 63 705 85 71',
