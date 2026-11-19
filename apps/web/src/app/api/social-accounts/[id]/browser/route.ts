@@ -188,7 +188,7 @@ export async function POST(request: Request) {
       const session = resolveSocialSession(account);
       const { sonarPool } = await import('@sonar/db');
       const { rows } = await sonarPool.query(
-        "select key,value from settings where key in ('social.browser.max_profiles','social.browser.idle_ms')",
+        "select key,value from settings where key in ('social.browser.max_profiles','social.browser.idle_ms','social.browser.locale')",
       );
       const values = Object.fromEntries(
         rows.map((row) => [row.key, Number(row.value)]),
@@ -202,6 +202,8 @@ export async function POST(request: Request) {
           proxy: session.proxy,
           maxProfiles: values['social.browser.max_profiles'] ?? 3,
           idleMs: values['social.browser.idle_ms'] ?? 1800000,
+          locale: rows.find((row) => row.key === 'social.browser.locale')
+            ?.value,
         }),
       });
       if (!started.ok)

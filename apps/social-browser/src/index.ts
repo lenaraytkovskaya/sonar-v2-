@@ -7,7 +7,7 @@ import {
   type Server as TcpServer,
 } from 'node:net';
 import { chromium, type BrowserContext, type Page } from 'playwright';
-import { parseBrowserAction, viewport } from './input.js';
+import { browserLocale, parseBrowserAction, viewport } from './input.js';
 
 type Profile = {
   context: BrowserContext;
@@ -19,6 +19,7 @@ type Profile = {
   viewerLock: boolean;
   busyAt: number | null;
   forwarder: TcpServer;
+  locale: string;
 };
 const profiles = new Map<string, Profile>();
 const webAuthnSetup = new WeakMap<Page, Promise<void>>();
@@ -160,10 +161,17 @@ async function startProfile(input: Record<string, unknown>) {
     configuredIdle <= 86400000
   )
     idleTimeoutMs = configuredIdle;
+  const language = browserLocale(input.locale);
   const existing = profiles.get(id);
-  if (existing) {
+  if (existing && (existing.locale === language.locale || existing.busy)) {
     existing.lastUsedAt = Date.now();
     return existing;
+  }
+  if (existing) {
+    // The locale is fixed at launch; restart an idle profile, keeping its data dir.
+    await existing.context.close().catch(() => {});
+    existing.forwarder.close();
+    profiles.delete(id);
   }
   const maximum = Number(input.maxProfiles);
   if (!Number.isInteger(maximum) || maximum < 1 || profiles.size >= maximum)
@@ -195,8 +203,8 @@ async function startProfile(input: Record<string, unknown>) {
   const context = await chromium.launchPersistentContext(path, {
     headless: false,
     viewport: { width: 1280, height: 800 },
-    locale: 'uk-UA',
-    extraHTTPHeaders: { 'Accept-Language': 'uk,ru;q=0.9,en;q=0.8' },
+    locale: language.locale,
+    extraHTTPHeaders: { 'Accept-Language': language.acceptLanguage },
     ...(proxy ? { proxy } : {}),
     args: [
       `--remote-debugging-port=${port}`,
@@ -232,6 +240,7 @@ async function startProfile(input: Record<string, unknown>) {
     viewerLock: false,
     busyAt: null,
     forwarder,
+    locale: language.locale,
   };
   profiles.set(id, profile);
   return profile;

@@ -95,3 +95,18 @@ export function parseBrowserAction(
   }
   return null;
 }
+
+const defaultLocale = 'en-US';
+/** Browser UI language from the `social.browser.locale` setting; invalid values fall back to English. */
+export function browserLocale(value: unknown) {
+  const locale =
+    typeof value === 'string' && /^[a-z]{2}(?:-[A-Z]{2})?$/.test(value)
+      ? value
+      : defaultLocale;
+  const language = locale.slice(0, 2);
+  const acceptLanguage =
+    language === 'en'
+      ? `${locale},en;q=0.9`
+      : `${locale},${language};q=0.9,en;q=0.8`;
+  return { locale, acceptLanguage };
+}
