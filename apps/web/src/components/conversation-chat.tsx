@@ -21,6 +21,11 @@ import { FormReplyMatch } from './form-reply-match';
 import { ViberThreadMatch } from './viber-thread-match';
 import { ChannelIcon } from './channel-icon';
 import { FriendlyError } from './friendly-error';
+import { LocalTime } from './local-time';
+import {
+  canReplyInConversation,
+  isReplyDraftChannel,
+} from '@/lib/conversation-reply';
 type Message = NonNullable<
   Awaited<ReturnType<typeof getConversationChat>>
 >['messages'][number];
@@ -36,7 +41,11 @@ export function ConversationChat({
   backHref?: string;
 }) {
   const [data, setData] = useState(initial);
+  const [timeZone, setTimeZone] = useState('UTC');
   useEffect(() => setData(initial), [initial]);
+  useEffect(() => {
+    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  }, []);
   const [body, setBody] = useState('');
   const [subject, setSubject] = useState(
     [...initial.messages].reverse().find((m) => m.subject)?.subject ?? '',
@@ -287,7 +296,7 @@ export function ConversationChat({
       (m) =>
         m.direction === 'out' &&
         ['draft', 'awaiting_approval'].includes(m.status) &&
-        ['email', 'telegram', 'whatsapp'].includes(m.channel),
+        isReplyDraftChannel(m.channel),
     );
   const pendingDraftId = pendingDraft?.id;
   useEffect(() => {
@@ -336,10 +345,7 @@ export function ConversationChat({
   const manual =
     ['form', 'call'].includes(conversation.channel) ||
     (social && !data.socialAvailable);
-  const canReply =
-    manual ||
-    social ||
-    ['email', 'telegram', 'whatsapp'].includes(conversation.channel);
+  const canReply = canReplyInConversation(conversation.channel);
   const link =
     ['form', 'social'].includes(conversation.channel) &&
     /^https?:\/\//i.test(conversation.contactValue ?? '')
@@ -447,7 +453,10 @@ export function ConversationChat({
               .filter((message) => message.id !== pendingDraftId)
               .map((message, index, shown) => {
                 const day = (value: Message) =>
-                  new Date(value.sentAt ?? value.createdAt).toDateString();
+                  new Date(value.sentAt ?? value.createdAt).toLocaleDateString(
+                    'en-CA',
+                    { timeZone },
+                  );
                 const newDay =
                   index === 0 || day(shown[index - 1]!) !== day(message);
                 return (
@@ -458,12 +467,10 @@ export function ConversationChat({
                         suppressHydrationWarning
                       >
                         <span className="rounded-full bg-surface px-3 py-1">
-                          {new Date(
-                            message.sentAt ?? message.createdAt,
-                          ).toLocaleDateString('uk-UA', {
-                            day: 'numeric',
-                            month: 'long',
-                          })}
+                          <LocalTime
+                            value={message.sentAt ?? message.createdAt}
+                            monthDay
+                          />
                         </span>
                       </p>
                     )}

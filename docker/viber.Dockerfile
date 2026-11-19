@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     apt-get install -y /tmp/viber.deb && rm -rf /tmp/viber.deb /var/lib/apt/lists/* && \
     mkdir /data && chown node:node /data
 RUN apt-get update && apt-get install -y --no-install-recommends xclip && rm -rf /var/lib/apt/lists/* && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-ENV HOME=/data DISPLAY=:99 LANG=C.UTF-8 QT_QPA_PLATFORM=xcb QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 VIBER_DESKTOP_VERSION=29.4.0.7
+ENV HOME=/data DISPLAY=:99 LANG=C.UTF-8 TZ=Europe/Kyiv QT_QPA_PLATFORM=xcb QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 VIBER_DESKTOP_VERSION=29.4.0.7
 WORKDIR /app
 COPY --from=compile /app/apps/viber-bridge/dist ./dist
 COPY apps/viber-bridge/package.json ./package.json

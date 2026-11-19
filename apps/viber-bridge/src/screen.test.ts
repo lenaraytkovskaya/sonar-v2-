@@ -188,6 +188,20 @@ it('assigns Viber message times to visible day separators and never returns futu
   expect(visibleMessageTimestamp('17:12', reference)?.getDate()).toBe(19);
 });
 
+it('interprets visible Viber times in the configured local timezone', () => {
+  const originalTimezone = process.env.TZ;
+  process.env.TZ = 'Europe/Kyiv';
+  try {
+    const reference = new Date('2026-11-19T09:52:00.000Z');
+    expect(visibleMessageTimestamp('11:47', reference)?.toISOString()).toBe(
+      '2026-11-19T09:47:00.000Z',
+    );
+  } finally {
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+  }
+});
+
 it('applies the nearest visible date divider to an inbound message', () => {
   const incoming = visibleInboundMessages(
     [
