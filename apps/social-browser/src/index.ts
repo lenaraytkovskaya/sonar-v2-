@@ -6,7 +6,8 @@ import {
   connect as connectTcp,
   type Server as TcpServer,
 } from 'node:net';
-import { chromium, type BrowserContext } from 'playwright';
+import { chromium, type BrowserContext, type Page } from 'playwright';
+import { parseBrowserAction, viewport } from './input.js';
 
 type Profile = {
   context: BrowserContext;
@@ -15,10 +16,12 @@ type Profile = {
   instance: string;
   lastUsedAt: number;
   busy: boolean;
+  viewerLock: boolean;
   busyAt: number | null;
   forwarder: TcpServer;
 };
 const profiles = new Map<string, Profile>();
+const webAuthnSetup = new WeakMap<Page, Promise<void>>();
 const firstPort = Number(process.env.SOCIAL_BROWSER_CDP_PORT ?? 9300);
 const portRange = Number(process.env.SOCIAL_BROWSER_CDP_PORTS ?? 100);
 const firstConnectPort = Number(
@@ -34,6 +37,29 @@ const home: Record<string, string> = {
   instagram: 'https://www.instagram.com/accounts/login/',
   linkedin: 'https://www.linkedin.com/login',
 };
+function disableWebAuthn(context: BrowserContext, page: Page) {
+  const existing = webAuthnSetup.get(page);
+  if (existing) return existing;
+  const setup = (async () => {
+    try {
+      const session = await context.newCDPSession(page);
+      await session.send('WebAuthn.enable', { enableUI: false });
+      await session.send('WebAuthn.addVirtualAuthenticator', {
+        options: {
+          protocol: 'ctap2',
+          transport: 'internal',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: false,
+        },
+      });
+    } catch {
+      console.warn('WebAuthn virtual authenticator unavailable');
+    }
+  })();
+  webAuthnSetup.set(page, setup);
+  return setup;
+}
 const safeId = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 const json = (
@@ -51,7 +77,7 @@ async function body(request: import('node:http').IncomingMessage) {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.from(chunk));
-    if (Buffer.concat(chunks).length > 8192) throw new Error('body_too_large');
+    if (Buffer.concat(chunks).length > 20000) throw new Error('body_too_large');
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<
     string,
@@ -180,6 +206,10 @@ async function startProfile(input: Record<string, unknown>) {
   });
   const page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(15000);
+  context.on('page', (next) => void disableWebAuthn(context, next));
+  await Promise.all(
+    context.pages().map((current) => disableWebAuthn(context, current)),
+  );
   await page
     .goto(home[network]!, { waitUntil: 'domcontentloaded', timeout: 30000 })
     .catch(() => {});
@@ -197,6 +227,7 @@ async function startProfile(input: Record<string, unknown>) {
     instance: randomUUID(),
     lastUsedAt: Date.now(),
     busy: false,
+    viewerLock: false,
     busyAt: null,
     forwarder,
   };
@@ -226,7 +257,7 @@ const server = createServer(async (request, response) => {
       });
     }
     const match =
-      /^\/profiles\/([0-9a-f-]{36})(?:\/(screen|action|close|lock|unlock))?$/i.exec(
+      /^\/profiles\/([0-9a-f-]{36})(?:\/(screen|action|close|lock|unlock|viewer-unlock))?$/i.exec(
         url.pathname,
       );
     if (!match) return json(response, 404, { error: 'not_found' });
@@ -238,12 +269,22 @@ const server = createServer(async (request, response) => {
     if (action === 'lock' && request.method === 'POST') {
       if (profile.busy) return json(response, 409, { error: 'profile_busy' });
       profile.busy = true;
+      profile.viewerLock = request.headers['x-sonar-viewer'] === 'true';
       profile.busyAt = Date.now();
       return json(response, 200, { locked: true });
     }
     if (action === 'unlock' && request.method === 'POST') {
       profile.busy = false;
+      profile.viewerLock = false;
       profile.busyAt = null;
+      return json(response, 200, { unlocked: true });
+    }
+    if (action === 'viewer-unlock' && request.method === 'POST') {
+      if (profile.viewerLock) {
+        profile.busy = false;
+        profile.viewerLock = false;
+        profile.busyAt = null;
+      }
       return json(response, 200, { unlocked: true });
     }
     if (action === 'close' && request.method === 'POST') {
@@ -253,36 +294,108 @@ const server = createServer(async (request, response) => {
       return json(response, 200, { closed: true });
     }
     if (action === 'screen' && request.method === 'GET') {
-      const page = profile.context.pages()[0];
-      if (!page) return json(response, 503, { error: 'screen_unavailable' });
-      const image = await page.screenshot({
-        type: 'jpeg',
-        quality: 65,
-        timeout: 5000,
-      });
+      if (!profile.viewerLock)
+        return json(response, 409, { error: 'profile_busy' });
+      const boundary = 'sonar-frame';
       response.writeHead(200, {
-        'Content-Type': 'image/jpeg',
+        'Content-Type': `multipart/x-mixed-replace; boundary=${boundary}`,
         'Cache-Control': 'no-store',
+        Connection: 'keep-alive',
       });
-      return response.end(image);
+      const pages = profile.context.pages();
+      let page = pages.at(-1);
+      if (!page) page = await profile.context.newPage();
+      let session:
+        Awaited<ReturnType<typeof profile.context.newCDPSession>> | undefined;
+      let closed = false;
+      let switching = Promise.resolve();
+      let lastFrameAt = 0;
+      const stopPage = async () => {
+        const previous = session;
+        session = undefined;
+        if (!previous) return;
+        await previous.send('Page.stopScreencast').catch(() => {});
+        await previous.detach().catch(() => {});
+      };
+      const startPage = async (next: (typeof pages)[number]) => {
+        if (closed || next.isClosed() || (next === page && session)) return;
+        await stopPage();
+        page = next;
+        const current = await profile.context.newCDPSession(next);
+        session = current;
+        current.on(
+          'Page.screencastFrame',
+          (event: { data: string; sessionId: number }) => {
+            void (async () => {
+              if (!closed && session === current && !response.destroyed) {
+                const image = Buffer.from(event.data, 'base64');
+                const writable = response.write(
+                  `--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${image.length}\r\n\r\n`,
+                );
+                const imageWritable = response.write(image);
+                const endingWritable = response.write('\r\n');
+                if (!writable || !imageWritable || !endingWritable)
+                  await new Promise<void>((resolve) => {
+                    const finish = () => {
+                      response.off('drain', finish);
+                      response.off('close', finish);
+                      resolve();
+                    };
+                    response.once('drain', finish);
+                    response.once('close', finish);
+                  });
+                const delay = Math.max(0, 100 - (Date.now() - lastFrameAt));
+                if (delay)
+                  await new Promise((resolve) => setTimeout(resolve, delay));
+                lastFrameAt = Date.now();
+              }
+              if (!closed && session === current)
+                await current
+                  .send('Page.screencastFrameAck', {
+                    sessionId: event.sessionId,
+                  })
+                  .catch(() => {});
+            })().catch(() => {});
+          },
+        );
+        await current.send('Page.startScreencast', {
+          format: 'jpeg',
+          quality: 60,
+          maxWidth: viewport.width,
+          maxHeight: viewport.height,
+          everyNthFrame: 1,
+        });
+      };
+      const onPage = (next: (typeof pages)[number]) => {
+        switching = switching.then(() => startPage(next)).catch(() => {});
+      };
+      profile.context.on('page', onPage);
+      response.on('close', () => {
+        closed = true;
+        profile.context.off('page', onPage);
+        void switching.then(stopPage);
+      });
+      switching = startPage(page);
+      try {
+        await switching;
+      } catch {
+        response.destroy();
+      }
+      return;
     }
     if (action === 'action' && request.method === 'POST') {
-      if (profile.busy) return json(response, 409, { error: 'profile_busy' });
       const input = await body(request);
+      if (profile.busy && !(profile.viewerLock && input.viewer === true))
+        return json(response, 409, { error: 'profile_busy' });
       const page =
-        profile.context.pages()[0] ?? (await profile.context.newPage());
+        profile.context.pages().at(-1) ?? (await profile.context.newPage());
       if (input.navigate !== undefined) {
         if (typeof input.navigate !== 'string')
           return json(response, 400, { error: 'invalid_action' });
         const target = new URL(input.navigate);
         if (
           target.protocol !== 'https:' ||
-          ![
-            'facebook.com',
-            'instagram.com',
-            'linkedin.com',
-            'example.com',
-          ].some(
+          !['facebook.com', 'instagram.com', 'linkedin.com'].some(
             (host) =>
               target.hostname === host || target.hostname.endsWith(`.${host}`),
           )
@@ -292,16 +405,29 @@ const server = createServer(async (request, response) => {
           waitUntil: 'domcontentloaded',
           timeout: 30000,
         });
+        return json(response, 200, { accepted: true });
       }
-      if (Number.isFinite(input.x) && Number.isFinite(input.y))
-        await page.mouse.click(Number(input.x), Number(input.y));
-      if (typeof input.text === 'string' && input.text.length <= 4096)
-        await page.keyboard.type(input.text);
-      if (
-        typeof input.key === 'string' &&
-        ['Enter', 'Tab', 'Backspace', 'Escape'].includes(input.key)
-      )
-        await page.keyboard.press(input.key);
+      const action = parseBrowserAction(input);
+      if (!action) return json(response, 400, { error: 'invalid_action' });
+      if (action.type === 'move') await page.mouse.move(action.x, action.y);
+      if (action.type === 'down')
+        await page.mouse.down({ button: action.button });
+      if (action.type === 'up') await page.mouse.up({ button: action.button });
+      if (action.type === 'click')
+        await page.mouse.click(action.x, action.y, { button: action.button });
+      if (action.type === 'doubleClick')
+        await page.mouse.dblclick(action.x, action.y, {
+          button: action.button,
+        });
+      if (action.type === 'wheel') {
+        await page.mouse.move(action.x, action.y);
+        await page.mouse.wheel(action.deltaX, action.deltaY);
+      }
+      if (action.type === 'text') await page.keyboard.insertText(action.text);
+      if (action.type === 'key')
+        await page.keyboard.press(action.selectAll ? 'Control+A' : action.key);
+      if (action.type === 'reload')
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
       return json(response, 200, { accepted: true });
     }
     return json(response, 405, { error: 'method_not_allowed' });
@@ -334,6 +460,7 @@ setInterval(() => {
       Date.now() - profile.busyAt >= 1800000
     ) {
       profile.busy = false;
+      profile.viewerLock = false;
       profile.busyAt = null;
     }
     if (!profile.busy && Date.now() - profile.lastUsedAt >= idleTimeoutMs) {

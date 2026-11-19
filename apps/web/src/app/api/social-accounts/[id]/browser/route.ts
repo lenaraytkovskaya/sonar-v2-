@@ -36,6 +36,15 @@ async function callService(path: string, init?: RequestInit) {
     signal: AbortSignal.timeout(35000),
   });
 }
+async function streamService(path: string, signal: AbortSignal) {
+  const config = service();
+  if (!config) throw new Error('unavailable');
+  return fetch(new URL(path, config.url), {
+    headers: { Authorization: `Bearer ${config.key}` },
+    cache: 'no-store',
+    signal,
+  });
+}
 export async function GET(request: Request) {
   const user = await apiUser(request);
   if (!user) return Response.json({ error: uk.unauthorized }, { status: 401 });
@@ -49,14 +58,28 @@ export async function GET(request: Request) {
       { status: 503 },
     );
   try {
-    const response = await callService(`/profiles/${account.id}/screen`);
+    const response = await streamService(
+      `/profiles/${account.id}/screen`,
+      request.signal,
+    );
+    if (response.status === 409)
+      return Response.json(
+        { error: uk.socialAccounts.browserBusy },
+        { status: 409 },
+      );
     if (!response.ok)
       return Response.json(
         { error: uk.socialAccounts.browserUnavailable },
         { status: 502 },
       );
     return new Response(response.body, {
-      headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
+      headers: {
+        'Content-Type':
+          response.headers.get('content-type') ??
+          'multipart/x-mixed-replace; boundary=sonar-frame',
+        'Cache-Control': 'no-store, no-transform',
+        'X-Accel-Buffering': 'no',
+      },
     });
   } catch {
     return Response.json(
@@ -78,20 +101,41 @@ export async function POST(request: Request) {
   > | null;
   if (
     !input ||
-    !['open', 'click', 'text', 'key', 'navigate'].includes(String(input.action))
+    ![
+      'open',
+      'close',
+      'mouse',
+      'wheel',
+      'text',
+      'key',
+      'navigate',
+      'reload',
+    ].includes(String(input.action))
   )
     return Response.json(
       { error: uk.socialAccounts.browserUnavailable },
       { status: 400 },
     );
   if (
-    input.action === 'click' &&
+    ['mouse', 'wheel'].includes(String(input.action)) &&
     (!Number.isFinite(input.x) ||
       !Number.isFinite(input.y) ||
       Number(input.x) < 0 ||
       Number(input.y) < 0 ||
       Number(input.x) > 1280 ||
-      Number(input.y) > 800)
+      Number(input.y) > 800 ||
+      (input.action === 'mouse' &&
+        !['move', 'down', 'up', 'click', 'doubleClick'].includes(
+          String(input.type),
+        )) ||
+      (input.action === 'mouse' &&
+        input.button !== undefined &&
+        !['left', 'middle', 'right'].includes(String(input.button))) ||
+      (input.action === 'wheel' &&
+        (typeof input.deltaX !== 'number' ||
+          Math.abs(input.deltaX) > 2000 ||
+          typeof input.deltaY !== 'number' ||
+          Math.abs(input.deltaY) > 2000)))
   )
     return Response.json(
       { error: uk.socialAccounts.browserUnavailable },
@@ -107,7 +151,22 @@ export async function POST(request: Request) {
     );
   if (
     input.action === 'key' &&
-    !['Enter', 'Tab', 'Backspace', 'Escape'].includes(String(input.key))
+    !(
+      input.selectAll === true ||
+      [
+        'Enter',
+        'Tab',
+        'Backspace',
+        'Delete',
+        'Escape',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'Home',
+        'End',
+      ].includes(String(input.key))
+    )
   )
     return Response.json(
       { error: uk.socialAccounts.browserUnavailable },
@@ -150,24 +209,60 @@ export async function POST(request: Request) {
           { error: uk.socialAccounts.browserUnavailable },
           { status: 502 },
         );
+      const locked = await callService(`/profiles/${account.id}/lock`, {
+        method: 'POST',
+        headers: { 'X-Sonar-Viewer': 'true' },
+      });
+      if (locked.status === 409)
+        return Response.json(
+          { error: uk.socialAccounts.browserBusy },
+          { status: 409 },
+        );
+      if (!locked.ok)
+        return Response.json(
+          { error: uk.socialAccounts.browserUnavailable },
+          { status: 502 },
+        );
       await sonarPool.query(
         "update channel_accounts set settings=settings||jsonb_build_object('browserProfile',true) where id=$1 and owner_id=$2",
         [account.id, user.id],
       );
       return Response.json({ accepted: true });
     }
+    if (input.action === 'close') {
+      const response = await callService(
+        `/profiles/${account.id}/viewer-unlock`,
+        { method: 'POST' },
+      );
+      if (!response.ok)
+        return Response.json(
+          { error: uk.socialAccounts.browserUnavailable },
+          { status: 502 },
+        );
+      return Response.json({ accepted: true });
+    }
     const payload =
-      input.action === 'click'
-        ? { x: input.x, y: input.y }
-        : input.action === 'text'
-          ? { text: input.text }
-          : input.action === 'key'
-            ? { key: input.key }
-            : { navigate: input.url };
+      input.action === 'mouse'
+        ? { type: input.type, x: input.x, y: input.y, button: input.button }
+        : input.action === 'wheel'
+          ? {
+              type: 'wheel',
+              x: input.x,
+              y: input.y,
+              deltaX: input.deltaX,
+              deltaY: input.deltaY,
+            }
+          : input.action === 'text'
+            ? { type: 'text', text: input.text }
+            : input.action === 'key'
+              ? { type: 'key', key: input.key, selectAll: input.selectAll }
+              : input.action === 'reload'
+                ? { type: 'reload' }
+                : { navigate: input.url };
     const response = await callService(`/profiles/${account.id}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, viewer: true }),
     });
     if (response.status === 409)
       return Response.json(
@@ -181,6 +276,10 @@ export async function POST(request: Request) {
       );
     return Response.json({ accepted: true });
   } catch {
+    if (input.action === 'open')
+      await callService(`/profiles/${account.id}/viewer-unlock`, {
+        method: 'POST',
+      }).catch(() => {});
     return Response.json(
       { error: uk.socialAccounts.browserUnavailable },
       { status: 502 },
