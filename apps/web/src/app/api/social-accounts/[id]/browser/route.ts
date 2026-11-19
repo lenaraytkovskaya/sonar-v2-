@@ -101,9 +101,16 @@ export async function POST(request: Request) {
   > | null;
   if (
     !input ||
-    !['open', 'close', 'mouse', 'wheel', 'text', 'key', 'navigate'].includes(
-      String(input.action),
-    )
+    ![
+      'open',
+      'close',
+      'mouse',
+      'wheel',
+      'text',
+      'key',
+      'navigate',
+      'reload',
+    ].includes(String(input.action))
   )
     return Response.json(
       { error: uk.socialAccounts.browserUnavailable },
@@ -249,7 +256,9 @@ export async function POST(request: Request) {
             ? { type: 'text', text: input.text }
             : input.action === 'key'
               ? { type: 'key', key: input.key, selectAll: input.selectAll }
-              : { navigate: input.url };
+              : input.action === 'reload'
+                ? { type: 'reload' }
+                : { navigate: input.url };
     const response = await callService(`/profiles/${account.id}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

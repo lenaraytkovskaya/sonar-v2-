@@ -358,6 +358,7 @@ export const uk = {
     browserUnavailable: 'Браузерний профіль зараз недоступний.',
     browserBusy: 'Sonar зараз працює в цьому браузері. Спробуйте пізніше.',
     browserStarting: 'Запуск браузера…',
+    browserReload: 'Оновити сторінку',
     browserClipboardUnavailable: 'Не вдалося прочитати текст із буфера обміну.',
     browserDone: 'Готово, я увійшла',
     syncInbox: 'Синхронізувати вхідні',
