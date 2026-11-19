@@ -176,7 +176,8 @@ it.skipIf(!enabled)(
         body: 'Fixture reply',
         receivedAt,
       };
-      expect(await inbound.recordInbound(incoming)).toMatchObject({
+      const received = await inbound.recordInbound(incoming);
+      expect(received).toMatchObject({
         created: true,
         companyId: ids.company,
       });
@@ -184,6 +185,46 @@ it.skipIf(!enabled)(
         created: false,
         companyId: ids.company,
       });
+      const replyRequest = {
+        conversationId: received.conversationId,
+        body: 'Viber inbox reply',
+        requestId: randomUUID(),
+      };
+      const reply = await inbound.queueConversationReply(
+        replyRequest,
+        ids.user,
+      );
+      expect(reply).toMatchObject({ status: 'queued' });
+      expect(
+        await inbound.queueConversationReply(replyRequest, ids.user),
+      ).toEqual(reply);
+      expect(
+        (
+          await db.sonarPool.query(
+            'select channel,account_id,to_value,source from messages where id=$1',
+            [reply.id],
+          )
+        ).rows[0],
+      ).toEqual({
+        channel: 'viber',
+        account_id: account.id,
+        to_value: '+48500100200',
+        source: 'reply',
+      });
+      await db.sonarPool.query(
+        "insert into do_not_contact(company_id,kind,value_normalized,reason,created_by) values($1::uuid,'company',$1::text,'Viber refusal',$2::uuid)",
+        [ids.company, ids.user],
+      );
+      await expect(
+        inbound.queueConversationReply(
+          { ...replyRequest, requestId: randomUUID() },
+          ids.user,
+        ),
+      ).rejects.toThrow('Контакт у списку «Не контактувати».');
+      await db.sonarPool.query(
+        'delete from do_not_contact where company_id=$1 or created_by=$2',
+        [ids.company, ids.user],
+      );
       const unbound = {
         ...incoming,
         providerId: 'fixture-viber-event-unbound',
@@ -283,6 +324,18 @@ it.skipIf(!enabled)(
         action: 'viber.manually_sent',
       });
     } finally {
+      await db.sonarPool.query(
+        'delete from do_not_contact where company_id=$1 or created_by=$2',
+        [ids.company, ids.user],
+      );
+      await db.sonarPool.query(
+        "delete from pgboss.job where name='message.send' and data->>'taskId' in (select id::text from tasks where payload->>'messageId' in (select id::text from messages where conversation_id in (select id from conversations where company_id=$1)))",
+        [ids.company],
+      );
+      await db.sonarPool.query(
+        "delete from tasks where payload->>'messageId' in (select id::text from messages where conversation_id in (select id from conversations where company_id=$1))",
+        [ids.company],
+      );
       await db.sonarPool.query('delete from tasks where subject_id=$1', [
         ids.company,
       ]);
