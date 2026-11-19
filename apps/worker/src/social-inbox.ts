@@ -130,7 +130,7 @@ export async function runSocialInboxSync(
         };
     }
     const { rows: settings } = await c.query(
-      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.max_threads','social.inbox.max_messages','social.inbox.quiet_hours','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
+      "select key,value from settings where key in ('social.inbox.enabled','social.inbox.poll_seconds','social.inbox.daily_limit','social.inbox.max_threads','social.inbox.max_messages','social.inbox.quiet_hours','social.inbox.timezone','social.inbox.facebook.enabled','social.inbox.instagram.enabled')",
     );
     const config = Object.fromEntries(
       settings.map((row) => [row.key, row.value]),
@@ -170,7 +170,13 @@ export async function runSocialInboxSync(
     const quietHours = String(config['social.inbox.quiet_hours']);
     let nextPollAt: string;
     try {
-      nextPollAt = nextSocialInboxPollAt(now, poll, quietHours).toISOString();
+      nextPollAt = nextSocialInboxPollAt(
+        now,
+        poll,
+        quietHours,
+        undefined,
+        String(config['social.inbox.timezone'] ?? 'Europe/Kyiv'),
+      ).toISOString();
     } catch {
       return {
         status: 'paused',

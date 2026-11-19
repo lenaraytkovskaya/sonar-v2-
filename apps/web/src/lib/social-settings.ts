@@ -29,6 +29,7 @@ export const socialKeys = [
   'social.inbox.enabled',
   'social.inbox.facebook.enabled',
   'social.inbox.instagram.enabled',
+  'social.auto_password_login',
   ...Object.keys(socialFields),
 ];
 export type SocialSettings = Record<string, number | boolean>;
@@ -41,6 +42,7 @@ export function validSocialSettings(value: unknown): value is SocialSettings {
       'social.inbox.enabled',
       'social.inbox.facebook.enabled',
       'social.inbox.instagram.enabled',
+      'social.auto_password_login',
     ].every((key) => typeof data[key] === 'boolean') &&
     Object.keys(data).every((key) => socialKeys.includes(key)) &&
     Object.entries(socialFields).every(

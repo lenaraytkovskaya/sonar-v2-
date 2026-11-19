@@ -14,6 +14,7 @@ import {
   socialSessionCheckReason,
   type SocialSessionCheckDiagnostic,
 } from '@sonar/core/social-session';
+import { isIP } from 'node:net';
 import { socialTarget, type SocialNetwork } from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
 import { sendFacebook } from './facebook-send-browser.js';
@@ -33,7 +34,11 @@ export type SocialBrowserSession = {
   | 'persistStorageState'
   | 'persistDevice'
   | 'persistFailureShot'
->;
+> & {
+    proxyPublicIp?: string;
+    proxyPublicIpCheckedAt?: string;
+    persistProxyPublicIp?: (ip: string, checkedAt: string) => Promise<void>;
+  };
 export type FailureShotKind = 'check' | 'keepalive' | 'inbox' | 'send';
 export async function captureFailureShot(
   page: Page,
@@ -1714,6 +1719,41 @@ export function createSocialSendBrowser(
           acceptDownloads: false,
         });
         try {
+          if (
+            device.hardwareConcurrency !== undefined ||
+            device.deviceMemory !== undefined ||
+            device.languages ||
+            device.userAgentData
+          )
+            await context.addInitScript(
+              (fingerprint) => {
+                const overrides: Record<string, unknown> = {
+                  ...(fingerprint.hardwareConcurrency !== undefined
+                    ? { hardwareConcurrency: fingerprint.hardwareConcurrency }
+                    : {}),
+                  ...(fingerprint.deviceMemory !== undefined
+                    ? { deviceMemory: fingerprint.deviceMemory }
+                    : {}),
+                  ...(fingerprint.languages
+                    ? { languages: fingerprint.languages }
+                    : {}),
+                  ...(fingerprint.userAgentData
+                    ? { userAgentData: fingerprint.userAgentData }
+                    : {}),
+                };
+                for (const [key, value] of Object.entries(overrides))
+                  Object.defineProperty(Navigator.prototype, key, {
+                    configurable: true,
+                    get: () => value,
+                  });
+              },
+              {
+                hardwareConcurrency: device.hardwareConcurrency,
+                deviceMemory: device.deviceMemory,
+                languages: device.languages,
+                userAgentData: device.userAgentData,
+              },
+            );
           if (!session.storageState) await context.addCookies(session.cookies);
         } catch (error) {
           await context.close().catch(() => {});
@@ -1727,6 +1767,34 @@ export function createSocialSendBrowser(
       const page = await cached.context.newPage();
       page.setDefaultTimeout(timeoutMs);
       try {
+        if (session.persistProxyPublicIp) {
+          const checkedAt = Date.parse(session.proxyPublicIpCheckedAt ?? '');
+          if (
+            !session.proxyPublicIp ||
+            !Number.isFinite(checkedAt) ||
+            Date.now() - checkedAt >= 3600000
+          ) {
+            let ip = '';
+            try {
+              const response = await page.request.get(
+                'https://api.ipify.org?format=json',
+                { timeout: 8000 },
+              );
+              if (!response.ok()) throw new Error('ip lookup failed');
+              const body = (await response.json()) as { ip?: unknown };
+              ip = typeof body.ip === 'string' ? body.ip : '';
+            } catch {
+              throw new SocialSessionCheckError('proxy');
+            }
+            if (!isIP(ip)) throw new SocialSessionCheckError('proxy');
+            if (session.proxyPublicIp && session.proxyPublicIp !== ip)
+              throw new SocialSessionCheckError('proxy');
+            const verifiedAt = new Date().toISOString();
+            await session.persistProxyPublicIp(ip, verifiedAt);
+            session.proxyPublicIp = ip;
+            session.proxyPublicIpCheckedAt = verifiedAt;
+          }
+        }
         const result = await fn(page);
         if (session.persistStorageState) {
           const save = async () => {

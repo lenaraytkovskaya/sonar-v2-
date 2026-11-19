@@ -283,11 +283,15 @@ export const uk = {
       'Зміна проксі може викликати додаткову перевірку входу. Cookies можна залишити без змін.',
     keepalive: 'Автоматично підтримувати сесію',
     sessionLost: 'Втрачено сесію соцмережі — потрібен вхід',
-    sessionExpired: 'Сесія {network} закінчилась — оновіть вхід',
+    sessionExpired: (network: string) =>
+      `Сесія ${network} завершилась. Відкрийте вхід і підтвердіть його вручну.`,
     sessionLostBanner: 'Є акаунти соцмереж, які потребують повторного входу.',
     openChannels: 'Перейти до каналів',
     proxyHelp:
       'Типово Instagram і Facebook використовують проксі 1, LinkedIn — проксі 2. Спільний або ротаційний проксі може змінювати IP та спричиняти перевірки входу; власний стабільний проксі зменшує цей ризик.',
+    proxyIpHint: 'Входьте у соцмережу через цей самий IP.',
+    proxyIpUnknown: 'IP проксі ще не перевірено.',
+    proxyIp: 'IP проксі',
     cookies: 'Сесія (storageState або cookies) — JSON',
     namePlaceholders: {
       instagram: 'Наприклад: Демокомпанія — Instagram',
@@ -312,6 +316,8 @@ export const uk = {
     updateDevice: 'Оновити пристрій з цього браузера',
     ownerBrowserDevice: (details: string) =>
       `Пристрій: як у вашому браузері (${details})`,
+    deviceUnconfirmed:
+      'Пристрій не підтверджено — імпортуйте сесію з того ж браузера.',
     edit: 'Редагувати акаунт',
     removeConfirm: (name: string) =>
       `Видалити акаунт «${name}»? Збережена сесія, логін, пароль і ключ 2FA будуть видалені. Листування з компаніями залишиться.`,
@@ -419,6 +425,8 @@ export const uk = {
       messages: 'Повідомлень за розмову',
     },
     settings: {
+      'social.auto_password_login':
+        'Автоматично входити за паролем після завершення сесії',
       'social.login.daily_limit': 'Спроб входу на акаунт за добу',
       'social.login.relogin_cooldown_hours':
         'Пауза між повторними входами, годин',

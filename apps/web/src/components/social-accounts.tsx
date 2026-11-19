@@ -83,6 +83,13 @@ function ownerBrowserParameters() {
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     language: navigator.language,
     languages: [...navigator.languages],
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    ...('deviceMemory' in navigator
+      ? {
+          deviceMemory: (navigator as Navigator & { deviceMemory?: number })
+            .deviceMemory,
+        }
+      : {}),
   };
 }
 /** "Проксі 7 · sol.ua-proxy.net": the number stays, the host makes it recognisable. */
@@ -474,6 +481,22 @@ export function SocialAccounts({
                       : proxyName(account.proxyIndex, proxyLabels),
                   },
                   {
+                    label: uk.socialAccounts.proxyIp,
+                    value: account.proxyPublicIp ? (
+                      <span>
+                        {account.proxyPublicIp}
+                        {account.proxyPublicIpCheckedAt && (
+                          <>
+                            {' · '}
+                            <LocalTime value={account.proxyPublicIpCheckedAt} />
+                          </>
+                        )}
+                      </span>
+                    ) : (
+                      uk.socialAccounts.proxyIpUnknown
+                    ),
+                  },
+                  {
                     label: uk.social.checked,
                     value: account.checkedAt ? (
                       <LocalTime value={account.checkedAt} />
@@ -507,10 +530,20 @@ export function SocialAccounts({
                   },
                 ]}
               />
+              <p className="text-xs text-muted-foreground">
+                {uk.socialAccounts.proxyIpHint}
+              </p>
               {deviceDescription && (
                 <Callout tone="run">
                   <span className="text-xs">
                     {uk.socialAccounts.ownerBrowserDevice(deviceDescription)}
+                  </span>
+                </Callout>
+              )}
+              {account.deviceSource !== 'owner_browser' && (
+                <Callout tone="wait">
+                  <span className="text-xs">
+                    {uk.socialAccounts.deviceUnconfirmed}
                   </span>
                 </Callout>
               )}

@@ -198,11 +198,46 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
       expect(JSON.stringify(publicAccount)).not.toMatch(
         /private-|actually-updated|Encrypted|JBSWY|123456/,
       );
-      // S1 tries one automatic relogin, then a challenge surfaces Needs Action.
-      await accounts.withSocialSessionCheck(saved.id, async () => ({
-        valid: false,
-        reason: 'login_required',
-      }));
+      const automaticSetting = await sonarPool.query(
+        "select value from settings where key='social.auto_password_login'",
+      );
+      expect(automaticSetting.rows[0]?.value).toBe(false);
+      const lostAt = Date.now() + 120000;
+      // Session loss pauses and notifies the owner without queuing a password login.
+      await accounts.withSocialSessionCheck(
+        saved.id,
+        async () => ({
+          valid: false,
+          reason: 'login_required',
+        }),
+        new Date(lostAt),
+      );
+      const automaticCount = await sonarPool.query(
+        "select count(*)::int as count from tasks where type='social.session.login' and payload->>'accountId'=$1 and payload->>'automatic'='true'",
+        [saved.id],
+      );
+      expect(automaticCount.rows[0].count).toBe(0);
+      expect(await accounts.listSocialSessionNotices(actor)).toHaveLength(1);
+      await accounts.withSocialSessionCheck(
+        saved.id,
+        async () => ({
+          valid: true,
+        }),
+        new Date(lostAt + 120000),
+      );
+      expect(await accounts.listSocialSessionNotices(actor)).toEqual([]);
+      await sonarPool.query(
+        "update settings set value='true'::jsonb where key='social.auto_password_login'",
+      );
+      // After a later session loss, the explicit compatibility setting can restore the old flow.
+      await accounts.withSocialSessionCheck(
+        saved.id,
+        async () => ({
+          valid: false,
+          reason: 'login_required',
+        }),
+        new Date(lostAt + 240000),
+      );
       const auto = (
         await sonarPool.query(
           "select id,payload from tasks where type='social.session.login' and payload->>'accountId'=$1 and payload->>'automatic'='true'",
@@ -425,6 +460,9 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
         payload: { accountId: createdWithPassword.id, automatic: false },
       });
     } finally {
+      await sonarPool.query(
+        "update settings set value='false'::jsonb where key='social.auto_password_login'",
+      );
       await sonarPool.query(
         "delete from pgboss.job where name='social.session.login' and data->>'taskId' in (select id::text from tasks where payload->>'accountId'=any($1::text[]))",
         [ids],

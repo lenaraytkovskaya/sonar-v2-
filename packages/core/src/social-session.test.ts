@@ -558,6 +558,8 @@ describe('owner browser device capture', () => {
     timeZone: 'Europe/Kyiv',
     language: 'uk-UA',
     languages: ['uk-UA', 'uk', 'en-US'],
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
   };
 
   it('converts the bounded browser inputs to a Playwright device and clips viewport proportionally', () => {
@@ -568,10 +570,15 @@ describe('owner browser device capture', () => {
       timezoneId: 'Europe/Kyiv',
       deviceScaleFactor: 1,
       screen: { width: 2560, height: 1313 },
+      hardwareConcurrency: 8,
+      deviceMemory: 8,
+      languages: ownerBrowser.languages,
+      userAgentData: ownerBrowser.userAgentData,
       extraHTTPHeaders: {
         'sec-ch-ua': '"Chromium";v="157", "Google Chrome";v="157"',
         'sec-ch-ua-platform': '"Windows"',
         'sec-ch-ua-mobile': '?0',
+        'accept-language': 'uk-UA,uk;q=0.9,en-US;q=0.8',
       },
     });
   });

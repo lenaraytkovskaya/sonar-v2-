@@ -98,8 +98,7 @@ export function SocialSessionNotices() {
           </div>
           {toast.map((notice) => (
             <p key={`${notice.id}:${notice.eventId}`} className="mt-2 text-sm">
-              {uk.socialAccounts.sessionExpired.replace(
-                '{network}',
+              {uk.socialAccounts.sessionExpired(
                 uk.social.networks[notice.network],
               )}{' '}
               ({notice.name})

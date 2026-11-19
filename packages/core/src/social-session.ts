@@ -685,6 +685,10 @@ export interface SocialDevice {
   deviceScaleFactor: number;
   screen?: { width: number; height: number };
   extraHTTPHeaders?: Record<string, string>;
+  hardwareConcurrency?: number;
+  deviceMemory?: number;
+  languages?: string[];
+  userAgentData?: OwnerBrowserDeviceInput['userAgentData'];
 }
 export interface OwnerBrowserDeviceInput {
   userAgent: string;
@@ -699,6 +703,8 @@ export interface OwnerBrowserDeviceInput {
   timeZone: string;
   language: string;
   languages: string[];
+  hardwareConcurrency?: number;
+  deviceMemory?: number;
 }
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -732,6 +738,8 @@ export function socialDeviceFromOwnerBrowser(raw: unknown): SocialDevice {
       'timeZone',
       'language',
       'languages',
+      'hardwareConcurrency',
+      'deviceMemory',
     ]) ||
     typeof raw.userAgent !== 'string' ||
     raw.userAgent.length < 20 ||
@@ -748,6 +756,15 @@ export function socialDeviceFromOwnerBrowser(raw: unknown): SocialDevice {
     typeof raw.language !== 'string' ||
     raw.language.length > 35 ||
     !Array.isArray(raw.languages) ||
+    (raw.hardwareConcurrency !== undefined &&
+      (!Number.isInteger(raw.hardwareConcurrency) ||
+        Number(raw.hardwareConcurrency) < 1 ||
+        Number(raw.hardwareConcurrency) > 1024)) ||
+    (raw.deviceMemory !== undefined &&
+      (typeof raw.deviceMemory !== 'number' ||
+        !Number.isFinite(raw.deviceMemory) ||
+        raw.deviceMemory < 0.25 ||
+        raw.deviceMemory > 1024)) ||
     raw.languages.length < 1 ||
     raw.languages.length > 20 ||
     !raw.languages.every(
@@ -816,7 +833,29 @@ export function socialDeviceFromOwnerBrowser(raw: unknown): SocialDevice {
     timezoneId: raw.timeZone,
     deviceScaleFactor: raw.devicePixelRatio,
     screen: { ...raw.screen },
-    ...(Object.keys(headers).length ? { extraHTTPHeaders: headers } : {}),
+    ...(raw.hardwareConcurrency !== undefined
+      ? { hardwareConcurrency: Number(raw.hardwareConcurrency) }
+      : {}),
+    ...(raw.deviceMemory !== undefined
+      ? { deviceMemory: raw.deviceMemory }
+      : {}),
+    languages: [...(raw.languages as string[])],
+    ...(raw.userAgentData
+      ? {
+          userAgentData:
+            raw.userAgentData as OwnerBrowserDeviceInput['userAgentData'],
+        }
+      : {}),
+    extraHTTPHeaders: {
+      ...(Object.keys(headers).length ? headers : {}),
+      'accept-language': raw.languages
+        .map((language, index) =>
+          index === 0
+            ? language
+            : `${language};q=${Math.max(0.1, 1 - index * 0.1).toFixed(1)}`,
+        )
+        .join(','),
+    },
   };
 }
 export function generateSocialDevice(
