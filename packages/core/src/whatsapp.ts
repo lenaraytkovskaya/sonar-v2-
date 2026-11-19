@@ -143,7 +143,7 @@ export function createWhatsAppAdapter(
       throw new WhatsAppSendError(
         sending ? 'send_ambiguous' : 'waha_unreachable',
         sending
-          ? 'Результат надсилання WhatsApp невідомий. Перевірте чат перед повтором.'
+          ? 'Результат відправки WhatsApp невідомий — перевірте чат вручну'
           : 'Сервіс WhatsApp недоступний. Повторіть спробу.',
         !sending,
       );
@@ -183,6 +183,11 @@ export function createWhatsAppAdapter(
         seconds && Number.isFinite(seconds) ? Math.max(1, seconds) : undefined,
       );
     }
+    if (sending && response.status >= 500)
+      throw new WhatsAppSendError(
+        'send_ambiguous',
+        'Результат відправки WhatsApp невідомий — перевірте чат вручну',
+      );
     if (response.status === 401 || response.status === 403)
       throw new WhatsAppSendError(
         'waha_auth',

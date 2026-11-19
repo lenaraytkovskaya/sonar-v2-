@@ -153,7 +153,7 @@ it.skipIf(!enabled)(
         "update settings set value=$1 where key='send.hours'",
         [JSON.stringify({ start: 0, end: 24, days: [0, 1, 2, 3, 4, 5, 6] })],
       );
-      for (const code of ['waha_rate_limit', 'waha_server_error']) {
+      for (const code of ['waha_rate_limit']) {
         await reset();
         const retry = await create(),
           failure = vi.fn(async () => {
@@ -176,6 +176,24 @@ it.skipIf(!enabled)(
         ).toMatchObject({ status: 'done' });
         expect(failure).toHaveBeenCalledTimes(1);
       }
+      await reset();
+      const serverError = await create(),
+        ambiguousHttp = vi.fn(async () => {
+          throw new WhatsAppSendError(
+            'send_ambiguous',
+            'Результат відправки WhatsApp невідомий — перевірте чат вручну',
+            false,
+          );
+        });
+      expect(await send(serverError.id, ambiguousHttp)).toMatchObject({
+        status: 'paused',
+        reasonUk:
+          'Результат відправки WhatsApp невідомий — перевірте чат вручну',
+      });
+      expect(await send(serverError.id, ambiguousHttp)).toMatchObject({
+        status: 'paused',
+      });
+      expect(ambiguousHttp).toHaveBeenCalledTimes(1);
       await reset();
       const offline = await create();
       expect(

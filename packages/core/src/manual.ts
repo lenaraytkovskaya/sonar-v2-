@@ -48,7 +48,7 @@ export const manualCompanySchema = z
       .trim()
       .toUpperCase()
       .refine((value) => getCountries().includes(value as CountryCode))
-      .default('UA'),
+      .optional(),
     campaignId: z.string().uuid(),
   })
   .strict();
