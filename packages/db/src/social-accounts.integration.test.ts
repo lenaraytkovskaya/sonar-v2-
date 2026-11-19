@@ -6,6 +6,47 @@ import {
 } from '@sonar/core/social-session';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
+  'only lets the channel account owner retry session management tasks',
+  async () => {
+    const { sonarPool } = await import('./index.js');
+    const { retryTask } = await import('./tasks.js');
+    const owner = randomUUID(),
+      other = randomUUID(),
+      accountId = randomUUID(),
+      taskId = randomUUID();
+    try {
+      await sonarPool.query(
+        "insert into users(id,email,name,password_hash) values($1,$2,'Owner','x'),($3,$4,'Other','x')",
+        [owner, `${owner}@example.test`, other, `${other}@example.test`],
+      );
+      await sonarPool.query(
+        "insert into channel_accounts(id,channel,name,address,owner_id,status,daily_limit) values($1,'facebook','Owned account','',$2,'paused',20)",
+        [accountId, owner],
+      );
+      await sonarPool.query(
+        "insert into tasks(id,type,idempotency_key,status,payload) values($1,'social.session.check',$1::uuid::text,'paused',$2)",
+        [taskId, { accountId }],
+      );
+      expect(await retryTask(taskId, other)).toBe(false);
+      expect(
+        (
+          await sonarPool.query('select status from tasks where id=$1', [
+            taskId,
+          ])
+        ).rows[0].status,
+      ).toBe('paused');
+    } finally {
+      await sonarPool.query('delete from tasks where id=$1', [taskId]);
+      await sonarPool.query('delete from channel_accounts where id=$1', [
+        accountId,
+      ]);
+      await sonarPool.query('delete from users where id=any($1::uuid[])', [
+        [owner, other],
+      ]);
+    }
+  },
+);
+it.skipIf(!enabled)(
   'stores social cookies privately, enforces ownership and pauses a changed pinned proxy',
   async () => {
     const { sonarPool } = await import('./index.js');

@@ -17,7 +17,9 @@ it.skipIf(!enabled)(
     const admin = new PgBoss(process.env.DATABASE_URL!);
     const userId = randomUUID(),
       campaignId = randomUUID(),
-      ids: string[] = [];
+      polishCampaignId = randomUUID(),
+      ids: string[] = [],
+      campaignCountryIds: string[] = [];
     const email = `team@${userId}.test`;
     const mock = vi
       .spyOn(SiteHttp.prototype, 'read')
@@ -46,6 +48,10 @@ it.skipIf(!enabled)(
         "insert into campaigns(id,name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,$2,'UA','uk','{}','{}','',20,.5,'{}','{\"email\":1}')",
         [campaignId, userId],
       );
+      await sonarPool.query(
+        "insert into campaigns(id,name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,$2,'PL','uk','{}','{}','',20,.5,'{}','{\"email\":1}')",
+        [polishCampaignId, `${userId}-PL`],
+      );
       const input = {
         campaignId,
         name: userId,
@@ -60,6 +66,21 @@ it.skipIf(!enabled)(
         domain: `${userId}.test`,
       });
       expect(company.place_id).toMatch(/^manual:/);
+      const campaignCountry = await manual.createManualCompany(
+        {
+          campaignId: polishCampaignId,
+          name: `${userId}-campaign-country`,
+        },
+        userId,
+      );
+      campaignCountryIds.push(campaignCountry.id);
+      expect(campaignCountry.country_code).toBe('PL');
+      const polishPhone = await manual.addManualContact(
+        campaignCountry.id,
+        { kind: 'phone', value: '512 345 679' },
+        userId,
+      );
+      expect(polishPhone.normalized).toBe('+48512345679');
       expect((await manual.getCompany(company.id))?.campaigns).toMatchObject([
         { id: campaignId, batch_id: null },
       ]);
@@ -235,17 +256,18 @@ it.skipIf(!enabled)(
       );
     } finally {
       mock.mockRestore();
+      const cleanupIds = [...ids, ...campaignCountryIds];
       await sonarPool.query(
         'delete from do_not_contact where value_normalized=any($1::text[])',
-        [[email, ...ids, `${userId}.test`]],
+        [[email, ...cleanupIds, `${userId}.test`]],
       );
       await sonarPool.query(
         "delete from pgboss.job where data->>'taskId' in(select id::text from tasks where subject_id=any($1::text[]))",
-        [ids],
+        [cleanupIds],
       );
       await sonarPool.query(
         'delete from tasks where subject_id=any($1::text[])',
-        [ids],
+        [cleanupIds],
       );
       for (const table of [
         'analyses',
@@ -257,16 +279,18 @@ it.skipIf(!enabled)(
       ])
         await sonarPool.query(
           `delete from ${table} where company_id=any($1::uuid[])`,
-          [ids],
+          [cleanupIds],
         );
       await sonarPool.query(
         'delete from activity_log where entity_id=any($1::text[]) or user_id=$2',
-        [ids, userId],
+        [cleanupIds, userId],
       );
       await sonarPool.query('delete from companies where id=any($1::uuid[])', [
-        ids,
+        cleanupIds,
       ]);
-      await sonarPool.query('delete from campaigns where id=$1', [campaignId]);
+      await sonarPool.query('delete from campaigns where id=any($1::uuid[])', [
+        [campaignId, polishCampaignId],
+      ]);
       await sonarPool.query('delete from users where id=$1', [userId]);
       await admin.stop();
     }

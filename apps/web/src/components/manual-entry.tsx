@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { uk } from '@/i18n/uk';
 import { socialNetwork } from '@/lib/outreach-labels';
@@ -15,7 +15,7 @@ export function ManualEntry({
   initialCampaignId = '',
 }: {
   companyId?: string;
-  campaigns?: { id: string; name: string }[];
+  campaigns?: { id: string; name: string; countryCode: string }[];
   initialCampaignId?: string;
 }) {
   const router = useRouter();
@@ -31,12 +31,17 @@ export function ManualEntry({
           name: '',
           website: '',
           city: '',
-          countryCode: 'UA',
+          countryCode: '',
           campaignId: initialCampaignId,
         },
   );
   const update = (key: string, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
+  useEffect(() => {
+    if (companyId || values.countryCode || !initialCampaignId) return;
+    const campaign = campaigns.find((item) => item.id === initialCampaignId);
+    if (campaign) update('countryCode', campaign.countryCode);
+  }, [campaigns, companyId, initialCampaignId, values.countryCode]);
   const title = companyId ? uk.manual.addContact : uk.manual.addCompany;
   const fields = companyId
     ? ['value', 'note']
@@ -120,7 +125,17 @@ export function ManualEntry({
                       update('value', '');
                     setNetwork(selected as keyof typeof uk.social.networks);
                     update('kind', 'social');
-                  } else update(companyId ? 'kind' : 'campaignId', selected);
+                  } else if (companyId) update('kind', selected);
+                  else {
+                    const campaign = campaigns.find(
+                      (item) => item.id === selected,
+                    );
+                    setValues((current) => ({
+                      ...current,
+                      campaignId: selected,
+                      countryCode: campaign?.countryCode ?? '',
+                    }));
+                  }
                 }}
               >
                 {companyId ? (

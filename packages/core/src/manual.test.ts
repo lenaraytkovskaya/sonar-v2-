@@ -45,18 +45,20 @@ it('rejects invalid addresses, mismatched messengers and unsafe form URLs', () =
   ] as const)
     expect(normalizeManualContact({ kind, value }, 'UA')).toBeNull();
 });
-it('requires a campaign and real ISO country for manual companies', () => {
+it('requires a campaign and preserves an optional ISO country override', () => {
   const input = {
     name: ' Company ',
     campaignId: '608cc931-22dc-447f-8f06-a25975beb38b',
   };
-  expect(manualCompanySchema.parse(input)).toMatchObject({
-    name: 'Company',
-    countryCode: 'UA',
-  });
+  expect(manualCompanySchema.parse(input)).toMatchObject({ name: 'Company' });
+  expect(manualCompanySchema.parse(input).countryCode).toBeUndefined();
   expect(
     manualCompanySchema.parse({ ...input, countryCode: 'pl' }).countryCode,
   ).toBe('PL');
+  expect(
+    normalizeManualContact({ kind: 'phone', value: '512 345 678' }, 'PL')
+      ?.value,
+  ).toBe('+48512345678');
   for (const patch of [
     { campaignId: '' },
     { name: '' },
