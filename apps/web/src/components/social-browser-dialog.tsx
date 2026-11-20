@@ -4,6 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapBrowserPoint } from '@/lib/social-browser-input';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
+
+type DomSnapshot = {
+  id: string;
+  capturedAt: string;
+  label: string | null;
+};
 
 export function SocialBrowserDialog({
   accountId,
@@ -16,7 +23,11 @@ export function SocialBrowserDialog({
 }) {
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+  const [label, setLabel] = useState('');
+  const [snapshots, setSnapshots] = useState<DomSnapshot[]>([]);
+  const [savingDom, setSavingDom] = useState(false);
   const base = `/api/social-accounts/${accountId}/browser`;
+  const domBase = `${base}/dom`;
   const openRequest = useRef<Promise<void> | null>(null);
   const releaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMoveAt = useRef(0);
@@ -165,6 +176,57 @@ export function SocialBrowserDialog({
       );
     }
   };
+  const loadSnapshots = useCallback(async () => {
+    const response = await fetch(domBase, { cache: 'no-store' });
+    if (!response.ok) throw new Error(uk.socialAccounts.domUnavailable);
+    setSnapshots((await response.json()) as DomSnapshot[]);
+  }, [domBase]);
+  useEffect(() => {
+    if (ready) void loadSnapshots().catch(() => {});
+  }, [ready, loadSnapshots]);
+  const saveDom = async () => {
+    setSavingDom(true);
+    try {
+      const response = await fetch(domBase, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+        cache: 'no-store',
+      });
+      if (!response.ok)
+        throw new Error(
+          (await response.json().catch(() => ({}))).error ??
+            uk.socialAccounts.domUnavailable,
+        );
+      setLabel('');
+      setError(uk.socialAccounts.domSaved);
+      await loadSnapshots();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : uk.socialAccounts.domUnavailable,
+      );
+    } finally {
+      setSavingDom(false);
+    }
+  };
+  const deleteDom = async (snapshotId: string) => {
+    try {
+      const response = await fetch(`${domBase}/${snapshotId}`, {
+        method: 'DELETE',
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(uk.socialAccounts.domUnavailable);
+      await loadSnapshots();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : uk.socialAccounts.domUnavailable,
+      );
+    }
+  };
 
   return (
     <div
@@ -251,7 +313,17 @@ export function SocialBrowserDialog({
             {error}
           </p>
         )}
-        <div className="flex justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            aria-label={uk.socialAccounts.domLabel}
+            placeholder={uk.socialAccounts.domLabel}
+            maxLength={60}
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            className="min-h-11 flex-1"
+          />
+        </div>
+        <div className="flex flex-wrap justify-between gap-2">
           <Button
             type="button"
             variant="outline"
@@ -262,12 +334,57 @@ export function SocialBrowserDialog({
           </Button>
           <Button
             type="button"
+            variant="outline"
+            disabled={!ready || savingDom}
+            onClick={() => void saveDom()}
+          >
+            {uk.socialAccounts.saveDom}
+          </Button>
+          <Button
+            type="button"
             disabled={!ready}
             onClick={() => void close(true)}
           >
             {uk.socialAccounts.browserDone}
           </Button>
         </div>
+        <ul
+          className="flex flex-col gap-2"
+          aria-label={uk.socialAccounts.failureDom}
+        >
+          {snapshots.length === 0 ? (
+            <li className="text-sm text-muted-foreground">
+              {uk.socialAccounts.domEmpty}
+            </li>
+          ) : (
+            snapshots.map((snapshot) => (
+              <li
+                key={snapshot.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-2 text-sm"
+              >
+                <span>
+                  {new Date(snapshot.capturedAt).toLocaleString('uk-UA')}
+                  {snapshot.label ? ` · ${snapshot.label}` : ''}
+                </span>
+                <span className="flex gap-2">
+                  <a
+                    className="inline-flex min-h-11 items-center rounded-lg px-3 text-accent underline"
+                    href={`${domBase}/${snapshot.id}`}
+                  >
+                    {uk.socialAccounts.domDownload}
+                  </a>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void deleteDom(snapshot.id)}
+                  >
+                    {uk.socialAccounts.domDelete}
+                  </Button>
+                </span>
+              </li>
+            ))
+          )}
+        </ul>
       </section>
     </div>
   );

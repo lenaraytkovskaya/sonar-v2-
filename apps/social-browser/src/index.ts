@@ -7,6 +7,7 @@ import {
   type Server as TcpServer,
 } from 'node:net';
 import { chromium, type BrowserContext, type Page } from 'playwright';
+import { failureDomSkeleton } from '@sonar/core/social-failure-dom';
 import { browserLocale, parseBrowserAction, viewport } from './input.js';
 
 type Profile = {
@@ -275,7 +276,7 @@ const server = createServer(async (request, response) => {
       });
     }
     const match =
-      /^\/profiles\/([0-9a-f-]{36})(?:\/(screen|action|close|lock|unlock|viewer-unlock))?$/i.exec(
+      /^\/profiles\/([0-9a-f-]{36})(?:\/(screen|dom|action|close|lock|unlock|viewer-unlock))?$/i.exec(
         url.pathname,
       );
     if (!match) return json(response, 404, { error: 'not_found' });
@@ -400,6 +401,15 @@ const server = createServer(async (request, response) => {
         response.destroy();
       }
       return;
+    }
+    if (action === 'dom' && request.method === 'GET') {
+      if (!profile.viewerLock)
+        return json(response, 409, { error: 'profile_not_running' });
+      const page = profile.context.pages().at(-1);
+      if (!page || page.isClosed())
+        return json(response, 409, { error: 'profile_not_running' });
+      const dom = await page.evaluate(failureDomSkeleton, 200 * 1024 - 512);
+      return json(response, 200, dom);
     }
     if (action === 'action' && request.method === 'POST') {
       const input = await body(request);

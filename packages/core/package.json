@@ -24,6 +24,10 @@
       "types": "./dist/social-session.d.ts",
       "default": "./dist/social-session.js"
     },
+    "./social-failure-dom": {
+      "types": "./dist/social-failure-dom.d.ts",
+      "default": "./dist/social-failure-dom.js"
+    },
     "./social-inbox": {
       "types": "./dist/social-inbox.d.ts",
       "default": "./dist/social-inbox.js"

@@ -38,6 +38,9 @@ importers:
 
   apps/social-browser:
     dependencies:
+      '@sonar/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       playwright:
         specifier: ^1.65.0
         version: 1.65.0
