@@ -110,7 +110,7 @@ export async function runSocialSessionCheck(
       }
     },
     new Date(),
-    'recipient',
+    'check',
     taskId,
   );
 }
@@ -245,7 +245,7 @@ export async function runFacebookRecipientCheck(
       }
     },
     now,
-    'check',
+    'recipient',
     taskId,
   );
 }

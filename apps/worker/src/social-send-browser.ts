@@ -2276,104 +2276,95 @@ export function createSocialSendBrowser(
       };
       let stage = 'navigation';
       const started = Date.now();
-      try {
-        return await withPage(
-          account,
-          session,
-          timeoutMs,
-          async (page) => {
-            const response = await navigateSocialPage(
-              page,
-              target.canonicalUrl,
-              timeoutMs,
-            );
-            stage = 'http';
-            if (response?.status() === 429)
-              throw new SocialSessionCheckError('rate_limit');
-            if (response?.status() === 407)
-              throw new SocialSessionCheckError('proxy');
-            if (response && response.status() >= 500)
-              throw new SocialSessionCheckError('network');
-            stage = 'auth';
-            try {
-              await assertSocialSession(page, 'facebook');
-            } catch (error) {
-              const reason = socialSessionCheckReason(error);
-              const diagnostic =
-                error instanceof SocialSessionCheckError
-                  ? error.diagnostic
-                  : undefined;
-              const checkpointVisible =
-                reason === 'checkpoint' || diagnostic?.urlKind === 'checkpoint';
-              const loginVisible =
-                reason === 'login_required' || diagnostic?.urlKind === 'login';
-              const observation = {
-                profileUrlMatches: false,
-                headingFound: false,
-                messageButtonCount: 0,
-                messageButtonCaption: null,
-                messageButtonRole: null,
-                extraWindowCount: 0,
-                hasNewMessageWindow: false,
-                hasMiniChat: false,
-                loginVisible,
-                identityCheckVisible:
-                  diagnostic?.stage === 'identity' || checkpointVisible,
-                checkpointVisible,
-                language: diagnostic?.page?.lang ?? 'missing',
-                elapsedMs: Date.now() - started,
-                summaryUk:
-                  checkpointVisible || loginVisible
-                    ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
-                    : 'Facebook не підтвердив сесію. Перевірте акаунт у браузері.',
-              } satisfies Record<string, unknown>;
-              await captureFailureShot(
-                page,
-                session,
-                'check',
-                'auth',
-                Date.now() - started,
-                taskId,
-              );
-              return {
-                valid: false,
-                reason,
-                ...(diagnostic ? { diagnostic } : {}),
-                observation,
-              } satisfies RecipientCheckResult;
-            }
-            if (
-              !response ||
-              response.status() < 200 ||
-              response.status() >= 300
-            )
-              throw new SocialSessionCheckError('unknown_auth');
-            stage = 'profile';
-            const result = await inspectFacebookRecipient(
-              page,
-              target.handle,
-              timeoutMs,
-            );
+      return withPage(
+        account,
+        session,
+        timeoutMs,
+        async (page) => {
+          const response = await navigateSocialPage(
+            page,
+            target.canonicalUrl,
+            timeoutMs,
+          );
+          stage = 'http';
+          if (response?.status() === 429)
+            throw new SocialSessionCheckError('rate_limit');
+          if (response?.status() === 407)
+            throw new SocialSessionCheckError('proxy');
+          if (response && response.status() >= 500)
+            throw new SocialSessionCheckError('network');
+          stage = 'auth';
+          try {
+            await assertSocialSession(page, 'facebook');
+          } catch (error) {
+            const reason = socialSessionCheckReason(error);
+            const diagnostic =
+              error instanceof SocialSessionCheckError
+                ? error.diagnostic
+                : undefined;
+            const checkpointVisible =
+              reason === 'checkpoint' || diagnostic?.urlKind === 'checkpoint';
+            const loginVisible =
+              reason === 'login_required' || diagnostic?.urlKind === 'login';
+            const observation = {
+              profileUrlMatches: false,
+              headingFound: false,
+              messageButtonCount: 0,
+              messageButtonCaption: null,
+              messageButtonRole: null,
+              extraWindowCount: 0,
+              hasNewMessageWindow: false,
+              hasMiniChat: false,
+              loginVisible,
+              identityCheckVisible:
+                diagnostic?.stage === 'identity' || checkpointVisible,
+              checkpointVisible,
+              language: diagnostic?.page?.lang ?? 'missing',
+              elapsedMs: Date.now() - started,
+              summaryUk:
+                checkpointVisible || loginVisible
+                  ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
+                  : 'Facebook не підтвердив сесію. Перевірте акаунт у браузері.',
+            } satisfies Record<string, unknown>;
             await captureFailureShot(
               page,
               session,
               'check',
-              'recipient',
+              'auth',
               Date.now() - started,
               taskId,
             );
             return {
-              valid: true,
-              observation: result,
+              valid: false,
+              reason,
+              ...(diagnostic ? { diagnostic } : {}),
+              observation,
             } satisfies RecipientCheckResult;
-          },
-          true,
-          { kind: 'check', stage: () => stage, taskId },
-        );
-      } catch (error) {
-        if (error instanceof SocialProfileBusyError) throw error;
-        throw error;
-      }
+          }
+          if (!response || response.status() < 200 || response.status() >= 300)
+            throw new SocialSessionCheckError('unknown_auth');
+          stage = 'profile';
+          const result = await inspectFacebookRecipient(
+            page,
+            target.handle,
+            timeoutMs,
+          );
+          await captureFailureShot(
+            page,
+            session,
+            'check',
+            'recipient',
+            Date.now() - started,
+            taskId,
+          );
+          return {
+            valid: true,
+            observation: result,
+          } satisfies RecipientCheckResult;
+        },
+        true,
+        { kind: 'check', stage: () => stage, taskId },
+      );
     },
     async check(
       account: SocialSessionAccount,
