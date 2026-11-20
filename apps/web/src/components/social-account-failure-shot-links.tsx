@@ -1,5 +1,5 @@
 import React from 'react';
-import { uk } from '@/i18n/uk';
+import { uk } from '../i18n/uk';
 
 export function SocialAccountFailureShotLinks({
   accountId,
