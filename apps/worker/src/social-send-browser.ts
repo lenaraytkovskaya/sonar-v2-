@@ -86,21 +86,22 @@ export async function captureFailureShot(
     // With no visible composer there is no conversation to protect yet: keep the
     // popup readable and record its visible text to learn what blocks the composer.
     // Any doubt keeps the mask: only a confirmed zero count unmasks.
-    const composerAbsent =
+    const readableFailure =
       facebookScreenshot &&
-      (await (async () => {
-        try {
-          return (
-            (await page
-              .locator('[contenteditable="true"][role="textbox"]')
-              .filter({ visible: true })
-              .count()) === 0
-          );
-        } catch {
-          return false;
-        }
-      })());
-    if (dom && composerAbsent)
+      (stage === 'confirmation' ||
+        (await (async () => {
+          try {
+            return (
+              (await page
+                .locator('[contenteditable="true"][role="textbox"]')
+                .filter({ visible: true })
+                .count()) === 0
+            );
+          } catch {
+            return false;
+          }
+        })()));
+    if (dom && readableFailure)
       Object.assign(dom, {
         noComposerText: await page
           .evaluate(() =>
@@ -123,7 +124,7 @@ export async function captureFailureShot(
       });
     const redactedConversation =
       facebookScreenshot &&
-      !composerAbsent &&
+      !readableFailure &&
       typeof page.locator === 'function'
         ? [
             page.locator(
