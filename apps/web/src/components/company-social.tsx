@@ -82,6 +82,143 @@ function PublicLink({
   );
 }
 
+type RecipientCheckTask = {
+  id: string;
+  status: string;
+  result?: { summaryUk?: string; accountId?: string } | null;
+  reasonUk?: string | null;
+};
+class RecipientCheckError extends Error {}
+function recipientCheckError(error: unknown) {
+  return error instanceof RecipientCheckError
+    ? error.message
+    : uk.social.recipientCheckError;
+}
+function FacebookRecipientCheck({
+  companyId,
+  contactId,
+}: {
+  companyId: string;
+  contactId: string;
+}) {
+  const endpoint = `/api/companies/${companyId}/contacts/${contactId}/facebook-check`;
+  const [task, setTask] = useState<RecipientCheckTask | null>(null);
+  const [pending, setPending] = useState(true);
+  const [error, setError] = useState('');
+  const active = !!task && ['queued', 'running'].includes(task.status);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(endpoint, { signal: controller.signal, cache: 'no-store' })
+      .then(async (response) => {
+        const next = await response.json();
+        if (!response.ok)
+          throw new RecipientCheckError(
+            next.error ?? uk.social.recipientCheckError,
+          );
+        setTask(next.task ?? null);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setError(recipientCheckError(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPending(false);
+      });
+    return () => controller.abort();
+  }, [endpoint]);
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const response = await fetch(endpoint, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        const next = await response.json();
+        if (!response.ok)
+          throw new RecipientCheckError(
+            next.error ?? uk.social.recipientCheckError,
+          );
+        setTask(next.task ?? null);
+        setError('');
+        if (next.task && ['queued', 'running'].includes(next.task.status))
+          timer = setTimeout(() => void poll(), 3000);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setError(recipientCheckError(error));
+          timer = setTimeout(() => void poll(), 3000);
+        }
+      }
+    };
+    timer = setTimeout(() => void poll(), 3000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [active, endpoint]);
+  const run = async () => {
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch(endpoint, { method: 'POST' });
+      const next = await response.json();
+      if (!response.ok)
+        throw new RecipientCheckError(
+          next.error ?? uk.social.recipientCheckError,
+        );
+      setTask(next.task ?? null);
+    } catch (error) {
+      setError(recipientCheckError(error));
+    } finally {
+      setPending(false);
+    }
+  };
+  const summary = task?.result?.summaryUk ?? task?.reasonUk;
+  const accountId = task?.result?.accountId;
+  return (
+    <span className="ml-2 inline-flex max-w-full flex-wrap items-center gap-2 align-middle">
+      <Button
+        type="button"
+        variant="outline"
+        className="min-h-11"
+        disabled={pending || active}
+        onClick={() => void run()}
+      >
+        {uk.social.recipientCheck}
+      </Button>
+      <span role="status" className="basis-full text-xs">
+        {error ||
+          summary ||
+          (active && task
+            ? uk.tasks.status[task.status as keyof typeof uk.tasks.status]
+            : '')}
+        {accountId && !active && (
+          <>
+            {' '}
+            <a
+              className="underline"
+              target="_blank"
+              rel="noreferrer"
+              href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(accountId)}&kind=check`}
+            >
+              {uk.social.recipientCheckShot}
+            </a>{' '}
+            <a
+              className="underline"
+              target="_blank"
+              rel="noreferrer"
+              href={`/api/social-accounts/failure-dom?id=${encodeURIComponent(accountId)}&kind=check`}
+            >
+              {uk.socialAccounts.failureDom}
+            </a>
+          </>
+        )}
+      </span>
+    </span>
+  );
+}
+
 export function CompanySocial({
   companyId,
   initial,
@@ -177,13 +314,20 @@ export function CompanySocial({
               })
               .slice(0, 1)
               .map((contact) => (
-                <Link
-                  key={contact.id}
-                  className="ml-2 text-accent"
-                  href={`/inbox?contact=${contact.id}`}
-                >
-                  {uk.email.write}
-                </Link>
+                <span key={contact.id}>
+                  <Link
+                    className="ml-2 text-accent"
+                    href={`/inbox?contact=${contact.id}`}
+                  >
+                    {uk.email.write}
+                  </Link>
+                  {row.network === 'facebook' && (
+                    <FacebookRecipientCheck
+                      companyId={companyId}
+                      contactId={contact.id}
+                    />
+                  )}
+                </span>
               ))}
           </p>
           {row.task && (

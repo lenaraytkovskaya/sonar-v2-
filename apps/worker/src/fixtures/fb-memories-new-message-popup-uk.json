@@ -1,0 +1,1839 @@
+{
+  "id": "b330c611-b8f5-43ed-957c-5ee0df04a2b9",
+  "dom": {
+    "nodes": [
+      {
+        "tag": "div",
+        "bbox": [857, 481, 328, 259],
+        "data": ["data-pagelet"],
+        "parent": null,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [857, 481, 328, 259],
+        "parent": 0,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [857, 481, 328, 259],
+        "parent": 1,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [857, 481, 328, 259],
+        "data": ["data-pagelet"],
+        "parent": 2,
+        "visible": true
+      },
+      {
+        "tag": "h2",
+        "bbox": [857, 481, 1, 1],
+        "text": "<text n=12>",
+        "parent": 3,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [857, 481, 1, 1],
+        "role": "status",
+        "parent": 3,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [857, 481, 328, 259],
+        "role": "log",
+        "parent": 3,
+        "visible": true,
+        "aria-label": "<text n=41>"
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 481, 324, 259],
+        "parent": 6,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 481, 324, 259],
+        "role": "none",
+        "parent": 7,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 481, 324, 259],
+        "parent": 8,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 481, 324, 259],
+        "role": "presentation",
+        "parent": 9,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 481, 324, 20],
+        "role": "presentation",
+        "parent": 10,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 501, 324, 227],
+        "role": "none",
+        "parent": 10,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 501, 324, 227],
+        "parent": 12,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 501, 324, 227],
+        "data": ["data-<name>", "data-scope"],
+        "parent": 13,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [859, 501, 324, 227],
+        "parent": 14,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [871, 521, 300, 60],
+        "parent": 15,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "data": ["data-visualcompletion"],
+        "parent": 16,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 17,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 18,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 19,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 20,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 21,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 22,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [991, 521, 60, 60],
+        "parent": 23,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [991, 521, 60, 60],
+        "parent": 23,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [983, 521, 68, 60],
+        "parent": 17,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [871, 590, 300, 21],
+        "parent": 15,
+        "visible": true
+      },
+      {
+        "tag": "h2",
+        "bbox": [871, 590, 300, 21],
+        "parent": 27,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [871, 590, 300, 21],
+        "parent": 28,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [871, 590, 300, 21],
+        "text": "<text n=16>",
+        "parent": 29,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [865, 617, 312, 105],
+        "parent": 15,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [865, 629, 312, 93],
+        "parent": 31,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [871, 635, 300, 81],
+        "parent": 32,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [887, 647, 268, 57],
+        "parent": 33,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [887, 647, 268, 57],
+        "parent": 34,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [887, 647, 268, 57],
+        "text": "<text n=118>",
+        "parent": 35,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [911, 644, 14, 15],
+        "parent": 36,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [911, 647, 10, 10],
+        "parent": 37,
+        "visible": true
+      },
+      {
+        "tag": "i",
+        "bbox": [911, 647, 10, 10],
+        "data": ["data-visualcompletion"],
+        "parent": 38,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1016, 692, 77, 15],
+        "parent": 36,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1016, 692, 77, 15],
+        "role": "button",
+        "text": "<text n=10>",
+        "parent": 40,
+        "visible": true,
+        "aria-label": "<text n=35>"
+      },
+      {
+        "tag": "div",
+        "bbox": [1155, 505, 24, 24],
+        "role": "button",
+        "parent": 12,
+        "visible": true,
+        "aria-label": "<text n=29>"
+      },
+      {
+        "tag": "div",
+        "bbox": [1167, 512, 11, 10],
+        "parent": 42,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1167, 517, 11, 377],
+        "parent": 43,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1167, 514, 11, 384],
+        "text": "<text n=29>",
+        "parent": 44,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [997, 752, 144, 36],
+        "parent": null,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [997, 752, 1, 1],
+        "text": "<text n=25>",
+        "parent": 46,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [997, 752, 144, 36],
+        "parent": 46,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [997, 752, 144, 36],
+        "parent": 48,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1009, 760, 100, 20],
+        "data": ["data-visualcompletion"],
+        "parent": 49,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1009, 760, 100, 20],
+        "data": ["data-lexical-editor", "data-<name>"],
+        "role": "textbox",
+        "parent": 50,
+        "visible": true,
+        "aria-label": "<text n=25>",
+        "contenteditable": "true",
+        "aria-placeholder": "<text n=2>"
+      },
+      {
+        "tag": "p",
+        "bbox": [1009, 760, 100, 20],
+        "parent": 51,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1109, 756, 32, 32],
+        "parent": 49,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1109, 756, 28, 28],
+        "parent": 53,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1105, 752, 36, 36],
+        "role": "button",
+        "parent": 54,
+        "visible": true,
+        "aria-label": "Виберіть смайлик"
+      },
+      {
+        "tag": "div",
+        "bbox": [16, 0, 40, 56],
+        "parent": null,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [16, 8, 40, 40],
+        "href": "/",
+        "role": "link",
+        "parent": 56,
+        "visible": true,
+        "aria-label": "Facebook"
+      },
+      {
+        "tag": "div",
+        "bbox": [0, 0, 320, 56],
+        "parent": null,
+        "visible": true
+      },
+      { "tag": "div", "bbox": [0, 0, 320, 56], "parent": 58, "visible": true },
+      { "tag": "div", "bbox": [0, 0, 320, 56], "parent": 59, "visible": true },
+      { "tag": "div", "bbox": [0, 0, 320, 56], "parent": 60, "visible": true },
+      { "tag": "div", "bbox": [16, 0, 288, 56], "parent": 61, "visible": true },
+      { "tag": "div", "bbox": [16, 0, 288, 56], "parent": 62, "visible": true },
+      { "tag": "div", "bbox": [16, 18, 36, 20], "parent": 63, "visible": true },
+      { "tag": "div", "bbox": [52, 0, 12, 56], "parent": 63, "visible": true },
+      {
+        "tag": "label",
+        "bbox": [64, 8, 240, 40],
+        "parent": 63,
+        "visible": true
+      },
+      { "tag": "span", "bbox": [64, 8, 28, 40], "parent": 66, "visible": true },
+      {
+        "tag": "input",
+        "bbox": [92, 8, 212, 40],
+        "role": "combobox",
+        "parent": 66,
+        "visible": true,
+        "aria-label": "<text n=16>"
+      },
+      {
+        "tag": "div",
+        "bbox": [0, 0, 1265, 56],
+        "parent": null,
+        "visible": true
+      },
+      { "tag": "div", "bbox": [0, 0, 1265, 56], "parent": 69, "visible": true },
+      { "tag": "div", "bbox": [0, 0, 1265, 56], "parent": 70, "visible": true },
+      {
+        "tag": "div",
+        "bbox": [0, 0, 1265, 56],
+        "role": "navigation",
+        "parent": 71,
+        "visible": true,
+        "aria-label": "<text n=8>"
+      },
+      { "tag": "ul", "bbox": [0, 0, 1265, 56], "parent": 72, "visible": true },
+      { "tag": "li", "bbox": [397, 0, 112, 56], "parent": 73, "visible": true },
+      {
+        "tag": "span",
+        "bbox": [397, 0, 112, 56],
+        "parent": 74,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [397, 0, 112, 56],
+        "parent": 75,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [399, 53, 108, 3],
+        "parent": 76,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [397, 0, 112, 56],
+        "href": "/",
+        "role": "link",
+        "parent": 76,
+        "visible": true,
+        "aria-label": "Головна"
+      },
+      {
+        "tag": "span",
+        "bbox": [441, 16, 24, 24],
+        "parent": 78,
+        "visible": true
+      },
+      { "tag": "li", "bbox": [517, 0, 112, 56], "parent": 73, "visible": true },
+      {
+        "tag": "span",
+        "bbox": [517, 0, 112, 56],
+        "parent": 80,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [517, 0, 112, 56],
+        "parent": 81,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [517, 0, 112, 56],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 82,
+        "visible": true,
+        "aria-label": "Відео Reels"
+      },
+      {
+        "tag": "span",
+        "bbox": [561, 16, 24, 24],
+        "parent": 83,
+        "visible": true
+      },
+      { "tag": "li", "bbox": [637, 0, 112, 56], "parent": 73, "visible": true },
+      {
+        "tag": "span",
+        "bbox": [637, 0, 112, 56],
+        "parent": 85,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [637, 0, 112, 56],
+        "parent": 86,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [637, 0, 112, 56],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 87,
+        "visible": true,
+        "aria-label": "Друзі"
+      },
+      {
+        "tag": "span",
+        "bbox": [680, 16, 24, 24],
+        "parent": 88,
+        "visible": true
+      },
+      { "tag": "li", "bbox": [756, 0, 112, 56], "parent": 73, "visible": true },
+      {
+        "tag": "span",
+        "bbox": [756, 0, 112, 56],
+        "parent": 90,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [756, 0, 112, 56],
+        "parent": 91,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [756, 0, 112, 56],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 92,
+        "visible": true,
+        "aria-label": "Групи"
+      },
+      {
+        "tag": "span",
+        "bbox": [800, 16, 24, 24],
+        "parent": 93,
+        "visible": true
+      },
+      { "tag": "div", "bbox": [0, 55, 1265, 7], "parent": 70, "visible": true },
+      {
+        "tag": "div",
+        "bbox": [943, 0, 322, 56],
+        "parent": null,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [947, 0, 302, 56],
+        "role": "navigation",
+        "parent": 96,
+        "visible": true,
+        "aria-label": "<text n=43>"
+      },
+      {
+        "tag": "div",
+        "bbox": [947, 0, 110, 56],
+        "parent": 97,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [947, 10, 110, 36],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 98,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [959, 23, 86, 11],
+        "parent": 99,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [959, 19, 86, 20],
+        "text": "<text n=12>",
+        "parent": 100,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1065, 0, 40, 56],
+        "parent": 97,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1065, 0, 40, 56],
+        "parent": 102,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1065, 8, 40, 40],
+        "parent": 103,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1065, 8, 40, 40],
+        "parent": 104,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1065, 8, 40, 40],
+        "role": "button",
+        "parent": 105,
+        "visible": true,
+        "aria-label": "Меню Facebook"
+      },
+      {
+        "tag": "div",
+        "bbox": [1113, 0, 40, 56],
+        "parent": 97,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1113, 0, 40, 56],
+        "parent": 107,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1113, 8, 40, 40],
+        "parent": 108,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1113, 8, 40, 40],
+        "parent": 109,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1113, 8, 40, 40],
+        "role": "button",
+        "parent": 110,
+        "visible": true,
+        "aria-label": "Messenger"
+      },
+      {
+        "tag": "div",
+        "bbox": [1161, 0, 40, 56],
+        "parent": 97,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1161, 0, 40, 56],
+        "parent": 112,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1161, 8, 40, 40],
+        "parent": 113,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1161, 8, 40, 40],
+        "parent": 114,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1161, 8, 40, 40],
+        "role": "button",
+        "parent": 115,
+        "visible": true,
+        "aria-label": "Сповіщення"
+      },
+      {
+        "tag": "span",
+        "bbox": [1209, 0, 40, 56],
+        "parent": 97,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1209, 8, 40, 40],
+        "parent": 117,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1209, 8, 40, 40],
+        "data": ["data-<name>"],
+        "role": "button",
+        "parent": 118,
+        "visible": true,
+        "aria-label": "Account, your profile"
+      },
+      {
+        "tag": "div",
+        "bbox": [1209, 8, 40, 40],
+        "parent": 119,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1237, 36, 12, 12],
+        "data": ["data-visualcompletion"],
+        "parent": 120,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1237, 36, 12, 12],
+        "parent": 121,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [280, -344, 705, 5503],
+        "role": "main",
+        "parent": null,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -344, 641, 5503],
+        "parent": 123,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -344, 641, 5503],
+        "parent": 124,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -328, 641, 5487],
+        "parent": 125,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -328, 641, 5487],
+        "parent": 126,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -328, 641, 5487],
+        "parent": 127,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 5311],
+        "parent": 128,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 5311],
+        "role": "feed",
+        "parent": 129,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 5311],
+        "parent": 130,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "data": ["data-pagelet"],
+        "parent": 131,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 132,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 133,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 134,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 135,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 136,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 137,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 138,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "role": "article",
+        "parent": 139,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "data": ["data-<name>"],
+        "parent": 140,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 141,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 142,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 143,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 144,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 145,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 146,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -168, 641, 790],
+        "parent": 147,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -108, 641, 688],
+        "parent": 148,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 641, 641],
+        "parent": 149,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 641, 641],
+        "parent": 150,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 641, 641],
+        "parent": 151,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 641, 641],
+        "parent": 152,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 641, 641],
+        "parent": 153,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 320, 641],
+        "parent": 154,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [312, -61, 320, 641],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 155,
+        "visible": true,
+        "aria-label": "<text n=38>"
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 320, 641],
+        "parent": 156,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 320, 641],
+        "parent": 157,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [232, -61, 480, 641],
+        "parent": 158,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [232, -61, 480, 641],
+        "parent": 159,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, -61, 320, 641],
+        "parent": 157,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [634, -61, 320, 641],
+        "parent": 154,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [634, -61, 320, 641],
+        "href": "/<id>/",
+        "role": "link",
+        "parent": 162,
+        "visible": true,
+        "aria-label": "<text n=30>"
+      },
+      {
+        "tag": "div",
+        "bbox": [634, -61, 320, 641],
+        "parent": 163,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [634, -61, 320, 641],
+        "parent": 164,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [553, -61, 480, 641],
+        "parent": 165,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [553, -61, 480, 641],
+        "parent": 166,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [634, -61, 320, 641],
+        "parent": 164,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 580, 641, 42],
+        "parent": 148,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 580, 641, 42],
+        "data": ["data-visualcompletion"],
+        "parent": 169,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 641, 44],
+        "parent": 170,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 641, 44],
+        "parent": 171,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 641, 44],
+        "parent": 172,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 641, 44],
+        "parent": 173,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 641, 44],
+        "parent": 174,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [316, 578, 74, 44],
+        "parent": 175,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [316, 584, 74, 32],
+        "role": "button",
+        "parent": 176,
+        "visible": true,
+        "aria-label": "<text n=58>"
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 578, 82, 44],
+        "parent": 177,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 584, 28, 32],
+        "parent": 178,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [328, 590, 20, 20],
+        "parent": 179,
+        "visible": true
+      },
+      {
+        "tag": "i",
+        "bbox": [328, 590, 20, 20],
+        "data": ["data-visualcompletion"],
+        "parent": 180,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [352, 589, 30, 21],
+        "parent": 178,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [356, 595, 22, 9],
+        "text": "<text n=3>",
+        "parent": 182,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [368, 579, 16, 42],
+        "role": "button",
+        "parent": 176,
+        "visible": true,
+        "aria-label": "<text n=44>"
+      },
+      {
+        "tag": "div",
+        "bbox": [390, 578, 74, 44],
+        "parent": 175,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [390, 584, 74, 32],
+        "role": "button",
+        "parent": 185,
+        "visible": true,
+        "aria-label": "<text n=56>"
+      },
+      {
+        "tag": "div",
+        "bbox": [386, 578, 82, 44],
+        "parent": 186,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [398, 584, 28, 32],
+        "parent": 187,
+        "visible": true
+      },
+      {
+        "tag": "i",
+        "bbox": [402, 590, 20, 20],
+        "data": ["data-visualcompletion"],
+        "parent": 188,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [426, 589, 30, 21],
+        "parent": 187,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [430, 595, 22, 9],
+        "text": "<text n=3>",
+        "parent": 190,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [463, 578, 66, 44],
+        "parent": 175,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [463, 584, 66, 32],
+        "role": "button",
+        "parent": 192,
+        "visible": true,
+        "aria-label": "<text n=50>"
+      },
+      {
+        "tag": "div",
+        "bbox": [459, 578, 74, 44],
+        "parent": 193,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [471, 584, 28, 32],
+        "parent": 194,
+        "visible": true
+      },
+      {
+        "tag": "i",
+        "bbox": [475, 590, 20, 20],
+        "data": ["data-visualcompletion"],
+        "parent": 195,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [499, 589, 22, 21],
+        "parent": 194,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [503, 595, 14, 9],
+        "text": "<text n=2>",
+        "parent": 197,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [911, 578, 38, 44],
+        "parent": 175,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [919, 589, 22, 22],
+        "role": "toolbar",
+        "parent": 199,
+        "visible": true,
+        "aria-label": "<text n=34>"
+      },
+      {
+        "tag": "span",
+        "bbox": [919, 589, 22, 22],
+        "parent": 200,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [919, 589, 22, 22],
+        "parent": 201,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [921, 591, 18, 18],
+        "parent": 202,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [921, 591, 18, 18],
+        "parent": 203,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [921, 591, 18, 18],
+        "role": "button",
+        "parent": 204,
+        "visible": true,
+        "aria-label": "<text n=22>"
+      },
+      {
+        "tag": "img",
+        "bbox": [921, 591, 18, 18],
+        "role": "presentation",
+        "parent": 205,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "data": ["data-pagelet"],
+        "parent": 131,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 207,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 208,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 209,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 210,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 211,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 212,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 213,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "role": "article",
+        "parent": 214,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "data": ["data-<name>"],
+        "parent": 215,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 216,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 217,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 218,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 219,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 220,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 221,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 553],
+        "parent": 222,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 634, 641, 50],
+        "parent": 223,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 646, 617, 36],
+        "parent": 224,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 646, 617, 36],
+        "parent": 225,
+        "visible": true
+      },
+      {
+        "tag": "h3",
+        "bbox": [324, 663, 1, 1],
+        "text": "<text n=11>",
+        "parent": 226,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [905, 646, 36, 36],
+        "parent": 226,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [905, 646, 36, 36],
+        "parent": 228,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [913, 654, 20, 20],
+        "parent": 229,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [913, 654, 20, 20],
+        "role": "button",
+        "parent": 230,
+        "visible": true,
+        "aria-label": "<text n=20>"
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 676, 641, 519],
+        "parent": 223,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 676, 641, 519],
+        "parent": 232,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 676, 641, 519],
+        "parent": 233,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 684, 641, 503],
+        "role": "grid",
+        "parent": 234,
+        "visible": true,
+        "aria-label": "<text n=11>"
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 684, 641, 503],
+        "role": "row",
+        "parent": 235,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 684, 641, 503],
+        "parent": 236,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [312, 692, 641, 487],
+        "parent": 237,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [312, 692, 12, 487],
+        "parent": 238,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "data": ["data-<name>"],
+        "role": "gridcell",
+        "parent": 238,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [324, 692, 273, 487],
+        "href": "/<id>/<id>/",
+        "role": "link",
+        "parent": 240,
+        "visible": true,
+        "aria-label": "<text n=42>"
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 241,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 242,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 243,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 244,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 245,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 246,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 247,
+        "visible": true
+      },
+      {
+        "tag": "element",
+        "bbox": [324, 692, 273, 487],
+        "parent": 248,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "data": ["data-visualcompletion"],
+        "role": "group",
+        "parent": 248,
+        "visible": true,
+        "aria-label": "<text n=12>"
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "role": "presentation",
+        "parent": 250,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 250,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [324, 692, 273, 487],
+        "parent": 252,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [321, 687, 278, 496],
+        "parent": 253,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [321, 687, 278, 496],
+        "parent": 254,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [555, 702, 32, 32],
+        "parent": 241,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [555, 702, 32, 32],
+        "parent": 256,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [555, 702, 32, 32],
+        "parent": 257,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [555, 706, 32, 24],
+        "role": "button",
+        "parent": 258,
+        "visible": true,
+        "aria-label": "<text n=4>"
+      },
+      {
+        "tag": "div",
+        "bbox": [559, 706, 24, 24],
+        "parent": 259,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "data": ["data-<name>"],
+        "role": "gridcell",
+        "parent": 238,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [605, 692, 273, 487],
+        "href": "/<id>/<id>/",
+        "role": "link",
+        "parent": 261,
+        "visible": true,
+        "aria-label": "<text n=38>"
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 262,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 263,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 264,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 265,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 266,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 267,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 268,
+        "visible": true
+      },
+      {
+        "tag": "element",
+        "bbox": [605, 692, 273, 487],
+        "parent": 269,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "data": ["data-visualcompletion"],
+        "role": "group",
+        "parent": 269,
+        "visible": true,
+        "aria-label": "<text n=12>"
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "role": "presentation",
+        "parent": 271,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 271,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 273,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [605, 692, 273, 487],
+        "parent": 274,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [605, 692, 273, 487],
+        "parent": 275,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [835, 702, 32, 32],
+        "parent": 262,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [835, 702, 32, 32],
+        "parent": 277,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [835, 702, 32, 32],
+        "parent": 278,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [835, 706, 32, 24],
+        "role": "button",
+        "parent": 279,
+        "visible": true,
+        "aria-label": "<text n=4>"
+      },
+      {
+        "tag": "div",
+        "bbox": [839, 706, 24, 24],
+        "parent": 280,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [885, 692, 273, 487],
+        "data": ["data-<name>"],
+        "role": "gridcell",
+        "parent": 238,
+        "visible": true
+      },
+      {
+        "tag": "a",
+        "bbox": [885, 692, 273, 487],
+        "href": "/<id>/<id>/",
+        "role": "link",
+        "parent": 282,
+        "visible": true,
+        "aria-label": "<text n=36>"
+      },
+      {
+        "tag": "div",
+        "bbox": [885, 692, 273, 487],
+        "parent": 283,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [885, 692, 273, 487],
+        "parent": 284,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [885, 692, 273, 487],
+        "parent": 285,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [885, 692, 273, 487],
+        "parent": 286,
+        "visible": true
+      },
+      {
+        "tag": "img",
+        "bbox": [885, 692, 273, 487],
+        "parent": 287,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1116, 702, 32, 32],
+        "parent": 283,
+        "visible": true
+      },
+      {
+        "tag": "span",
+        "bbox": [1116, 702, 32, 32],
+        "parent": 289,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1116, 702, 32, 32],
+        "parent": 290,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [1116, 706, 32, 24],
+        "role": "button",
+        "parent": 291,
+        "visible": true,
+        "aria-label": "<text n=4>"
+      },
+      {
+        "tag": "div",
+        "bbox": [1120, 706, 24, 24],
+        "parent": 292,
+        "visible": true
+      },
+      {
+        "tag": "div",
+        "bbox": [310, 632, 645, 557],
+        "parent": 221,
+        "visible": true
+      }
+    ],
+    "title": "Facebook",
+    "version": 1,
+    "truncated": false,
+    "urlPattern": "/<id>"
+  },
+  "label": null,
+  "phase": "manual",
+  "title": "Facebook",
+  "capturedAt": "2026-11-20T15:29:09.365Z",
+  "urlPattern": "/<id>"
+}

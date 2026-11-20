@@ -995,6 +995,7 @@ export type ResolvedSocialSession = {
       stage: string;
       jpeg?: string;
       dom?: unknown;
+      taskId?: string;
     },
   ) => Promise<void>;
 };

@@ -13,6 +13,7 @@ import { LocalTime } from './local-time';
 import { SocialLoginDialog } from './social-login-dialog';
 import { SocialBrowserDialog } from './social-browser-dialog';
 import { FriendlyError } from './friendly-error';
+import { SocialAccountFailureShotLinks } from './social-account-failure-shot-links';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { RowActions } from './ui/row-actions';
 import {
@@ -586,32 +587,13 @@ export function SocialAccounts({
               {account.reasonUk && (
                 <Callout tone="err">
                   <FriendlyError reason={account.reasonUk} />
-                  {account.failureShotKinds.some(
-                    (kind) => kind !== 'inbox',
-                  ) && (
-                    <>
-                      <a
-                        className="ml-2 underline"
-                        target="_blank"
-                        rel="noreferrer"
-                        href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(account.id)}&kind=${account.failureShotKinds.find((kind) => kind !== 'inbox')}`}
-                      >
-                        {uk.socialAccounts.failureShot}
-                      </a>
-                      {['facebook', 'instagram'].includes(account.network) && (
-                        <a
-                          className="ml-2 underline"
-                          target="_blank"
-                          rel="noreferrer"
-                          href={`/api/social-accounts/failure-dom?id=${encodeURIComponent(account.id)}&kind=${account.failureShotKinds.find((kind) => kind !== 'inbox')}`}
-                        >
-                          {uk.socialAccounts.failureDom}
-                        </a>
-                      )}
-                    </>
-                  )}
                 </Callout>
               )}
+              <SocialAccountFailureShotLinks
+                accountId={account.id}
+                network={account.network}
+                kinds={account.failureShotKinds}
+              />
               {account.inboxSyncErrorUk && !inboxErrorSuperseded(account) && (
                 <Callout tone="err">
                   {account.inboxSyncErrorUk}

@@ -279,6 +279,32 @@ export type AccountHealthSummary = {
   failureShotKinds: ('check' | 'keepalive' | 'inbox' | 'send')[];
 };
 
+export function failureShotKindForEvent(
+  event: Pick<HealthEvent, 'details' | 'createdAt'>,
+  shots: Record<string, { at?: string; taskId?: string }>,
+  kinds: readonly ('check' | 'keepalive' | 'inbox' | 'send')[],
+) {
+  const eventTaskId = (event.details as Record<string, unknown> | undefined)
+    ?.taskId;
+  return kinds
+    .filter(
+      (kind) =>
+        shots[kind]?.at &&
+        (typeof eventTaskId === 'string'
+          ? shots[kind]?.taskId === eventTaskId
+          : Math.abs(
+              Date.parse(shots[kind]!.at!) -
+                Date.parse(new Date(event.createdAt).toISOString()),
+            ) <
+            15 * 60_000),
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(Date.parse(shots[a]!.at!) - Date.parse(event.createdAt)) -
+        Math.abs(Date.parse(shots[b]!.at!) - Date.parse(event.createdAt)),
+    )[0];
+}
+
 export async function accountHealth(
   accountId: string | 'all' = 'all',
   now = new Date(),
@@ -315,7 +341,7 @@ export async function accountHealth(
   return rows.map((row) => {
     const shots = (row.settings.failureShots ?? {}) as Record<
       string,
-      { at?: string }
+      { at?: string; taskId?: string }
     >;
     const failureShotKinds = Object.keys(shots).filter(
       (kind): kind is 'check' | 'keepalive' | 'inbox' | 'send' =>
@@ -323,18 +349,11 @@ export async function accountHealth(
     );
     const events = (row.events as HealthEvent[]).map((event) => {
       const createdAt = new Date(event.createdAt).toISOString();
-      const failureShotKind = failureShotKinds
-        .filter(
-          (kind) =>
-            shots[kind]?.at &&
-            Math.abs(Date.parse(shots[kind]!.at!) - Date.parse(createdAt)) <
-              15 * 60_000,
-        )
-        .sort(
-          (a, b) =>
-            Math.abs(Date.parse(shots[a]!.at!) - Date.parse(createdAt)) -
-            Math.abs(Date.parse(shots[b]!.at!) - Date.parse(createdAt)),
-        )[0];
+      const failureShotKind = failureShotKindForEvent(
+        { ...event, createdAt },
+        shots,
+        failureShotKinds,
+      );
       return {
         ...event,
         createdAt,

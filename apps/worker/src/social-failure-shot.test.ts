@@ -97,3 +97,22 @@ it('persists the sanitized DOM alongside the image and survives screenshot failu
   );
   expect(persistFailureShot.mock.lastCall?.[1]).not.toHaveProperty('jpeg');
 });
+
+it('masks conversation regions from Facebook failure screenshots', async () => {
+  const page = {
+    ...pageWith([Buffer.from('jpeg')]),
+    locator: vi.fn(() => ({ selector: 'conversation-mask' })),
+  };
+  await captureFailureShot(
+    page as never,
+    { persistFailureShot: vi.fn(async () => {}) } as never,
+    'send',
+    'profile',
+  );
+  expect(page.screenshot).toHaveBeenCalledWith(
+    expect.objectContaining({
+      mask: [{ selector: 'conversation-mask' }],
+      maskColor: '#000000',
+    }),
+  );
+});

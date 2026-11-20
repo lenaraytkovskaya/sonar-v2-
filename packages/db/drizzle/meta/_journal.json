@@ -470,6 +470,13 @@
       "when": 1795000012000,
       "tag": "0066_reply_duplicate_window",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1795000013000,
+      "tag": "0067_social_recipient_check",
+      "breakpoints": true
     }
   ]
 }

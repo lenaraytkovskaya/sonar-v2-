@@ -1,26 +1,85 @@
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { socialTarget } from '@sonar/core';
 import {
   SocialProfileBusyError,
   SocialSessionCheckError,
   socialSessionCheckReasons,
 } from '@sonar/core/social-session';
-const { check } = vi.hoisted(() => ({ check: vi.fn() }));
-vi.mock('./social-send-browser.js', () => ({ socialSendBrowser: { check } }));
+const { check, checkRecipient, modes } = vi.hoisted(() => ({
+  check: vi.fn(),
+  checkRecipient: vi.fn(),
+  modes: [] as unknown[],
+}));
+vi.mock('./social-send-browser.js', () => ({
+  socialSendBrowser: { check, checkRecipient },
+}));
 vi.mock('@sonar/core/social-session', async (original) => ({
   ...(await original<typeof import('@sonar/core/social-session')>()),
   resolveSocialSession: () => ({ cookies: [], proxy: {} }),
 }));
 vi.mock('@sonar/db', () => ({
-  sonarPool: { query: async () => ({ rows: [{ value: 1000 }] }) },
+  sonarPool: {
+    query: async (sql: string) =>
+      sql.includes('select channel,status,settings')
+        ? {
+            rows: [
+              {
+                channel: 'facebook',
+                status: 'active',
+                settings: { sessionStatus: 'valid' },
+              },
+            ],
+          }
+        : { rows: [{ value: 1000 }] },
+  },
 }));
 vi.mock('@sonar/db/tasks', () => ({ boss: {}, runTask: vi.fn() }));
 vi.mock('@sonar/db/social-accounts', () => ({
-  withSocialSessionCheck: async (
-    _id: string,
-    callback: (account: unknown) => unknown,
-  ) => callback({ id: 'synthetic', channel: 'facebook' }),
+  withSocialSessionCheck: async (...args: unknown[]) => {
+    modes.push(args[3]);
+    const callback = args[1] as (
+      account: never,
+      session: never,
+    ) => Promise<unknown>;
+    return callback(
+      { id: 'synthetic', channel: 'facebook' } as never,
+      {} as never,
+    );
+  },
 }));
-import { runSocialSessionCheck } from './social-send.js';
+import {
+  runFacebookRecipientCheck,
+  runSocialSessionCheck,
+} from './social-send.js';
+
+beforeEach(() => {
+  check.mockReset();
+  checkRecipient.mockReset();
+  modes.length = 0;
+});
+
+it('uses the mutating check mode for the ordinary session check', async () => {
+  check.mockResolvedValueOnce(undefined);
+  await runSocialSessionCheck({ accountId: 'synthetic' });
+  expect(modes).toEqual(['check']);
+});
+
+it('uses the read-only recipient mode for Facebook recipient checks', async () => {
+  checkRecipient.mockResolvedValueOnce({
+    valid: false,
+    reason: 'checkpoint',
+    observation: { checkpointVisible: true },
+  });
+  const target = socialTarget(
+    'https://www.facebook.com/profile.php?id=100000000000001',
+  )!;
+  await runFacebookRecipientCheck(
+    { accountId: 'synthetic', target },
+    'task-synthetic',
+  );
+  expect(modes).toEqual(['recipient']);
+});
+
 it.each(Object.keys(socialSessionCheckReasons))(
   'preserves safe adapter reason %s',
   async (reason) => {

@@ -88,6 +88,10 @@
       "types": "./dist/social-accounts.d.ts",
       "default": "./dist/social-accounts.js"
     },
+    "./social-recipient-check": {
+      "types": "./dist/social-recipient-check.d.ts",
+      "default": "./dist/social-recipient-check.js"
+    },
     "./social-inbox": {
       "types": "./dist/social-inbox.d.ts",
       "default": "./dist/social-inbox.js"

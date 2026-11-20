@@ -1067,6 +1067,176 @@ async function conversation(
   }
 }
 
+const facebookMessageActionName =
+  /^(?:Message|Send message|Повідомлення|Надіслати повідомлення|Сообщение|Отправить сообщение)$/i;
+
+export function facebookProfileActions(page: Page) {
+  const main = page.locator('main, [role="main"]');
+  return main
+    .getByRole('button', { name: facebookMessageActionName })
+    .or(main.getByRole('link', { name: facebookMessageActionName }))
+    .filter({ visible: true });
+}
+
+export function facebookProfileHeadings(page: Page) {
+  return page.locator('main h1, [role="main"] h1').filter({ visible: true });
+}
+
+export async function waitForFacebookProfileActions(
+  page: Page,
+  timeoutMs: number,
+  allowMissing = false,
+) {
+  const headings = facebookProfileHeadings(page);
+  const actions = facebookProfileActions(page);
+  try {
+    await headings.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  } catch (error) {
+    if (
+      !allowMissing ||
+      !(error instanceof Error) ||
+      error.name !== 'TimeoutError'
+    )
+      throw error;
+  }
+  if ((await headings.count()) > 0)
+    try {
+      await actions.first().waitFor({ state: 'visible', timeout: timeoutMs });
+    } catch (error) {
+      if (
+        !allowMissing ||
+        !(error instanceof Error) ||
+        error.name !== 'TimeoutError'
+      )
+        throw error;
+    }
+  return { headings, actions };
+}
+
+export type FacebookRecipientObservation = {
+  profileUrlMatches: boolean;
+  headingFound: boolean;
+  messageButtonCount: number;
+  messageButtonCaption: string | null;
+  messageButtonRole: 'button' | 'link' | null;
+  extraWindowCount: number;
+  hasNewMessageWindow: boolean;
+  hasMiniChat: boolean;
+  loginVisible: boolean;
+  identityCheckVisible: boolean;
+  checkpointVisible: boolean;
+  language: string;
+  elapsedMs: number;
+  summaryUk: string;
+};
+
+export async function inspectFacebookRecipient(
+  page: Page,
+  recipient: string,
+  timeoutMs: number,
+): Promise<FacebookRecipientObservation> {
+  const started = Date.now();
+  const { headings, actions } = await waitForFacebookProfileActions(
+    page,
+    timeoutMs,
+    true,
+  );
+  const headingFound = (await headings.count()) > 0;
+  const messageButtonCount = await actions.count();
+  const button = actions.first();
+  const action = messageButtonCount
+    ? await button.evaluate((node) => {
+        const label =
+          node.getAttribute('aria-label') ||
+          node.getAttribute('title') ||
+          node.textContent ||
+          '';
+        return {
+          caption: label.replace(/\s+/g, ' ').trim().slice(0, 40) || null,
+          role: node.matches('a, [role="link"]') ? 'link' : 'button',
+        };
+      })
+    : null;
+  const pageFlags = await page.evaluate(() => {
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility === 'visible' &&
+      !node.closest('[hidden], [aria-hidden="true"], [inert]');
+    const dialogs = Array.from(
+      document.querySelectorAll('[role="dialog"], [aria-modal="true"]'),
+    ).filter(visible);
+    const logs = Array.from(document.querySelectorAll('[role="log"]')).filter(
+      visible,
+    );
+    const editors = Array.from(
+      document.querySelectorAll(
+        '[contenteditable="true"][role="textbox"], textarea[placeholder]',
+      ),
+    ).filter(visible);
+    const visibleText = (node: Element) =>
+      (node.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const newMessage = dialogs.some((node) => {
+      const heading = Array.from(
+        node.querySelectorAll('h1, h2, h3, [role="heading"]'),
+      )
+        .filter(visible)
+        .map(visibleText);
+      return heading.some((text) =>
+        /^(?:Нове повідомлення|New message|Новое сообщение)$/i.test(text),
+      );
+    });
+    const checkpoint = Array.from(
+      document.querySelectorAll(
+        'form[action*="checkpoint"], [aria-label*="Confirm you"], [aria-label*="Підтвердьте"], [aria-label*="Подтвердите"]',
+      ),
+    ).some(visible);
+    const login = Array.from(
+      document.querySelectorAll(
+        'input[name="email"], input[name="pass"], form[action*="login"], [aria-label="Log in"], [aria-label="Увійти"]',
+      ),
+    ).some(visible);
+    const identity = Array.from(
+      document.querySelectorAll('form, [role="dialog"], [role="main"]'),
+    )
+      .filter(visible)
+      .some((node) =>
+        /confirm your identity|confirm it.s you|підтвердьте свою особу|підтвердіть, що це ви|подтвердите, что это вы/i.test(
+          visibleText(node).slice(0, 500),
+        ),
+      );
+    return {
+      extraWindowCount: dialogs.length,
+      hasNewMessageWindow: newMessage,
+      hasMiniChat: logs.length > 0 || editors.length > 0,
+      loginVisible: login,
+      identityCheckVisible: identity,
+      checkpointVisible: checkpoint,
+      language: document.documentElement.lang.slice(0, 20),
+    };
+  });
+  const profileUrlMatches = socialTarget(page.url())?.handle === recipient;
+  const summaryUk =
+    pageFlags.checkpointVisible || pageFlags.loginVisible
+      ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
+      : messageButtonCount === 1 && headingFound && profileUrlMatches
+        ? 'Профіль відкрито, кнопку «Повідомлення» знайдено.'
+        : messageButtonCount === 0
+          ? 'Кнопку «Повідомлення» не знайдено — перегляньте знімок.'
+          : messageButtonCount > 1
+            ? 'Знайдено кілька кнопок «Повідомлення». Потрібна дія: перегляньте знімок і перевірте профіль.'
+            : 'Профіль одержувача не підтверджено. Потрібна дія: перевірте посилання та знімок.';
+  return {
+    profileUrlMatches,
+    headingFound,
+    messageButtonCount,
+    messageButtonCaption: action?.caption ?? null,
+    messageButtonRole: (action?.role as 'button' | 'link' | undefined) ?? null,
+    ...pageFlags,
+    elapsedMs: Date.now() - started,
+    summaryUk,
+  };
+}
+
 export async function sendFacebook(
   page: Page,
   target: SocialTarget,
@@ -1075,7 +1245,17 @@ export async function sendFacebook(
   beforeSend: () => Promise<void>,
   assertSession: (timeoutMs?: number) => Promise<void>,
   draft?: SocialComposerDraft,
+  captureFailure?: (
+    phase: string,
+    elapsedMs: number,
+  ) => Promise<boolean | void>,
 ): Promise<FacebookDispatchResult> {
+  const startedAt = Date.now();
+  let failureCaptured = false;
+  const markCaptured = (error: unknown) => {
+    if (failureCaptured && error && typeof error === 'object')
+      Object.assign(error, { failureShotCaptured: true });
+  };
   let attempted = false;
   const facts: FacebookDispatchResult['observation'] = {
     inputExactMatch: false,
@@ -1209,23 +1389,7 @@ export async function sendFacebook(
     phase = 'profile';
     if (socialTarget(page.url())?.handle !== target.handle)
       throw unavailable('profile_mismatch');
-    const actions = page
-      .locator('main, [role="main"]')
-      .getByRole('button', {
-        name: /^(?:Message|Send message|Повідомлення|Надіслати повідомлення|Сообщение|Отправить сообщение)$/i,
-      })
-      .or(
-        page.locator('main, [role="main"]').getByRole('link', {
-          name: /^(?:Message|Send message|Повідомлення|Надіслати повідомлення|Сообщение|Отправить сообщение)$/i,
-        }),
-      )
-      .filter({ visible: true });
-    await page
-      .locator('main h1, [role="main"] h1')
-      .filter({ visible: true })
-      .first()
-      .waitFor({ state: 'visible', timeout: timeoutMs });
-    await actions.waitFor({ state: 'visible', timeout: timeoutMs });
+    const { actions } = await waitForFacebookProfileActions(page, timeoutMs);
     if ((await actions.count()) !== 1) throw unavailable('action_count');
     // Bind either the existing popup or the profile action to this visible H1
     // when its header exposes a name instead of a canonical recipient link.
@@ -1642,6 +1806,14 @@ export async function sendFacebook(
       await state.dispose();
     }
   } catch (error) {
+    // Capture the failing DOM before a second session check can navigate or
+    // otherwise change the page. The outer withPage capture remains a fallback.
+    if (captureFailure && !failureCaptured) {
+      const stored = await captureFailure(phase, Date.now() - startedAt)
+        .then((result) => result !== false)
+        .catch(() => false);
+      failureCaptured = stored;
+    }
     // Explicit auth/checkpoint/rate-limit evidence pauses the account. A closed
     // page or failed recheck must still be uncertain after the durable marker.
     if (observationStarted)
@@ -1666,19 +1838,25 @@ export async function sendFacebook(
       ['session_invalid', 'rate_limit'].includes(caught.code)
     ) {
       caught.reasonUk += ` ${detail}`;
+      markCaptured(caught);
       throw caught;
     }
-    if (attempted || draft?.recoveryFirstAttemptAt !== undefined)
-      throw new SocialSendError(
+    if (attempted || draft?.recoveryFirstAttemptAt !== undefined) {
+      const failure = new SocialSendError(
         'delivery_uncertain',
         `[facebook/${phase}] Доставку не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично. ${detail}`,
       );
+      markCaptured(failure);
+      throw failure;
+    }
     if (caught instanceof SocialSendError && caught.code === 'unavailable') {
       caught.reasonUk += ` ${detail}`;
+      markCaptured(caught);
       throw caught;
     }
     const failure = unavailable();
     failure.reasonUk += ` ${detail}`;
+    markCaptured(failure);
     throw failure;
   }
 }

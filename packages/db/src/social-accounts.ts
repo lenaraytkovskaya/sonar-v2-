@@ -172,6 +172,7 @@ export async function prepareSocialSession(
         stage: string;
         jpeg?: string;
         dom?: unknown;
+        taskId?: string;
       },
     ) => {
       await c.query(
@@ -1104,9 +1105,10 @@ export async function withSocialSessionCheck(
     reason?: SocialSessionCheckReason;
     diagnostic?: SocialSessionCheckDiagnostic;
     busy?: boolean;
+    result?: Record<string, unknown>;
   }>,
   now = new Date(),
-  mode: 'check' | 'keepalive' = 'check',
+  mode: 'check' | 'keepalive' | 'recipient' = 'check',
   taskId?: string,
 ): Promise<TaskOutcome> {
   const c = await sonarPool.connect();
@@ -1178,13 +1180,17 @@ export async function withSocialSessionCheck(
     let session: Awaited<ReturnType<typeof prepareSocialSession>> | undefined;
     let valid = false;
     let diagnostic: SocialSessionCheckDiagnostic | undefined;
+    let checkResult: Record<string, unknown> | undefined;
     let reason: SocialSessionCheckReason | undefined;
     try {
       session = await prepareSocialSession(c, account);
     } catch (error) {
       reason = socialSessionCheckReason(error);
     }
-    const runAt = reason ? null : await reserveSocialAction(c, id, mode, now);
+    const runAt =
+      reason || mode === 'recipient'
+        ? null
+        : await reserveSocialAction(c, id, mode, now);
     await c.query('commit');
     inTransaction = false;
     if (runAt)
@@ -1198,6 +1204,7 @@ export async function withSocialSessionCheck(
       try {
         const result = await check(account, session!);
         valid = result.valid;
+        checkResult = result.result;
         diagnostic = safeSocialSessionDiagnostic(result.diagnostic);
         if (result.busy) {
           const {
@@ -1226,6 +1233,40 @@ export async function withSocialSessionCheck(
       }
     }
     const reasonUk = reason ? socialSessionCheckReasons[reason] : null;
+    if (mode === 'recipient')
+      return valid
+        ? {
+            status: 'done',
+            result: { valid: true, ...(checkResult ?? {}) },
+          }
+        : [
+              'login_required',
+              'cookies_invalid',
+              'captcha',
+              'checkpoint',
+            ].includes(reason ?? '')
+          ? {
+              status: 'paused',
+              reasonCode: `social_session_${reason}`,
+              reasonUk: reasonUk!,
+              result: {
+                valid: false,
+                ...(diagnostic ? { diagnostic } : {}),
+                ...(checkResult ?? {}),
+              },
+            }
+          : {
+              status: 'failed',
+              reasonCode: `social_session_${reason ?? 'unknown_auth'}`,
+              reasonUk:
+                reasonUk ??
+                'Не вдалося перевірити Facebook. Потрібна дія: відкрийте «Канали» й перевірте акаунт.',
+              result: {
+                valid: false,
+                ...(diagnostic ? { diagnostic } : {}),
+                ...(checkResult ?? {}),
+              },
+            };
     if (
       mode === 'keepalive' &&
       reason &&
@@ -1425,17 +1466,28 @@ export async function withSocialSessionCheck(
       );
     }
     return valid
-      ? { status: 'done', result: { valid: true } }
+      ? {
+          status: 'done',
+          result: { valid: true, ...(checkResult ?? {}) },
+        }
       : authFailure || (timeoutLimit > 0 && timeoutCount >= timeoutLimit)
         ? {
             status: 'paused',
-            result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
+            result: {
+              valid: false,
+              ...(diagnostic ? { diagnostic } : {}),
+              ...(checkResult ?? {}),
+            },
             reasonCode: `social_session_${reason}`,
             reasonUk: reasonUk!,
           }
         : {
             status: 'failed',
-            result: { valid: false, ...(diagnostic ? { diagnostic } : {}) },
+            result: {
+              valid: false,
+              ...(diagnostic ? { diagnostic } : {}),
+              ...(checkResult ?? {}),
+            },
             reasonCode: `social_session_${reason}`,
             reasonUk: reasonUk!,
           };
