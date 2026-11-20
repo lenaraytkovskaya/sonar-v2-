@@ -89,6 +89,7 @@ export async function captureFailureShot(
     const readableFailure =
       facebookScreenshot &&
       (stage === 'confirmation' ||
+        stage === 'transmission' ||
         (await (async () => {
           try {
             return (
