@@ -74,6 +74,7 @@ export async function runSocialSend(
           request.to,
           request.body,
           account.beforeSend,
+          account.facebookDraft,
         );
       }),
     now,

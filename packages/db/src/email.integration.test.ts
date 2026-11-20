@@ -29,6 +29,7 @@ it.skipIf(!enabled)(
     const now = new Date('2026-11-12T10:00:00Z');
     const keys = [
       'send.hours',
+      'send.hours_exempt_company_ids',
       'send.time_zones',
       'send.min_gap_seconds',
       'send.max_gap_seconds',
@@ -65,6 +66,7 @@ it.skipIf(!enabled)(
     const send = async (id: string, at = now) =>
       email.sendEmailMessage(id, randomUUID(), sender, at, () => 0);
     try {
+      await set('send.hours_exempt_company_ids', []);
       await set('send.hours', {
         start: 0,
         end: 24,
@@ -371,6 +373,38 @@ it.skipIf(!enabled)(
       expect(
         await send(night.id, new Date('2026-11-12T23:00:00Z')),
       ).toMatchObject({ status: 'deferred' });
+      await set('send.hours_exempt_company_ids', [ids.company]);
+      const exemptNight = await create();
+      const nightAt = new Date('2026-11-12T23:00:00Z');
+      await db.sonarPool.query(
+        'update channel_accounts set next_send_at=$2 where id=$1',
+        [ids.account, new Date('2026-11-12T23:05:00Z')],
+      );
+      expect(await send(exemptNight.id, nightAt)).toMatchObject({
+        status: 'deferred',
+        runAt: new Date('2026-11-12T23:05:00Z'),
+      });
+      await db.sonarPool.query(
+        'update channel_accounts set next_send_at=null,daily_limit=1 where id=$1',
+        [ids.account],
+      );
+      expect(await send(exemptNight.id, nightAt)).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'daily_limit',
+        runAt: new Date('2026-11-13T00:00:00Z'),
+      });
+      await db.sonarPool.query(
+        'update channel_accounts set daily_limit=100 where id=$1',
+        [ids.account],
+      );
+      expect(await send(exemptNight.id, nightAt)).toMatchObject({
+        status: 'done',
+      });
+      const sendsAfterNight = sender.mock.calls.length;
+      expect(await send(exemptNight.id, nightAt)).toMatchObject({
+        status: 'done',
+      });
+      expect(sender).toHaveBeenCalledTimes(sendsAfterNight);
       const emailBlocked = await create();
       const sendsBeforeDnc = sender.mock.calls.length;
       await db.sonarPool.query(

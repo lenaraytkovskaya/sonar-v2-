@@ -208,15 +208,58 @@
             'beforeend',
             '<textarea placeholder="Message"></textarea>',
           );
+        if (f.inboxComposer) {
+          // Synthetic EN/UK inbox: one main spans notes/search and the chat pane.
+          const uk = f.inboxComposer === 'uk';
+          const panel = document.createElement('section');
+          panel.style.cssText =
+            'height:680px;flex:1;display:flex;flex-direction:column;min-width:0';
+          panel.append(...main.childNodes);
+          main.style.cssText = 'display:flex;width:960px;height:680px';
+          main.innerHTML = `<div style="width:320px"><span>${uk ? 'Ваша нотатка' : 'Your note'}</span><div contenteditable="true" role="textbox" style="min-height:44px" id="note" aria-describedby="note-hint"><span id="note-hint" contenteditable="false">${uk ? 'Що нового...' : "What's new..."}</span></div><input id="inbox-search" placeholder="${uk ? 'Пошук' : 'Search'}"></div>`;
+          main.append(panel);
+          if (f.narrowInboxHeader) conversationHeader.style.width = '180px';
+          panel.querySelector('#messages').style.flex = '1';
+          const wrapper = document.createElement('div');
+          wrapper.style.cssText = 'position:relative;min-height:56px';
+          wrapper.innerHTML = `<div id="chat-composer" contenteditable="true" role="textbox" aria-describedby="composer-hint" style="min-height:44px"><p><br></p></div><span id="composer-hint">${uk ? 'Повідомлення...' : 'Message...'}</span>`;
+          panel
+            .querySelector('[contenteditable], textarea')
+            .replaceWith(wrapper);
+          if (f.unsafeComposerLabel)
+            wrapper.firstElementChild.setAttribute(
+              'aria-label',
+              'synthetic-private-label@example.test',
+            );
+          if (f.ambiguousInboxComposer)
+            wrapper.append(wrapper.firstElementChild.cloneNode(true));
+          if (f.upperInboxComposer)
+            panel
+              .querySelector('#messages')
+              .append(wrapper.firstElementChild.cloneNode(true));
+          if (f.delayedComposer) {
+            wrapper.hidden = true;
+            setTimeout(() => {
+              wrapper.hidden = false;
+            }, 120);
+          }
+        }
         document.body.insertAdjacentHTML(
           'beforeend',
           '<textarea id="decoy" placeholder="Search"></textarea>',
         );
         const findComposer = () =>
+          main.querySelector('#chat-composer') ||
           main.querySelector(
             '[data-pagelet="IGDComposerForCannes"] [contenteditable]',
-          ) || main.querySelector('[contenteditable], textarea:not([id])');
+          ) ||
+          main.querySelector('[contenteditable], textarea:not([id])');
         let composer = findComposer();
+        if (f.draftText) {
+          if (composer instanceof HTMLTextAreaElement)
+            composer.value = f.draftText;
+          else composer.textContent = f.draftText;
+        }
         const mutateDialog = (phase) => {
           if (phase === 'after_marker' && f.markerMessage)
             appendMessage('Synthetic message');
@@ -278,9 +321,16 @@
           }
         };
         mutateDialog('initial');
-        composer?.addEventListener('input', () => mutateDialog('after_fill'), {
-          once: true,
-        });
+        composer?.addEventListener(
+          'input',
+          () => {
+            if (f.inboxComposer) main.querySelector('#composer-hint')?.remove();
+            mutateDialog('after_fill');
+          },
+          {
+            once: true,
+          },
+        );
         document.addEventListener(
           'fixture-marker',
           () => mutateDialog('after_marker'),

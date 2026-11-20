@@ -10,6 +10,7 @@ import {
   SocialSessionCheckError,
   facebookDispatchReason,
   type FacebookDispatchResult,
+  type SocialComposerDraft,
   type SocialStorageState,
   type SocialDevice,
   socialSessionCheckReason,
@@ -21,6 +22,7 @@ import {
   socialTarget,
   messageStatusForMode,
   nextSendTime,
+  isSendHoursExempt,
   type SendHours,
   type CountryCode,
 } from '@sonar/core';
@@ -880,6 +882,7 @@ export type SendAccount = {
   id: string;
   settings: Record<string, unknown>;
   beforeSend?: () => Promise<void>;
+  facebookDraft?: SocialComposerDraft;
   persistDevice?: (device: SocialDevice) => Promise<void>;
   persistStorageState?: (
     state: SocialStorageState,
@@ -1275,6 +1278,10 @@ export async function sendEmailMessage(
     const zone = m.country_code
       ? config['send.time_zones']?.[m.country_code]
       : config['send.inbound_time_zone'];
+    const hoursExempt = isSendHoursExempt(
+      m.company_id,
+      config['send.hours_exempt_company_ids'],
+    );
     let at: Date;
     const gapPrefix =
       channel === 'social'
@@ -1300,6 +1307,7 @@ export async function sendEmailMessage(
         zone,
         config['send.hours'] as SendHours,
         account.next_send_at ?? undefined,
+        hoursExempt,
       );
     } catch {
       return finish(
@@ -1328,7 +1336,13 @@ export async function sendEmailMessage(
       tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
       return finish(
         deferred(
-          nextSendTime(tomorrow, zone, config['send.hours'] as SendHours),
+          nextSendTime(
+            tomorrow,
+            zone,
+            config['send.hours'] as SendHours,
+            tomorrow,
+            hoursExempt,
+          ),
           'daily_limit',
           'Денний ліміт акаунта вичерпано. Надсилання перенесено.',
         ),
@@ -1345,7 +1359,9 @@ export async function sendEmailMessage(
             [m.conversation_id],
           )
         : { rows: [] };
-    const request: EmailRequest = m.request_snapshot ?? {
+    const request: EmailRequest = (channel === 'social'
+      ? undefined
+      : m.request_snapshot) ?? {
       from: account.address,
       to: m.to_value,
       subject: m.subject,
@@ -1499,6 +1515,36 @@ export async function sendEmailMessage(
         },
       };
     };
+    // Paused/uncertain tasks retain a queued/failed message. Sent messages are
+    // deliberately excluded, including browser dispatches without a receipt.
+    const previousBodies: string[] = [];
+    const deliveredBodies = new Set<string>();
+    const normalizeDraft = (text: string) => text.replace(/\s+/gu, ' ').trim();
+    if (channel === 'social') {
+      const { rows: history } = await c.query(
+        `select body,status,request_snapshot from messages where conversation_id=$1
+          and account_id=$2 and to_value=$3 and direction='out' and id<>$4
+          and created_at<=(select created_at from messages where id=$4)
+          and status in ('queued','failed','sent','delivered','read')`,
+        [m.conversation_id, account.id, m.to_value, messageId],
+      );
+      for (const text of history
+        .filter((row) => ['sent', 'delivered', 'read'].includes(row.status))
+        .flatMap((row) => [row.body, row.request_snapshot?.body])
+        .filter((text): text is string => typeof text === 'string')
+        .map(normalizeDraft))
+        deliveredBodies.add(text);
+      for (const row of history.filter((row) =>
+        ['queued', 'failed'].includes(row.status),
+      ))
+        for (const text of [row.body, row.request_snapshot?.body])
+          if (
+            typeof text === 'string' &&
+            normalizeDraft(text) &&
+            !deliveredBodies.has(normalizeDraft(text))
+          )
+            previousBodies.push(text);
+    }
     try {
       const providerId =
         channel === 'telegram' ||
@@ -1518,6 +1564,36 @@ export async function sendEmailMessage(
                     persistStorageState: socialSession!.persistStorageState,
                     persistDevice: socialSession!.persistDevice,
                     persistFailureShot: socialSession!.persistFailureShot,
+                    facebookDraft: {
+                      previousBodies,
+                      ...(m.request_snapshot?.facebookDraftMessageId ===
+                        messageId &&
+                      m.request_snapshot.facebookDraftAccountId ===
+                        account.id &&
+                      m.request_snapshot.to === m.to_value &&
+                      m.request_snapshot.body === m.body &&
+                      !deliveredBodies.has(normalizeDraft(request.body))
+                        ? { previousBody: request.body }
+                        : {}),
+                      beforeFill: async () => {
+                        const result = await c.query(
+                          'update messages set request_snapshot=$2 where id=$1 and first_attempt_at is null returning id',
+                          [
+                            messageId,
+                            {
+                              ...request,
+                              facebookDraftMessageId: messageId,
+                              facebookDraftAccountId: account.id,
+                            },
+                          ],
+                        );
+                        if (!result.rowCount)
+                          throw new SocialSendError(
+                            'delivery_uncertain',
+                            'Перевірте чат вручну',
+                          );
+                      },
+                    },
                     beforeSend: async () => {
                       const result = await c.query(
                         'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',
@@ -1750,6 +1826,7 @@ export async function sendEmailMessage(
           code === 'unavailable' ? 'skipped' : 'paused',
           `social_${code}`,
           reason,
+          error instanceof SocialSendError ? error.taskResult : undefined,
         );
       }
       if (error instanceof WhatsAppSendError) {

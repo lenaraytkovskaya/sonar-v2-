@@ -5,6 +5,7 @@ import { socialTarget } from '@sonar/core';
 import {
   SocialSendError,
   type FacebookDispatchResult,
+  type SocialComposerDraft,
   SocialSessionCheckError,
   socialSessionCheckReason,
 } from '@sonar/core/social-session';
@@ -44,6 +45,10 @@ type ParentStructureCounts = {
   regionsVisible?: number;
   editorsVisible?: number;
   forbiddenVisible?: number;
+  actionsOutside?: number;
+  extraEditors?: number;
+  extraComposers?: number;
+  linksOutside?: number;
 };
 type Observation = {
   branch: FinderBranch;
@@ -139,17 +144,48 @@ async function conversation(
       };
       const identity = (anchor: Element) =>
         identityUrl(anchor.getAttribute('href')!);
-      const namesRecipient = (link: Element, name: string) => {
+      const namesRecipient = (
+        link: Element,
+        name: string,
+        allowEmpty = false,
+      ) => {
         const text = normalize(link.textContent);
         const label = normalize(link.getAttribute('aria-label'));
         // The live avatar link has no text; its exact accessible name binds it
         // to the composer/log name. Reject contradictory labels or text.
-        return (label || text) === name && (!text || text === name);
-      };
-      const profileHeaderNames = (header: Element, name: string) =>
-        all(header, 'button, [role="button"]').filter(
-          (button) => normalize((button as HTMLElement).innerText) === name,
+        return (
+          ((allowEmpty && !label && !text) || (label || text) === name) &&
+          (!text || text === name)
         );
+      };
+      const profileHeaderNames = (header: Element, name: string) => {
+        const matches = all(
+          header,
+          'button, [role="button"], a[href], span',
+        ).filter(
+          (node) =>
+            normalize((node as HTMLElement).innerText) === name &&
+            (!node.getAttribute('aria-label') ||
+              normalize(node.getAttribute('aria-label')) === name) &&
+            (() => {
+              for (
+                let parent = node.parentElement;
+                parent && parent !== header;
+                parent = parent.parentElement
+              )
+                if (
+                  parent.hasAttribute('aria-label') &&
+                  normalize(parent.getAttribute('aria-label')) !== name
+                )
+                  return false;
+              return true;
+            })(),
+        );
+        return matches.filter(
+          (node) =>
+            !matches.some((other) => other !== node && other.contains(node)),
+        );
+      };
       const profileBindingValid = (header: Element, name: string) =>
         Boolean(
           openedProfile &&
@@ -167,7 +203,12 @@ async function conversation(
           chatControls(document.documentElement).every((node) =>
             header.contains(node),
           ) &&
-          header.querySelectorAll('a[href]').length === 0 &&
+          all(header, 'a[href]').every(
+            (link) =>
+              !identity(link) ||
+              (identity(link) === recipient &&
+                namesRecipient(link, name, true)),
+          ) &&
           profileHeaderNames(header, name).length === 1,
         );
       const headersIn = (scope: Element, region: Element, composer: Element) =>
@@ -184,6 +225,30 @@ async function conversation(
       const sendSelector =
         '[role="button"][aria-label="Press Enter to send"], button[aria-label="Press Enter to send"], [role="button"][aria-label="Натисніть Enter, щоб надіслати"], button[aria-label="Натисніть Enter, щоб надіслати"], [role="button"][aria-label="Нажмите Enter, чтобы отправить"], button[aria-label="Нажмите Enter, чтобы отправить"], [role="button"][aria-label="Send"], button[aria-label="Send"], [role="button"][aria-label="Надіслати"], button[aria-label="Надіслати"], [role="button"][aria-label="Отправить"], button[aria-label="Отправить"]';
       const composerActionSelector = `${sendSelector}, [role="button"][aria-label="Send a Like"], button[aria-label="Send a Like"], [role="button"][aria-label="Надіслати вподобайку"], button[aria-label="Надіслати вподобайку"], [role="button"][aria-label="Надіслать отметку Нравится"], button[aria-label="Надіслать отметку Нравится"]`;
+      // Lexical can wrap the editor on input while the send action remains its
+      // sibling. Expand only inside this content branch, never into its log/header.
+      const fallbackComposer = (
+        editor: Element,
+        scope: Element,
+        region: Element,
+      ) => {
+        for (
+          let node = editor.parentElement;
+          node && scope.contains(node) && !node.contains(region);
+          node = node.parentElement
+        ) {
+          if (
+            all(node, composerActionSelector).length === 1 &&
+            all(node, composerSelector).length === 1 &&
+            all(node, '[contenteditable="true"], [role="textbox"]').length ===
+              1 &&
+            !all(node, forbidden).length &&
+            !chatControls(node).length
+          )
+            return node;
+        }
+        return editor.parentElement;
+      };
       // The live third branch is unobserved. Accept incidental branches only
       // when all chat semantics stay exclusively in the immediate header/body.
       // Reuse this predicate through dispatch; never search a higher ancestor.
@@ -220,6 +285,28 @@ async function conversation(
         );
         const logs = all(parent, '[role="log"]');
         const editor = all(content, composerSelector)[0];
+        counts.actionsOutside = count(
+          all(parent, composerActionSelector).filter(
+            (node) => !composer.contains(node),
+          ).length,
+        );
+        counts.extraEditors = count(
+          all(parent, '[contenteditable="true"], [role="textbox"]').filter(
+            (node) => node !== editor,
+          ).length,
+        );
+        counts.extraComposers = count(
+          all(parent, composerContainer).filter((node) => node !== composer)
+            .length,
+        );
+        counts.linksOutside = count(
+          all(parent, 'a[href]').filter(
+            (node) =>
+              !header.contains(node) &&
+              !region.contains(node) &&
+              identity(node),
+          ).length,
+        );
         if (
           new Set(controls).size !== controls.length ||
           chatControls(parent).some((node) => !header.contains(node)) ||
@@ -321,7 +408,7 @@ async function conversation(
             const composer =
               editor.closest(composerContainer) ??
               (editor.getAttribute('aria-placeholder') === 'Aa'
-                ? editor.parentElement
+                ? fallbackComposer(editor, scope, region)
                 : null);
             const editorLabel = normalize(editor.getAttribute('aria-label'));
             const editorName = /^(?:write to|напишіть|напишите)\s+(.+)$/i.exec(
@@ -479,6 +566,63 @@ async function conversation(
           link,
         ];
         const parents = pinned.map((node) => node.parentElement);
+        const inputText = () => {
+          // Lexical paragraphs and inline text preserve spaces that innerText
+          // can collapse. Read their boundaries explicitly; reject hidden text.
+          if (
+            Array.from(editor.querySelectorAll('*')).some(
+              (node) =>
+                !visible(node) ||
+                node.getAttribute('contenteditable') === 'false',
+            )
+          )
+            return null;
+          const inline = (node: Element): string | null => {
+            let text = '';
+            for (const child of Array.from(node.childNodes)) {
+              if (child.nodeType === Node.TEXT_NODE) text += child.textContent;
+              else if (child instanceof HTMLElement && child.tagName === 'BR')
+                text += '\n';
+              // Chromium fill can leave an empty trailing Lexical paragraph
+              // after a direct text node; it carries no text or line break.
+              else if (
+                node === editor &&
+                child instanceof HTMLElement &&
+                /^(P|DIV)$/.test(child.tagName) &&
+                !child.childNodes.length &&
+                child === editor.lastChild
+              )
+                continue;
+              else if (
+                child instanceof HTMLElement &&
+                child.tagName === 'SPAN' &&
+                ['inline', 'contents'].includes(getComputedStyle(child).display)
+              ) {
+                const nested = inline(child);
+                if (nested === null) return null;
+                text += nested;
+              } else return null;
+            }
+            return text;
+          };
+          const blocks = Array.from(editor.children);
+          if (
+            blocks.length &&
+            blocks.length === editor.childNodes.length &&
+            blocks.every((node) => /^(P|DIV)$/.test(node.tagName))
+          ) {
+            const lines = blocks.map((node) =>
+              node.childNodes.length === 1 &&
+              node.firstChild instanceof HTMLBRElement
+                ? ''
+                : inline(node),
+            );
+            // One LF per paragraph boundary, including empty paragraphs. Never
+            // concatenate textContent across blocks or collapse repeated spaces.
+            return lines.includes(null) ? null : lines.join('\n');
+          }
+          return inline(editor);
+        };
         const valid = (filled: boolean) =>
           pinned.every(
             (node, index) => node.parentElement === parents[index],
@@ -545,7 +689,7 @@ async function conversation(
           !all(scope, forbidden).length &&
           (!filled ||
             ((editor as HTMLElement).isContentEditable &&
-              (editor as HTMLElement).innerText === body &&
+              inputText() === body &&
               editor.getAttribute('aria-disabled') !== 'true' &&
               editor.getAttribute('aria-readonly') !== 'true' &&
               sendButtons().length === 1 &&
@@ -573,9 +717,9 @@ async function conversation(
             observation.canonicalMatch = links.some(
               (link) => identity(link) === recipient,
             );
-            observation.nameMatch = links.some((link) =>
-              namesRecipient(link, name),
-            );
+            observation.nameMatch =
+              profileBindingValid(header, name) ||
+              links.some((link) => namesRecipient(link, name));
           }
           return ok;
         };
@@ -724,11 +868,15 @@ async function conversation(
           scope,
           region,
           valid: verify,
-          inputExactMatch: () => (editor as HTMLElement).innerText === body,
+          inputExactMatch: () => inputText() === body,
+          matchesDraft: (draft: string) => {
+            const text = inputText();
+            return text !== null && normalize(text) === normalize(draft);
+          },
           outgoingCount: () =>
             rows().filter((row) => sentRow(row) !== null).length,
           empty: () => {
-            const empty = !normalize((editor as HTMLElement).innerText);
+            const empty = inputText() === '';
             if (!empty) observation.branch = 'draft';
             return empty;
           },
@@ -813,6 +961,7 @@ export async function sendFacebook(
   body: string,
   beforeSend: () => Promise<void>,
   assertSession: (timeoutMs?: number) => Promise<void>,
+  draft?: SocialComposerDraft,
 ): Promise<FacebookDispatchResult> {
   let attempted = false;
   const facts: FacebookDispatchResult['observation'] = {
@@ -1005,13 +1154,40 @@ export async function sendFacebook(
     );
     try {
       if (
-        !(await state.evaluate((state) => state?.valid(false) && state.empty()))
+        !(await state.evaluate(
+          (state, previousBodies) =>
+            state?.valid(false) &&
+            (state.empty() ||
+              previousBodies.some((body) => state.matchesDraft(body))),
+          [
+            ...(draft?.previousBodies ?? []),
+            ...(draft?.previousBody !== undefined ? [draft.previousBody] : []),
+          ],
+        ))
       )
-        throw unavailable();
+        throw new SocialSendError(
+          'unavailable',
+          'Поле повідомлення містить непідтверджену чернетку. Перевірте й очистіть його вручну.',
+        );
       const editor = (
         await state.evaluateHandle((state) => state!.editor)
       ).asElement();
       if (!editor) throw unavailable();
+      await draft?.beforeFill();
+      // Recheck persisted recovery evidence before replacing an existing draft.
+      if (
+        !(await state.evaluate(
+          (state, previousBodies) =>
+            state?.valid(false) &&
+            (state.empty() ||
+              previousBodies.some((body) => state.matchesDraft(body))),
+          [
+            ...(draft?.previousBodies ?? []),
+            ...(draft?.previousBody !== undefined ? [draft.previousBody] : []),
+          ],
+        ))
+      )
+        throw unavailable();
       phase = 'after_fill';
       await editor.fill(body);
       // Lexical may rerender during fill. Rebind only before the durable marker.

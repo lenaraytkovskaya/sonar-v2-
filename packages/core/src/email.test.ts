@@ -3,6 +3,8 @@ import {
   EmailSendError,
   messageStatusForMode,
   nextSendTime,
+  isSendHoursExempt,
+  validSendHoursExemptCompanyIds,
   sendResendEmail,
 } from './email.js';
 
@@ -88,6 +90,39 @@ describe('sending schedule and campaign modes', () => {
         new Date('2026-11-12T08:02:30Z'),
       ).toISOString(),
     ).toBe('2026-11-12T08:02:30.000Z');
+  });
+  it('exempts only configured company UUIDs, with no default exemptions', () => {
+    const id = '83d7c52f-6aaa-47b1-aa49-c40d738cc44e';
+    expect(validSendHoursExemptCompanyIds([])).toBe(true);
+    expect(validSendHoursExemptCompanyIds([id])).toBe(true);
+    for (const invalid of [null, {}, id, [1], ['unknown'], [id, 'bad']]) {
+      expect(validSendHoursExemptCompanyIds(invalid)).toBe(false);
+      expect(isSendHoursExempt(id, invalid)).toBe(false);
+    }
+    expect(isSendHoursExempt(id, undefined)).toBe(false);
+    expect(isSendHoursExempt(id, [])).toBe(false);
+    expect(isSendHoursExempt(null, [id])).toBe(false);
+    expect(isSendHoursExempt(id, [id.toUpperCase()])).toBe(true);
+    expect(
+      isSendHoursExempt('fc81d391-0025-4d00-bba9-6f80b38d1146', [id]),
+    ).toBe(false);
+  });
+  it('bypasses working hours and weekends while preserving account pauses and invalid-date/timezone guards', () => {
+    const now = new Date('2026-11-14T23:00:00Z');
+    const pause = new Date('2026-11-15T00:05:00Z');
+    expect(nextSendTime(now, 'Europe/Warsaw', hours, now, true)).toEqual(now);
+    expect(nextSendTime(now, 'Europe/Warsaw', hours, pause, true)).toEqual(
+      pause,
+    );
+    expect(nextSendTime(now, 'Europe/Warsaw', hours)).toEqual(
+      new Date('2026-11-16T08:00:00Z'),
+    );
+    expect(() => nextSendTime(now, 'invalid', hours, now, true)).toThrow(
+      EmailSendError,
+    );
+    expect(() => nextSendTime(now, 'UTC', hours, new Date(NaN), true)).toThrow(
+      EmailSendError,
+    );
   });
   it('handles DST and non-hour offsets', () => {
     expect(next('2026-03-27T17:00:00Z')).toBe('2026-03-30T07:00:00.000Z');

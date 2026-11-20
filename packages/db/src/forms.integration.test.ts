@@ -73,6 +73,7 @@ it.skipIf(!enabled)(
     const now = new Date(Date.now() + 60_000);
     const keys = [
       'send.hours',
+      'send.hours_exempt_company_ids',
       'send.time_zones',
       'send.min_gap_seconds',
       'send.max_gap_seconds',
@@ -153,6 +154,7 @@ it.skipIf(!enabled)(
       },
     );
     try {
+      await set('send.hours_exempt_company_ids', []);
       await set('send.hours', {
         start: 0,
         end: 24,
@@ -247,7 +249,23 @@ it.skipIf(!enabled)(
       await expect(
         create({ idempotencyKey: inputKey, body: 'different' }),
       ).rejects.toThrow('Ключ');
+      await set('send.hours', {
+        start: 0,
+        end: 24,
+        days: [(now.getUTCDay() + 3) % 7],
+      });
+      expect(await send(one.id, sender)).toMatchObject({
+        status: 'deferred',
+        reasonCode: 'outside_send_hours',
+      });
+      expect(sender).not.toHaveBeenCalled();
+      await set('send.hours_exempt_company_ids', [ids.company]);
       await Promise.all([send(one.id, sender), send(one.id, sender)]);
+      await set('send.hours', {
+        start: 0,
+        end: 24,
+        days: [0, 1, 2, 3, 4, 5, 6],
+      });
       expect(sender).toHaveBeenCalledTimes(1);
       expect(sender.mock.calls[0]?.[0]).toMatchObject({
         name: 'Test Sender',

@@ -100,6 +100,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           throw Error(
             'https://user:synthetic-password@example.test/ cookie=synthetic-cookie Synthetic message',
           );
+        if (options.inboxMarkerAmbiguity)
+          await page.evaluate(() => {
+            const composer = document.querySelector('#chat-composer')!;
+            composer.after(composer.cloneNode(true));
+          });
         if (options.switchComposer)
           await page.evaluate(() => {
             const original = document.querySelector('[contenteditable]')!;
@@ -167,6 +172,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'https://instagram.com/fixture_company/',
           typeof options.body === 'string' ? options.body : 'Synthetic message',
           mark,
+          options.priorBodies
+            ? {
+                previousBodies: options.priorBodies as string[],
+                beforeFill: async () => {},
+              }
+            : undefined,
         );
       return {
         send,
@@ -204,6 +215,46 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'textarea' in options ? 'textarea' : 'textbox',
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([{ lexical: true }, { textarea: true }])(
+      'recovers only a prior undelivered draft (%j)',
+      async (variant) => {
+        const f = await fixture({
+          ...variant,
+          draftText: '  Earlier \n draft ',
+          priorBodies: ['Earlier draft'],
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events.filter((event) => event === 'send')).toHaveLength(1);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([{ priorBodies: [] }, { priorBodies: ['Another draft'] }])(
+      'preserves an unknown or delivered draft (%j)',
+      async ({ priorBodies }) => {
+        const f = await fixture({
+          lexical: true,
+          draftText: 'Existing draft',
+          priorBodies,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            reasonUk: expect.stringContaining('чернетку'),
+          });
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+          expect(f.events).not.toContain('send');
         } finally {
           await f.close();
         }
@@ -303,6 +354,75 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       }
     });
     it.each([
+      { inboxComposer: 'en' },
+      { inboxComposer: 'uk' },
+      { inboxComposer: 'en', delayedComposer: true },
+      { inboxComposer: 'uk', containerHeader: true, narrowInboxHeader: true },
+    ])(
+      'selects only the lower chat editor in the shared inbox main (%j)',
+      async (options) => {
+        const f = await fixture({ ...options, timeoutMs: 600 });
+        try {
+          await expect(f.send()).resolves.toContain(
+            '/direct/t/fixture-thread/',
+          );
+          expect(f.inputs).toEqual(['chat-composer']);
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      { ambiguousInboxComposer: true },
+      { upperInboxComposer: true },
+      { unsafeComposerLabel: true },
+      { inboxMarkerAmbiguity: true },
+    ])('fails closed with safe composer diagnostics (%j)', async (options) => {
+      const f = await fixture({ inboxComposer: 'en', ...options });
+      try {
+        const error = (await f.send().catch((caught: unknown) => caught)) as {
+          code: string;
+          stage: string;
+          reasonUk: string;
+          taskResult: {
+            composer: { counts: Record<string, number>; attrs: unknown[] };
+          };
+        };
+        expect(error).toMatchObject({
+          code: options.inboxMarkerAmbiguity
+            ? 'delivery_uncertain'
+            : 'unavailable',
+          stage: 'composer',
+        });
+        expect(error.reasonUk).toContain('composer_counts=');
+        expect(error.reasonUk).toContain('"named":0');
+        expect(error.reasonUk).toContain('"panel":');
+        expect(error.reasonUk).toContain('"role":"textbox"');
+        expect(error.reasonUk).toContain('"contenteditable":"true"');
+        expect(error.reasonUk).toContain('"rect":');
+        expect(error.taskResult.composer.counts.named).toBe(0);
+        expect(error.taskResult.composer.attrs.length).toBeGreaterThan(0);
+        expect(JSON.stringify(error.taskResult)).not.toMatch(
+          /fixture_company|Synthetic message|synthetic-private|@example/,
+        );
+        expect(error.reasonUk).not.toMatch(
+          /fixture_company|Synthetic message|synthetic-private|@example/,
+        );
+        if (options.unsafeComposerLabel)
+          expect(error.reasonUk).toContain('[redacted]');
+        expect(f.inputs).toEqual(
+          options.inboxMarkerAmbiguity ? ['chat-composer'] : [],
+        );
+        expect(f.events).not.toContain('send');
+        expect(f.mark).toHaveBeenCalledTimes(
+          options.inboxMarkerAmbiguity ? 1 : 0,
+        );
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
       ['Напишите сообщение…', 'ru'],
       ['Напишіть повідомлення…', 'uk'],
       ['mEsSaGe...', 'en'],
@@ -391,7 +511,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     it.each([
       { switchRecipient: true, code: 'delivery_uncertain', stage: 'dialog' },
       { hideRecipient: true, code: 'delivery_uncertain', stage: 'dialog' },
-      { switchComposer: true, code: 'delivery_uncertain', stage: 'dialog' },
+      { switchComposer: true, code: 'delivery_uncertain', stage: 'composer' },
       { switchContainer: true, code: 'delivery_uncertain', stage: 'dialog' },
       { markerFailure: true, code: 'delivery_uncertain', stage: 'attempt' },
       { markerRateLimit: true, code: 'rate_limit', stage: 'session' },
@@ -812,7 +932,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ['staleHeader', 'dialog', 'unconfirmed', 'unavailable'],
       ['ambiguousDialog', 'dialog', 'unconfirmed', 'unavailable'],
       ['noComposer', 'composer', 'timeout', 'unavailable'],
-      ['duplicateComposer', 'composer', 'unexpected', 'unavailable'],
+      ['duplicateComposer', 'composer', 'unconfirmed', 'unavailable'],
     ])(
       'stops safely for %s with a stage-specific reason',
       async (option, stage, errorKind, code) => {
@@ -1144,7 +1264,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           const error = await f.send().catch((error) => error);
           expect(error).toMatchObject({
             code: 'delivery_uncertain',
-            stage: option === 'markerFailure' ? 'attempt' : 'dialog',
+            stage:
+              option === 'markerFailure'
+                ? 'attempt'
+                : option === 'switchComposer'
+                  ? 'composer'
+                  : 'dialog',
           });
           expect(error.reasonUk).not.toMatch(
             /synthetic-password|synthetic-cookie|Synthetic message|https:/,
