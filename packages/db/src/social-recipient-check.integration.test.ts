@@ -46,6 +46,14 @@ it.skipIf(!enabled)(
         enqueueFacebookRecipientCheck(companyId, contactId, userId),
       ]);
       taskIds = [first.id, second.id];
+      const { getFacebookRecipientCheck } =
+        await import('./social-recipient-check.js');
+      const latest = await getFacebookRecipientCheck(
+        companyId,
+        contactId,
+        userId,
+      );
+      expect(latest?.id).toBe(first.id);
       expect(first.id).toBe(second.id);
       expect([first.created, second.created].sort()).toEqual([false, true]);
       const { rows } = await sonarPool.query(
