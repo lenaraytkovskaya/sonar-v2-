@@ -275,6 +275,7 @@ export const uk = {
   },
   socialAccounts: {
     failureShot: 'Показати, що бачив Sonar',
+    failureDom: 'Структура сторінки',
     empty:
       'Акаунтів ще немає. Додайте акаунт через логін і пароль або cookies.',
     syncPartialShort: 'Історія листування неповна.',

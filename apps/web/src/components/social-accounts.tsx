@@ -589,14 +589,26 @@ export function SocialAccounts({
                   {account.failureShotKinds.some(
                     (kind) => kind !== 'inbox',
                   ) && (
-                    <a
-                      className="ml-2 underline"
-                      target="_blank"
-                      rel="noreferrer"
-                      href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(account.id)}&kind=${account.failureShotKinds.find((kind) => kind !== 'inbox')}`}
-                    >
-                      {uk.socialAccounts.failureShot}
-                    </a>
+                    <>
+                      <a
+                        className="ml-2 underline"
+                        target="_blank"
+                        rel="noreferrer"
+                        href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(account.id)}&kind=${account.failureShotKinds.find((kind) => kind !== 'inbox')}`}
+                      >
+                        {uk.socialAccounts.failureShot}
+                      </a>
+                      {['facebook', 'instagram'].includes(account.network) && (
+                        <a
+                          className="ml-2 underline"
+                          target="_blank"
+                          rel="noreferrer"
+                          href={`/api/social-accounts/failure-dom?id=${encodeURIComponent(account.id)}&kind=${account.failureShotKinds.find((kind) => kind !== 'inbox')}`}
+                        >
+                          {uk.socialAccounts.failureDom}
+                        </a>
+                      )}
+                    </>
                   )}
                 </Callout>
               )}
@@ -604,14 +616,26 @@ export function SocialAccounts({
                 <Callout tone="err">
                   {account.inboxSyncErrorUk}
                   {account.failureShotKinds.includes('inbox') && (
-                    <a
-                      className="ml-2 underline"
-                      target="_blank"
-                      rel="noreferrer"
-                      href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(account.id)}&kind=inbox`}
-                    >
-                      {uk.socialAccounts.failureShot}
-                    </a>
+                    <>
+                      <a
+                        className="ml-2 underline"
+                        target="_blank"
+                        rel="noreferrer"
+                        href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(account.id)}&kind=inbox`}
+                      >
+                        {uk.socialAccounts.failureShot}
+                      </a>
+                      {['facebook', 'instagram'].includes(account.network) && (
+                        <a
+                          className="ml-2 underline"
+                          target="_blank"
+                          rel="noreferrer"
+                          href={`/api/social-accounts/failure-dom?id=${encodeURIComponent(account.id)}&kind=inbox`}
+                        >
+                          {uk.socialAccounts.failureDom}
+                        </a>
+                      )}
+                    </>
                   )}
                 </Callout>
               )}

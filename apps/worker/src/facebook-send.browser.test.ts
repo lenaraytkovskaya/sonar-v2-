@@ -72,6 +72,17 @@ function chat(id, target, name) {
       void window.fixtureEvent('restore');
     });
     if (o.headerNameButton) {
+      if (o.decoratedHeader) {
+        const header = scope.querySelector('[data-fixture-recipient]');
+        header.innerHTML = '<span>  SYNTHETIC &#8203;  recipient&#65279; </span><span>⌄</span><svg><title>Open chat options</title></svg><span aria-hidden="true">Icon</span>';
+        header.setAttribute('aria-label', 'Synthetic Recipient ⌄');
+        scope.querySelector('[aria-label="Налаштування чату"]').remove();
+      }
+      if (o.duplicateHeaderName) scope.firstElementChild.insertAdjacentHTML('beforeend', '<button>Synthetic Recipient</button>');
+      if (o.normalizedIdentityLabels) {
+        scope.querySelector('[contenteditable]').setAttribute('aria-label', 'Write to SYNTHETIC &#8203; recipient'.replace('&#8203;', String.fromCharCode(8203)));
+        scope.querySelector('[role="log"]').setAttribute('aria-label', 'Messages in conversation with synthetic  RECIPIENT');
+      }
       if (o.headerWrongParentLabel) scope.querySelector('[data-fixture-recipient]').setAttribute('aria-label', 'Other Recipient');
       if (o.headerSpan || o.headerLink) {
         const original = scope.querySelector('[data-fixture-recipient]');
@@ -126,6 +137,16 @@ function chat(id, target, name) {
   return scope;
 }
 const region = scope => scope.querySelector('[aria-label^="Messages in conversation"], [aria-label^="Повідомлення в розмові"], [aria-label^="Сообщения в переписке"], [role="log"]');
+function historySpinner(scope, phase) {
+  const spinner = document.createElement('div');
+  spinner.style.minHeight = '24px';
+  spinner.setAttribute('role', 'progressbar');
+  spinner.setAttribute('aria-label', 'Loading messages');
+  region(scope).append(spinner);
+  if (!o.spinnerRemains) setTimeout(() => {
+    spinner.remove(); window.fixtureEvent('history-ready:' + phase);
+  }, 90);
+}
 function wire(scope) {
   const editor = scope.querySelector('[contenteditable]');
   const button = scope.querySelector('[aria-label="Send a Like"], [aria-label="Press Enter to send"]');
@@ -153,6 +174,9 @@ function wire(scope) {
     if (o.hiddenDraftText) editor.insertAdjacentHTML('beforeend', '<span hidden>Unexpected draft text</span>');
     if (o.extraDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p>Unexpected paragraph</p>');
     if (o.emptyDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p><br></p>');
+    if (o.afterFillSpinner) historySpinner(scope, 'after_fill');
+    if (o.afterFillHeaderName) scope.querySelector('[data-fixture-recipient]').textContent = 'Other Recipient';
+    if (o.afterFillProfileName) document.querySelector('main h1').textContent = 'Other Recipient';
     if (o.rerenderFill && !window.rerendered) {
       window.rerendered = true; const replacement = scope.cloneNode(true); scope.replaceWith(replacement); wire(replacement);
     }
@@ -191,6 +215,7 @@ document.querySelector('#open').onclick = () => {
     if (o.saturatedCounts) for (let i = 0; i < 100; i++) region(scope).append(row());
 
     document.querySelector('#chats').append(scope); wire(scope);
+    if (o.historySpinner) historySpinner(scope, 'first_lookup');
     if (o.secondPopup || o.secondPopupHeaderOnly) {
       const other = chat('neighbour', '100000000000002', 'Other Recipient'); scope.after(other);
       if (o.secondPopupHeaderOnly) while (other.children[1]) other.children[1].remove(); else wire(other);
@@ -889,7 +914,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             error.reasonUk.slice(error.reasonUk.indexOf('{')),
           );
           expect(diagnostic).toMatchObject({
-            version: 'fb-observed84-v1',
+            version: 'fb-profile-chat-v2',
             phase,
             branch,
             failure,
@@ -931,6 +956,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     );
     it.each([
       { headerNameButton: true },
+      { headerNameButton: true, decoratedHeader: true },
+      {
+        headerNameButton: true,
+        decoratedHeader: true,
+        normalizedIdentityLabels: true,
+      },
+      { headerNameButton: true, decoratedHeader: true, rerenderFill: true },
       { headerNameButton: true, headerSpan: true, lexicalWrap: true },
       { headerNameButton: true, headerSpan: true, headerAvatar: true },
       {
@@ -1025,6 +1057,58 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? ['pointerdown']
               : [],
           );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['first_lookup', 'after_fill'] as const)(
+      'waits for mini-chat history before filling/marking (%s)',
+      async (phase) => {
+        const f = await fixture({
+          headerNameButton: true,
+          decoratedHeader: true,
+          historySpinner: phase === 'first_lookup',
+          afterFillSpinner: phase === 'after_fill',
+        });
+        try {
+          await expect(f.send()).resolves.toMatchObject({
+            outcome: 'facebook_dispatched_unconfirmed',
+          });
+          expect(f.events).toEqual([
+            'open',
+            ...(phase === 'first_lookup'
+              ? ['history-ready:first_lookup', 'input:target']
+              : ['input:target', 'history-ready:after_fill']),
+            'mark',
+            'send:target',
+          ]);
+          expect(f.requests).toEqual([f.target]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['first_lookup', 'after_fill'] as const)(
+      'times out safely on persistent mini-chat history spinner (%s)',
+      async (phase) => {
+        const f = await fixture({
+          headerNameButton: true,
+          decoratedHeader: true,
+          historySpinner: phase === 'first_lookup',
+          afterFillSpinner: phase === 'after_fill',
+          spinnerRemains: true,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            reasonUk: expect.stringContaining('"branch":"history_loading"'),
+          });
+          expect(f.events).toEqual([
+            'open',
+            ...(phase === 'after_fill' ? ['input:target'] : []),
+          ]);
+          expect(f.mark).not.toHaveBeenCalled();
         } finally {
           await f.close();
         }
@@ -1149,7 +1233,41 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+    it.each(['afterFillHeaderName', 'afterFillProfileName'])(
+      'rejects a mini-chat recipient change after fill without marking (%s)',
+      async (kind) => {
+        const f = await fixture({
+          headerNameButton: true,
+          decoratedHeader: true,
+          [kind]: true,
+        });
+        try {
+          const error = await f.send().catch((error: unknown) => error);
+          expect(error).toMatchObject({ code: 'unavailable' });
+          expect((error as { reasonUk: string }).reasonUk).toContain(
+            '"phase":"after_fill"',
+          );
+          expect((error as { reasonUk: string }).reasonUk).toContain(
+            '"branch":"recipient_link_count"',
+          );
+          expect(f.events).toEqual(['open', 'input:target']);
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([
+      {
+        headerNameButton: true,
+        decoratedHeader: true,
+        headerWrongParentLabel: true,
+      },
+      {
+        headerNameButton: true,
+        decoratedHeader: true,
+        duplicateHeaderName: true,
+      },
       { headerNameButton: true, headerWrongParentLabel: true },
       { headerNameButton: true, headerNameMismatch: true },
       { headerNameButton: true, headerSpan: true, headerNameMismatch: true },
@@ -1288,6 +1406,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      { headerNameButton: true, decoratedHeader: true, markerHeaderName: true },
+      { headerNameButton: true, decoratedHeader: true, clickHeaderName: true },
       { headerNameButton: true, markerHeaderName: true },
       { headerNameButton: true, markerSecondPopup: true },
       { headerNameButton: true, clickHeaderName: true },

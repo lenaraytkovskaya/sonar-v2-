@@ -55,3 +55,39 @@ it('retries at lower JPEG quality and never stores images above 3 MB', async () 
   );
   expect(rejectedPersist).not.toHaveBeenCalled();
 });
+
+it('persists the sanitized DOM alongside the image and survives screenshot failure', async () => {
+  const dom = { version: 1, truncated: false, nodes: [] };
+  const persistFailureShot = vi.fn<
+    (kind: string, shot: { jpeg?: string; dom?: unknown }) => Promise<void>
+  >(async () => {});
+  const page = {
+    ...pageWith([Buffer.from('jpeg')]),
+    evaluate: vi.fn(async () => dom),
+  };
+  await captureFailureShot(
+    page as never,
+    { persistFailureShot } as never,
+    'send',
+    'dialog',
+  );
+  expect(persistFailureShot).toHaveBeenLastCalledWith(
+    'send',
+    expect.objectContaining({
+      dom,
+      jpeg: Buffer.from('jpeg').toString('base64'),
+    }),
+  );
+  page.screenshot.mockRejectedValueOnce(new Error('closed screenshot'));
+  await captureFailureShot(
+    page as never,
+    { persistFailureShot } as never,
+    'send',
+    'dialog',
+  );
+  expect(persistFailureShot).toHaveBeenLastCalledWith(
+    'send',
+    expect.objectContaining({ dom }),
+  );
+  expect(persistFailureShot.mock.lastCall?.[1]).not.toHaveProperty('jpeg');
+});

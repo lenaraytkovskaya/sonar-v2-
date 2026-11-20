@@ -143,6 +143,7 @@ export type SocialSessionCheckDiagnostic = {
     | 'thread';
   navigationHttpStatus: number | null;
   errorKind: 'timeout' | 'unconfirmed';
+  screen?: 'splash';
   /** FB has no semantic auth implementation; its zero counter is not negative evidence. */
   semanticAuthImplemented?: false;
   page?: {
@@ -428,6 +429,7 @@ export function safeSocialSessionDiagnostic(
     urlKind: d.urlKind,
     navigationHttpStatus: d.navigationHttpStatus,
     errorKind: d.errorKind,
+    ...(d.screen === 'splash' ? { screen: 'splash' as const } : {}),
     ...(d.semanticAuthImplemented === false
       ? { semanticAuthImplemented: false }
       : {}),
@@ -985,7 +987,13 @@ export type ResolvedSocialSession = {
   persistDevice?: (device: SocialDevice) => Promise<void>;
   persistFailureShot?: (
     kind: 'check' | 'keepalive' | 'inbox' | 'send',
-    shot: { at: string; path: string; stage: string; jpeg: string },
+    shot: {
+      at: string;
+      path: string;
+      stage: string;
+      jpeg?: string;
+      dom?: unknown;
+    },
   ) => Promise<void>;
 };
 export function resolveSocialSession(

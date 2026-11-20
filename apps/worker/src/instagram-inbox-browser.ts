@@ -12,6 +12,7 @@ import {
 import {
   assertSocialSession,
   instagramSessionMarkers,
+  waitForInstagramReady,
   socialSendBrowser,
   captureFailureShot,
 } from './social-send-browser.js';
@@ -72,7 +73,11 @@ async function diagnose(
                     : 'other';
     return {
       version: 1,
-      stage,
+      stage:
+        'screen' in error && error.screen === 'splash' ? 'navigation' : stage,
+      ...('screen' in error && error.screen === 'splash'
+        ? { screen: 'splash' as const }
+        : {}),
       urlKind,
       navigationHttpStatus,
       errorKind: error.errorKind ?? 'unconfirmed',
@@ -407,6 +412,19 @@ export async function captureInstagramInbox(
       if (navigationHttpStatus === 429)
         throw new SocialSessionCheckError('rate_limit');
       if (!response || response.status() >= 400) invalid = true;
+      if (typeof page.waitForFunction === 'function') {
+        stage = 'navigation';
+        const reloaded = await waitForInstagramReady(
+          page,
+          Math.max(1, deadline - Date.now()),
+        );
+        if (reloaded) {
+          navigationHttpStatus = reloaded.status();
+          if (navigationHttpStatus === 429)
+            throw new SocialSessionCheckError('rate_limit');
+          if (navigationHttpStatus >= 400) invalid = true;
+        }
+      }
       await checkSession('auth');
     } catch (error) {
       throw await diagnosed(error, stage);

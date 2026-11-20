@@ -166,7 +166,13 @@ export async function prepareSocialSession(
     },
     persistFailureShot: async (
       kind: 'check' | 'keepalive' | 'inbox' | 'send',
-      shot: { at: string; path: string; stage: string; jpeg: string },
+      shot: {
+        at: string;
+        path: string;
+        stage: string;
+        jpeg?: string;
+        dom?: unknown;
+      },
     ) => {
       await c.query(
         "update channel_accounts set settings=jsonb_set(settings,'{failureShots}',coalesce(settings->'failureShots','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb)) where id=$1",

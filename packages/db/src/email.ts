@@ -890,7 +890,13 @@ export type SendAccount = {
   ) => Promise<void>;
   persistFailureShot?: (
     kind: 'check' | 'keepalive' | 'inbox' | 'send',
-    shot: { at: string; path: string; stage: string; jpeg: string },
+    shot: {
+      at: string;
+      path: string;
+      stage: string;
+      jpeg?: string;
+      dom?: unknown;
+    },
   ) => Promise<void>;
 };
 export type ChannelSender = (
