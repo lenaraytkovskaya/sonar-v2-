@@ -111,9 +111,9 @@ export async function getFacebookRecipientCheck(
   const { rows } = await sonarPool.query(
     `select t.id,t.status,t.result,t.reason_uk as "reasonUk",t.created_at as "createdAt",
       t.payload->>'accountId' as "accountId"
-     from tasks t join contacts c on c.id=$2 and c.company_id=$1
-     where t.type='social.recipient.check' and t.payload->>'contactId'=$2
-       and exists(select 1 from channel_accounts a where a.id::text=t.payload->>'accountId' and a.owner_id=$3 and a.channel='facebook')
+     from tasks t join contacts c on c.id=$2::uuid and c.company_id=$1::uuid
+     where t.type='social.recipient.check' and t.payload->>'contactId'=$2::text
+       and exists(select 1 from channel_accounts a where a.id::text=t.payload->>'accountId' and a.owner_id=$3::uuid and a.channel='facebook')
      order by t.created_at desc limit 1`,
     [companyId, contactId, userId],
   );
