@@ -2160,6 +2160,10 @@ export function createSocialSendBrowser(
       to: string,
       body: string,
       beforeSend: () => Promise<void>,
+      facebookDraft?: {
+        previousBody?: string;
+        beforeFill: () => Promise<void>;
+      },
     ) {
       const providerThreadId =
         typeof account.settings.providerThreadId === 'string'
@@ -2200,6 +2204,7 @@ export function createSocialSendBrowser(
                 beforeSend,
                 (sessionTimeoutMs) =>
                   assertSocialSession(page, 'facebook', sessionTimeoutMs),
+                facebookDraft,
               );
             await page.goto(target.canonicalUrl, {
               waitUntil: 'domcontentloaded',

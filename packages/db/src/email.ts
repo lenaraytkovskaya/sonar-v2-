@@ -880,6 +880,7 @@ export type SendAccount = {
   id: string;
   settings: Record<string, unknown>;
   beforeSend?: () => Promise<void>;
+  facebookDraft?: { previousBody?: string; beforeFill: () => Promise<void> };
   persistDevice?: (device: SocialDevice) => Promise<void>;
   persistStorageState?: (
     state: SocialStorageState,
@@ -1518,6 +1519,38 @@ export async function sendEmailMessage(
                     persistStorageState: socialSession!.persistStorageState,
                     persistDevice: socialSession!.persistDevice,
                     persistFailureShot: socialSession!.persistFailureShot,
+                    ...(account.channel === 'facebook'
+                      ? {
+                          facebookDraft: {
+                            ...(m.request_snapshot?.facebookDraftMessageId ===
+                              messageId &&
+                            m.request_snapshot.facebookDraftAccountId ===
+                              account.id &&
+                            m.request_snapshot.to === m.to_value &&
+                            m.request_snapshot.body === m.body
+                              ? { previousBody: request.body }
+                              : {}),
+                            beforeFill: async () => {
+                              const result = await c.query(
+                                'update messages set request_snapshot=$2 where id=$1 and first_attempt_at is null returning id',
+                                [
+                                  messageId,
+                                  {
+                                    ...request,
+                                    facebookDraftMessageId: messageId,
+                                    facebookDraftAccountId: account.id,
+                                  },
+                                ],
+                              );
+                              if (!result.rowCount)
+                                throw new SocialSendError(
+                                  'delivery_uncertain',
+                                  'Перевірте чат вручну',
+                                );
+                            },
+                          },
+                        }
+                      : {}),
                     beforeSend: async () => {
                       const result = await c.query(
                         'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',

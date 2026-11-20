@@ -21,7 +21,7 @@ const markup = `
 <script>
 const o = window.fixtureOptions;
 const observedChat = ${JSON.stringify(observedChat)};
-const body = o.bodySending ? 'Sending' : o.bodyPending ? 'Pending review' : 'Synthetic message';
+const body = o.whitespaceBody ? 'Synthetic  message' : o.multilineBody ? 'Synthetic\\nmessage' : o.bodySending ? 'Sending' : o.bodyPending ? 'Pending review' : 'Synthetic message';
 const recipient = o.company ? 'synthetic_company' : '100000000000001';
 const label = 'Synthetic Recipient';
 function row(own = true, text = body, time = '4 November 2026, 20:15') {
@@ -72,6 +72,27 @@ function chat(id, target, name) {
       void window.fixtureEvent('restore');
     });
     if (o.headerNameButton) {
+      if (o.headerSpan || o.headerLink) {
+        const original = scope.querySelector('[data-fixture-recipient]');
+        const replacement = document.createElement(o.headerLink ? 'a' : 'span');
+        replacement.textContent = original.textContent;
+        replacement.setAttribute('data-fixture-recipient', '');
+        if (o.headerLink) replacement.href = '/profile.php?id=' + (o.wrongRecipient ? '100000000000002' : target);
+        original.replaceWith(replacement);
+      }
+      if (o.headerAvatar) {
+        const avatar = document.createElement('a');
+        avatar.href = '/profile.php?id=' + (o.wrongAvatarRecipient ? '100000000000002' : target);
+        avatar.innerHTML = '<img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">';
+        if (o.wrongAvatarLabel) avatar.setAttribute('aria-label', 'Other Recipient');
+        if (o.wrongAvatarText) avatar.append('Other Recipient');
+        scope.firstElementChild.prepend(avatar);
+      }
+      if (o.ukrainianRestore) {
+        scope.querySelector('section h2').textContent = 'Відновіть повідомлення';
+        scope.querySelector('section button').textContent = 'Відновити зараз';
+        document.querySelector('#open').textContent = 'Повідомлення';
+      }
       const restore = scope.querySelector('section');
       const content = document.createElement('div');
       while (scope.children[1]) content.append(scope.children[1]);
@@ -110,6 +131,26 @@ function wire(scope) {
   editor.addEventListener('input', () => {
     window.fixtureEvent('input:' + scope.id);
     button.setAttribute('aria-label', editor.textContent ? 'Press Enter to send' : 'Send a Like');
+    if (o.lexicalWrap && !editor.querySelector('p')) {
+      const paragraph = document.createElement('p'); const text = document.createElement('span');
+      text.textContent = editor.textContent; paragraph.append(text); editor.replaceChildren(paragraph);
+      const wrapper = document.createElement('div'); editor.replaceWith(wrapper); wrapper.append(editor);
+    }
+    if (o.whitespaceBody || o.multilineBody) {
+      editor.replaceChildren(...body.split('\\n').map(line => {
+        const paragraph = document.createElement('p'); paragraph.textContent = line; return paragraph;
+      }));
+    }
+    if (o.lexicalNewline) {
+      const text = editor.textContent; editor.innerHTML = '<p><span></span></p>';
+      editor.querySelector('span').textContent = text;
+      Object.defineProperty(editor, 'innerText', { configurable: true, get: () => text + '\\n' });
+    }
+    if (o.splitDraftWords) editor.innerHTML = '<p>Synthetic</p><p>message</p>';
+    if (o.breakDraftWords) editor.innerHTML = '<span>Synthetic<br>message</span>';
+    if (o.hiddenDraftText) editor.insertAdjacentHTML('beforeend', '<span hidden>Unexpected draft text</span>');
+    if (o.extraDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p>Unexpected paragraph</p>');
+    if (o.emptyDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p><br></p>');
     if (o.rerenderFill && !window.rerendered) {
       window.rerendered = true; const replacement = scope.cloneNode(true); scope.replaceWith(replacement); wire(replacement);
     }
@@ -170,8 +211,9 @@ document.querySelector('#open').onclick = () => {
     if (o.outsideHeaderLink) scope.append(scope.querySelector('a'));
     if (o.headerLinkInMessages) region(scope).append(scope.querySelector('a'));
     if (o.globalLinkOnly) { scope.querySelector('a').remove(); document.querySelector('nav').insertAdjacentHTML('beforeend', '<a href="/' + recipient + '/">' + label + '</a>'); }
-    if (o.draft) scope.querySelector('[contenteditable]').textContent = 'Existing draft';
+    if (o.draft || o.sameDraft) scope.querySelector('[contenteditable]').textContent = o.sameDraft ? body : 'Existing draft';
     const editor = scope.querySelector('[contenteditable]');
+    if (o.emptyLexicalBreak) editor.innerHTML = '<p><br></p>';
     if (o.noEditor) editor.remove();
     if (o.hiddenEditor) editor.hidden = true;
     if (o.displayEditor) editor.style.display = 'none';
@@ -372,6 +414,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       const adapter = createSocialSendBrowser(
         async () => ({ newContext: async () => context }) as unknown as Browser,
       );
+      const persistDraft = vi.fn(async () => {
+        if (options.draftPersistenceFailure)
+          throw Error('synthetic persistence failure');
+      });
       const mark = vi.fn(async () => {
         events.push('mark');
         if (options.headerNameButton)
@@ -535,6 +581,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         popupChildren,
         requests,
         mark,
+        persistDraft,
         target,
         send: () =>
           adapter.send(
@@ -542,12 +589,26 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
             400,
             target,
-            options.bodySending
-              ? 'Sending'
-              : options.bodyPending
-                ? 'Pending review'
-                : 'Synthetic message',
+            options.whitespaceBody
+              ? 'Synthetic  message'
+              : options.multilineBody
+                ? 'Synthetic\nmessage'
+                : options.bodySending
+                  ? 'Sending'
+                  : options.bodyPending
+                    ? 'Pending review'
+                    : 'Synthetic message',
             mark,
+            options.ownDraft ||
+              options.foreignDraft ||
+              options.draftPersistenceFailure
+              ? {
+                  previousBody: options.ownDraft
+                    ? 'Synthetic message'
+                    : undefined,
+                  beforeFill: persistDraft,
+                }
+              : undefined,
           ),
         close: () => context.close(),
       };
@@ -866,6 +927,19 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     );
     it.each([
       { headerNameButton: true },
+      { headerNameButton: true, headerSpan: true, lexicalWrap: true },
+      { headerNameButton: true, headerSpan: true, headerAvatar: true },
+      {
+        headerNameButton: true,
+        headerLink: true,
+        lexicalWrap: true,
+        ukrainianRestore: true,
+      },
+      { headerNameButton: true, lexicalNewline: true },
+      { headerNameButton: true, emptyLexicalBreak: true },
+      { headerNameButton: true, whitespaceBody: true },
+      { headerNameButton: true, multilineBody: true },
+      { headerNameButton: true, sameDraft: true, ownDraft: true },
       { headerNameButton: true, company: true },
       { observed: true, incidentalBranch: true },
       { observed: true, incidentalBranch: true, neighbour: true },
@@ -921,9 +995,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               lateError: 'none',
             },
           });
+          const inputEvents = f.events.filter(
+            (event) => event === 'input:target',
+          );
+          expect(inputEvents.length).toBeGreaterThan(0);
           expect(f.events).toEqual([
             'open',
-            'input:target',
+            ...inputEvents,
             'mark',
             'send:target',
           ]);
@@ -1018,7 +1096,51 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       },
     );
     it.each([
+      'hiddenDraftText',
+      'extraDraftParagraph',
+      'emptyDraftParagraph',
+      'splitDraftWords',
+      'breakDraftWords',
+    ])('rejects ambiguous Lexical text after fill (%s)', async (kind) => {
+      const f = await fixture({
+        headerNameButton: true,
+        lexicalNewline: true,
+        [kind]: true,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
+        expect(f.events).toEqual(['open', 'input:target']);
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
       { headerNameButton: true, headerNameMismatch: true },
+      { headerNameButton: true, headerSpan: true, headerNameMismatch: true },
+      {
+        headerNameButton: true,
+        headerSpan: true,
+        headerAvatar: true,
+        wrongAvatarLabel: true,
+      },
+      {
+        headerNameButton: true,
+        headerSpan: true,
+        headerAvatar: true,
+        wrongAvatarText: true,
+      },
+      {
+        headerNameButton: true,
+        headerSpan: true,
+        headerAvatar: true,
+        wrongAvatarRecipient: true,
+      },
+      { headerNameButton: true, headerLink: true, wrongRecipient: true },
+      { headerNameButton: true, lexicalWrap: true, extraBranchSend: true },
+      { headerNameButton: true, sameDraft: true, foreignDraft: true },
+      { headerNameButton: true, draft: true, ownDraft: true },
+      { headerNameButton: true, draftPersistenceFailure: true },
       { headerNameButton: true, secondPopup: true },
       { headerNameButton: true, secondPopupHeaderOnly: true },
       { headerNameButton: true, preopenedProfilePopup: true },

@@ -233,6 +233,82 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         expect(knownThreadSender).toHaveBeenCalledOnce();
       }
       if (network === 'facebook') {
+        // A failed pre-dispatch fill belongs only to its persisted message,
+        // account, recipient and exact body; the durable marker still wins.
+        await reset();
+        const draft = await create();
+        const fill = vi.fn(async (_request, a) => {
+          expect(a?.facebookDraft?.previousBody).toBeUndefined();
+          await a!.facebookDraft!.beforeFill();
+          throw new SocialSessionCheckError('network');
+        });
+        await send(draft.id, fill);
+        expect(fill).toHaveBeenCalledOnce();
+        const snapshot = (
+          await sonarPool.query(
+            'select request_snapshot from messages where id=$1',
+            [draft.id],
+          )
+        ).rows[0].request_snapshot;
+        expect(snapshot).toMatchObject({
+          facebookDraftMessageId: draft.id,
+          facebookDraftAccountId: account,
+          body: 'Human reply',
+        });
+        for (const patch of [
+          { facebookDraftMessageId: randomUUID() },
+          { facebookDraftAccountId: randomUUID() },
+          { to: 'https://www.facebook.com/other_recipient/' },
+          { body: 'Different draft' },
+        ]) {
+          await reset();
+          await sonarPool.query(
+            'update messages set request_snapshot=$2 where id=$1',
+            [draft.id, { ...snapshot, ...patch }],
+          );
+          const rejectDraft = vi.fn(async (_request, a) => {
+            expect(a?.facebookDraft?.previousBody).toBeUndefined();
+            throw new SocialSessionCheckError('network');
+          });
+          await send(draft.id, rejectDraft);
+          expect(rejectDraft).toHaveBeenCalledOnce();
+          expect(
+            rejectDraft.mock.calls[0]![1]?.facebookDraft?.previousBody,
+          ).toBeUndefined();
+        }
+        await reset();
+        const otherDraft = await create();
+        await sonarPool.query(
+          'update messages set request_snapshot=$2 where id=$1',
+          [otherDraft.id, snapshot],
+        );
+        const rejectOther = vi.fn(async (_request, a) => {
+          expect(a?.facebookDraft?.previousBody).toBeUndefined();
+          throw new SocialSessionCheckError('network');
+        });
+        await send(otherDraft.id, rejectOther);
+        expect(rejectOther).toHaveBeenCalledOnce();
+        expect(
+          rejectOther.mock.calls[0]![1]?.facebookDraft?.previousBody,
+        ).toBeUndefined();
+        await reset();
+        await sonarPool.query(
+          'update messages set request_snapshot=$2 where id=$1',
+          [draft.id, snapshot],
+        );
+        const resumeDraft = vi.fn(async (_request, a) => {
+          expect(a?.facebookDraft?.previousBody).toBe('Human reply');
+          await a!.beforeSend!();
+          throw new SocialSendError(
+            'delivery_uncertain',
+            'Перевірте чат вручну',
+          );
+        });
+        await send(draft.id, resumeDraft);
+        expect(await send(draft.id, resumeDraft)).toMatchObject({
+          reasonCode: 'social_delivery_uncertain',
+        });
+        expect(resumeDraft).toHaveBeenCalledOnce();
         expect(stored.providerId).toBe(`https://www.facebook.com/sonar_test/`);
         expect(await send(first.id, sender)).toMatchObject({
           status: 'done',
