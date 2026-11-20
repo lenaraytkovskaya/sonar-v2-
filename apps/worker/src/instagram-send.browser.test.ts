@@ -58,7 +58,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         if (options.navigationFailure) return route.abort('failed');
         if (
           url.hostname === 'www.instagram.com' &&
-          (url.pathname === '/fixture_company/' ||
+          (url.pathname === '/' ||
+            url.pathname === '/fixture_company/' ||
             url.pathname === '/direct/t/fixture-thread/')
         )
           return route.fulfill({
@@ -66,8 +67,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             contentType: 'text/html',
             body:
               options.splash ||
+              (options.splashOnFirstLoad &&
+                requests.filter(
+                  (request) => request === `${url.hostname}${url.pathname}`,
+                ).length === 1) ||
               (options.delayedSplash && !url.searchParams.has('loaded'))
-                ? `<div aria-label="Instagram logo">Instagram</div><p>from Meta</p>${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
+                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
                 : options.capturedMenu
                   ? capturedMenu +
                     '<nav><a href="/direct/inbox/">Inbox</a></nav>'
@@ -181,6 +186,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         );
       return {
         send,
+        check: () =>
+          adapter.check(
+            { id: 'fixture', channel: 'instagram', settings: {} },
+            { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
+            Number(options.timeoutMs ?? 250),
+          ),
         mark,
         requests,
         events,
@@ -301,20 +312,95 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         );
         expect(f.events).toEqual(['open', 'mark', 'send']);
         expect(f.mark).toHaveBeenCalledOnce();
+        expect(
+          f.requests.filter(
+            (request) => request === 'www.instagram.com/fixture_company/',
+          ),
+        ).toHaveLength(2);
+      } finally {
+        await f.close();
+      }
+    });
+    it('reloads a stalled splash exactly once before one send', async () => {
+      const f = await fixture({ splashOnFirstLoad: true, timeoutMs: 250 });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(
+          f.requests.filter(
+            (request) => request === 'www.instagram.com/fixture_company/',
+          ),
+        ).toHaveLength(2);
+        expect(f.events).toEqual(['open', 'mark', 'send']);
+        expect(f.mark).toHaveBeenCalledOnce();
       } finally {
         await f.close();
       }
     });
     it('reports a persistent splash as a navigation timeout without dispatch', async () => {
-      const f = await fixture({ splash: true, timeoutMs: 120 });
+      const f = await fixture({
+        splash: true,
+        splashShell: true,
+        timeoutMs: 120,
+      });
       try {
         await expect(f.send()).rejects.toMatchObject({
           stage: 'navigation',
           errorKind: 'timeout',
-          reasonUk: expect.stringContaining('не завершив завантаження'),
+          screen: 'splash',
+          reasonUk: expect.stringContaining('[screen=splash]'),
         });
         expect(f.mark).not.toHaveBeenCalled();
         expect(f.events).not.toContain('send');
+        expect(f.inputs).toEqual([]);
+        expect(
+          f.requests.filter(
+            (request) => request === 'www.instagram.com/fixture_company/',
+          ),
+        ).toHaveLength(2);
+      } finally {
+        await f.close();
+      }
+    });
+    it('does not fall back from a persistent direct-thread splash or reload twice', async () => {
+      const f = await fixture({
+        splash: true,
+        knownThreadId: 'fixture-thread',
+        timeoutMs: 120,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          stage: 'navigation',
+          errorKind: 'timeout',
+          screen: 'splash',
+        });
+        expect(f.requests).toEqual([
+          'www.instagram.com/direct/t/fixture-thread/',
+          'www.instagram.com/direct/t/fixture-thread/',
+        ]);
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it('classifies a persistent session-check splash before checking authentication', async () => {
+      const f = await fixture({ splash: true, timeoutMs: 120 });
+      try {
+        await expect(f.check()).rejects.toMatchObject({
+          reason: 'timeout',
+          errorKind: 'timeout',
+          diagnostic: {
+            stage: 'navigation',
+            screen: 'splash',
+            errorKind: 'timeout',
+          },
+        });
+        expect(f.requests).toEqual([
+          'www.instagram.com/',
+          'www.instagram.com/',
+        ]);
       } finally {
         await f.close();
       }

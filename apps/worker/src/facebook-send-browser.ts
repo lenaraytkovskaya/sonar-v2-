@@ -16,6 +16,7 @@ type FinderBranch =
   | 'multiple'
   | 'forbidden'
   | 'name_mismatch'
+  | 'history_loading'
   | 'composer_scope'
   | 'header_count'
   | 'parent_structure'
@@ -75,18 +76,47 @@ async function conversation(
   recipient: string,
   body: string,
   observe: (observation: Observation) => void,
+  timeoutMs: number,
   openedProfile?: { url: string; name: string },
 ) {
   const finder = await page.evaluateHandle(
     ({ recipient, body, openedProfile }) => {
       const normalize = (text: string | null) =>
         (text ?? '').replace(/\s+/g, ' ').trim();
+      // Recipient names tolerate formatting controls and case; draft text does not.
+      const normalizeName = (text: string | null) =>
+        normalize(
+          (text ?? '').replace(
+            /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]|\ufe0e|\ufe0f/g,
+            '',
+          ),
+        ).toLowerCase();
+      const headerName = (text: string | null) =>
+        normalizeName(text)
+          .replace(/(?:\s*[⌄▾▼∨˅›❯⌃▴▲‹❮〉〈>])+$/u, '')
+          .trim();
       const visible = (node: Element) =>
         node.getClientRects().length > 0 &&
         getComputedStyle(node).visibility === 'visible' &&
         !node.closest('[hidden], [aria-hidden="true"], [inert]');
       const all = (node: ParentNode, selector: string) =>
         Array.from(node.querySelectorAll(selector)).filter(visible);
+      const historyLoading = (scope: Element) =>
+        [scope, ...all(scope, '*')].some(
+          (node) =>
+            node.getAttribute('role') === 'progressbar' ||
+            node.getAttribute('aria-busy') === 'true' ||
+            /^(?:loading|завантаження|загрузка)(?:[ .…]|$)/i.test(
+              normalize(node.getAttribute('aria-label')),
+            ),
+        );
+      const namedLabel = (node: Element, pattern: RegExp) => {
+        const label = normalize(node.getAttribute('aria-label'));
+        return label ? normalizeName(pattern.exec(label)?.[1] ?? '') : null;
+      };
+      const editorPattern = /^(?:write to|напишіть|напишите)\s+(.+)$/i;
+      const regionPattern =
+        /^(?:messages in conversation with|повідомлення в розмові з|сообщения в переписке с)\s+(.+)$/i;
       const regionSelector =
         '[aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="log"]';
       const composerSelector =
@@ -149,8 +179,8 @@ async function conversation(
         name: string,
         allowEmpty = false,
       ) => {
-        const text = normalize(link.textContent);
-        const label = normalize(link.getAttribute('aria-label'));
+        const text = normalizeName(link.textContent);
+        const label = normalizeName(link.getAttribute('aria-label'));
         // The live avatar link has no text; its exact accessible name binds it
         // to the composer/log name. Reject contradictory labels or text.
         return (
@@ -159,14 +189,28 @@ async function conversation(
         );
       };
       const profileHeaderNames = (header: Element, name: string) => {
+        const textName = (node: Element) => {
+          const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+          let text = '';
+          while (walker.nextNode()) {
+            const parent = walker.currentNode.parentElement;
+            if (
+              parent &&
+              visible(parent) &&
+              !parent.closest('svg, img, [role="img"], [aria-hidden="true"]')
+            )
+              text += walker.currentNode.textContent;
+          }
+          return headerName(text);
+        };
         const matches = all(
           header,
           'button, [role="button"], a[href], span',
         ).filter(
           (node) =>
-            normalize((node as HTMLElement).innerText) === name &&
+            textName(node) === name &&
             (!node.getAttribute('aria-label') ||
-              normalize(node.getAttribute('aria-label')) === name) &&
+              headerName(node.getAttribute('aria-label')) === name) &&
             (() => {
               for (
                 let parent = node.parentElement;
@@ -175,7 +219,7 @@ async function conversation(
               )
                 if (
                   parent.hasAttribute('aria-label') &&
-                  normalize(parent.getAttribute('aria-label')) !== name
+                  headerName(parent.getAttribute('aria-label')) !== name
                 )
                   return false;
               return true;
@@ -192,9 +236,9 @@ async function conversation(
           location.href === openedProfile.url &&
           pageKind() === 'profile' &&
           identityUrl(location.href) === recipient &&
-          name === openedProfile.name &&
+          name === normalizeName(openedProfile.name) &&
           all(document, 'main h1, [role="main"] h1').length === 1 &&
-          normalize(
+          normalizeName(
             all(document, 'main h1, [role="main"] h1')[0]!.textContent,
           ) === name &&
           all(document, composerSelector).length === 1 &&
@@ -410,19 +454,13 @@ async function conversation(
               (editor.getAttribute('aria-placeholder') === 'Aa'
                 ? fallbackComposer(editor, scope, region)
                 : null);
-            const editorLabel = normalize(editor.getAttribute('aria-label'));
-            const editorName = /^(?:write to|напишіть|напишите)\s+(.+)$/i.exec(
-              editorLabel,
-            )?.[1];
+            const editorName = namedLabel(editor, editorPattern);
             const regionLabel = normalize(region.getAttribute('aria-label'));
-            const regionName =
-              /^(?:messages in conversation with|повідомлення в розмові з|сообщения в переписке с)\s+(.+)$/i.exec(
-                regionLabel,
-              )?.[1];
+            const regionName = namedLabel(region, regionPattern);
             const localRecipientLinks = all(scope, 'a[href]').filter(
               (link) => identity(link) === recipient,
             );
-            const name = normalize(
+            const name = normalizeName(
               editorName ||
                 regionName ||
                 (localRecipientLinks.length === 1
@@ -431,14 +469,11 @@ async function conversation(
                   : (openedProfile?.name ?? '')),
             );
             const regionNameMatches =
-              !regionLabel ||
-              Boolean(regionName && normalize(regionName) === name);
+              !regionLabel || Boolean(regionName && regionName === name);
             if (
               !name ||
               !regionNameMatches ||
-              (editorName &&
-                regionName &&
-                normalize(editorName) !== normalize(regionName))
+              (editorName && regionName && editorName !== regionName)
             ) {
               reject('name_mismatch');
               break;
@@ -515,6 +550,10 @@ async function conversation(
                   ? 'wrong_recipient'
                   : 'recipient_link_count',
               );
+              break;
+            }
+            if (historyLoading(scope)) {
+              reject('history_loading');
               break;
             }
             candidates.push({
@@ -672,16 +711,10 @@ async function conversation(
             ? profileHeaderNames(header, name)[0] === link
             : identity(link) === recipient && namesRecipient(link, name)) &&
           (!editor.getAttribute('aria-label') ||
-            editor.getAttribute('aria-label') === `Write to ${name}` ||
-            editor.getAttribute('aria-label') === `Напишіть ${name}` ||
-            editor.getAttribute('aria-label') === `Напишите ${name}`) &&
+            namedLabel(editor, editorPattern) === name) &&
           (!region.getAttribute('aria-label') ||
-            region.getAttribute('aria-label') ===
-              `Messages in conversation with ${name}` ||
-            region.getAttribute('aria-label') ===
-              `Повідомлення в розмові з ${name}` ||
-            region.getAttribute('aria-label') ===
-              `Сообщения в переписке с ${name}`) &&
+            namedLabel(region, regionPattern) === name) &&
+          !historyLoading(scope) &&
           all(scope, composerSelector).length === 1 &&
           all(scope, composerSelector)[0] === editor &&
           all(scope, regionSelector).length === 1 &&
@@ -938,7 +971,9 @@ async function conversation(
     { recipient, body, openedProfile },
   );
   try {
-    await page.waitForFunction((finder) => finder.find() !== null, finder);
+    await page.waitForFunction((finder) => finder.find() !== null, finder, {
+      timeout: timeoutMs,
+    });
     const state = await finder.evaluateHandle((finder) => finder.find());
     observe(await finder.evaluate((finder) => finder.diagnostic()));
     return state;
@@ -982,7 +1017,7 @@ export async function sendFacebook(
   };
   const diagnostic = (error: unknown) =>
     JSON.stringify({
-      version: 'fb-observed84-v1',
+      version: 'fb-profile-chat-v2',
       phase,
       transmission: facts,
       ...observation,
@@ -1150,6 +1185,7 @@ export async function sendFacebook(
       target.handle,
       body,
       observe,
+      timeoutMs,
       openedProfile,
     );
     try {
@@ -1197,6 +1233,7 @@ export async function sendFacebook(
         target.handle,
         body,
         observe,
+        timeoutMs,
         openedProfile,
       );
       if (!(await state.evaluate((state) => state?.valid(true))))

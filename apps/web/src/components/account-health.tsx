@@ -179,14 +179,26 @@ export function HealthJournal({
                   health.channel !== 'email' &&
                   health.channel !== 'telegram' &&
                   health.channel !== 'whatsapp' && (
-                    <a
-                      className="inline-block underline"
-                      target="_blank"
-                      rel="noreferrer"
-                      href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(health.accountId)}&kind=${event.failureShotKind}`}
-                    >
-                      {uk.socialAccounts.failureShot}
-                    </a>
+                    <>
+                      <a
+                        className="inline-block underline"
+                        target="_blank"
+                        rel="noreferrer"
+                        href={`/api/social-accounts/failure-shot?id=${encodeURIComponent(health.accountId)}&kind=${event.failureShotKind}`}
+                      >
+                        {uk.socialAccounts.failureShot}
+                      </a>
+                      {['facebook', 'instagram'].includes(health.channel) && (
+                        <a
+                          className="ml-2 inline-block underline"
+                          target="_blank"
+                          rel="noreferrer"
+                          href={`/api/social-accounts/failure-dom?id=${encodeURIComponent(health.accountId)}&kind=${event.failureShotKind}`}
+                        >
+                          {uk.socialAccounts.failureDom}
+                        </a>
+                      )}
+                    </>
                   )}
               </li>
             ))}
