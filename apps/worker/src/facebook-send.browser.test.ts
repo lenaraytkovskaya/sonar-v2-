@@ -469,7 +469,14 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? '<h1>Service unavailable</h1>'
               : options.login
                 ? '<input type="password">'
-                : markup +
+                : (options.noH1
+                    ? markup.replace(
+                        '<h1>Synthetic recipient</h1>',
+                        options.noTitle
+                          ? ''
+                          : '<a href="/100000000000001/" aria-label="Synthetic Recipient"></a><div role="button" aria-label="Add friend Synthetic Recipient"></div>',
+                      )
+                    : markup) +
                   (options.stalledNavigation
                     ? '<script defer src="/background"></script>'
                     : '') +
@@ -686,6 +693,26 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it('sends from a profile without h1 when the add-friend action and a profile link carry the same name', async () => {
+      const f = await fixture({ noH1: true });
+      try {
+        await expect(f.send()).resolves.toBeTruthy();
+        expect(f.events).toContain('send:target');
+      } finally {
+        await f.close();
+      }
+    });
+
+    it('does not send from a profile with neither h1 nor an add-friend title', async () => {
+      const f = await fixture({ noH1: true, noTitle: true });
+      try {
+        await expect(f.send()).rejects.toBeTruthy();
+        expect(f.events).not.toContain('send:target');
+      } finally {
+        await f.close();
+      }
+    });
+
     it.each([{ headerNameButton: true }, { observed: true }])(
       'reuses a confirmed existing profile mini-chat (%j)',
       async (options) => {

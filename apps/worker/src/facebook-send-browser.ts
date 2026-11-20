@@ -238,10 +238,11 @@ async function conversation(
           pageKind() === 'profile' &&
           identityUrl(location.href) === recipient &&
           name === normalizeName(openedProfile.name) &&
-          all(document, 'main h1, [role="main"] h1').length === 1 &&
-          normalizeName(
-            all(document, 'main h1, [role="main"] h1')[0]!.textContent,
-          ) === name &&
+          all(document, 'main h1, [role="main"] h1').length <= 1 &&
+          (all(document, 'main h1, [role="main"] h1').length === 0 ||
+            normalizeName(
+              all(document, 'main h1, [role="main"] h1')[0]!.textContent,
+            ) === name) &&
           all(document, composerSelector).length === 1 &&
           all(document, regionSelector).length === 1 &&
           headerControls(header) &&
@@ -1081,6 +1082,14 @@ export function facebookProfileActions(page: Page) {
     .filter({ visible: true });
 }
 
+export function facebookAddFriendActions(page: Page) {
+  return page
+    .locator(
+      'main [aria-label^="Add friend "], [role="main"] [aria-label^="Add friend "], main [aria-label^="Додати друга "], [role="main"] [aria-label^="Додати друга "], main [aria-label^="Добавить в друзья "], [role="main"] [aria-label^="Добавить в друзья "]',
+    )
+    .filter({ visible: true });
+}
+
 export function facebookProfileHeadings(page: Page) {
   return page.locator('main h1, [role="main"] h1').filter({ visible: true });
 }
@@ -1111,7 +1120,10 @@ export async function waitForFacebookProfileActions(
       .catch(tolerateTimeout);
     return { headings, actions };
   }
-  await headings.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  await headings
+    .or(facebookAddFriendActions(page))
+    .first()
+    .waitFor({ state: 'visible', timeout: timeoutMs });
   await actions.first().waitFor({ state: 'visible', timeout: timeoutMs });
   return { headings, actions };
 }
@@ -1419,9 +1431,52 @@ export async function sendFacebook(
           '[aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="log"]',
         ),
       ).filter(visible);
-      const name = headings[0]?.textContent?.replace(/\s+/g, ' ').trim();
+      const clean = (text: string | null) =>
+        (text ?? '').replace(/\s+/g, ' ').trim();
+      // Profiles can render without any h1. Then the name is accepted only when
+      // exactly one distinct "Add friend <name>" action and a profile link
+      // labelled with that same name are both visible in main.
+      const labelledName = () => {
+        const friendNames = new Set(
+          Array.from(
+            document.querySelectorAll(
+              'main [aria-label], [role="main"] [aria-label]',
+            ),
+          )
+            .filter(
+              (node) =>
+                visible(node) &&
+                node.matches('button, [role="button"], a[href]') &&
+                /^(?:add friend|додати друга|добавить в друзья)\s+\S/i.test(
+                  clean(node.getAttribute('aria-label')),
+                ),
+            )
+            .map((node) =>
+              clean(node.getAttribute('aria-label')).replace(
+                /^(?:add friend|додати друга|добавить в друзья)\s+/i,
+                '',
+              ),
+            ),
+        );
+        if (friendNames.size !== 1) return undefined;
+        const [friendName] = Array.from(friendNames);
+        const links = Array.from(
+          document.querySelectorAll(
+            'main a[href][aria-label], [role="main"] a[href][aria-label]',
+          ),
+        ).filter(
+          (node) =>
+            visible(node) &&
+            clean(node.getAttribute('aria-label')).toLowerCase() ===
+              friendName!.toLowerCase(),
+        );
+        return links.length > 0 ? friendName : undefined;
+      };
+      const name = headings.length
+        ? clean(headings[0]?.textContent ?? null)
+        : labelledName();
       return actionIsButton &&
-        headings.length === 1 &&
+        headings.length <= 1 &&
         name &&
         editors.length <= 1 &&
         regions.length === editors.length
