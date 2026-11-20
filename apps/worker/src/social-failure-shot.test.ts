@@ -116,3 +116,33 @@ it('masks conversation regions from Facebook failure screenshots', async () => {
     }),
   );
 });
+
+it('leaves Facebook failure screenshots unmasked only when no composer is visible', async () => {
+  const withCount = (count: number) => ({
+    ...pageWith([Buffer.from('jpeg')]),
+    locator: vi.fn(() => ({
+      selector: 'any',
+      filter: () => ({ count: async () => count }),
+    })),
+  });
+  const absent = withCount(0);
+  await captureFailureShot(
+    absent as never,
+    { persistFailureShot: vi.fn(async () => {}) } as never,
+    'send',
+    'first_lookup',
+  );
+  expect(absent.screenshot).toHaveBeenCalledWith(
+    expect.not.objectContaining({ mask: expect.anything() }),
+  );
+  const present = withCount(1);
+  await captureFailureShot(
+    present as never,
+    { persistFailureShot: vi.fn(async () => {}) } as never,
+    'send',
+    'first_lookup',
+  );
+  expect(present.screenshot).toHaveBeenCalledWith(
+    expect.objectContaining({ maskColor: '#000000' }),
+  );
+});
