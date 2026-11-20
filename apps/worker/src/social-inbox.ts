@@ -435,6 +435,7 @@ export async function runSocialInboxSync(
                   at: now.toISOString(),
                   stage: result.reason ? 'sync' : 'persist',
                   kind: result.reason ?? 'incomplete',
+                  skipped: (result.skipped ?? []).slice(0, 12),
                 },
               }
             : { lastFailure: null }),

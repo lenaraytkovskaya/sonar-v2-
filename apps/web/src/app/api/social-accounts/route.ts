@@ -305,6 +305,7 @@ async function handle(request: Request, method: string) {
       inboxPollingEnabled: account.inboxPollingEnabled,
       inboxSyncComplete: account.inboxSyncComplete,
       inboxSyncCreated: account.inboxSyncCreated,
+      inboxSyncSkipped: account.inboxSyncSkipped,
       inboxSyncCheckedAt: account.inboxSyncCheckedAt,
       inboxSyncErrorUk: account.inboxSyncErrorUk,
       failureShotKinds: account.failureShotKinds,
