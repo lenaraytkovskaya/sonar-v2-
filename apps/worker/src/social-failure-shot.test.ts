@@ -147,21 +147,24 @@ it('leaves Facebook failure screenshots unmasked only when no composer is visibl
   );
 });
 
-it('leaves the Facebook screenshot unmasked at the unconfirmed-delivery stage even with a composer', async () => {
-  const page = {
-    ...pageWith([Buffer.from('jpeg')]),
-    locator: vi.fn(() => ({
-      selector: 'any',
-      filter: () => ({ count: async () => 1 }),
-    })),
-  };
-  await captureFailureShot(
-    page as never,
-    { persistFailureShot: vi.fn(async () => {}) } as never,
-    'send',
-    'confirmation',
-  );
-  expect(page.screenshot).toHaveBeenCalledWith(
-    expect.not.objectContaining({ mask: expect.anything() }),
-  );
-});
+it.each(['confirmation', 'transmission'])(
+  'leaves the Facebook screenshot unmasked at the %s stage even with a composer',
+  async (stage) => {
+    const page = {
+      ...pageWith([Buffer.from('jpeg')]),
+      locator: vi.fn(() => ({
+        selector: 'any',
+        filter: () => ({ count: async () => 1 }),
+      })),
+    };
+    await captureFailureShot(
+      page as never,
+      { persistFailureShot: vi.fn(async () => {}) } as never,
+      'send',
+      stage,
+    );
+    expect(page.screenshot).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mask: expect.anything() }),
+    );
+  },
+);
