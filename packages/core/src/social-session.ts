@@ -64,6 +64,13 @@ export type FacebookDispatchResult = {
   };
 };
 
+// Recovery evidence is scoped to the same conversation, account and recipient.
+export type SocialComposerDraft = {
+  previousBody?: string;
+  previousBodies?: string[];
+  beforeFill: () => Promise<void>;
+};
+
 export class SocialSendError extends Error {
   taskResult?: object;
   constructor(

@@ -172,6 +172,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'https://instagram.com/fixture_company/',
           typeof options.body === 'string' ? options.body : 'Synthetic message',
           mark,
+          options.priorBodies
+            ? {
+                previousBodies: options.priorBodies as string[],
+                beforeFill: async () => {},
+              }
+            : undefined,
         );
       return {
         send,
@@ -209,6 +215,46 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'textarea' in options ? 'textarea' : 'textbox',
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([{ lexical: true }, { textarea: true }])(
+      'recovers only a prior undelivered draft (%j)',
+      async (variant) => {
+        const f = await fixture({
+          ...variant,
+          draftText: '  Earlier \n draft ',
+          priorBodies: ['Earlier draft'],
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events.filter((event) => event === 'send')).toHaveLength(1);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([{ priorBodies: [] }, { priorBodies: ['Another draft'] }])(
+      'preserves an unknown or delivered draft (%j)',
+      async ({ priorBodies }) => {
+        const f = await fixture({
+          lexical: true,
+          draftText: 'Existing draft',
+          priorBodies,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'unavailable',
+            reasonUk: expect.stringContaining('чернетку'),
+          });
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+          expect(f.events).not.toContain('send');
         } finally {
           await f.close();
         }

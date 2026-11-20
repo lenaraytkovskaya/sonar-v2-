@@ -116,6 +116,13 @@ export const uk = {
     range: (min: number, max: number) =>
       `Допустиме значення: від ${min} до ${max}.`,
     section: 'Розділ налаштувань',
+    hoursExemptCompanies: 'Компанії без робочих годин (тестові)',
+    hoursExemptHint:
+      'Для вибраних компаній надсилання доступне в будь-який час. Денний ліміт, паузи акаунтів і список «Не контактувати» діють.',
+    hoursExemptEmpty: 'Винятків немає',
+    hoursExemptRemove: 'Прибрати виняток',
+    hoursExemptFind: 'Знайти',
+    hoursExemptSearch: 'Знайти компанію за назвою',
     showAll: 'Показати все',
     modelHint: 'Для помічника та щоденних завдань.',
     aboutHint:

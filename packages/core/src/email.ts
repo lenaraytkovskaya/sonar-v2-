@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export class EmailSendError extends Error {
   constructor(
     public code: string,
@@ -115,6 +117,22 @@ export function messageStatusForMode(
       ? 'queued'
       : 'draft';
 }
+const exemptCompanyIdsSchema = z.array(z.string().uuid());
+export function validSendHoursExemptCompanyIds(
+  value: unknown,
+): value is string[] {
+  return exemptCompanyIdsSchema.safeParse(value).success;
+}
+export function isSendHoursExempt(
+  companyId: string | null,
+  value: unknown,
+): boolean {
+  return (
+    companyId !== null &&
+    validSendHoursExemptCompanyIds(value) &&
+    value.some((id) => id.toLowerCase() === companyId.toLowerCase())
+  );
+}
 // Days use JavaScript weekday numbers: Sunday = 0. Hours are local wall-clock hours.
 export type SendHours = { start: number; end: number; days: number[] };
 export function nextSendTime(
@@ -122,19 +140,21 @@ export function nextSendTime(
   timeZone: string,
   hours: SendHours,
   notBefore = now,
+  hoursExempt = false,
 ): Date {
   if (
-    !hours ||
-    !Number.isInteger(hours.start) ||
-    !Number.isInteger(hours.end) ||
-    hours.start < 0 ||
-    hours.start > 23 ||
-    hours.end < 1 ||
-    hours.end > 24 ||
-    hours.start >= hours.end ||
-    !Array.isArray(hours.days) ||
-    !hours.days.length ||
-    hours.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)
+    !hoursExempt &&
+    (!hours ||
+      !Number.isInteger(hours.start) ||
+      !Number.isInteger(hours.end) ||
+      hours.start < 0 ||
+      hours.start > 23 ||
+      hours.end < 1 ||
+      hours.end > 24 ||
+      hours.start >= hours.end ||
+      !Array.isArray(hours.days) ||
+      !hours.days.length ||
+      hours.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))
   )
     throw new EmailSendError(
       'send_hours',
@@ -165,6 +185,7 @@ export function nextSendTime(
       'Некоректна дата відправлення.',
       false,
     );
+  if (hoursExempt) return candidate;
   // Walk actual instants, so DST gaps and repeated wall-clock hours remain correct.
   for (let minute = 0; minute <= 8 * 24 * 60; minute++) {
     const parts = format.formatToParts(candidate);

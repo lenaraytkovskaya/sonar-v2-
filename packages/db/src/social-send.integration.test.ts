@@ -54,6 +54,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
     const now = new Date('2026-11-12T10:00:00Z');
     const keys = [
       'send.hours',
+      'send.hours_exempt_company_ids',
       'send.time_zones',
       'social.send.min_gap_seconds',
       'social.send.max_gap_seconds',
@@ -66,6 +67,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
     ).rows;
     try {
       for (const [key, value] of [
+        ['send.hours_exempt_company_ids', []],
         ['send.hours', { start: 0, end: 24, days: [0, 1, 2, 3, 4, 5, 6] }],
         ['send.time_zones', { PL: 'Europe/Warsaw' }],
         ['social.send.min_gap_seconds', 120],
@@ -232,11 +234,83 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         });
         expect(knownThreadSender).toHaveBeenCalledOnce();
       }
+      // Only earlier, undelivered outgoing text for this account/recipient may
+      // replace a browser draft. Delivered collisions always remain protected.
+      await reset();
+      const prior = await create();
+      await sonarPool.query(
+        "update messages set body='Earlier  draft',status='failed',first_attempt_at=now() where id=$1",
+        [prior.id],
+      );
+      const current = await create();
+      const inspectDrafts = vi.fn(async (request, a) => {
+        expect(request.body).toBe('Human reply');
+        expect(a?.facebookDraft?.previousBodies).toContain('Earlier  draft');
+        throw new SocialSessionCheckError('network');
+      });
+      await send(current.id, inspectDrafts);
+      expect(inspectDrafts).toHaveBeenCalledOnce();
+      for (const status of ['sent', 'delivered', 'read']) {
+        await reset();
+        await sonarPool.query('update messages set status=$2 where id=$1', [
+          prior.id,
+          status,
+        ]);
+        await sonarPool.query(
+          "update messages set status='queued' where id=$1",
+          [current.id],
+        );
+        const protectedDraft = vi.fn(async (_request, a) => {
+          expect(a?.facebookDraft?.previousBodies).not.toContain(
+            'Earlier  draft',
+          );
+          throw new SocialSessionCheckError('network');
+        });
+        await send(current.id, protectedDraft);
+        expect(protectedDraft).toHaveBeenCalledOnce();
+      }
+      await reset();
+      const duplicate = await create();
+      await sonarPool.query(
+        "update messages set body='  Earlier \n draft ',status='failed' where id=$1",
+        [duplicate.id],
+      );
+      const collision = await create();
+      const rejectCollision = vi.fn(async (_request, a) => {
+        expect(
+          a?.facebookDraft?.previousBodies?.map((text) =>
+            text.replace(/\s+/g, ' ').trim(),
+          ),
+        ).not.toContain('Earlier draft');
+        throw new SocialSessionCheckError('network');
+      });
+      await send(collision.id, rejectCollision);
+      expect(rejectCollision).toHaveBeenCalledOnce();
+      await reset();
+      const refreshed = await create();
+      await sonarPool.query(
+        'update messages set request_snapshot=$2 where id=$1',
+        [
+          refreshed.id,
+          { body: 'Stale snapshot', to: 'https://www.instagram.com/other/' },
+        ],
+      );
+      const freshRequest = vi.fn(async (request) => {
+        expect(request.body).toBe('Human reply');
+        expect(request.to).toContain('sonar_test');
+        throw new SocialSessionCheckError('network');
+      });
+      await send(refreshed.id, freshRequest);
+      expect(freshRequest).toHaveBeenCalledOnce();
       if (network === 'facebook') {
         // A failed pre-dispatch fill belongs only to its persisted message,
         // account, recipient and exact body; the durable marker still wins.
         await reset();
         const draft = await create();
+        await sonarPool.query(
+          "update messages set body='Own persisted draft' where id=$1",
+          [draft.id],
+        );
         const fill = vi.fn(async (_request, a) => {
           expect(a?.facebookDraft?.previousBody).toBeUndefined();
           await a!.facebookDraft!.beforeFill();
@@ -253,7 +327,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         expect(snapshot).toMatchObject({
           facebookDraftMessageId: draft.id,
           facebookDraftAccountId: account,
-          body: 'Human reply',
+          body: 'Own persisted draft',
         });
         for (const patch of [
           { facebookDraftMessageId: randomUUID() },
@@ -297,7 +371,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           [draft.id, snapshot],
         );
         const resumeDraft = vi.fn(async (_request, a) => {
-          expect(a?.facebookDraft?.previousBody).toBe('Human reply');
+          expect(a?.facebookDraft?.previousBody).toBe('Own persisted draft');
           await a!.beforeSend!();
           throw new SocialSendError(
             'delivery_uncertain',
@@ -371,6 +445,14 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         reasonCode: 'outside_send_hours',
         runAt: new Date('2026-11-16T08:00:00Z'),
       });
+      await sonarPool.query(
+        "update settings set value=$1 where key='send.hours_exempt_company_ids'",
+        [JSON.stringify([company])],
+      );
+      const exemptNight = await create();
+      expect(
+        await send(exemptNight.id, sender, new Date('2026-11-12T23:00:00Z')),
+      ).toMatchObject({ status: 'done' });
       await sonarPool.query(
         "update settings set value=$1 where key='send.hours'",
         [JSON.stringify({ start: 0, end: 24, days: [0, 1, 2, 3, 4, 5, 6] })],

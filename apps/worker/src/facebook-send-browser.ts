@@ -5,6 +5,7 @@ import { socialTarget } from '@sonar/core';
 import {
   SocialSendError,
   type FacebookDispatchResult,
+  type SocialComposerDraft,
   SocialSessionCheckError,
   socialSessionCheckReason,
 } from '@sonar/core/social-session';
@@ -165,7 +166,20 @@ async function conversation(
           (node) =>
             normalize((node as HTMLElement).innerText) === name &&
             (!node.getAttribute('aria-label') ||
-              normalize(node.getAttribute('aria-label')) === name),
+              normalize(node.getAttribute('aria-label')) === name) &&
+            (() => {
+              for (
+                let parent = node.parentElement;
+                parent && parent !== header;
+                parent = parent.parentElement
+              )
+                if (
+                  parent.hasAttribute('aria-label') &&
+                  normalize(parent.getAttribute('aria-label')) !== name
+                )
+                  return false;
+              return true;
+            })(),
         );
         return matches.filter(
           (node) =>
@@ -569,6 +583,16 @@ async function conversation(
               if (child.nodeType === Node.TEXT_NODE) text += child.textContent;
               else if (child instanceof HTMLElement && child.tagName === 'BR')
                 text += '\n';
+              // Chromium fill can leave an empty trailing Lexical paragraph
+              // after a direct text node; it carries no text or line break.
+              else if (
+                node === editor &&
+                child instanceof HTMLElement &&
+                /^(P|DIV)$/.test(child.tagName) &&
+                !child.childNodes.length &&
+                child === editor.lastChild
+              )
+                continue;
               else if (
                 child instanceof HTMLElement &&
                 child.tagName === 'SPAN' &&
@@ -597,7 +621,7 @@ async function conversation(
             // concatenate textContent across blocks or collapse repeated spaces.
             return lines.includes(null) ? null : lines.join('\n');
           }
-          return inline(editor) ?? (editor as HTMLElement).innerText;
+          return inline(editor);
         };
         const valid = (filled: boolean) =>
           pinned.every(
@@ -845,7 +869,10 @@ async function conversation(
           region,
           valid: verify,
           inputExactMatch: () => inputText() === body,
-          matchesDraft: (draft: string) => inputText() === draft,
+          matchesDraft: (draft: string) => {
+            const text = inputText();
+            return text !== null && normalize(text) === normalize(draft);
+          },
           outgoingCount: () =>
             rows().filter((row) => sentRow(row) !== null).length,
           empty: () => {
@@ -934,7 +961,7 @@ export async function sendFacebook(
   body: string,
   beforeSend: () => Promise<void>,
   assertSession: (timeoutMs?: number) => Promise<void>,
-  draft?: { previousBody?: string; beforeFill: () => Promise<void> },
+  draft?: SocialComposerDraft,
 ): Promise<FacebookDispatchResult> {
   let attempted = false;
   const facts: FacebookDispatchResult['observation'] = {
@@ -1128,28 +1155,36 @@ export async function sendFacebook(
     try {
       if (
         !(await state.evaluate(
-          (state, previousBody) =>
+          (state, previousBodies) =>
             state?.valid(false) &&
             (state.empty() ||
-              (previousBody !== undefined && state.matchesDraft(previousBody))),
-          draft?.previousBody,
+              previousBodies.some((body) => state.matchesDraft(body))),
+          [
+            ...(draft?.previousBodies ?? []),
+            ...(draft?.previousBody !== undefined ? [draft.previousBody] : []),
+          ],
         ))
       )
-        throw unavailable();
+        throw new SocialSendError(
+          'unavailable',
+          'Поле повідомлення містить непідтверджену чернетку. Перевірте й очистіть його вручну.',
+        );
       const editor = (
         await state.evaluateHandle((state) => state!.editor)
       ).asElement();
       if (!editor) throw unavailable();
       await draft?.beforeFill();
-      // The only permitted replacement is the exact persisted draft for this
-      // message. Recheck after persistence before touching the editor.
+      // Recheck persisted recovery evidence before replacing an existing draft.
       if (
         !(await state.evaluate(
-          (state, previousBody) =>
+          (state, previousBodies) =>
             state?.valid(false) &&
             (state.empty() ||
-              (previousBody !== undefined && state.matchesDraft(previousBody))),
-          draft?.previousBody,
+              previousBodies.some((body) => state.matchesDraft(body))),
+          [
+            ...(draft?.previousBodies ?? []),
+            ...(draft?.previousBody !== undefined ? [draft.previousBody] : []),
+          ],
         ))
       )
         throw unavailable();

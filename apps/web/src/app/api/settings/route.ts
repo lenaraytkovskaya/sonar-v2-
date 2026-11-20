@@ -1,6 +1,10 @@
 import { scannerKeys, validScannerSettings } from '@/lib/scanner-settings';
 import { socialKeys, validSocialSettings } from '@/lib/social-settings';
-import { profilesSchema, validFinanceRates } from '@sonar/core';
+import {
+  profilesSchema,
+  validFinanceRates,
+  validSendHoursExemptCompanyIds,
+} from '@sonar/core';
 import { apiUser } from '@/lib/api-access';
 import { uk } from '@/i18n/uk';
 export async function GET(request: Request) {
@@ -15,6 +19,7 @@ export async function GET(request: Request) {
         'ai.model.cheap',
         'ai.model.strong',
         'budget.monthly_usd',
+        'send.hours_exempt_company_ids',
         'finance.rates',
         'finance.renewal_reminder_days',
         'company.about',
@@ -32,7 +37,16 @@ export async function GET(request: Request) {
       ],
     ],
   );
+  const exemptIds =
+    rows.find((row) => row.key === 'send.hours_exempt_company_ids')?.value ??
+    [];
+  const { rows: hoursExemptCompanies } = await sonarPool.query(
+    'select id,name from companies where id=any($1::uuid[]) order by name,id',
+    [validSendHoursExemptCompanyIds(exemptIds) ? exemptIds : []],
+  );
   return Response.json({
+    'send.hours_exempt_company_ids': [],
+    hoursExemptCompanies,
     'budget.monthly_usd': Number(process.env.MONTHLY_BUDGET_USD ?? 50),
     'finance.rates': { USD: 1, UAH: 0.024, EUR: 1.08 },
     'finance.renewal_reminder_days': 3,
@@ -49,6 +63,8 @@ export async function POST(request: Request) {
       (typeof data.analysisPrompt !== 'string' ||
         !data.analysisPrompt.trim() ||
         data.analysisPrompt.length > 20000)) ||
+    (data.hoursExemptCompanyIds !== undefined &&
+      !validSendHoursExemptCompanyIds(data.hoursExemptCompanyIds)) ||
     (data.scanner !== undefined && !validScannerSettings(data.scanner)) ||
     (data.social !== undefined && !validSocialSettings(data.social)) ||
     typeof data.about !== 'string' ||
@@ -101,6 +117,17 @@ export async function POST(request: Request) {
       ...(data.social ?? {}),
       ...(data.analysisPrompt !== undefined
         ? { 'analysis.prompt': data.analysisPrompt }
+        : {}),
+      ...(data.hoursExemptCompanyIds !== undefined
+        ? {
+            'send.hours_exempt_company_ids': [
+              ...new Set(
+                (data.hoursExemptCompanyIds as string[]).map((id) =>
+                  id.toLowerCase(),
+                ),
+              ),
+            ],
+          }
         : {}),
       'company.about': data.about,
       'budget.monthly_usd': data.budget,

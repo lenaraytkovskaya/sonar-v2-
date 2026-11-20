@@ -72,6 +72,7 @@ function chat(id, target, name) {
       void window.fixtureEvent('restore');
     });
     if (o.headerNameButton) {
+      if (o.headerWrongParentLabel) scope.querySelector('[data-fixture-recipient]').setAttribute('aria-label', 'Other Recipient');
       if (o.headerSpan || o.headerLink) {
         const original = scope.querySelector('[data-fixture-recipient]');
         const replacement = document.createElement(o.headerLink ? 'a' : 'span');
@@ -148,6 +149,7 @@ function wire(scope) {
     }
     if (o.splitDraftWords) editor.innerHTML = '<p>Synthetic</p><p>message</p>';
     if (o.breakDraftWords) editor.innerHTML = '<span>Synthetic<br>message</span>';
+    if (o.unsupportedInline) editor.innerHTML = '<em>' + editor.textContent + '</em>';
     if (o.hiddenDraftText) editor.insertAdjacentHTML('beforeend', '<span hidden>Unexpected draft text</span>');
     if (o.extraDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p>Unexpected paragraph</p>');
     if (o.emptyDraftParagraph) editor.insertAdjacentHTML('beforeend', '<p><br></p>');
@@ -211,7 +213,7 @@ document.querySelector('#open').onclick = () => {
     if (o.outsideHeaderLink) scope.append(scope.querySelector('a'));
     if (o.headerLinkInMessages) region(scope).append(scope.querySelector('a'));
     if (o.globalLinkOnly) { scope.querySelector('a').remove(); document.querySelector('nav').insertAdjacentHTML('beforeend', '<a href="/' + recipient + '/">' + label + '</a>'); }
-    if (o.draft || o.sameDraft) scope.querySelector('[contenteditable]').textContent = o.sameDraft ? body : 'Existing draft';
+    if (o.draft || o.sameDraft) scope.querySelector('[contenteditable]').textContent = o.draftWhitespace ? '  Earlier \u00a0 draft  ' : o.sameDraft ? body : 'Existing draft';
     const editor = scope.querySelector('[contenteditable]');
     if (o.emptyLexicalBreak) editor.innerHTML = '<p><br></p>';
     if (o.noEditor) editor.remove();
@@ -600,9 +602,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                     : 'Synthetic message',
             mark,
             options.ownDraft ||
+              options.priorDraft ||
               options.foreignDraft ||
               options.draftPersistenceFailure
               ? {
+                  previousBodies: options.priorDraft ? ['Earlier draft'] : [],
                   previousBody: options.ownDraft
                     ? 'Synthetic message'
                     : undefined,
@@ -1115,7 +1119,38 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+    it('rejects unsupported editor markup after filling without marking or sending', async () => {
+      const f = await fixture({
+        headerNameButton: true,
+        unsupportedInline: true,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.events).toEqual(['open', 'input:target']);
+      } finally {
+        await f.close();
+      }
+    });
+    it('replaces a normalized draft from an earlier undelivered message', async () => {
+      const f = await fixture({
+        headerNameButton: true,
+        draft: true,
+        draftWhitespace: true,
+        priorDraft: true,
+      });
+      try {
+        await expect(f.send()).resolves.toMatchObject({
+          outcome: 'facebook_dispatched_unconfirmed',
+        });
+        expect(f.mark).toHaveBeenCalledOnce();
+        expect(f.events).not.toContain('restore');
+      } finally {
+        await f.close();
+      }
+    });
     it.each([
+      { headerNameButton: true, headerWrongParentLabel: true },
       { headerNameButton: true, headerNameMismatch: true },
       { headerNameButton: true, headerSpan: true, headerNameMismatch: true },
       {

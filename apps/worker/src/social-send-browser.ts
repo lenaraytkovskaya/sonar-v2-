@@ -11,6 +11,7 @@ import {
   socialActionBlockedPattern,
   generateSocialDevice,
   type ResolvedSocialSession,
+  type SocialComposerDraft,
   SocialSessionCheckError,
   socialSessionCheckReason,
   type SocialSessionCheckDiagnostic,
@@ -691,6 +692,7 @@ async function sendInstagram(
   body: string,
   beforeSend: () => Promise<void>,
   providerThreadId?: string,
+  draft?: SocialComposerDraft,
 ) {
   let stage: SendStage = 'navigation';
   let attempted = false;
@@ -1133,6 +1135,45 @@ async function sendInstagram(
     );
     composerDiagnostic = initialComposer.diagnostic;
     let composerNode = initialComposer.composer;
+    const mayReplaceDraft = () =>
+      composerNode.evaluate(
+        (node, bodies) => {
+          const text =
+            node instanceof HTMLTextAreaElement ||
+            node instanceof HTMLInputElement
+              ? node.value
+              : (node as HTMLElement).innerText;
+          const normalize = (value: string) =>
+            value.replace(/\s+/gu, ' ').trim();
+          return (
+            !normalize(text) ||
+            bodies.some((body) => normalize(body) === normalize(text))
+          );
+        },
+        [
+          ...(draft?.previousBodies ?? []),
+          ...(draft?.previousBody !== undefined ? [draft.previousBody] : []),
+        ],
+      );
+    const draftFailure = () => {
+      const error = composerFailure(composerDiagnostic, 'unconfirmed');
+      error.reasonUk =
+        'Поле повідомлення містить непідтверджену чернетку. Перевірте й очистіть його вручну.';
+      return error;
+    };
+    if (!(await mayReplaceDraft())) throw draftFailure();
+    await draft?.beforeFill();
+    const checked = await instagramDialog(page, target.handle, 'after_fill');
+    if (
+      !(await checked.dialog.evaluate(
+        (node, pinned) => node === pinned,
+        dialogNode,
+      )) ||
+      !(await composerNode.isEditable()) ||
+      !(await composerNode.isEnabled()) ||
+      !(await mayReplaceDraft())
+    )
+      throw draftFailure();
     await composerNode.fill(body);
     const verifyDialog = async (phase: Exclude<DialogPhase, 'initial'>) => {
       await assertSession();
@@ -1294,7 +1335,11 @@ async function sendInstagram(
       }
       throw stagedFailure(stage, kind, 'delivery_uncertain');
     }
-    if (error instanceof SocialSendError && 'stage' in error) throw error;
+    if (
+      error instanceof SocialSendError &&
+      ('stage' in error || stage === 'composer')
+    )
+      throw error;
     throw stagedFailure(stage, kind);
   }
 }
@@ -2160,10 +2205,7 @@ export function createSocialSendBrowser(
       to: string,
       body: string,
       beforeSend: () => Promise<void>,
-      facebookDraft?: {
-        previousBody?: string;
-        beforeFill: () => Promise<void>;
-      },
+      facebookDraft?: SocialComposerDraft,
     ) {
       const providerThreadId =
         typeof account.settings.providerThreadId === 'string'
@@ -2194,6 +2236,7 @@ export function createSocialSendBrowser(
                 body,
                 beforeSend,
                 providerThreadId,
+                facebookDraft,
               );
             if (account.channel === 'facebook')
               return sendFacebook(

@@ -1,5 +1,6 @@
 import {
   nextSendTime,
+  isSendHoursExempt,
   normalizePhone,
   sharedFormContactsFromValues,
   type SharedFormContact,
@@ -259,6 +260,10 @@ export async function sendFormMessage(
       "select key,value from settings where key like 'send.%'",
     );
     const config = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+    const hoursExempt = isSendHoursExempt(
+      m.company_id,
+      config['send.hours_exempt_company_ids'],
+    );
     let day = now.toISOString().slice(0, 10);
     const zone = config['send.time_zones']?.[m.country_code];
     const min = Number(config['send.min_gap_seconds']),
@@ -337,6 +342,7 @@ export async function sendFormMessage(
           zone,
           config['send.hours'] as SendHours,
           active.next_send_at ?? undefined,
+          hoursExempt,
         );
         if (at > now)
           return {
@@ -365,6 +371,8 @@ export async function sendFormMessage(
               tomorrow,
               zone,
               config['send.hours'] as SendHours,
+              tomorrow,
+              hoursExempt,
             ),
             reasonCode: count.n >= cap ? 'company_daily_limit' : 'daily_limit',
             reasonUk: 'Денний ліміт форм вичерпано. Надсилання перенесено.',

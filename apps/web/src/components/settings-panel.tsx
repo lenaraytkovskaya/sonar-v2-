@@ -100,6 +100,128 @@ function TextSetting({
   );
 }
 
+type ExemptCompany = { id: string; name: string };
+function HoursExemptCompanies({
+  value,
+  onChange,
+  editing,
+}: {
+  value: ExemptCompany[];
+  onChange: (value: ExemptCompany[]) => void;
+  editing: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ExemptCompany[]>([]);
+  const [error, setError] = useState('');
+  const [searching, setSearching] = useState(false);
+  const search = async () => {
+    setSearching(true);
+    setError('');
+    try {
+      const response = await fetch(
+        `/api/companies?q=${encodeURIComponent(query.trim())}`,
+      );
+      if (!response.ok) throw Error(uk.ai.error);
+      const data = await response.json();
+      setResults(data.companies ?? []);
+    } catch {
+      setError(uk.ai.error);
+    } finally {
+      setSearching(false);
+    }
+  };
+  return (
+    <div className="space-y-3">
+      {value.length ? (
+        <ul className="space-y-2">
+          {value.map((company) => (
+            <li
+              key={company.id}
+              className="flex items-center justify-between gap-2"
+            >
+              <Link
+                href={`/companies/${company.id}`}
+                className="text-accent hover:underline"
+              >
+                {company.name}
+              </Link>
+              {editing && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    onChange(value.filter((item) => item.id !== company.id))
+                  }
+                  aria-label={`${uk.settings.hoursExemptRemove}: ${company.name}`}
+                >
+                  {uk.settings.hoursExemptRemove}
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">{uk.settings.hoursExemptEmpty}</p>
+      )}
+      {editing && (
+        <>
+          <div className="flex gap-2">
+            <Input
+              aria-label={uk.settings.hoursExemptSearch}
+              placeholder={uk.settings.hoursExemptSearch}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void search();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0"
+              disabled={searching}
+              onClick={() => void search()}
+            >
+              {uk.settings.hoursExemptFind}
+            </Button>
+          </div>
+          <AiAssist text={query} onApply={setQuery} />
+          {!!results.length && (
+            <ul className="max-h-64 space-y-2 overflow-y-auto">
+              {results.map((company) => (
+                <li key={company.id}>
+                  <label className="flex min-h-11 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={value.some((item) => item.id === company.id)}
+                      onChange={(event) =>
+                        onChange(
+                          event.target.checked
+                            ? [...value, company]
+                            : value.filter((item) => item.id !== company.id),
+                        )
+                      }
+                    />
+                    {company.name}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          {error && (
+            <p role="alert" className="text-err">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function SettingsPanel({ section }: { section?: string }) {
   const router = useRouter();
   const active: SectionId =
@@ -116,6 +238,9 @@ export function SettingsPanel({ section }: { section?: string }) {
     [cheap, setCheap] = useState(''),
     [strong, setStrong] = useState(''),
     [budget, setBudget] = useState(50),
+    [hoursExemptCompanies, setHoursExemptCompanies] = useState<ExemptCompany[]>(
+      [],
+    ),
     [financeRates, setFinanceRates] = useState<FinanceRates>({
       USD: 1,
       UAH: 0.024,
@@ -131,6 +256,7 @@ export function SettingsPanel({ section }: { section?: string }) {
     cheap,
     strong,
     budget,
+    hoursExemptCompanies,
     financeRates,
     renewalReminderDays,
     about,
@@ -146,6 +272,7 @@ export function SettingsPanel({ section }: { section?: string }) {
     setCheap(value.cheap);
     setStrong(value.strong);
     setBudget(value.budget);
+    setHoursExemptCompanies(value.hoursExemptCompanies);
     setFinanceRates(value.financeRates);
     setRenewalReminderDays(value.renewalReminderDays);
     setAbout(value.about);
@@ -166,6 +293,15 @@ export function SettingsPanel({ section }: { section?: string }) {
     setCheap(data['ai.model.cheap'] ?? '');
     setStrong(data['ai.model.strong'] ?? '');
     setBudget(data['budget.monthly_usd'] ?? 50);
+    setHoursExemptCompanies(
+      (data['send.hours_exempt_company_ids'] ?? []).map((id: string) => ({
+        id,
+        name:
+          data.hoursExemptCompanies?.find(
+            (company: ExemptCompany) => company.id === id,
+          )?.name ?? id,
+      })),
+    );
     setFinanceRates(data['finance.rates'] ?? { USD: 1, UAH: 0.024, EUR: 1.08 });
     setRenewalReminderDays(data['finance.renewal_reminder_days'] ?? 3);
     setAbout(data['company.about'] ?? '');
@@ -221,6 +357,9 @@ export function SettingsPanel({ section }: { section?: string }) {
           cheap,
           strong,
           budget,
+          hoursExemptCompanyIds: hoursExemptCompanies.map(
+            (company) => company.id,
+          ),
           financeRates,
           renewalReminderDays,
           about,
@@ -251,7 +390,7 @@ export function SettingsPanel({ section }: { section?: string }) {
     label: string,
     value: number,
     onChange: (value: number) => void,
-    range: { min: number; max: number; step?: number },
+    range: { min: number; max: number; step?: number | 'any' },
   ) =>
     editing ? (
       <Input
@@ -718,6 +857,16 @@ export function SettingsPanel({ section }: { section?: string }) {
             {active === 'budget' && (
               <>
                 <SettingRow
+                  label={uk.settings.hoursExemptCompanies}
+                  description={uk.settings.hoursExemptHint}
+                >
+                  <HoursExemptCompanies
+                    value={hoursExemptCompanies}
+                    onChange={setHoursExemptCompanies}
+                    editing={editing}
+                  />
+                </SettingRow>
+                <SettingRow
                   label={uk.ai.budget}
                   description={sections.budget.description}
                 >
@@ -735,7 +884,7 @@ export function SettingsPanel({ section }: { section?: string }) {
                     uk.finance.rateUah,
                     financeRates.UAH,
                     (UAH) => setFinanceRates({ ...financeRates, UAH }),
-                    { min: 0.0000001, max: 1e6, step: 0.000001 },
+                    { min: 0.0000001, max: 1e6, step: 'any' },
                   )}
                 </SettingRow>
                 <SettingRow
@@ -746,7 +895,7 @@ export function SettingsPanel({ section }: { section?: string }) {
                     uk.finance.rateEur,
                     financeRates.EUR,
                     (EUR) => setFinanceRates({ ...financeRates, EUR }),
-                    { min: 0.0000001, max: 1e6, step: 0.000001 },
+                    { min: 0.0000001, max: 1e6, step: 'any' },
                   )}
                 </SettingRow>
                 <SettingRow

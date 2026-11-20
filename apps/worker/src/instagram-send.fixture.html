@@ -255,6 +255,11 @@
           ) ||
           main.querySelector('[contenteditable], textarea:not([id])');
         let composer = findComposer();
+        if (f.draftText) {
+          if (composer instanceof HTMLTextAreaElement)
+            composer.value = f.draftText;
+          else composer.textContent = f.draftText;
+        }
         const mutateDialog = (phase) => {
           if (phase === 'after_marker' && f.markerMessage)
             appendMessage('Synthetic message');
