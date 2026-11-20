@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
+import { navigateSocialPage } from './social-navigation.js';
 import type { SocialTarget } from '@sonar/core';
 import { socialTarget } from '@sonar/core';
 import {
@@ -1097,18 +1098,17 @@ export async function sendFacebook(
     );
   };
   try {
-    const response = await page
-      .goto(target.canonicalUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: timeoutMs,
-      })
-      .catch((error: unknown) => {
-        throw new SocialSessionCheckError(
-          socialSessionCheckReason(error, 'network') === 'timeout'
-            ? 'timeout'
-            : 'network',
-        );
-      });
+    const response = await navigateSocialPage(
+      page,
+      target.canonicalUrl,
+      timeoutMs,
+    ).catch((error: unknown) => {
+      throw new SocialSessionCheckError(
+        socialSessionCheckReason(error, 'network') === 'timeout'
+          ? 'timeout'
+          : 'network',
+      );
+    });
     if (response?.status() === 429)
       throw new SocialSessionCheckError('rate_limit');
     if (response && (response.status() === 407 || response.status() >= 500))
@@ -1143,7 +1143,12 @@ export async function sendFacebook(
         }),
       )
       .filter({ visible: true });
-    await actions.waitFor({ state: 'visible' });
+    await page
+      .locator('main h1, [role="main"] h1')
+      .filter({ visible: true })
+      .first()
+      .waitFor({ state: 'visible', timeout: timeoutMs });
+    await actions.waitFor({ state: 'visible', timeout: timeoutMs });
     if ((await actions.count()) !== 1) throw unavailable('action_count');
     // Only this run's profile action can supply identity when the popup header
     // exposes a name button instead of a canonical recipient link.

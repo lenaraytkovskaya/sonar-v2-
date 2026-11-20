@@ -1,4 +1,5 @@
 import type { Page, Response } from 'playwright';
+import { navigateSocialPage } from './social-navigation.js';
 import { captureFacebookInbox } from './facebook-inbox-browser.js';
 import type {
   SocialInboxBatch,
@@ -403,10 +404,11 @@ export async function captureInstagramInbox(
     let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
     try {
       navigationHttpStatus = null;
-      const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: Math.max(1, deadline - Date.now()),
-      });
+      const response = await navigateSocialPage(
+        page,
+        url,
+        Math.max(1, deadline - Date.now()),
+      );
       navigationHttpStatus = response?.status() ?? null;
       stage = 'http';
       if (navigationHttpStatus === 429)

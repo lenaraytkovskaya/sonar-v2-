@@ -1,11 +1,18 @@
 import type { Page } from 'playwright';
 
-/** Evaluate in the page: no raw HTML, message text, attribute values or URLs leave it. */
+/** Evaluate in the page: only bounded UI labels/names and structural data leave it. */
 export function failureDomSkeleton(limit = 200 * 1024) {
   const nodes: Record<string, unknown>[] = [];
   const encoder = new TextEncoder();
   const sensitive =
-    '[contenteditable], input, textarea, aside, nav, [role="grid"], [role="list"], [role="complementary"], [role="navigation"], [aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="textbox"], [role="log"], [role="article"], [role="row"], [role="listitem"], article, [data-message-id], [data-testid*="message" i], [data-testid*="preview" i]';
+    '[contenteditable], input, textarea, aside, [role="complementary"], [data-pagelet="IGDMessagesList"], [data-pagelet^="IGDInboxThreadList"], [role="grid"], [role="list"], [aria-label^="Messages in conversation with "], [aria-label^="Повідомлення в розмові з "], [aria-label^="Сообщения в переписке с "], [role="textbox"], [role="log"], [role="article"], [role="row"], [role="listitem"], article, [data-message-id], [data-testid*="message" i], [data-testid*="preview" i]';
+  const roles = new Set(
+    'alert alertdialog application article banner blockquote button caption cell checkbox code columnheader combobox complementary contentinfo definition deletion dialog directory document emphasis feed figure form generic grid gridcell group heading img insertion link list listbox listitem log main marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar search searchbox separator slider spinbutton status strong subscript suggestion superscript switch tab table tablist tabpanel term textbox time timer toolbar tooltip tree treegrid treeitem'.split(
+      ' ',
+    ),
+  );
+  const controls =
+    'button, a, select, [role="button"], [role="link"], [role="combobox"], [role="searchbox"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"], [role="spinbutton"], [role="option"], [role="tab"], [role^="menuitem"]';
   const ui =
     /^(?:message|send message|send|messages|inbox|search|close|loading(?:\.\.\.)?|instagram|from meta|повідомлення|надіслати|пошук|закрити|завантаження|сообщение|отправить|поиск|закрыть|загрузка|aa)$/i;
   const redact = (text: string) => `<text n=${text.length}>`;
@@ -34,6 +41,7 @@ export function failureDomSkeleton(limit = 200 * 1024) {
       return (
         url.pathname
           .split('/')
+          .slice(0, 32)
           .map((part) => (!part || fixed.has(part) ? part : '<id>'))
           .join('/') + (url.searchParams.has('id') ? '?id=<id>' : '')
       );
@@ -70,6 +78,30 @@ export function failureDomSkeleton(limit = 200 * 1024) {
   const pageHeading =
     profilePage && headings.length === 1 ? headings[0] : undefined;
   const pageName = pageHeading?.textContent?.replace(/\s+/g, ' ').trim();
+  const chatHeadings = Array.from(
+    document.querySelectorAll(
+      '[role="dialog"] header h1, [role="dialog"] header h2, [role="dialog"] header [role="heading"]',
+    ),
+  ).filter(
+    (node) =>
+      !node.closest(sensitive) &&
+      !hidden(node) &&
+      node.getClientRects().length > 0,
+  );
+  const safeNames = new Set(
+    [
+      pageName,
+      ...chatHeadings.map((node) =>
+        node.textContent?.replace(/\s+/g, ' ').trim(),
+      ),
+    ].filter((name): name is string => Boolean(name && name.length <= 40)),
+  );
+  const titleName =
+    pageName && safeNames.has(pageName)
+      ? pageName
+      : safeNames.size === 1
+        ? Array.from(safeNames)[0]
+        : undefined;
   const safeData = new Set([
     'data-testid',
     'data-pagelet',
@@ -86,7 +118,20 @@ export function failureDomSkeleton(limit = 200 * 1024) {
     ),
   );
   const seen = new Set<Element>();
-  let bytes = 64;
+  const platform =
+    location.hostname.endsWith('instagram.com') || location.hostname === 'ig.me'
+      ? 'Instagram'
+      : location.href === 'about:blank'
+        ? ''
+        : 'Facebook';
+  const result = {
+    version: 1,
+    urlPattern: path(location.href),
+    title: titleName ? `${titleName} | ${platform}` : platform,
+    truncated: false,
+    nodes,
+  };
+  let bytes = encoder.encode(JSON.stringify(result)).length;
   let visited = 0;
   let truncated = false;
   const walk = (
@@ -118,22 +163,21 @@ export function failureDomSkeleton(limit = 200 * 1024) {
     let index = parent;
     if (scoped && visible) {
       const privateArea = Boolean(element.closest(sensitive));
-      // Only dedicated page/header headings may expose a short name. A chat body
-      // or preview remains private even if its content uses heading markup.
-      const header = element.closest('header, [role="banner"]');
+      // Reuse only names established by profile/chat headings, including linked
+      // minichat headers. Message bodies and previews stay private.
+      const nameContainer = element.closest(
+        'header, [role="banner"], h1, h2, [role="heading"], a, [role="link"], button, [role="button"]',
+      );
       const heading =
         !privateArea &&
         (element === pageHeading ||
           Boolean(
-            header &&
-            pageName &&
-            element.textContent?.replace(/\s+/g, ' ').trim() === pageName,
+            nameContainer &&
+            safeNames.has(
+              element.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+            ),
           ));
-      const control =
-        Boolean(header) &&
-        element.matches(
-          'button, [role="button"], a, [role="link"], [role="progressbar"], [role="status"], [role="img"], img',
-        );
+      const control = element.matches(controls);
       const node: Record<string, unknown> = {
         parent,
         tag: tags.has(element.localName) ? element.localName : 'element',
@@ -144,14 +188,13 @@ export function failureDomSkeleton(limit = 200 * 1024) {
         const value = element.getAttribute(name);
         if (value !== null)
           node[name] =
-            name === 'role' &&
-            /^(?:dialog|region|main|banner|heading|button|link|textbox|row|grid|list|listitem|log|progressbar|status|img|navigation|presentation|none)$/.test(
-              value,
-            )
+            name === 'role' && roles.has(value)
               ? value
               : privateArea
                 ? redact(value)
-                : caption(value, control);
+                : name === 'aria-label' && control && value.trim().length <= 40
+                  ? value.replace(/\s+/g, ' ').trim()
+                  : caption(value, control);
       }
       if (element.hasAttribute('contenteditable'))
         node.contenteditable =
@@ -217,17 +260,31 @@ export function failureDomSkeleton(limit = 200 * 1024) {
   ].filter((node): node is Element => Boolean(node));
   for (const root of roots.length ? roots : [document.body])
     walk(root, null, true);
-  return { version: 1, truncated, nodes };
+  return { ...result, truncated };
 }
 
-export async function captureFailureDom(page: Page) {
+export async function captureFailureDom(
+  page: Page,
+  metadata: { phase?: string; elapsedMs?: number } = {},
+) {
   if (
-    !/^(?:www\.)?(?:facebook|instagram)\.com$/.test(
+    page.url() !== 'about:blank' &&
+    !/^(?:(?:www\.)?(?:facebook|instagram)\.com|ig\.me)$/.test(
       new URL(page.url()).hostname,
     )
   )
     return;
-  const dom = await page.evaluate(failureDomSkeleton, 200 * 1024);
+  const dom = {
+    ...(await page.evaluate(failureDomSkeleton, 200 * 1024 - 512)),
+    phase:
+      metadata.phase && /^[a-z_]{1,40}$/.test(metadata.phase)
+        ? metadata.phase
+        : 'unknown',
+    elapsedMs:
+      Number.isFinite(metadata.elapsedMs) && metadata.elapsedMs! >= 0
+        ? Math.round(metadata.elapsedMs!)
+        : 0,
+  };
   return Buffer.byteLength(JSON.stringify(dom), 'utf8') <= 200 * 1024
     ? dom
     : undefined;

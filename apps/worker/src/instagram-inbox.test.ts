@@ -52,6 +52,41 @@ const requestPreviewFixture = () => {
   return value;
 };
 const observedAt = '2026-11-14T12:00:00.000Z';
+it('classifies an inbox navigation splash before reading or persisting messages', async () => {
+  const page = {
+    on: vi.fn(),
+    off: vi.fn(),
+    goto: vi.fn(async () => ({ status: () => 200 })),
+    reload: vi.fn(async () => ({ status: () => 200 })),
+    url: () => 'https://www.instagram.com/direct/inbox/',
+    waitForFunction: vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('timeout'), { name: 'TimeoutError' }),
+      ),
+    evaluate: vi.fn(async () => ({ splash: true })),
+  };
+  const persist = vi.fn();
+  await expect(
+    captureInstagramInbox(
+      page as unknown as Page,
+      20,
+      persist,
+      async () => {},
+      '90001',
+    ),
+  ).rejects.toMatchObject({
+    reason: 'timeout',
+    stage: 'navigation',
+    screen: 'splash',
+  });
+  expect(page.reload).toHaveBeenCalledOnce();
+  expect(persist).not.toHaveBeenCalled();
+  expect(page.goto).toHaveBeenCalledWith(
+    'https://www.instagram.com/direct/inbox/',
+    expect.objectContaining({ waitUntil: 'domcontentloaded' }),
+  );
+});
 const fixture = () =>
   JSON.parse(
     readFileSync(
@@ -784,8 +819,8 @@ it('counts parsed Requests without verification when its auth guard fails', asyn
   const f = browser([fixture()]);
   let requestChecks = 0;
   f.assert.mockImplementation(async () => {
-    // Navigation checks first; the second check belongs to the parsed response.
-    if (f.page.url().endsWith('/requests/') && ++requestChecks === 2)
+    // Response capture can validate auth before navigation resolves.
+    if (f.page.url().endsWith('/requests/') && ++requestChecks === 1)
       throw new SocialSessionCheckError('unknown_auth');
   });
   await expect(f.run()).rejects.toMatchObject({

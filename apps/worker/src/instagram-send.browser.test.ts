@@ -47,6 +47,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
         requests.push(`${url.hostname}${url.pathname}`);
+        if (url.pathname === '/stalled-script') return;
         if (
           url.pathname === '/api/v1/direct/fixture/' ||
           url.pathname === '/blocked-resource'
@@ -72,7 +73,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                   (request) => request === `${url.hostname}${url.pathname}`,
                 ).length === 1) ||
               (options.delayedSplash && !url.searchParams.has('loaded'))
-                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
+                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.stalledNavigation ? '<script defer src="/stalled-script"></script>' : ''}${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
                 : options.capturedMenu
                   ? capturedMenu +
                     '<nav><a href="/direct/inbox/">Inbox</a></nav>'
@@ -90,6 +91,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             status: 200,
             contentType: 'text/html',
             body: '<div aria-label="Instagram logo">Instagram</div><p>from Meta</p><script>location.replace("https://www.instagram.com/direct/t/fixture-thread/")</script>',
+          });
+        if (options.splashAtDeepLink)
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/html',
+            body: '<div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>',
           });
         return route.fulfill({
           status: 404,
@@ -163,6 +170,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           );
         events.push('mark');
       });
+      const persistFailureShot = vi.fn<
+        (kind: string, shot: Record<string, unknown>) => Promise<void>
+      >(async () => {});
       const send = () =>
         adapter.send(
           {
@@ -172,7 +182,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? { providerThreadId: options.knownThreadId }
               : {},
           },
-          { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
+          {
+            cookies: [],
+            proxy: { server: 'http://127.0.0.1:9' },
+            persistFailureShot,
+          },
           Number(options.timeoutMs ?? 250),
           'https://instagram.com/fixture_company/',
           typeof options.body === 'string' ? options.body : 'Synthetic message',
@@ -192,10 +206,18 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
             Number(options.timeoutMs ?? 250),
           ),
+        keepalive: () =>
+          adapter.keepalive(
+            { id: 'fixture', channel: 'instagram', settings: {} },
+            { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
+            Number(options.timeoutMs ?? 250),
+            0,
+          ),
         mark,
         requests,
         events,
         inputs,
+        persistFailureShot,
         context,
         close: () => context.close(),
       };
@@ -385,22 +407,92 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
-    it('classifies a persistent session-check splash before checking authentication', async () => {
-      const f = await fixture({ splash: true, timeoutMs: 120 });
-      try {
-        await expect(f.check()).rejects.toMatchObject({
-          reason: 'timeout',
-          errorKind: 'timeout',
-          diagnostic: {
-            stage: 'navigation',
-            screen: 'splash',
-            errorKind: 'timeout',
-          },
+    it.each([undefined, 'fixture-thread'])(
+      'captures a splash before DOMContentLoaded on profile/direct navigation (%s)',
+      async (knownThreadId) => {
+        const f = await fixture({
+          splash: true,
+          stalledNavigation: true,
+          knownThreadId,
+          timeoutMs: 120,
         });
-        expect(f.requests).toEqual([
-          'www.instagram.com/',
-          'www.instagram.com/',
-        ]);
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            stage: 'navigation',
+            errorKind: 'timeout',
+            screen: 'splash',
+          });
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.persistFailureShot).toHaveBeenCalledWith(
+            'send',
+            expect.objectContaining({
+              stage: 'navigation',
+              dom: expect.objectContaining({
+                phase: 'navigation',
+                urlPattern: knownThreadId ? '/direct/t/<id>/' : '/<id>/',
+                title: 'Instagram',
+                elapsedMs: expect.any(Number),
+                navigation: expect.objectContaining({
+                  splashElement: true,
+                  logo: true,
+                  login: false,
+                  challenge: false,
+                  waitedSeconds: expect.any(Number),
+                }),
+              }),
+            }),
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['check', 'keepalive'] as const)(
+      'classifies a persistent %s splash before checking authentication',
+      async (operation) => {
+        const f = await fixture({ splash: true, timeoutMs: 120 });
+        try {
+          await expect(f[operation]()).rejects.toMatchObject({
+            reason: 'timeout',
+            errorKind: 'timeout',
+            ...(operation === 'check'
+              ? {
+                  diagnostic: {
+                    stage: 'navigation',
+                    screen: 'splash',
+                    errorKind: 'timeout',
+                  },
+                }
+              : {}),
+          });
+          expect(f.requests).toEqual([
+            'www.instagram.com/',
+            'www.instagram.com/',
+          ]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('keeps a persistent ig.me splash classified and available as failure DOM', async () => {
+      const f = await fixture({ splashAtDeepLink: true, timeoutMs: 120 });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          stage: 'navigation',
+          errorKind: 'timeout',
+          screen: 'splash',
+        });
+        expect(f.persistFailureShot).toHaveBeenCalledWith(
+          'send',
+          expect.objectContaining({
+            dom: expect.objectContaining({
+              title: 'Instagram',
+              phase: 'navigation',
+              urlPattern: '/<id>/<id>',
+            }),
+          }),
+        );
+        expect(f.mark).not.toHaveBeenCalled();
       } finally {
         await f.close();
       }

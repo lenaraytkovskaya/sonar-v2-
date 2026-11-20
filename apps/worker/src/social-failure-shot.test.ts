@@ -57,7 +57,13 @@ it('retries at lower JPEG quality and never stores images above 3 MB', async () 
 });
 
 it('persists the sanitized DOM alongside the image and survives screenshot failure', async () => {
-  const dom = { version: 1, truncated: false, nodes: [] };
+  const dom = {
+    version: 1,
+    phase: 'dialog',
+    elapsedMs: 0,
+    truncated: false,
+    nodes: [],
+  };
   const persistFailureShot = vi.fn<
     (kind: string, shot: { jpeg?: string; dom?: unknown }) => Promise<void>
   >(async () => {});

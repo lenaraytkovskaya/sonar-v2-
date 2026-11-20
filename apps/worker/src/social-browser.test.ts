@@ -66,14 +66,14 @@ function browserFixture(authenticated = true) {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn(),
     locator: vi.fn((selector: string) =>
-      selector.startsWith('main ')
+      selector.startsWith('main a')
         ? { evaluateAll: vi.fn(async () => links) }
         : {
             filter: () => ({
               count: async () => 0,
               first: () => ({
                 waitFor: async () => {
-                  if (!authenticated)
+                  if (!authenticated && !selector.startsWith('main,'))
                     throw new Error('missing authenticated marker');
                 },
               }),

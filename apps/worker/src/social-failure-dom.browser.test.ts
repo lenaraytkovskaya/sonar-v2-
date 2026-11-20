@@ -13,25 +13,66 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       await browser?.close();
     });
     it('redacts correspondence, inputs, previews, arbitrary attributes and URL identities', async () => {
-      const page = await browser.newPage();
+      const page = await browser.newPage({
+        viewport: { width: 1000, height: 1600 },
+      });
       try {
         await page.route('https://www.facebook.com/fixture-profile/', (route) =>
           route.fulfill({ body: '<main></main>' }),
         );
         await page.goto('https://www.facebook.com/fixture-profile/');
-        await page.setContent(`<main><h1>Fixture Name</h1><header><h2>Fixture Name</h2></header>
+        await page.setContent(`<title>Private message in document title</title><main><h1><span>Fixture Name</span></h1><header><h2>Fixture Name</h2></header>
         <div role="log"><header><h2>Private heading</h2></header><div aria-label="Private label">Private body</div><button>Send</button></div>
         <div role="listitem"><h1>Private preview name</h1>Private preview</div>
         <div contenteditable="true" aria-placeholder="Private placeholder" data-testid="private-id">Private draft</div>
-        <input value="Private input"><textarea>Private textarea</textarea>
+        <input value="Private input" aria-label="Private input label"><textarea aria-label="Private textarea label">Private textarea</textarea>
+        <div role="dialog"><header><h2>Chat Recipient</h2><button aria-label="Згорнути чат">Close</button></header>
+        <div role="log"><button aria-label="Private message action">Send</button><header><h2>Private chat heading</h2></header></div></div>
+        <nav><button aria-label="Надіслати повідомлення">Message</button><a aria-label="Профіль компанії" href="/fixture-profile/">Profile</a></nav>
+        <div role="combobox" aria-label="Оберіть дію">Choose</div>
+        <div role="tab" aria-label="${'x'.repeat(41)}">Tab</div>
+        <div role="listitem"><button aria-label="Private preview action">Send</button></div>
+        <div contenteditable="true"><button aria-label="Private editor action">Send</button></div>
+        <div data-pagelet="IGDMessagesList"><button aria-label="Private IG message">Send</button></div>
+        <div data-pagelet="IGDInboxThreadListScrollableAreaPagelet"><a aria-label="Private IG preview">Preview</a></div>
+        <div role="toolbar" aria-label="Private noncontrol label">Toolbar</div>
         <a href="https://www.facebook.com/profile.php?id=123456&token=private-token" data-user-id="private-id" data-secret-value="hidden" data-person-123="hidden">Private link</a>
         <a href="/direct/t/secret-thread/">Private thread</a><header><button aria-label="Close">Close</button></header>
         <div aria-label="Messages in conversation with Fixture"><button>Inbox</button><h1>Private message heading</h1></div><div role="button" aria-label="Inbox">Inbox</div><div hidden>Private hidden</div><header aria-hidden="true"><h1>Private hidden heading</h1></header></main>`);
-        const dom = await captureFailureDom(page);
+        const dom = await captureFailureDom(page, {
+          phase: 'composer',
+          elapsedMs: 123.4,
+        });
         const json = JSON.stringify(dom);
         expect(json).not.toMatch(/Private|private|123456|secret-thread/);
-        expect(json).not.toContain('Inbox');
+        expect(dom).toMatchObject({
+          phase: 'composer',
+          elapsedMs: 123,
+          urlPattern: '/<id>/',
+          title: 'Fixture Name | Facebook',
+        });
         expect(json).toContain('Fixture Name');
+        expect(json).toContain('Chat Recipient');
+        expect(json).not.toContain('x'.repeat(41));
+        for (const label of [
+          'Inbox',
+          'Згорнути чат',
+          'Надіслати повідомлення',
+          'Профіль компанії',
+          'Оберіть дію',
+        ])
+          expect(dom?.nodes.some((node) => node['aria-label'] === label)).toBe(
+            true,
+          );
+        for (const role of [
+          'log',
+          'dialog',
+          'combobox',
+          'tab',
+          'toolbar',
+          'listitem',
+        ])
+          expect(dom?.nodes.some((node) => node.role === role)).toBe(true);
         expect(json).not.toContain('Private heading');
         expect(json).toContain('/profile.php?id=<id>');
         expect(json).toContain('/direct/t/<id>/');
@@ -47,6 +88,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             (node) => node.visible === true && Array.isArray(node.bbox),
           ),
         ).toBe(true);
+        const invalid = await captureFailureDom(page, {
+          phase: 'Private arbitrary phase',
+          elapsedMs: -1,
+        });
+        expect(invalid).toMatchObject({ phase: 'unknown', elapsedMs: 0 });
       } finally {
         await page.close();
       }
@@ -59,7 +105,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         );
         await page.goto('https://www.facebook.com/fixture-profile/');
         await page.setContent(
-          '<div id="app"><main><h1>Fixture Name</h1></main><section><div><div><div aria-label="Messages in conversation with Fixture"><div role="article">Private message</div></div><div contenteditable="true" aria-placeholder="Private draft" data-lexical-editor="true">Private input</div></div></div></section></div>',
+          '<div id="app"><main><h1>Fixture Name</h1></main><section><div><div><a href="/fixture-profile/"><span>Fixture Name</span></a><button aria-label="Згорнути чат">Close</button><div aria-label="Messages in conversation with Fixture"><div role="article">Private message</div></div><div contenteditable="true" aria-placeholder="Private draft" data-lexical-editor="true">Private input</div></div></div></section></div>',
         );
         await page.evaluate(() => {
           document
@@ -76,6 +122,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(dom?.nodes.some((node) => node.contenteditable === 'true')).toBe(
           true,
         );
+        expect(
+          dom?.nodes.some((node) => node['aria-label'] === 'Згорнути чат'),
+        ).toBe(true);
+        expect(
+          dom?.nodes.filter((node) => node.text === 'Fixture Name').length,
+        ).toBeGreaterThanOrEqual(2);
         expect(JSON.stringify(dom)).not.toContain('Private');
       } finally {
         await page.close();

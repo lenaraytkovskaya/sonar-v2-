@@ -410,6 +410,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       let marked = false;
       await context.route('**/*', (route) => {
         requests.push(route.request().url());
+        if (options.background && route.request().url().endsWith('/background'))
+          return;
         if (
           options.lateHttp &&
           route.request().url().endsWith('/synthetic-transmission')
@@ -435,7 +437,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               ? '<h1>Service unavailable</h1>'
               : options.login
                 ? '<input type="password">'
-                : markup,
+                : markup +
+                  (options.stalledNavigation
+                    ? '<script defer src="/background"></script>'
+                    : '') +
+                  (options.background
+                    ? '<img src="/background"><script>setInterval(() => fetch("/background"), 20)</script>'
+                    : ''),
         });
       });
       const adapter = createSocialSendBrowser(
@@ -642,6 +650,21 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it.each([false, true])(
+      'uses the rendered profile while load/background requests remain pending (deferred script: %s)',
+      async (stalledNavigation) => {
+        const f = await fixture({ background: true, stalledNavigation });
+        try {
+          await expect(f.send()).resolves.toBeTruthy();
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.requests.some((url) => url.endsWith('/background'))).toBe(
+            true,
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([
       [
         { noEditor: true },

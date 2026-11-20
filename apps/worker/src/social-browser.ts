@@ -240,19 +240,17 @@ export async function renderSocialDocuments(
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
       });
-      // Give scripts a bounded opportunity to render profile sections and the post grid.
       await page
-        .waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, 3000) })
-        .catch(() => {});
+        .locator(
+          'main, [role="main"], h1, input[type="password"], form[action*="checkpoint"]',
+        )
+        .filter({ visible: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: timeoutMs });
       let html = await page.content();
       const status = response?.status() ?? 0;
       if (!detectSocialBlock(html, page.url(), status, target)) {
         await page.evaluate(() => window.scrollBy(0, 650));
-        await page
-          .waitForLoadState('networkidle', {
-            timeout: Math.min(timeoutMs, 1500),
-          })
-          .catch(() => {});
         html = await page.content();
       }
       return { html, url: page.url(), status };
