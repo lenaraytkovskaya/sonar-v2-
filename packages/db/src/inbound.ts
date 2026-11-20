@@ -1,5 +1,6 @@
 import { enqueueFormReplyMatch } from './form-replies.js';
 import { messageHistoryOrder } from './message-history.js';
+import { assertNoRecentReply } from './reply-duplicate.js';
 import { createHash } from 'node:crypto';
 import {
   findMessagePlaceholder,
@@ -869,6 +870,7 @@ async function reply(
         invalid('Ключ повідомлення вже використано для іншого запиту.');
       return { id: String(prior.id), status: String(prior.status) };
     }
+    if (queued) await assertNoRecentReply(c, conversationId, draft.body);
     if (socialBrowser) {
       const target = socialTarget(last.to_value);
       if (

@@ -24,6 +24,7 @@ beforeEach(() => {
   row = {
     ...original,
     id: 'message',
+    conversation_id: 'conversation',
     company_id: 'company',
     status: 'draft',
     channel: 'email',
@@ -33,6 +34,10 @@ beforeEach(() => {
     first_attempt_at: null,
   };
   query.mockImplementation(async (sql: string, values: unknown[]) => {
+    if (sql.includes("where key='send.reply_duplicate_window_seconds'"))
+      return { rows: [{ value: 120 }] };
+    if (sql.startsWith('select body from messages where conversation_id='))
+      return { rows: [] };
     if (sql.includes('as blocked')) return { rows: [{ blocked: false }] };
     if (sql.includes('for update of m')) return { rows: [{ ...row }] };
     if (sql.startsWith('select conversation_id,to_value'))
