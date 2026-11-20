@@ -253,6 +253,62 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
+    it('reads a conversation by structure alone, in a language the code has never seen', async () => {
+      const html =
+        '<div role="main"><a href="/100000000000001/">Peer Name</a><div role="log" aria-live="polite" aria-label="zz Peer Name">' +
+        '<div role="article"><div data-scope="messages_table" data-message-id="100000000000001@msgr.11" aria-label="O pjatnyci 23:12, Peer: \u00abHello\u00bb" aria-roledescription="zz"><div dir="auto">Hello</div></div></div>' +
+        '<div role="article"><div data-message-id="100000000000002@msgr.12" aria-label="O pjatnyci 23:13, qq: \u00abAnswer\u00bb"><div dir="auto">Answer</div></div></div>' +
+        '</div></div>';
+      const { page, context } = await fixture(html);
+      try {
+        const result = await readFacebookThread(page, '100000000000002');
+        expect(result.skipped).toEqual([]);
+        expect(
+          result.messages.map((m) => [m.direction, m.body, m.threadId]),
+        ).toEqual([
+          ['in', 'Hello', '900000000000001'],
+          ['out', 'Answer', '900000000000001'],
+        ]);
+      } finally {
+        await context.close();
+      }
+    });
+    const pinDialog = (clean: boolean) =>
+      `<div id="pin" role="dialog" aria-modal="true"><div role="button" aria-label="x"><svg></svg></div><h2>zz</h2><input autocomplete="one-time-code" maxlength="6"><div role="button">ff</div></div><div id="cont" role="dialog" aria-modal="true" hidden><h2>yy</h2><div role="button">aa</div><div role="button" onclick="document.querySelector('#cont').remove()">bb</div></div><script>document.querySelector('#pin input').addEventListener('input', (e) => { window.typed = e.target.value; if (${clean} && e.target.value === '123456') document.querySelector('#pin').remove(); });</script>`;
+    it.each([
+      { pin: '123456', clean: true },
+      { pin: '654321', clean: false },
+    ])(
+      'fills the owner PIN once and pauses instead of choosing "do not restore" when it fails ($pin)',
+      async ({ pin, clean }) => {
+        vi.stubEnv('FACEBOOK_RESTORE_PIN', pin);
+        const { page, context } = await fixture(pinDialog(clean) + captured);
+        try {
+          const run = captureFacebookInbox(
+            page,
+            '100000000000002',
+            3000,
+            vi.fn(),
+          );
+          if (clean) {
+            await expect(run).resolves.toMatchObject({ complete: false });
+            expect(await page.locator('#pin').count()).toBe(0);
+          } else {
+            await expect(run).rejects.toBeInstanceOf(SocialSessionCheckError);
+            // The confirm dialog was never revealed or clicked.
+            expect(await page.locator('#cont').count()).toBe(1);
+          }
+          expect(
+            await page.evaluate(
+              () => (window as never as { typed: string }).typed,
+            ),
+          ).toBe(pin);
+        } finally {
+          vi.unstubAllEnvs();
+          await context.close();
+        }
+      },
+    );
     const chats = (paths: string[]) =>
       `<section role="region" aria-label="Thread list"><table aria-label="Chats"><tr><td>${paths.map((p) => `<a href="${p}">Chat</a>`).join('')}</td></tr></table></section>`;
     it.each([

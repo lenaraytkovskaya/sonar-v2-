@@ -79,9 +79,10 @@ async function conversation(
   observe: (observation: Observation) => void,
   timeoutMs: number,
   openedProfile?: { url: string; name: string },
+  ownId?: string,
 ) {
   const finder = await page.evaluateHandle(
-    ({ recipient, body, openedProfile }) => {
+    ({ recipient, body, openedProfile, ownId }) => {
       const normalize = (text: string | null) =>
         (text ?? '').replace(/\s+/g, ' ').trim();
       // Recipient names tolerate formatting controls and case; draft text does not.
@@ -758,7 +759,7 @@ async function conversation(
           }
           return ok;
         };
-        const rows = () =>
+        const legacyRows = () =>
           all(region, '[aria-label]').filter(
             (row) =>
               /^(?:At .+, You: |.+, (?:Ви|Вы): |(?:Ви|Вы): )/s.test(
@@ -770,7 +771,62 @@ async function conversation(
                 ),
               ),
           );
+        // Language-independent rows: Facebook prefixes data-message-id with the
+        // sender id, so an own message is identified without any label text.
+        const structuralRow = (row: Element) => {
+          const id = row.getAttribute('data-message-id') ?? '';
+          return (
+            Boolean(ownId) &&
+            /^\d+@msgr\.\d+$/.test(id) &&
+            id.startsWith(`${ownId}@msgr.`)
+          );
+        };
+        const rows = () => {
+          const legacy = legacyRows();
+          return [
+            ...legacy,
+            ...all(region, '[data-message-id]').filter(
+              (row) =>
+                structuralRow(row) &&
+                !legacy.some(
+                  (other) =>
+                    other === row || other.contains(row) || row.contains(other),
+                ),
+            ),
+          ];
+        };
+        const failedState =
+          /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b|надсилається|не надіслано|повторити|помилка|отправляется|не отправлено|повторить|ошибка/i;
         const sentRow = (row: Element) => {
+          if (structuralRow(row)) {
+            const bodies = all(row, 'div[dir="auto"]').filter(
+              (node) => normalize(node.textContent) === normalize(body),
+            );
+            const wrapper = row.closest('[role="article"]') ?? row;
+            if (
+              bodies.length !== 1 ||
+              rows().filter((other) => wrapper.contains(other)).length !== 1 ||
+              all(wrapper, '[aria-busy="true"], [role="progressbar"]').length ||
+              [wrapper, ...all(wrapper, '*')].some(
+                (node) =>
+                  !bodies[0]!.contains(node) &&
+                  failedState.test(
+                    [
+                      node.getAttribute('aria-label') ?? '',
+                      Array.from(node.childNodes)
+                        .filter((child) => child.nodeType === Node.TEXT_NODE)
+                        .map((child) => child.textContent)
+                        .join(' '),
+                    ].join(' '),
+                  ),
+              )
+            )
+              return null;
+            return JSON.stringify([
+              row.getAttribute('data-message-id'),
+              normalize(body),
+            ]);
+          }
           // The observed sent button is a sibling of the labelled content container.
           // Do not infer delivery from a disappearing editor, alignment or text alone.
           let wrapper = row.parentElement;
@@ -1053,7 +1109,7 @@ async function conversation(
       };
       return { find, diagnostic: () => observation };
     },
-    { recipient, body, openedProfile },
+    { recipient, body, openedProfile, ownId },
   );
   try {
     await page.waitForFunction((finder) => finder.find() !== null, finder, {
@@ -1404,6 +1460,7 @@ export async function sendFacebook(
         )
         .map((cookie) => cookie.value),
     );
+    const ownId = identities.size === 1 ? [...identities][0] : undefined;
     if (identities.size === 1)
       facts.senderFingerprint = createHash('sha256')
         .update([...identities][0]!)
@@ -1664,6 +1721,7 @@ export async function sendFacebook(
       observe,
       timeoutMs,
       openedProfile,
+      ownId,
     );
     try {
       if (!(await state.evaluate((state) => Boolean(state))))
@@ -1686,6 +1744,7 @@ export async function sendFacebook(
         observe,
         timeoutMs,
         openedProfile,
+        ownId,
       );
       if (draft?.recoveryFirstAttemptAt !== undefined) {
         phase = 'recovery';
@@ -1763,6 +1822,7 @@ export async function sendFacebook(
         observe,
         timeoutMs,
         openedProfile,
+        ownId,
       );
       if (!(await state.evaluate((state) => state?.valid(true))))
         throw unavailable();

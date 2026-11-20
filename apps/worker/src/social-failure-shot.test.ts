@@ -111,7 +111,10 @@ it('masks conversation regions from Facebook failure screenshots', async () => {
   );
   expect(page.screenshot).toHaveBeenCalledWith(
     expect.objectContaining({
-      mask: [{ selector: 'conversation-mask' }],
+      mask: [
+        { selector: 'conversation-mask' },
+        { selector: 'conversation-mask' },
+      ],
       maskColor: '#000000',
     }),
   );
@@ -132,8 +135,9 @@ it('leaves Facebook failure screenshots unmasked only when no composer is visibl
     'send',
     'first_lookup',
   );
+  // Only the input fields stay masked, never the conversation region.
   expect(absent.screenshot).toHaveBeenCalledWith(
-    expect.not.objectContaining({ mask: expect.anything() }),
+    expect.objectContaining({ mask: [expect.anything()] }),
   );
   const present = withCount(1);
   await captureFailureShot(
@@ -143,7 +147,7 @@ it('leaves Facebook failure screenshots unmasked only when no composer is visibl
     'first_lookup',
   );
   expect(present.screenshot).toHaveBeenCalledWith(
-    expect.objectContaining({ maskColor: '#000000' }),
+    expect.objectContaining({ mask: [expect.anything(), expect.anything()] }),
   );
 });
 
@@ -164,7 +168,7 @@ it.each(['confirmation', 'transmission'])(
       stage,
     );
     expect(page.screenshot).toHaveBeenCalledWith(
-      expect.not.objectContaining({ mask: expect.anything() }),
+      expect.objectContaining({ mask: [expect.anything()] }),
     );
   },
 );

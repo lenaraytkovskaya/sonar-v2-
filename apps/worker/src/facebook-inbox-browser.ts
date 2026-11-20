@@ -14,7 +14,8 @@ import {
 } from './social-send-browser.js';
 
 const origin = 'https://www.facebook.com';
-const logSelector = '[aria-label^="Messages in conversation with "]';
+// Structure over language: Facebook labels are localized (and mixed), roles are not.
+const logSelector = '[role="log"]';
 
 /** Fixed enums and capped marker counts only. Never retain page content or URLs. */
 async function diagnose(
@@ -34,14 +35,33 @@ async function diagnose(
   return error;
 }
 
-/** Only the observed English DOM contract. No transport replay or generated IDs. */
+const months = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * Language-independent: a message row is `[data-message-id="<senderId>@msgr.<n>"]`
+ * whose text is the only `div[dir="auto"]` value; the sender id decides direction.
+ * Localized aria-labels are used only to keep the provider's own time string.
+ */
 export async function readFacebookThread(
   page: Page,
   ownId: string,
   maxMessages = 100,
 ) {
   return page.evaluate(
-    ({ ownId, logSelector, maxMessages }) => {
+    ({ ownId, logSelector, maxMessages, months }) => {
       const visible = (node: Element) =>
         node.getClientRects().length > 0 &&
         getComputedStyle(node).visibility === 'visible' &&
@@ -49,9 +69,10 @@ export async function readFacebookThread(
       const all = (node: ParentNode, selector: string) =>
         Array.from(node.querySelectorAll(selector)).filter(visible);
       const logs = all(document, logSelector);
-      const threadId = /^\/messages\/(?:e2ee\/)?t\/(\d+)\/?$/.exec(
-        location.pathname,
-      )?.[1];
+      const threadId =
+        /^\/messages\/(?:e2ee\/(?:requests\/)?|requests\/)?t\/(\d+)\/?$/.exec(
+          location.pathname,
+        )?.[1];
       const skipped: string[] = [];
       const messages: SocialInboxMessage[] = [];
       const result = () => ({ messages, skipped });
@@ -60,116 +81,152 @@ export async function readFacebookThread(
         return result();
       }
       const log = logs[0]!;
-      const peerName = log
-        .getAttribute('aria-label')!
-        .slice('Messages in conversation with '.length);
-      if (!peerName || peerName === 'You') {
-        skipped.push('peer_name_ambiguous');
-        return result();
+      // Boundary without language: a full conversation page has [role=main];
+      // the floating chat is found by climbing to the composer's container.
+      const composerSelector = '[contenteditable="true"][role="textbox"]';
+      let scope: Element | null = log.closest('[role="main"]');
+      if (!scope) {
+        scope = log.parentElement;
+        while (
+          scope &&
+          scope !== document.body &&
+          !all(scope, composerSelector).length
+        )
+          scope = scope.parentElement;
+        // The nearest content boundary holds log and composer; its parent also
+        // holds the peer header.
+        if (scope && !all(scope, 'a[href]').some((node) => !log.contains(node)))
+          scope = scope.parentElement;
       }
-      let scope = log.parentElement;
-      const composerSelector =
-        '[aria-label="Thread composer"] [aria-label^="Write to "]';
-      while (
-        scope &&
-        scope !== document.body &&
-        !all(scope, composerSelector).length
-      )
-        scope = scope.parentElement;
-      // Captured floating chat: the nearest content boundary has the log and
-      // composer; its immediate parent also contains the peer header. Fullscreen
-      // conversation regions may already contain all three.
-      if (scope && !all(scope, 'a[href]').some((node) => !log.contains(node)))
-        scope = scope.parentElement;
       if (
         !scope ||
         scope === document.body ||
         all(scope, logSelector).length !== 1 ||
-        all(scope, 'nav,[role="navigation"],[aria-label="Thread list"]')
-          .length > 0 ||
-        all(scope, composerSelector).length !== 1 ||
-        all(scope, composerSelector)[0]!.getAttribute('aria-label') !==
-          `Write to ${peerName}`
+        all(scope, 'nav,[role="navigation"]').length > 0 ||
+        all(scope, composerSelector).length > 1
       ) {
         skipped.push('peer_boundary_unverified');
         return result();
       }
-      const peers = all(scope, 'a[href]')
-        .filter(
-          (node) =>
-            !log.contains(node) &&
-            (
-              node.getAttribute('aria-label') ||
-              node.textContent ||
-              ''
-            ).trim() === peerName,
-        )
-        .map((node) => {
-          try {
-            const url = new URL(node.getAttribute('href')!, location.href);
-            return url.protocol === 'https:' &&
-              /^(www\.)?facebook\.com$/.test(url.hostname) &&
-              !url.username &&
-              !url.password &&
-              /^\/\d+\/?$/.test(url.pathname)
-              ? url.pathname.match(/\d+/)![0]
-              : null;
-          } catch {
-            return null;
-          }
-        })
-        .filter((id): id is string => Boolean(id));
+      const main = scope;
+      const profileId = (node: Element) => {
+        try {
+          const url = new URL(node.getAttribute('href')!, location.href);
+          return url.protocol === 'https:' &&
+            /^(www\.)?facebook\.com$/.test(url.hostname) &&
+            !url.username &&
+            !url.password &&
+            /^\/\d+\/?$/.test(url.pathname)
+            ? url.pathname.match(/\d+/)![0]
+            : null;
+        } catch {
+          return null;
+        }
+      };
+      const peers = [
+        ...new Set(
+          all(main, 'a[href]')
+            .filter((node) => !log.contains(node))
+            .map(profileId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ];
       if (peers.length !== 1 || peers[0] === ownId) {
         skipped.push('peer_identity_unverified');
         return result();
       }
-      const peerProfile = `https://www.facebook.com/${peers[0]}/`;
+      const peerId = peers[0]!;
+      const peerLink = all(main, 'a[href]').find(
+        (node) => !log.contains(node) && profileId(node) === peerId,
+      );
+      const peerName = (
+        peerLink?.getAttribute('aria-label') ||
+        peerLink?.textContent ||
+        ''
+      ).trim();
+      const composer = all(main, composerSelector)[0];
+      const composerName = composer?.getAttribute('aria-label')?.trim();
+      if (peerName && composerName && !composerName.includes(peerName)) {
+        skipped.push('peer_boundary_unverified');
+        return result();
+      }
+      const peerProfile = `https://www.facebook.com/${peerId}/`;
       const observedAt = new Date().toISOString();
-      const nodes = all(log, '[aria-roledescription="message"]');
+      const seen = new Set<string>();
+      const nodes = all(log, '[data-message-id]').filter((node) => {
+        const id = node.getAttribute('data-message-id') ?? '';
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
       if (!nodes.length) skipped.push('no_message_nodes');
       for (const [providerOrder, node] of nodes.slice(-maxMessages).entries()) {
-        const id = node.getAttribute('data-message-id');
-        if (!id || !/^\d+@msgr\.\d+$/.test(id)) {
+        const id = node.getAttribute('data-message-id')!;
+        const parsed = /^(\d+)@msgr\.\d+$/.exec(id);
+        if (!parsed) {
           skipped.push('message_id_unverified');
           continue;
         }
+        const sender = parsed[1]!;
         const label = node.getAttribute('aria-label') ?? '';
-        const match =
-          /^At ((?:(?:\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}, |(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) ))?\d{1,2}:\d{2}), (You|.+?): ([\s\S]+)$/.exec(
-            label,
-          );
+        // A recognizable "You" label wins; otherwise the sender id in the
+        // message id decides, which needs no language at all.
+        const labelOwn = /(?:^|, )(?:You|Ви|Вы): /.test(label);
+        if (!labelOwn && sender !== ownId && sender !== peerId) {
+          skipped.push('sender_unverified');
+          continue;
+        }
+        const bodies = [
+          ...new Set(
+            all(node, 'div[dir="auto"]')
+              .map((value) => value.textContent ?? '')
+              .filter(Boolean),
+          ),
+        ];
+        if (bodies.length !== 1) {
+          skipped.push('message_content_unverified');
+          continue;
+        }
+        const body = bodies[0]!;
+        // The localized label must still carry this exact text and name only
+        // us or the peer, whatever the language of its wording.
+        const labelPrefix = label.includes(': ')
+          ? label.slice(0, label.indexOf(': '))
+          : '';
+        const labelSender = labelPrefix
+          ? labelPrefix.slice(labelPrefix.lastIndexOf(', ') + 2).trim()
+          : undefined;
+        const ownWord = /^(?:You|Ви|Вы)$/.test(labelSender ?? '');
         if (
-          !match ||
-          !['You', peerName].includes(match[2]!) ||
-          !all(node, 'div[dir="auto"]').some(
-            (value) => value.textContent === match[3],
-          )
+          (label && !label.includes(body)) ||
+          (labelSender &&
+            peerName &&
+            !ownWord &&
+            sender !== ownId &&
+            !peerName.startsWith(labelSender) &&
+            !labelSender.startsWith(peerName))
         ) {
           skipped.push('message_content_unverified');
           continue;
         }
-        // Relative display times have no proven calendar date. Keep the label and
-        // observation separately; created_at is ingestion order, never provider time.
+        // The label is localized: keep its time part verbatim, and derive a
+        // calendar date only from the one English shape that proves one.
+        const english =
+          /^At ((?:(?:\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}, |(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) ))?\d{1,2}:\d{2}), /.exec(
+            label,
+          );
+        const providerTimestamp = (
+          english?.[1] ??
+          label.split(', ')[0] ??
+          ''
+        ).slice(0, 60);
+        let occurredAt: string | null = null;
         const full =
           /^(\d{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) (\d{4}), (\d{2}):(\d{2})$/.exec(
-            match[1]!,
+            providerTimestamp,
           );
-        let occurredAt: string | null = null;
         if (full) {
-          const month = [
-            'January',
-            'February',
-            'March',
-            'April',
-            'May',
-            'June',
-            'July',
-            'August',
-            'September',
-            'October',
-            'November',
-            'December',
-          ].indexOf(full[2]!);
+          const month = months.indexOf(full[2]!);
           const date = new Date(
             +full[3]!,
             month,
@@ -186,7 +243,7 @@ export async function readFacebookThread(
           )
             occurredAt = date.toISOString();
         }
-        const outgoing = match[2] === 'You';
+        const outgoing = labelOwn || sender === ownId;
         messages.push({
           externalMessageId: id,
           providerOrder,
@@ -196,16 +253,16 @@ export async function readFacebookThread(
             ? `https://www.facebook.com/${ownId}/`
             : peerProfile,
           peerProfile,
-          body: match[3]!,
+          body,
           occurredAt,
-          providerTimestamp: match[1]!,
+          providerTimestamp: providerTimestamp || 'unknown',
           observedAt,
           threadUrl: `https://www.facebook.com${location.pathname}`,
         });
       }
       return result();
     },
-    { ownId, logSelector, maxMessages },
+    { ownId, logSelector, maxMessages, months },
   );
 }
 
@@ -297,86 +354,141 @@ export async function readFacebookRequestPreviews(page: Page) {
   });
 }
 
-/** Only the non-destructive restore dismissal observed by root on 2026-11-15. */
+type RestoreDialog = 'none' | 'pin' | 'continue' | 'unknown';
+
+/**
+ * Structure only: the PIN dialog holds the single six-digit one-time-code
+ * input; the follow-up "continue without restoring" dialog has no input and
+ * exactly two text buttons (cancel first, confirm last). Labels are localized
+ * and even mixed within one dialog, so no label text is ever matched.
+ */
+async function restoreDialogKind(page: Page): Promise<RestoreDialog> {
+  return page.evaluate((): RestoreDialog => {
+    if (
+      location.origin !== 'https://www.facebook.com' ||
+      !/^\/messages\//.test(location.pathname)
+    )
+      return 'none';
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      !node.closest('[hidden],[aria-hidden="true"],[inert]');
+    const dialog = Array.from(
+      document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+    )
+      .filter(visible)
+      .at(-1);
+    if (!dialog) return 'none';
+    if (
+      Array.from(
+        dialog.querySelectorAll(
+          'input[autocomplete="one-time-code"][maxlength="6"], input[aria-label="PIN"]',
+        ),
+      ).some(visible)
+    )
+      return 'pin';
+    const textButtons = Array.from(
+      dialog.querySelectorAll('[role="button"],button'),
+    ).filter(
+      (node) =>
+        visible(node) &&
+        !node.querySelector('svg') &&
+        (node.textContent ?? '').trim().length > 0,
+    );
+    return textButtons.length === 2 &&
+      !dialog.querySelector('input:not([type="hidden"])')
+      ? 'continue'
+      : 'unknown';
+  });
+}
+
+/** The icon-only close control, or the last text button of the confirm dialog. */
+async function restoreButton(page: Page, kind: 'close' | 'confirm') {
+  return page.evaluateHandle((kind) => {
+    const visible = (node: Element) =>
+      node.getClientRects().length > 0 &&
+      !node.closest('[hidden],[aria-hidden="true"],[inert]');
+    const dialog = Array.from(
+      document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+    )
+      .filter(visible)
+      .at(-1);
+    if (!dialog) return null;
+    const buttons = Array.from(
+      dialog.querySelectorAll('[role="button"],button'),
+    ).filter(visible);
+    if (kind === 'close')
+      return (
+        buttons.find(
+          (node) =>
+            Boolean(node.querySelector('svg')) &&
+            !(node.textContent ?? '').trim(),
+        ) ??
+        // Fallback for a text-only close control in a known language.
+        buttons.find((node) =>
+          /^(?:close|закрити|закрыть)$/i.test(
+            (node.getAttribute('aria-label') || node.textContent || '').trim(),
+          ),
+        ) ??
+        null
+      );
+    const text = buttons.filter(
+      (node) =>
+        !node.querySelector('svg') && (node.textContent ?? '').trim().length,
+    );
+    return text.length === 2 ? text[1]! : null;
+  }, kind);
+}
+
+/**
+ * Restores chat history with the owner's PIN when FACEBOOK_RESTORE_PIN is set
+ * (six digits, typed once per run, never logged); otherwise dismisses the
+ * dialogs without restoring, as before. A rejected PIN is not retried and
+ * pauses the account instead of choosing "don't restore" for the owner.
+ */
 async function dismissRestore(page: Page, deadline: number) {
-  for (const step of ['pin', 'continue'] as const) {
+  const configured = process.env.FACEBOOK_RESTORE_PIN?.trim();
+  const pin = configured && /^\d{6}$/.test(configured) ? configured : null;
+  let pinTried = false;
+  for (let step = 0; step < 4; step++) {
     await assertSessionNegatives(page, 'facebook');
-    const button = await page.evaluateHandle((step) => {
-      if (
-        location.origin !== 'https://www.facebook.com' ||
-        !/^\/messages\//.test(location.pathname)
-      )
-        return null;
-      const visible = (node: Element) =>
-        node.getClientRects().length > 0 &&
-        !node.closest('[hidden],[aria-hidden="true"],[inert]');
-      const title =
-        step === 'pin'
-          ? 'Enter your PIN to restore your chats'
-          : 'Continue without restoring?';
-      const headings = Array.from(
-        document.querySelectorAll('h2,[role="heading"][aria-level="2"]'),
-      ).filter((node) => visible(node) && node.textContent?.trim() === title);
-      if (headings.length !== 1) return null;
-      // Text and ancestor coincidence do not prove a modal. Unknown boundaries
-      // stay untouched until their actual semantics have been observed.
-      const scope = headings[0]!.closest('[role="dialog"][aria-modal="true"]');
-      if (scope) {
-        const text = scope.textContent ?? '';
-        const buttons = Array.from(
-          scope.querySelectorAll('button,[role="button"]'),
-        ).filter(visible);
-        const named = (name: string) =>
-          buttons.filter(
-            (node) =>
-              (
-                node.getAttribute('aria-label') ||
-                node.textContent ||
-                ''
-              ).trim() === name,
-          );
-        if (
-          step === 'pin' &&
-          text.includes(
-            'Some messages are missing. Enter your PIN to restore your chat history.',
-          ) &&
-          scope.querySelector('input[aria-label="PIN"],input') &&
-          named('Forgotten PIN?').length === 1 &&
-          named('Close').length >= 1 &&
-          named('Close').length <= 2
+    const kind = await restoreDialogKind(page);
+    if (kind === 'none' || kind === 'unknown') return;
+    if (kind === 'pin' && pin && !pinTried) {
+      pinTried = true;
+      const input = page
+        .locator(
+          '[role="dialog"][aria-modal="true"] input[autocomplete="one-time-code"][maxlength="6"]',
         )
-          return named('Close')[0];
-        if (
-          step === 'continue' &&
-          text.includes('This means that you') &&
-          text.includes('full chat history on this device') &&
-          named('Cancel').length === 1 &&
-          named("Don't restore messages").length === 1
-        )
-          return named("Don't restore messages")[0];
+        .last();
+      await input.click({ timeout: Math.max(1, deadline - Date.now()) });
+      await page.keyboard.type(pin, { delay: 60 });
+      try {
+        await input.waitFor({
+          state: 'detached',
+          timeout: Math.max(1, Math.min(15000, deadline - Date.now())),
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === 'TimeoutError')
+          throw new SocialSessionCheckError('checkpoint');
+        throw error;
       }
-      return null;
-    }, step);
+      continue;
+    }
+    if (kind === 'pin' && pin) throw new SocialSessionCheckError('checkpoint');
+    const button = await restoreButton(
+      page,
+      kind === 'pin' ? 'close' : 'confirm',
+    );
     try {
       const element = button.asElement();
-      if (element) {
-        await element.click({ timeout: Math.max(1, deadline - Date.now()) });
-        if (step === 'pin')
-          await page
-            .getByRole('heading', {
-              name: 'Continue without restoring?',
-              exact: true,
-            })
-            .waitFor({
-              state: 'visible',
-              timeout: Math.max(1, deadline - Date.now()),
-            });
-      }
+      if (!element) return;
+      await element.click({ timeout: Math.max(1, deadline - Date.now()) });
+      await page.waitForTimeout(400);
     } finally {
       await button.dispose();
     }
-    await assertSessionNegatives(page, 'facebook');
   }
+  await assertSessionNegatives(page, 'facebook');
 }
 
 export async function captureFacebookInbox(
@@ -435,8 +547,13 @@ export async function captureFacebookInbox(
   };
   await navigate(`${origin}/messages/`, deadline);
   const list = page
-    .getByRole('region', { name: 'Thread list', exact: true })
-    .getByRole('table', { name: 'Chats', exact: true });
+    .locator('[role="grid"], [role="table"], table')
+    .filter({
+      has: page.locator(
+        'a[href^="/messages/t/"], a[href^="/messages/e2ee/t/"]',
+      ),
+    })
+    .first();
   try {
     await list.waitFor({
       state: 'visible',
@@ -492,7 +609,7 @@ export async function captureFacebookInbox(
     try {
       await navigate(url, end);
       await page
-        .locator(`${logSelector} [aria-roledescription="message"]`)
+        .locator(`${logSelector} [data-message-id]`)
         .first()
         .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
       read = await readFacebookThread(page, ownId, maxMessages);
