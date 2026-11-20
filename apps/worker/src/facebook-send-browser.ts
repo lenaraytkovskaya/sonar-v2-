@@ -1070,6 +1070,9 @@ async function conversation(
 const facebookMessageActionName =
   /^(?:Message|Send message|Повідомлення|Надіслати повідомлення|Сообщение|Отправить сообщение)$/i;
 
+// Extra wait for an optional h1 after the message action is already visible.
+const HEADING_OBSERVE_MS = 2000;
+
 export function facebookProfileActions(page: Page) {
   const main = page.locator('main, [role="main"]');
   return main
@@ -1089,27 +1092,27 @@ export async function waitForFacebookProfileActions(
 ) {
   const headings = facebookProfileHeadings(page);
   const actions = facebookProfileActions(page);
-  try {
-    await headings.first().waitFor({ state: 'visible', timeout: timeoutMs });
-  } catch (error) {
-    if (
-      !allowMissing ||
-      !(error instanceof Error) ||
-      error.name !== 'TimeoutError'
-    )
-      throw error;
+  const tolerateTimeout = (error: unknown) => {
+    if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+  };
+  if (allowMissing) {
+    // Dry run: Facebook profiles can render without any h1, so the action is
+    // awaited first and the heading is only observed, never required.
+    await actions
+      .first()
+      .waitFor({ state: 'visible', timeout: timeoutMs })
+      .catch(tolerateTimeout);
+    await headings
+      .first()
+      .waitFor({
+        state: 'visible',
+        timeout: Math.min(timeoutMs, HEADING_OBSERVE_MS),
+      })
+      .catch(tolerateTimeout);
+    return { headings, actions };
   }
-  if ((await headings.count()) > 0)
-    try {
-      await actions.first().waitFor({ state: 'visible', timeout: timeoutMs });
-    } catch (error) {
-      if (
-        !allowMissing ||
-        !(error instanceof Error) ||
-        error.name !== 'TimeoutError'
-      )
-        throw error;
-    }
+  await headings.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  await actions.first().waitFor({ state: 'visible', timeout: timeoutMs });
   return { headings, actions };
 }
 
@@ -1218,8 +1221,10 @@ export async function inspectFacebookRecipient(
   const summaryUk =
     pageFlags.checkpointVisible || pageFlags.loginVisible
       ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
-      : messageButtonCount === 1 && headingFound && profileUrlMatches
-        ? 'Профіль відкрито, кнопку «Повідомлення» знайдено.'
+      : messageButtonCount === 1 && profileUrlMatches
+        ? headingFound
+          ? 'Профіль відкрито, кнопку «Повідомлення» знайдено.'
+          : 'Профіль відкрито, кнопку «Повідомлення» знайдено, але заголовка h1 на сторінці немає.'
         : messageButtonCount === 0
           ? 'Кнопку «Повідомлення» не знайдено — перегляньте знімок.'
           : messageButtonCount > 1

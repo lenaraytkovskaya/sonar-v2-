@@ -139,6 +139,23 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       ).toMatchObject({ headingFound: false, messageButtonCount: 0 });
     });
 
+    it('confirms a profile with one message button even when the page has no h1', async () => {
+      await page.setContent(
+        '<html lang="uk"><body><main><div role="button" aria-label="Повідомлення">Повідомлення</div></main></body></html>',
+      );
+      const result = await inspectFacebookRecipient(
+        page,
+        '100000000000001',
+        500,
+      );
+      expect(result).toMatchObject({
+        headingFound: false,
+        messageButtonCount: 1,
+        profileUrlMatches: true,
+      });
+      expect(result.summaryUk).toContain('кнопку «Повідомлення» знайдено');
+    });
+
     it('detects a Ukrainian new-message window and a login checkpoint', async () => {
       await setProfile(
         'uk',
