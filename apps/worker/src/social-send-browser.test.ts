@@ -109,6 +109,7 @@ function fixture(
     })),
     getByRole: vi.fn((_role: string, roleOptions: { name: RegExp }) => ({
       first: () => ({
+        waitFor: async () => {},
         isVisible: async () => !options.noMessage,
         click: async () => {
           events.push('open');

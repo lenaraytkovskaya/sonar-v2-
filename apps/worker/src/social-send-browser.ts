@@ -25,6 +25,7 @@ import {
 } from './social-profile-browser.js';
 import { sendFacebook } from './facebook-send-browser.js';
 import { captureFailureDom } from './social-failure-dom.js';
+import { navigateSocialPage } from './social-navigation.js';
 
 export type SocialSessionAccount = {
   id: string;
@@ -52,10 +53,24 @@ export async function captureFailureShot(
   session: SocialBrowserSession,
   kind: FailureShotKind,
   stage: string,
+  elapsedMs = 0,
 ) {
   if (!session.persistFailureShot) return;
   try {
-    const dom = await captureFailureDom(page).catch(() => undefined);
+    const dom = await captureFailureDom(page, {
+      phase: stage,
+      elapsedMs,
+    }).catch(() => undefined);
+    if (
+      dom &&
+      /^(?:(www\.)?instagram\.com|ig\.me)$/.test(new URL(page.url()).hostname)
+    )
+      Object.assign(dom, {
+        navigation: {
+          ...(await page.evaluate(instagramLoadingState).catch(() => ({}))),
+          waitedSeconds: elapsedMs / 1000,
+        },
+      });
     const path = new URL(page.url()).pathname.slice(0, 500);
     let jpeg: string | undefined;
     try {
@@ -241,6 +256,7 @@ function dialogMismatch(
 async function instagramDialog(page: Page, handle: string, phase: DialogPhase) {
   await page.waitForURL(
     /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
+    { waitUntil: 'domcontentloaded' },
   );
   // Only the innermost visible conversation boundary may own its header/composer.
   // Ancestor headers, sidebar links and hidden recipients cannot identify a chat.
@@ -475,10 +491,7 @@ async function tryInstagramDirectChat(
   assertSession: () => Promise<void>,
 ) {
   try {
-    const response = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-    });
+    const response = await navigateSocialPage(page, url, timeoutMs);
     if (response && response.status() >= 400) return false;
     const reloaded = await waitForInstagramReady(page, timeoutMs);
     if (reloaded && reloaded.status() >= 400) return false;
@@ -486,7 +499,7 @@ async function tryInstagramDirectChat(
       await assertSession();
     await page.waitForURL(
       /^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/[^/?#]+\/?(?:[?#].*)?$/,
-      { timeout: timeoutMs },
+      { waitUntil: 'domcontentloaded', timeout: timeoutMs },
     );
     await assertSession();
     const { dialog, headers } = await instagramDialog(page, handle, 'initial');
@@ -509,6 +522,32 @@ function instagramLoadingState() {
     getComputedStyle(node).visibility !== 'hidden';
   const anyVisible = (selector: string) =>
     Array.from(document.querySelectorAll(selector)).some(visible);
+  const splashElement = anyVisible(
+    '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
+  );
+  const logo = anyVisible(
+    '[aria-label="Instagram logo"], img[alt="Instagram"], svg[aria-label="Instagram"]',
+  );
+  const privateArea =
+    '[contenteditable], input, textarea, [role="log"], [role="article"], [role="row"], [role="listitem"], [data-pagelet="IGDMessagesList"], [data-pagelet="IGDInboxThreadListScrollableAreaPagelet"]';
+  const marker = (pattern: RegExp) =>
+    Array.from(
+      document.querySelectorAll('h1, h2, button, a, label, p, span'),
+    ).some(
+      (node) =>
+        !node.closest(privateArea) &&
+        node.children.length === 0 &&
+        visible(node) &&
+        pattern.test(node.textContent?.trim() ?? ''),
+    );
+  const login =
+    anyVisible('input[name="username"], input[type="password"]') ||
+    marker(
+      /^(Log in|\u0423\u0432\u0456\u0439\u0442\u0438|\u0412\u043e\u0439\u0442\u0438)$/i,
+    );
+  const challenge =
+    /challenge|checkpoint/i.test(location.pathname) ||
+    marker(/^(Suspicious.*|Confirm it.s you)$/i);
   const splash =
     anyVisible(
       '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
@@ -525,6 +564,10 @@ function instagramLoadingState() {
         )));
   return {
     splash,
+    splashElement,
+    logo,
+    login,
+    challenge,
     ready:
       !splash &&
       (anyVisible(
@@ -533,17 +576,19 @@ function instagramLoadingState() {
         /login|signin|challenge|checkpoint|captcha/i.test(location.pathname)),
   };
 }
-function instagramSplashTimeout() {
+function instagramSplashTimeout(elapsedMs: number) {
   const error = Object.assign(new SocialSessionCheckError('timeout'), {
     stage: 'navigation' as const,
     errorKind: 'timeout' as const,
     screen: 'splash' as const,
   });
-  error.reasonUk += ' [screen=splash]';
+  error.reasonUk += ` [screen=splash] [waitedSeconds=${elapsedMs / 1000}]`;
   error.message = error.reasonUk;
   return error;
 }
-function isInstagramSplashTimeout(error: unknown) {
+function isInstagramSplashTimeout(
+  error: unknown,
+): error is SocialSessionCheckError & { screen: 'splash' } {
   return (
     error instanceof SocialSessionCheckError &&
     'screen' in error &&
@@ -554,6 +599,7 @@ function isInstagramSplashTimeout(error: unknown) {
 export async function waitForInstagramReady(page: Page, timeoutMs: number) {
   // Partial adapter stubs do not have a browser execution context.
   if (typeof page.waitForFunction !== 'function') return;
+  const started = Date.now();
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       // Browser code has no module closures; a static predicate survives redirects.
@@ -566,7 +612,7 @@ export async function waitForInstagramReady(page: Page, timeoutMs: number) {
     } catch (error) {
       const current = await page.evaluate(instagramLoadingState);
       if (!current.splash) throw error;
-      if (attempt === 1) throw instagramSplashTimeout();
+      if (attempt === 1) throw instagramSplashTimeout(Date.now() - started);
       try {
         const response = await page.reload({
           waitUntil: 'domcontentloaded',
@@ -574,7 +620,7 @@ export async function waitForInstagramReady(page: Page, timeoutMs: number) {
         });
         if (response && response.status() >= 400) return response;
       } catch {
-        throw instagramSplashTimeout();
+        throw instagramSplashTimeout(Date.now() - started);
       }
     }
   }
@@ -819,10 +865,11 @@ async function sendInstagram(
       }
     }
     if (!openedDirectChat) {
-      const response = await page.goto(target.canonicalUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: timeoutMs,
-      });
+      const response = await navigateSocialPage(
+        page,
+        target.canonicalUrl,
+        timeoutMs,
+      );
       if (response && response.status() >= 400)
         throw stagedFailure(
           stage,
@@ -1366,7 +1413,9 @@ async function sendInstagram(
         : 'unexpected';
     if (isInstagramSplashTimeout(error)) {
       const splash = stagedFailure('navigation', 'timeout');
-      splash.reasonUk += ' [screen=splash]';
+      splash.reasonUk += error.reasonUk.slice(
+        error.reasonUk.indexOf(' [screen=splash'),
+      );
       splash.message = splash.reasonUk;
       throw Object.assign(splash, { screen: 'splash' });
     }
@@ -2107,6 +2156,7 @@ export function createSocialSendBrowser(
         throw error;
       }
       page.setDefaultTimeout(timeoutMs);
+      const started = Date.now();
       try {
         if (session.persistProxyPublicIp) {
           const checkedAt = Date.parse(session.proxyPublicIpCheckedAt ?? '');
@@ -2148,12 +2198,26 @@ export function createSocialSendBrowser(
         }
         return result;
       } catch (error) {
+        const detail = error as
+          | {
+              stage?: unknown;
+              diagnostic?: { stage?: unknown };
+              reasonUk?: string;
+            }
+          | undefined;
+        const phase =
+          detail?.stage ??
+          detail?.diagnostic?.stage ??
+          detail?.reasonUk?.match(/"phase":"([a-z_]+)"/)?.[1] ??
+          failure?.stage?.() ??
+          'operation';
         if (failure)
           await captureFailureShot(
             page,
             session,
             failure.kind,
-            failure.stage?.() ?? 'operation',
+            typeof phase === 'string' ? phase : 'operation',
+            Date.now() - started,
           );
         throw error;
       } finally {
@@ -2178,10 +2242,11 @@ export function createSocialSendBrowser(
           async (page) => {
             let status: number | null = null;
             try {
-              const response = await page.goto(home(account.channel), {
-                waitUntil: 'domcontentloaded',
-                timeout: timeoutMs,
-              });
+              const response = await navigateSocialPage(
+                page,
+                home(account.channel),
+                timeoutMs,
+              );
               status = response?.status() ?? null;
               stage = 'http';
               // Only the final main-document response, never background HTTP failures.
@@ -2281,10 +2346,7 @@ export function createSocialSendBrowser(
             account.channel === 'linkedin'
               ? `${home(account.channel)}feed/`
               : home(account.channel);
-          const response = await page.goto(url, {
-            waitUntil: 'domcontentloaded',
-            timeout: timeoutMs,
-          });
+          const response = await navigateSocialPage(page, url, timeoutMs);
           stage = 'http';
           if (response?.status() === 429)
             throw new SocialSessionCheckError('rate_limit');
@@ -2360,14 +2422,15 @@ export function createSocialSendBrowser(
                   assertSocialSession(page, 'facebook', sessionTimeoutMs),
                 facebookDraft,
               );
-            await page.goto(target.canonicalUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: timeoutMs,
-            });
+            await navigateSocialPage(page, target.canonicalUrl, timeoutMs);
             await assertSocialSession(page, account.channel);
             const messageButton = page
               .getByRole('button', { name: messageLabel })
               .first();
+            await messageButton.waitFor({
+              state: 'visible',
+              timeout: timeoutMs,
+            });
             if (!(await messageButton.isVisible()))
               throw new SocialSendError(
                 'unavailable',
