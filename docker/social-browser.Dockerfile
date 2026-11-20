@@ -5,6 +5,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 COPY . .
 RUN pnpm install --offline --frozen-lockfile && \
+    pnpm --filter @sonar/core build && \
     pnpm --filter @sonar/social-browser build && \
     pnpm --filter @sonar/social-browser deploy --legacy --prod /service
 
