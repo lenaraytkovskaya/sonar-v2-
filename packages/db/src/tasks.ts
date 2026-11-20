@@ -533,6 +533,7 @@ const replayableInterruptedTaskTypes = new Set([
   'google.batch',
   'google.company',
   'social.fetch',
+  'social.recipient.check',
   'telegram.sync',
   'viber.inbox.sync',
   'email.receive',

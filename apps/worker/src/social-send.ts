@@ -1,3 +1,4 @@
+import { socialTarget, type SocialTarget } from '@sonar/core';
 import {
   SocialProfileBusyError,
   resolveSocialSession,
@@ -75,6 +76,7 @@ export async function runSocialSend(
           request.body,
           account.beforeSend,
           account.facebookDraft,
+          taskId,
         );
       }),
     now,
@@ -108,7 +110,7 @@ export async function runSocialSessionCheck(
       }
     },
     new Date(),
-    'check',
+    'recipient',
     taskId,
   );
 }
@@ -148,9 +150,110 @@ export async function runSocialSessionKeepalive(
     taskId,
   );
 }
+
+export async function runFacebookRecipientCheck(
+  input: { accountId: string; target: SocialTarget },
+  taskId: string,
+  now = new Date(),
+): Promise<TaskOutcome> {
+  const target = socialTarget(input.target?.canonicalUrl);
+  if (!target || target.network !== 'facebook' || target.kind === 'unsupported')
+    return {
+      status: 'skipped',
+      reasonCode: 'facebook_recipient_invalid',
+      reasonUk:
+        'Перевірка доступна лише для Facebook-профілю. Перевірте контакт.',
+    };
+  const { rows } = await sonarPool.query(
+    'select channel,status,settings from channel_accounts where id=$1',
+    [input.accountId],
+  );
+  if (!rows[0] || rows[0].channel !== 'facebook')
+    return {
+      status: 'skipped',
+      reasonCode: 'facebook_account_missing',
+      reasonUk:
+        'Facebook-акаунт не знайдено. Перевірте власний акаунт у «Канали».',
+    };
+  if (
+    rows[0].status !== 'active' ||
+    rows[0].settings.enabled === false ||
+    rows[0].settings.sessionStatus !== 'valid'
+  )
+    return {
+      status: 'paused',
+      reasonCode: 'facebook_account_unavailable',
+      reasonUk:
+        'Facebook-акаунт не готовий. Потрібна дія: перевірте вхід у «Канали».',
+    };
+  return withSocialSessionCheck(
+    input.accountId,
+    async (account, session) => {
+      try {
+        const result = await socialSendBrowser.checkRecipient(
+          { ...account, channel: 'facebook' },
+          session,
+          target,
+          await timeout(),
+          taskId,
+        );
+        if (result.valid)
+          return {
+            valid: true,
+            result: { ...result.observation, accountId: input.accountId },
+          };
+        return {
+          valid: false,
+          reason: result.reason,
+          ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
+          result: { ...result.observation, accountId: input.accountId },
+        };
+      } catch (error) {
+        const reason = socialSessionCheckReason(error);
+        const checkpointVisible = reason === 'checkpoint';
+        const loginVisible = reason === 'login_required';
+        const diagnostic =
+          error instanceof SocialSessionCheckError
+            ? error.diagnostic
+            : undefined;
+        return {
+          valid: false,
+          reason,
+          ...(error instanceof SocialProfileBusyError ? { busy: true } : {}),
+          ...(diagnostic ? { diagnostic } : {}),
+          result: {
+            accountId: input.accountId,
+            profileUrlMatches: false,
+            headingFound: false,
+            messageButtonCount: 0,
+            messageButtonCaption: null,
+            messageButtonRole: null,
+            extraWindowCount: 0,
+            hasNewMessageWindow: false,
+            hasMiniChat: false,
+            loginVisible,
+            identityCheckVisible: checkpointVisible,
+            checkpointVisible,
+            language: diagnostic?.page?.lang ?? 'missing',
+            elapsedMs: 0,
+            summaryUk:
+              checkpointVisible || loginVisible
+                ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
+                : 'Не вдалося перевірити профіль. Потрібна дія: відкрийте «Канали» та перевірте стан акаунта.',
+          },
+        };
+      }
+    },
+    now,
+    'check',
+    taskId,
+  );
+}
+
 export async function registerSocialSessionTasks() {
   await boss.createQueue('social.session.check');
   await boss.createQueue('social.session.keepalive');
+  await boss.createQueue('social.recipient.check');
   await runTask(
     'social.session.keepalive',
     (payload, taskId) =>
@@ -167,6 +270,12 @@ export async function registerSocialSessionTasks() {
   await reconcileSocialSessionKeepalive();
   await runTask('social.session.check', (payload, taskId) =>
     runSocialSessionCheck(payload as { accountId: string }, taskId),
+  );
+  await runTask('social.recipient.check', (payload, taskId) =>
+    runFacebookRecipientCheck(
+      payload as { accountId: string; target: SocialTarget },
+      taskId,
+    ),
   );
 }
 export const closeSocialSendBrowser = () => socialSendBrowser.close();

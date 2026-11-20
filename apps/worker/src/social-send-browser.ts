@@ -17,13 +17,20 @@ import {
   type SocialSessionCheckDiagnostic,
 } from '@sonar/core/social-session';
 import { isIP } from 'node:net';
-import { socialTarget, type SocialNetwork } from '@sonar/core';
+import {
+  socialTarget,
+  type SocialNetwork,
+  type SocialTarget,
+} from '@sonar/core';
 import type { socialProxies } from './social-browser.js';
 import {
   connectSocialProfile,
   lockSocialProfile,
 } from './social-profile-browser.js';
-import { sendFacebook } from './facebook-send-browser.js';
+import {
+  inspectFacebookRecipient,
+  sendFacebook,
+} from './facebook-send-browser.js';
 import { captureFailureDom } from './social-failure-dom.js';
 import { navigateSocialPage } from './social-navigation.js';
 
@@ -54,8 +61,9 @@ export async function captureFailureShot(
   kind: FailureShotKind,
   stage: string,
   elapsedMs = 0,
+  taskId?: string,
 ) {
-  if (!session.persistFailureShot) return;
+  if (!session.persistFailureShot) return false;
   try {
     const dom = await captureFailureDom(page, {
       phase: stage,
@@ -72,6 +80,17 @@ export async function captureFailureShot(
         },
       });
     const path = new URL(page.url()).pathname.slice(0, 500);
+    const facebookScreenshot = /^(?:www\.)?facebook\.com$/.test(
+      new URL(page.url()).hostname,
+    );
+    const redactedConversation =
+      facebookScreenshot && typeof page.locator === 'function'
+        ? [
+            page.locator(
+              '[role="log"], [aria-label^="Messages in conversation"], [aria-label^="Повідомлення в розмові"], [role="dialog"], [contenteditable="true"], [role="article"]',
+            ),
+          ]
+        : undefined;
     let jpeg: string | undefined;
     try {
       for (const quality of [55, 35, 20]) {
@@ -79,6 +98,9 @@ export async function captureFailureShot(
           type: 'jpeg',
           quality,
           timeout: 5000,
+          ...(redactedConversation?.length
+            ? { mask: redactedConversation, maskColor: '#000000' }
+            : {}),
         });
         if (bytes.byteLength <= 3 * 1024 * 1024) {
           jpeg = bytes.toString('base64');
@@ -88,16 +110,21 @@ export async function captureFailureShot(
     } catch {
       /* DOM diagnostics survive screenshot failures. */
     }
-    if (jpeg || dom)
+    if (jpeg || dom) {
       await session.persistFailureShot(kind, {
         at: new Date().toISOString(),
         path,
         stage: stage.slice(0, 80),
         ...(jpeg ? { jpeg } : {}),
         ...(dom ? { dom } : {}),
+        ...(taskId ? { taskId } : {}),
       });
+      return true;
+    }
+    return false;
   } catch {
     /* Diagnostic failures must not replace the operation result. */
+    return false;
   }
 }
 
@@ -2042,7 +2069,11 @@ export function createSocialSendBrowser(
     timeoutMs: number,
     fn: (page: Page) => Promise<T>,
     preserveResult = false,
-    failure?: { kind: FailureShotKind; stage?: () => string },
+    failure?: {
+      kind: FailureShotKind;
+      stage?: () => string;
+      taskId?: string;
+    },
   ) {
     return serialized(account.id, async () => {
       const profileMode = account.settings.browserProfile === true;
@@ -2203,6 +2234,7 @@ export function createSocialSendBrowser(
               stage?: unknown;
               diagnostic?: { stage?: unknown };
               reasonUk?: string;
+              failureShotCaptured?: boolean;
             }
           | undefined;
         const phase =
@@ -2211,13 +2243,14 @@ export function createSocialSendBrowser(
           detail?.reasonUk?.match(/"phase":"([a-z_]+)"/)?.[1] ??
           failure?.stage?.() ??
           'operation';
-        if (failure)
+        if (failure && !detail?.failureShotCaptured)
           await captureFailureShot(
             page,
             session,
             failure.kind,
             typeof phase === 'string' ? phase : 'operation',
             Date.now() - started,
+            failure.taskId,
           );
         throw error;
       } finally {
@@ -2228,6 +2261,120 @@ export function createSocialSendBrowser(
   }
   return {
     withPage,
+    async checkRecipient(
+      account: SocialSessionAccount,
+      session: SocialBrowserSession,
+      target: SocialTarget,
+      timeoutMs: number,
+      taskId: string,
+    ) {
+      type RecipientCheckResult = {
+        valid: boolean;
+        reason?: ReturnType<typeof socialSessionCheckReason>;
+        diagnostic?: SocialSessionCheckDiagnostic;
+        observation: Record<string, unknown>;
+      };
+      let stage = 'navigation';
+      const started = Date.now();
+      try {
+        return await withPage(
+          account,
+          session,
+          timeoutMs,
+          async (page) => {
+            const response = await navigateSocialPage(
+              page,
+              target.canonicalUrl,
+              timeoutMs,
+            );
+            stage = 'http';
+            if (response?.status() === 429)
+              throw new SocialSessionCheckError('rate_limit');
+            if (response?.status() === 407)
+              throw new SocialSessionCheckError('proxy');
+            if (response && response.status() >= 500)
+              throw new SocialSessionCheckError('network');
+            stage = 'auth';
+            try {
+              await assertSocialSession(page, 'facebook');
+            } catch (error) {
+              const reason = socialSessionCheckReason(error);
+              const diagnostic =
+                error instanceof SocialSessionCheckError
+                  ? error.diagnostic
+                  : undefined;
+              const checkpointVisible =
+                reason === 'checkpoint' || diagnostic?.urlKind === 'checkpoint';
+              const loginVisible =
+                reason === 'login_required' || diagnostic?.urlKind === 'login';
+              const observation = {
+                profileUrlMatches: false,
+                headingFound: false,
+                messageButtonCount: 0,
+                messageButtonCaption: null,
+                messageButtonRole: null,
+                extraWindowCount: 0,
+                hasNewMessageWindow: false,
+                hasMiniChat: false,
+                loginVisible,
+                identityCheckVisible:
+                  diagnostic?.stage === 'identity' || checkpointVisible,
+                checkpointVisible,
+                language: diagnostic?.page?.lang ?? 'missing',
+                elapsedMs: Date.now() - started,
+                summaryUk:
+                  checkpointVisible || loginVisible
+                    ? 'Facebook просить підтвердити вхід. Відкрийте браузер і підтвердьте.'
+                    : 'Facebook не підтвердив сесію. Перевірте акаунт у браузері.',
+              } satisfies Record<string, unknown>;
+              await captureFailureShot(
+                page,
+                session,
+                'check',
+                'auth',
+                Date.now() - started,
+                taskId,
+              );
+              return {
+                valid: false,
+                reason,
+                ...(diagnostic ? { diagnostic } : {}),
+                observation,
+              } satisfies RecipientCheckResult;
+            }
+            if (
+              !response ||
+              response.status() < 200 ||
+              response.status() >= 300
+            )
+              throw new SocialSessionCheckError('unknown_auth');
+            stage = 'profile';
+            const result = await inspectFacebookRecipient(
+              page,
+              target.handle,
+              timeoutMs,
+            );
+            await captureFailureShot(
+              page,
+              session,
+              'check',
+              'recipient',
+              Date.now() - started,
+              taskId,
+            );
+            return {
+              valid: true,
+              observation: result,
+            } satisfies RecipientCheckResult;
+          },
+          true,
+          { kind: 'check', stage: () => stage, taskId },
+        );
+      } catch (error) {
+        if (error instanceof SocialProfileBusyError) throw error;
+        throw error;
+      }
+    },
     async check(
       account: SocialSessionAccount,
       session: SocialBrowserSession,
@@ -2379,6 +2526,7 @@ export function createSocialSendBrowser(
       body: string,
       beforeSend: () => Promise<void>,
       facebookDraft?: SocialComposerDraft,
+      taskId?: string,
     ) {
       const providerThreadId =
         typeof account.settings.providerThreadId === 'string'
@@ -2421,6 +2569,15 @@ export function createSocialSendBrowser(
                 (sessionTimeoutMs) =>
                   assertSocialSession(page, 'facebook', sessionTimeoutMs),
                 facebookDraft,
+                (stage, elapsedMs) =>
+                  captureFailureShot(
+                    page,
+                    session,
+                    'send',
+                    stage,
+                    elapsedMs,
+                    taskId,
+                  ),
               );
             await navigateSocialPage(page, target.canonicalUrl, timeoutMs);
             await assertSocialSession(page, account.channel);
@@ -2471,7 +2628,7 @@ export function createSocialSendBrowser(
             return confirmedDialogUrl(page, account.channel);
           },
           true,
-          { kind: 'send', stage: () => 'send' },
+          { kind: 'send', stage: () => 'send', taskId },
         );
       } catch (error) {
         if (error instanceof SocialProfileBusyError) throw error;

@@ -275,6 +275,8 @@ export const uk = {
   },
   socialAccounts: {
     failureShot: 'Показати, що бачив Sonar',
+    failureShotSend: 'Знімок надсилання',
+    failureShotCheck: 'Знімок перевірки',
     failureDom: 'Структура сторінки',
     saveDom: 'Зберегти структуру сторінки',
     domLabel: 'Підпис (необов’язково)',
@@ -427,6 +429,9 @@ export const uk = {
   },
   social: {
     title: 'Соцмережі',
+    recipientCheck: 'Перевірити одержувача',
+    recipientCheckError: 'Не вдалося перевірити одержувача. Спробуйте ще раз.',
+    recipientCheckShot: 'Знімок',
     update: 'Оновити соцмережі',
     empty: 'Публічні профілі Facebook, Instagram або LinkedIn ще не знайдено.',
     error: 'Не вдалося оновити соцмережі. Спробуйте ще раз.',
@@ -1516,6 +1521,7 @@ export const uk = {
       'social.session.login': 'Вхід у соцмережу',
       'social.session.check': 'Перевірка входу в соцмережу',
       'social.session.keepalive': 'Підтримка входу в соцмережу',
+      'social.recipient.check': 'Перевірка одержувача Facebook',
       'company.score': 'Оцінювання компанії',
       'company.analyze': 'Аналіз компанії ШІ',
       'message.send': 'Надсилання повідомлення',
