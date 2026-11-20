@@ -29,6 +29,8 @@ import { LocalTime } from './local-time';
 import {
   canReplyInConversation,
   isReplyDraftChannel,
+  acceptedReplyDraft,
+  clearAcceptedReplyDraft,
 } from '@/lib/conversation-reply';
 type Message = NonNullable<
   Awaited<ReturnType<typeof getConversationChat>>
@@ -63,6 +65,8 @@ export function ConversationChat({
   const [task, setTask] = useState<Task | null>(null);
   const busy = useRef(false);
   const requestKey = useRef({ fingerprint: '', key: '' });
+  const composer = useRef({ body, subject });
+  composer.current = { body, subject };
   const history = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -235,11 +239,13 @@ export function ConversationChat({
     if (busy.current) return false;
     busy.current = true;
     revision.current++;
+    const version = revision.current;
     setPending(true);
     setNotice('');
     const fingerprint = JSON.stringify({ action, ...fields });
     if (requestKey.current.fingerprint !== fingerprint)
       requestKey.current = { fingerprint, key: crypto.randomUUID() };
+    const submitted = { body, subject, requestKey: { ...requestKey.current } };
     try {
       try {
         sessionStorage.setItem(
@@ -260,13 +266,33 @@ export function ConversationChat({
       });
       const result = await response.json();
       if (!response.ok) throw Error(result.error ?? uk.email.error);
-      if (!mounted.current) return true;
-      requestKey.current = { fingerprint: '', key: '' };
-      if (action === 'generate') setTask(result);
-      if (action === 'reply') {
-        setBody((current) => (current === fields.body ? '' : current));
+      const sent =
+        ['reply', 'send', 'approve', 'manual'].includes(action) &&
+        ['queued', 'sent', 'delivered', 'read'].includes(result.status);
+      if (sent) {
+        try {
+          clearAcceptedReplyDraft(sessionStorage, draftKey, submitted);
+        } catch {
+          /* Storage itself may be unavailable. */
+        }
+      }
+      if (!mounted.current || revision.current !== version) return true;
+      if (sent) {
+        const current = { ...composer.current, requestKey: requestKey.current };
+        const next = acceptedReplyDraft(current, submitted);
+        if (next !== current) setBody(next.body);
+        setData((current) => ({
+          ...current,
+          messages: current.messages.map((message) =>
+            message.id === result.id
+              ? { ...message, status: result.status }
+              : message,
+          ),
+        }));
         atBottom.current = true;
       }
+      requestKey.current = { fingerprint: '', key: '' };
+      if (action === 'generate') setTask(result);
       // An accepted send must not become a retryable failure if this read fails.
       try {
         const refresh = await fetch(path, {
@@ -329,21 +355,14 @@ export function ConversationChat({
       }))
     )
       return;
-    const requestingApproval =
-      pendingDraft.status !== 'awaiting_approval' &&
-      conversation?.campaignSendMode === 'approval';
-    if (
-      await act(
-        conversation?.channel === 'social' && !data.socialAvailable
-          ? 'manual'
-          : pendingDraft.status === 'awaiting_approval'
-            ? 'approve'
-            : 'send',
-        { messageId: pendingDraft.id, expected: changed ? submitted : base },
-      )
-    ) {
-      if (!requestingApproval) setBody('');
-    }
+    await act(
+      conversation?.channel === 'social' && !data.socialAvailable
+        ? 'manual'
+        : pendingDraft.status === 'awaiting_approval'
+          ? 'approve'
+          : 'send',
+      { messageId: pendingDraft.id, expected: changed ? submitted : base },
+    );
   };
   const conversation = data.conversation;
   if (!conversation) return null;

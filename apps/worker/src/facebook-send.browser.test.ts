@@ -148,6 +148,17 @@ function historySpinner(scope, phase) {
   }, 90);
 }
 function wire(scope) {
+  for (const control of scope.querySelectorAll('button, [role="button"]')) {
+    const label = control.getAttribute('aria-label') || control.textContent;
+    if (/^(?:Close chat|Закрити чат)$/i.test(label)) control.addEventListener('click', () => {
+      window.fixtureEvent('close:' + scope.id); scope.remove();
+    });
+    if (/call|виклик|відеодзвінок/i.test(label)) control.addEventListener('click', () => window.fixtureEvent('call'));
+    if (o.closeMutatesToCall && /^(?:Close chat|Закрити чат)$/i.test(label)) {
+      control.addEventListener('mousedown', () => control.setAttribute('aria-label', 'Start a voice call'));
+      control.addEventListener('click', () => window.fixtureEvent('call'));
+    }
+  }
   const editor = scope.querySelector('[contenteditable]');
   const button = scope.querySelector('[aria-label="Send a Like"], [aria-label="Press Enter to send"]');
   editor.addEventListener('input', () => {
@@ -197,7 +208,7 @@ function wire(scope) {
     if (o.bodyStatusLabel) next.querySelector('span').insertAdjacentHTML('beforeend', '<i aria-label="Sending"></i>');
     if (o.bodyWrapper) next.querySelector('span').innerHTML = '<span>' + body + '</span>';
     if (o.pendingSettles) { next.insertAdjacentHTML('beforeend', '<span class="status">Sending</span>'); setTimeout(() => next.querySelector('.status').remove(), 40); }
-    destination.append(next); editor.textContent = '';
+    destination.append(next); if (o.doubleOutgoing) destination.append(next.cloneNode(true)); editor.textContent = '';
     if (o.lateFailure) setTimeout(() => next.insertAdjacentHTML('beforeend', '<span>Not sent. Retry</span>'), 120);
     if (o.lateNoAuth) setTimeout(() => document.querySelector('nav').remove(), 120);
     if (o.lateNetwork || o.lateHttp) setTimeout(() => fetch('/synthetic-transmission').catch(() => {}), 120);
@@ -211,6 +222,27 @@ document.querySelector('#open').onclick = () => {
   if (o.preopenedRegionOnly) document.querySelector('#preexisting-region').remove();
   const show = () => {
     const scope = chat('target', o.wrongRecipient ? '100000000000002' : recipient, label);
+    if (o.recovery) {
+      const previous = row(!o.recoveryIncoming, o.recoveryMismatch ? 'Other message' : '  Synthetic \u00a0 message ', o.recoveryOld ? '4 November 2026, 20:14' : o.recoveryRelative ? 'Today, 20:16' : '4 November 2026, 20:16');
+      if (!o.recoveryNoId) previous.firstElementChild.setAttribute('data-message-id', 'recovered-id');
+      if (o.recoveryPending) previous.insertAdjacentHTML('beforeend', '<span>Sending</span>');
+      if (o.recoveryDelayed) scope.fixtureRecovery = previous; else region(scope).append(previous);
+      if (o.recoveryDuplicate) region(scope).append(previous.cloneNode(true));
+    }
+    if (o.scrollHistory) {
+      const log = region(scope); log.style.cssText = 'height: 60px; overflow: auto';
+      const spacer = document.createElement('div'); spacer.style.height = '600px'; log.append(spacer);
+      if (o.virtualizedHistory) log.append(row());
+      log.addEventListener('scroll', () => { if (log.scrollTop > 0) {
+        window.fixtureEvent('history:tail');
+        if (o.virtualizedHistory && !scope.fixtureVirtualized) {
+          scope.fixtureVirtualized = true;
+          const loading = document.createElement('div'); loading.setAttribute('role', 'progressbar'); log.append(loading);
+          setTimeout(() => { log.replaceChildren(spacer, row(true, 'Earlier unrelated outgoing')); window.fixtureEvent('history:ready'); }, 90);
+        }
+        if (scope.fixtureRecovery) { const previous = scope.fixtureRecovery; delete scope.fixtureRecovery; setTimeout(() => log.append(previous), 90); }
+      } });
+    }
     if (o.oldOnly || o.sameTimestamp || o.rerenderAfterSend) region(scope).append(row());
     if (o.saturatedCounts) for (let i = 0; i < 100; i++) region(scope).append(row());
 
@@ -637,8 +669,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             options.ownDraft ||
               options.priorDraft ||
               options.foreignDraft ||
-              options.draftPersistenceFailure
+              options.draftPersistenceFailure ||
+              options.recovery
               ? {
+                  recoveryFirstAttemptAt: options.recovery
+                    ? '2026-11-04T20:15:00Z'
+                    : undefined,
                   previousBodies: options.priorDraft ? ['Earlier draft'] : [],
                   previousBody: options.ownDraft
                     ? 'Synthetic message'
@@ -650,6 +686,124 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it.each([{ headerNameButton: true }, { observed: true }])(
+      'reuses a confirmed existing profile mini-chat (%j)',
+      async (options) => {
+        const f = await fixture({ ...options, preopenedProfilePopup: true });
+        try {
+          await expect(f.send()).resolves.toBeTruthy();
+          expect(f.events).not.toContain('open');
+          expect(f.events).toContain('send:target');
+          expect(f.events).not.toContain('call');
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('closes another mini-chat only through its close control, then opens the recipient', async () => {
+      const f = await fixture({ neighbour: true, headerNameButton: true });
+      try {
+        await expect(f.send()).resolves.toBeTruthy();
+        expect(f.events.indexOf('close:neighbour')).toBeLessThan(
+          f.events.indexOf('open'),
+        );
+        expect(f.events).not.toContain('call');
+        expect(f.events).not.toContain('send:neighbour');
+      } finally {
+        await f.close();
+      }
+    });
+    it('blocks a close control changed to a call during pointer dispatch', async () => {
+      const f = await fixture({ neighbour: true, closeMutatesToCall: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
+        expect(f.events).not.toContain('call');
+        expect(f.events).not.toContain('open');
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([false, true])(
+      'reconciles an exact normalized outgoing after the prior attempt without filling or sending (delayed: %s)',
+      async (delayed) => {
+        const f = await fixture({
+          recovery: true,
+          recoveryDelayed: delayed,
+          scrollHistory: delayed,
+        });
+        try {
+          await expect(f.send()).resolves.toMatchObject({
+            outcome: 'facebook_reconciled',
+            externalMessageId: 'recovered-id',
+            observation: {
+              dispatchPerformed: false,
+              matchedOutgoingAt: '2026-11-04T20:16:00.000Z',
+            },
+          });
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.persistDraft).not.toHaveBeenCalled();
+          expect(
+            f.events.filter((event) => /^(?:send|input):/.test(event)),
+          ).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      'recoveryOld',
+      'recoveryIncoming',
+      'recoveryMismatch',
+      'recoveryPending',
+      'recoveryNoId',
+      'recoveryRelative',
+      'recoveryDuplicate',
+    ])('fails closed for inconclusive prior delivery: %s', async (option) => {
+      const f = await fixture({ recovery: true, [option]: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.persistDraft).not.toHaveBeenCalled();
+        expect(
+          f.events.filter((event) => /^(?:send|input):/.test(event)),
+        ).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([false, true])(
+      'positions scrolled and virtualized history at the latest bubbles before counting (virtualized: %s)',
+      async (virtualized) => {
+        const f = await fixture({
+          scrollHistory: true,
+          virtualizedHistory: virtualized,
+        });
+        try {
+          await expect(f.send()).resolves.toBeTruthy();
+          expect(f.events).toContain('history:tail');
+          if (virtualized)
+            expect(f.events.indexOf('history:ready')).toBeLessThan(
+              f.events.indexOf('mark'),
+            );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('does not confirm two matching outgoing bubbles from one dispatch', async () => {
+      const f = await fixture({ doubleOutgoing: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
     it.each([false, true])(
       'uses the rendered profile while load/background requests remain pending (deferred script: %s)',
       async (stalledNavigation) => {
@@ -1059,6 +1213,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           );
           expect(inputEvents.length).toBeGreaterThan(0);
           expect(f.events).toEqual([
+            ...(options.neighbour ? ['close:neighbour'] : []),
             'open',
             ...inputEvents,
             'mark',
@@ -1319,7 +1474,6 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { headerNameButton: true, draftPersistenceFailure: true },
       { headerNameButton: true, secondPopup: true },
       { headerNameButton: true, secondPopupHeaderOnly: true },
-      { headerNameButton: true, preopenedProfilePopup: true },
       { headerNameButton: true, preopenedRegionOnly: true },
       { headerNameButton: true, directPage: true },
       ...[
@@ -1378,7 +1532,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         try {
           await expect(f.send()).rejects.toMatchObject({ code: 'unavailable' });
           expect(f.mark).not.toHaveBeenCalled();
-          expect(f.events.every((event) => event === 'open')).toBe(true);
+          expect(
+            f.events.every(
+              (event) =>
+                event === 'open' ||
+                (options.neighbour && event === 'close:neighbour'),
+            ),
+          ).toBe(true);
         } finally {
           await f.close();
         }
@@ -1392,7 +1552,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { observed: true, rerenderAfterSend: true },
       { observed: true, incoming: true },
       { observed: true, missingSelf: true },
-      { observed: true, sendInNeighbour: true, neighbour: true },
+      { observed: true, sendInNeighbour: true, secondPopup: true },
       { observed: true, nestedPending: true },
       { observed: true, nestedFailed: true },
       { observed: true, eraseOnly: true },
@@ -1401,7 +1561,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       { recipientAfterSend: true },
       { incoming: true },
       { missingSelf: true },
-      { sendInNeighbour: true, neighbour: true },
+      { sendInNeighbour: true, secondPopup: true },
       { rerenderAfterSend: true },
       { eraseOnly: true },
       { pending: true },

@@ -110,6 +110,144 @@ beforeAll(async () => {
   );
 });
 it.skipIf(!enabled)(
+  'rejects concurrent normalized replies while preserving intent retries, drafts, conversation scope and the configured window',
+  async () => {
+    const key = 'send.reply_duplicate_window_seconds';
+    const original = (
+      await db.sonarPool.query('select value from settings where key=$1', [key])
+    ).rows[0]?.value;
+    try {
+      await db.sonarPool.query(
+        "insert into settings(key,value) values($1,'120'::jsonb) on conflict(key) do update set value=excluded.value",
+        [key],
+      );
+      const body = `Duplicate protection ${randomUUID()}`;
+      const input = { conversationId, body, requestId: randomUUID() };
+      const drafted = await inbound.saveReplyDraft(
+        conversationId,
+        { body },
+        randomUUID(),
+      );
+      const inputs = [
+        input,
+        {
+          ...input,
+          body: ` \u00a0${body.replaceAll(' ', '\t')}\n`,
+          requestId: randomUUID(),
+        },
+      ];
+      const outcomes = await Promise.allSettled(
+        inputs.map((reply) => inbound.queueConversationReply(reply, userId)),
+      );
+      const accepted = outcomes.findIndex(
+        (outcome) => outcome.status === 'fulfilled',
+      );
+      expect(
+        outcomes.filter((outcome) => outcome.status === 'fulfilled'),
+      ).toHaveLength(1);
+      expect(
+        outcomes.find((outcome) => outcome.status === 'rejected'),
+      ).toMatchObject({
+        reason: { message: 'Таке саме повідомлення щойно надіслано' },
+      });
+      const queued = outcomes[accepted]!;
+      if (queued.status !== 'fulfilled') throw Error('No accepted reply');
+      expect(
+        (
+          await db.sonarPool.query('select status from messages where id=$1', [
+            drafted.id,
+          ])
+        ).rows[0].status,
+      ).toBe('draft');
+      expect(
+        await inbound.queueConversationReply(inputs[accepted]!, userId),
+      ).toEqual(queued.value);
+      await expect(
+        inbound.queueConversationReply(
+          { ...input, requestId: randomUUID() },
+          userId,
+        ),
+      ).rejects.toThrow('Таке саме повідомлення щойно надіслано');
+      const outreach = await import('./outreach.js');
+      await expect(
+        outreach.sendOutreachDraft(drafted.id, userId),
+      ).rejects.toThrow('Таке саме повідомлення щойно надіслано');
+      expect(
+        (
+          await inbound.queueConversationReply(
+            { ...input, body: `${body} different`, requestId: randomUUID() },
+            userId,
+          )
+        ).status,
+      ).toBe('queued');
+      for (const status of ['sent', 'delivered', 'read', 'failed']) {
+        await db.sonarPool.query(
+          "update messages set status=$2,first_attempt_at=coalesce(first_attempt_at,clock_timestamp()-interval '5 seconds') where id=$1",
+          [queued.value.id, status],
+        );
+        await expect(
+          inbound.queueConversationReply(
+            { ...input, requestId: randomUUID() },
+            userId,
+          ),
+        ).rejects.toThrow('Таке саме повідомлення щойно надіслано');
+      }
+      const generated = await inbound.enqueueReply(
+        conversationId,
+        randomUUID(),
+        userId,
+      );
+      expect(generated.status).toBe('queued');
+      const other = (
+        await db.sonarPool.query(
+          "insert into conversations(channel) values('email') returning id",
+        )
+      ).rows[0].id;
+      await db.sonarPool.query(
+        "insert into messages(conversation_id,account_id,to_value,subject,body,direction,status,idempotency_key) values($1,$2,$3,'','Inbound','in','delivered',$4)",
+        [other, accountId, sender, randomUUID()],
+      );
+      expect(
+        (
+          await inbound.queueConversationReply(
+            { ...input, conversationId: other, requestId: randomUUID() },
+            userId,
+          )
+        ).status,
+      ).toBe('queued');
+      await db.sonarPool.query(
+        "update messages set status='queued',approved_at=clock_timestamp()-interval '5 seconds',created_at=clock_timestamp()-interval '5 seconds' where id=$1",
+        [queued.value.id],
+      );
+      // Still blocked with the default window, allowed once the configured window is shorter.
+      await expect(
+        inbound.queueConversationReply(
+          { ...input, requestId: randomUUID() },
+          userId,
+        ),
+      ).rejects.toThrow('Таке саме повідомлення щойно надіслано');
+      await db.sonarPool.query(
+        "update settings set value='2'::jsonb where key=$1",
+        [key],
+      );
+      expect(
+        (await outreach.sendOutreachDraft(drafted.id, userId)).status,
+      ).toBe('queued');
+      expect((await outreach.sendOutreachDraft(drafted.id, userId)).id).toBe(
+        drafted.id,
+      );
+    } finally {
+      if (original === undefined)
+        await db.sonarPool.query('delete from settings where key=$1', [key]);
+      else
+        await db.sonarPool.query('update settings set value=$2 where key=$1', [
+          key,
+          JSON.stringify(original),
+        ]);
+    }
+  },
+);
+it.skipIf(!enabled)(
   'deduplicates concurrent provider deliveries atomically and follows email thread headers',
   async () => {
     const input = {

@@ -41,7 +41,7 @@ import type { SocialNetwork } from './social.js';
 // This records an observed browser dispatch, never a server delivery receipt.
 export const facebookDispatchReason = 'Відправлено, перевірте в чаті';
 export type FacebookDispatchResult = {
-  outcome: 'facebook_dispatched_unconfirmed';
+  outcome: 'facebook_dispatched_unconfirmed' | 'facebook_reconciled';
   externalMessageId?: string;
   threadId?: string;
   dialogUrl: string;
@@ -61,11 +61,13 @@ export type FacebookDispatchResult = {
       | 'network'
       | 'http_error';
     senderFingerprint?: string;
+    matchedOutgoingAt?: string;
   };
 };
 
 // Recovery evidence is scoped to the same conversation, account and recipient.
 export type SocialComposerDraft = {
+  recoveryFirstAttemptAt?: string;
   previousBody?: string;
   previousBodies?: string[];
   beforeFill: () => Promise<void>;
