@@ -761,9 +761,13 @@ async function conversation(
         const rows = () =>
           all(region, '[aria-label]').filter(
             (row) =>
-              /^At .+, You: /s.test(row.getAttribute('aria-label') ?? '') &&
-              all(row, 'h2, [role="heading"][aria-level="2"]').some(
-                (heading) => normalize(heading.textContent) === 'You sent',
+              /^(?:At .+, You: |.+, (?:Ви|Вы): |(?:Ви|Вы): )/s.test(
+                row.getAttribute('aria-label') ?? '',
+              ) &&
+              all(row, 'h2, [role="heading"][aria-level="2"]').some((heading) =>
+                /^(?:You sent|Ви надіслали|Вы отправили)$/.test(
+                  normalize(heading.textContent),
+                ),
               ),
           );
         const sentRow = (row: Element) => {
@@ -786,18 +790,20 @@ async function conversation(
             wrapper,
             '[role="button"][aria-label], button[aria-label]',
           ).filter((button) =>
-            /^Enter, Message sent .+ by You: /s.test(
+            /^Enter, (?:Message sent .+ by You: |Повідомлення від користувача (?:Ви|Вы) о .+: |Сообщение от пользователя Вы в .+: )/s.test(
               button.getAttribute('aria-label') ?? '',
             ),
           );
+          // The label tail is the exact body, optionally in guillemets (uk/ru).
+          const endsWithBody = (label: string | null) => {
+            const text = normalize(label);
+            const exact = normalize(body);
+            return text.endsWith(`: ${exact}`) || text.endsWith(`: «${exact}»`);
+          };
           if (
             buttons.length !== 1 ||
-            !normalize(row.getAttribute('aria-label')).endsWith(
-              `, You: ${normalize(body)}`,
-            ) ||
-            !normalize(buttons[0]!.getAttribute('aria-label')).endsWith(
-              ` by You: ${normalize(body)}`,
-            ) ||
+            !endsWithBody(row.getAttribute('aria-label')) ||
+            !endsWithBody(buttons[0]!.getAttribute('aria-label')) ||
             !all(row, '*').some(
               (node) => normalize(node.textContent) === normalize(body),
             )
@@ -831,7 +837,7 @@ async function conversation(
                     normalize(body))
                   ? ''
                   : node.getAttribute('aria-label');
-              return /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b/i.test(
+              return /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b|надсилається|не надіслано|повторити|помилка/i.test(
                 [
                   inBody && node.getAttribute('role') !== 'status' ? '' : text,
                   label,

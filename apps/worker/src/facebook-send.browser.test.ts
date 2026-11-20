@@ -40,6 +40,12 @@ function row(own = true, text = body, time = '4 November 2026, 20:15') {
   }
   const wrapper = document.createElement('div');
   const sender = own ? 'You' : 'Synthetic Recipient';
+  if (o.ukLabels) {
+    wrapper.innerHTML = '<div aria-label="\u041e ' + time + ', ' + (own ? '\u0412\u0438' : sender) + ': ' + text + '"><h2>' +
+      (own ? '\u0412\u0438 \u043d\u0430\u0434\u0456\u0441\u043b\u0430\u043b\u0438' : sender) + '</h2><span>' + text + '</span></div>' +
+      '<div role="button" aria-label="Enter, \u041f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f \u0432\u0456\u0434 \u043a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 ' + (own ? '\u0412\u0438' : sender) + ' \u043e ' + time + ': \u00ab' + text + '\u00bb"></div>';
+    return wrapper;
+  }
   wrapper.innerHTML = '<div aria-label="At ' + time + ', ' + sender + ': ' + text + '"><h2>' +
     (own ? 'You sent' : sender) + '</h2><span>' + text + '</span></div>' +
     '<div role="button" aria-label="Enter, Message sent ' + time + ' by ' + sender + ': ' + text + '"></div>';
@@ -693,6 +699,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it('confirms delivery from Ukrainian outgoing message labels', async () => {
+      const f = await fixture({ ukLabels: true });
+      try {
+        await expect(f.send()).resolves.toBeTruthy();
+        expect(f.events).toContain('send:target');
+      } finally {
+        await f.close();
+      }
+    });
+
     it('sends from a profile without h1 when the add-friend action and a profile link carry the same name', async () => {
       const f = await fixture({ noH1: true });
       try {
