@@ -40,6 +40,13 @@ function row(own = true, text = body, time = '4 November 2026, 20:15') {
   }
   const wrapper = document.createElement('div');
   const sender = own ? 'You' : 'Synthetic Recipient';
+  if (o.structuralOnly) {
+    // Labels in a language the code has never seen: only structure identifies the row.
+    wrapper.setAttribute('role', 'article');
+    const id = (own ? '100000000000009' : '100000000000001') + '@msgr.' + String(Date.now()).padEnd(19, '7');
+    wrapper.innerHTML = '<div data-scope="messages_table" data-message-id="' + id + '" aria-label="xx ' + time + ' qq: ' + text + '" aria-roledescription="zz"><div dir="auto">' + text + '</div></div>';
+    return wrapper;
+  }
   if (o.ukLabels) {
     wrapper.innerHTML = '<div aria-label="\u041e ' + time + ', ' + (own ? '\u0412\u0438' : sender) + ': ' + text + '"><h2>' +
       (own ? '\u0412\u0438 \u043d\u0430\u0434\u0456\u0441\u043b\u0430\u043b\u0438' : sender) + '</h2><span>' + text + '</span></div>' +
@@ -699,6 +706,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it('confirms delivery from message structure alone, in an unknown language', async () => {
+      const f = await fixture({ structuralOnly: true });
+      try {
+        await expect(f.send()).resolves.toBeTruthy();
+        expect(f.events).toContain('send:target');
+      } finally {
+        await f.close();
+      }
+    });
+
     it('confirms delivery from Ukrainian outgoing message labels', async () => {
       const f = await fixture({ ukLabels: true });
       try {

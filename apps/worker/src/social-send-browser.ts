@@ -133,6 +133,12 @@ export async function captureFailureShot(
             ),
           ]
         : undefined;
+    // Typed PIN digits and any other field values never appear in a screenshot.
+    const maskedFields =
+      facebookScreenshot && typeof page.locator === 'function'
+        ? [page.locator('input, textarea')]
+        : [];
+    const masks = [...(redactedConversation ?? []), ...maskedFields];
     let jpeg: string | undefined;
     try {
       for (const quality of [55, 35, 20]) {
@@ -140,9 +146,7 @@ export async function captureFailureShot(
           type: 'jpeg',
           quality,
           timeout: 5000,
-          ...(redactedConversation?.length
-            ? { mask: redactedConversation, maskColor: '#000000' }
-            : {}),
+          ...(masks.length ? { mask: masks, maskColor: '#000000' } : {}),
         });
         if (bytes.byteLength <= 3 * 1024 * 1024) {
           jpeg = bytes.toString('base64');
