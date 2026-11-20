@@ -5,6 +5,7 @@ import {
   whatsappConversation,
 } from './whatsapp-identity.js';
 import { messageHistoryOrder } from './message-history.js';
+import { assertNoRecentReply } from './reply-duplicate.js';
 export { messageHistoryOrder } from './message-history.js';
 import type { PoolClient } from 'pg';
 import { assertFacebookBinding } from './social-inbox.js';
@@ -752,6 +753,12 @@ async function submitOutreachDraft(
       );
       return { id: messageId, status: 'awaiting_approval' };
     }
+    await assertNoRecentReply(
+      c,
+      message.conversation_id,
+      message.body,
+      messageId,
+    );
     const {
       rows: [account],
     } = await c.query(
@@ -794,6 +801,12 @@ export async function markOutreachManualSent(
     assertNoPlaceholder(message);
     if (!editable.includes(message.status) || message.first_attempt_at)
       invalid('Це повідомлення вже не можна позначити надісланим.');
+    await assertNoRecentReply(
+      c,
+      message.conversation_id,
+      message.body,
+      messageId,
+    );
     let accountId = message.account_id;
     if (message.channel === 'form' && !accountId)
       accountId = (await ensureFormAccount(c)).id;

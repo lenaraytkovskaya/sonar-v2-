@@ -975,6 +975,10 @@ export async function sendEmailMessage(
       `select m.*,v.company_id,v.campaign_id,v.provider_thread_id,case when m.source='reply' then 'manual' else a.send_mode end as send_mode,coalesce(a.channels,jsonb_build_object(m.channel,true)) as channels,coalesce(a.status,'active') as campaign_status,a.country_code from messages m join conversations v on v.id=m.conversation_id left join campaigns a on a.id=v.campaign_id where m.id=$1 for update of m`,
       [messageId],
     );
+    const facebookRecovery =
+      channel === 'social' &&
+      socialTarget(m.to_value)?.network === 'facebook' &&
+      !!m.first_attempt_at;
     const finish = async (outcome: TaskOutcome, reason?: string) => {
       if (outcome.status === 'deferred')
         await c.query(
@@ -1045,7 +1049,10 @@ export async function sendEmailMessage(
         ),
       );
     if (channel === 'social') {
-      if (m.first_attempt_at)
+      if (
+        m.first_attempt_at &&
+        socialTarget(m.to_value)?.network !== 'facebook'
+      )
         return finish(
           terminal(
             'paused',
@@ -1324,7 +1331,7 @@ export async function sendEmailMessage(
         ),
       );
     }
-    if (at.getTime() > now.getTime())
+    if (!facebookRecovery && at.getTime() > now.getTime())
       return finish(
         deferred(
           at,
@@ -1334,6 +1341,7 @@ export async function sendEmailMessage(
       );
     const day = now.toISOString().slice(0, 10);
     if (
+      !facebookRecovery &&
       m.quota_day !== day &&
       account.sent_day === day &&
       account.attempt_count >= account.daily_limit
@@ -1365,7 +1373,16 @@ export async function sendEmailMessage(
             [m.conversation_id],
           )
         : { rows: [] };
-    const request: EmailRequest = (channel === 'social'
+    if (
+      facebookRecovery &&
+      (m.request_snapshot?.to !== m.to_value ||
+        m.request_snapshot?.body !== m.body ||
+        m.request_snapshot?.idempotencyKey !== m.idempotency_key)
+    )
+      return finish(
+        terminal('paused', 'social_delivery_uncertain', 'Перевірте чат вручну'),
+      );
+    const request: EmailRequest = (channel === 'social' && !facebookRecovery
       ? undefined
       : m.request_snapshot) ?? {
       from: account.address,
@@ -1415,7 +1432,7 @@ export async function sendEmailMessage(
         [messageId, now, request, rfcMessageId],
       );
     }
-    if (channel === 'social') {
+    if (channel === 'social' && !facebookRecovery) {
       const runAt = await reserveSocialAction(c, account.id, 'send', now);
       if (runAt)
         return finish(
@@ -1426,7 +1443,7 @@ export async function sendEmailMessage(
           ),
         );
     }
-    if (m.quota_day !== day)
+    if (!facebookRecovery && m.quota_day !== day)
       await c.query('update messages set quota_day=$2 where id=$1', [
         messageId,
         day,
@@ -1434,10 +1451,11 @@ export async function sendEmailMessage(
     const nextSendAt = new Date(
       now.getTime() + (min + Math.floor(random() * (max - min + 1))) * 1000,
     );
-    await c.query(
-      'update channel_accounts set sent_day=case when $4 then sent_day else $2 end,attempt_count=case when $4 then attempt_count when sent_day=$2 then attempt_count+1 else 1 end,next_send_at=$3 where id=$1',
-      [account.id, day, nextSendAt, m.quota_day === day],
-    );
+    if (!facebookRecovery)
+      await c.query(
+        'update channel_accounts set sent_day=case when $4 then sent_day else $2 end,attempt_count=case when $4 then attempt_count when sent_day=$2 then attempt_count+1 else 1 end,next_send_at=$3 where id=$1',
+        [account.id, day, nextSendAt, m.quota_day === day],
+      );
     if (channel === 'telegram' || channel === 'whatsapp' || channel === 'viber')
       await c.query('update messages set reason_uk=null where id=$1', [
         messageId,
@@ -1572,6 +1590,13 @@ export async function sendEmailMessage(
                     persistFailureShot: socialSession!.persistFailureShot,
                     facebookDraft: {
                       previousBodies,
+                      ...(facebookRecovery
+                        ? {
+                            recoveryFirstAttemptAt: new Date(
+                              m.first_attempt_at,
+                            ).toISOString(),
+                          }
+                        : {}),
                       ...(m.request_snapshot?.facebookDraftMessageId ===
                         messageId &&
                       m.request_snapshot.facebookDraftAccountId ===
@@ -1582,6 +1607,11 @@ export async function sendEmailMessage(
                         ? { previousBody: request.body }
                         : {}),
                       beforeFill: async () => {
+                        if (facebookRecovery)
+                          throw new SocialSendError(
+                            'delivery_uncertain',
+                            'Перевірте чат вручну',
+                          );
                         const result = await c.query(
                           'update messages set request_snapshot=$2 where id=$1 and first_attempt_at is null returning id',
                           [
@@ -1601,6 +1631,11 @@ export async function sendEmailMessage(
                       },
                     },
                     beforeSend: async () => {
+                      if (facebookRecovery)
+                        throw new SocialSendError(
+                          'delivery_uncertain',
+                          'Перевірте чат вручну',
+                        );
                       const result = await c.query(
                         'update messages set first_attempt_at=$2,request_snapshot=$3,reason_uk=null where id=$1 and first_attempt_at is null returning id',
                         [messageId, now, request],
@@ -1617,6 +1652,32 @@ export async function sendEmailMessage(
           : await send(request);
       if (typeof providerId !== 'string') {
         const facts = providerId.observation;
+        if (providerId.outcome === 'facebook_reconciled') {
+          if (
+            !facebookRecovery ||
+            !providerId.externalMessageId ||
+            facts.dispatchPerformed !== false ||
+            facts.lateError !== 'none' ||
+            !facts.matchedOutgoingAt ||
+            !Number.isFinite(Date.parse(facts.matchedOutgoingAt)) ||
+            Date.parse(facts.matchedOutgoingAt) > Date.now() ||
+            Date.parse(facts.matchedOutgoingAt) <=
+              new Date(m.first_attempt_at).getTime() ||
+            socialTarget(providerId.dialogUrl)?.network !== 'facebook' ||
+            socialTarget(providerId.dialogUrl)?.handle !==
+              socialTarget(request.to)?.handle
+          )
+            throw new SocialSendError(
+              'delivery_uncertain',
+              'Перевірте чат вручну',
+            );
+          return await recordDelivery(
+            providerId.dialogUrl,
+            null,
+            undefined,
+            providerId,
+          );
+        }
         const marker = await c.query(
           'select first_attempt_at from messages where id=$1',
           [messageId],
@@ -1624,6 +1685,7 @@ export async function sendEmailMessage(
         if (
           channel !== 'social' ||
           account.channel !== 'facebook' ||
+          facebookRecovery ||
           providerId.outcome !== 'facebook_dispatched_unconfirmed' ||
           !marker.rows[0]?.first_attempt_at ||
           !facts.inputExactMatch ||

@@ -115,14 +115,20 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
       expect((await getConversationChat(conversationId)).socialAvailable).toBe(
         true,
       );
-      const create = (
+      const create = async (
         requestId = randomUUID(),
         socialDelivery: 'browser' | 'manual' = 'browser',
-      ) =>
-        queueConversationReply(
+      ) => {
+        // These state-machine scenarios represent replies in separate windows.
+        await sonarPool.query(
+          "update messages set sent_at=now()-interval '121 seconds' where conversation_id=$1 and direction='out'",
+          [conversationId],
+        );
+        return queueConversationReply(
           { conversationId, body: 'Human reply', requestId, socialDelivery },
           user,
         );
+      };
       const send = (
         id: string,
         sender: import('./email.js').ChannelSender,
@@ -379,10 +385,64 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           );
         });
         await send(draft.id, resumeDraft);
-        expect(await send(draft.id, resumeDraft)).toMatchObject({
+        await reset();
+        const reconcile: import('./email.js').ChannelSender = vi.fn(
+          async (request, a) => {
+            expect(a?.facebookDraft?.recoveryFirstAttemptAt).toBe(
+              now.toISOString(),
+            );
+            await expect(a!.facebookDraft!.beforeFill()).rejects.toBeInstanceOf(
+              SocialSendError,
+            );
+            await expect(a!.beforeSend!()).rejects.toBeInstanceOf(
+              SocialSendError,
+            );
+            return {
+              ...dispatch(request.to),
+              outcome: 'facebook_reconciled',
+              externalMessageId: `recovered-${draft.id}`,
+              observation: {
+                ...dispatch(request.to).observation,
+                inputExactMatch: false,
+                dispatchPerformed: false,
+                newOutgoing: false,
+                matchedOutgoingAt: new Date(
+                  now.getTime() + 60000,
+                ).toISOString(),
+              },
+            };
+          },
+        );
+        const noEvidence = vi.fn(async () => {
+          throw new SocialSendError(
+            'delivery_uncertain',
+            'Перевірте чат вручну',
+          );
+        });
+        expect(await send(draft.id, noEvidence)).toMatchObject({
           reasonCode: 'social_delivery_uncertain',
         });
         expect(resumeDraft).toHaveBeenCalledOnce();
+        await reset();
+        expect(await send(draft.id, reconcile)).toMatchObject({
+          status: 'done',
+        });
+        expect(await send(draft.id, reconcile)).toMatchObject({
+          status: 'done',
+        });
+        expect(reconcile).toHaveBeenCalledOnce();
+        expect(
+          (
+            await sonarPool.query(
+              'select status,external_message_id,reason_uk from messages where id=$1',
+              [draft.id],
+            )
+          ).rows[0],
+        ).toEqual({
+          status: 'sent',
+          external_message_id: `recovered-${draft.id}`,
+          reason_uk: null,
+        });
         expect(stored.providerId).toBe(`https://www.facebook.com/sonar_test/`);
         expect(await send(first.id, sender)).toMatchObject({
           status: 'done',
@@ -479,7 +539,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         status: 'paused',
         reasonCode: 'social_delivery_uncertain',
       });
-      expect(ambiguous).toHaveBeenCalledTimes(1);
+      expect(ambiguous).toHaveBeenCalledTimes(network === 'facebook' ? 2 : 1);
       await reset();
       // Browser transport failures keep the session valid. After its durable
       // marker the adapter reports uncertainty, and the DB must never retry it.
@@ -529,7 +589,9 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
             status: 'paused',
             reasonCode: 'social_delivery_uncertain',
           });
-          expect(transport).toHaveBeenCalledOnce();
+          expect(transport).toHaveBeenCalledTimes(
+            network === 'facebook' ? 2 : 1,
+          );
         }
       }
       // Rate limits pause the account without invalidating cookies or retrying attempts.
@@ -580,7 +642,9 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
             reasonCode: 'social_delivery_uncertain',
           });
         }
-        expect(rateLimited).toHaveBeenCalledOnce();
+        expect(rateLimited).toHaveBeenCalledTimes(
+          attempted && network === 'facebook' ? 2 : 1,
+        );
       }
       await reset();
       const offline = await create();
@@ -686,7 +750,9 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         status: 'paused',
         reasonCode: 'social_delivery_uncertain',
       });
-      expect(checkpointSend).toHaveBeenCalledTimes(1);
+      expect(checkpointSend).toHaveBeenCalledTimes(
+        network === 'facebook' ? 2 : 1,
+      );
       const failedSend = await create();
       expect(
         await send(failedSend.id, async () => {

@@ -844,6 +844,28 @@ async function conversation(
             buttons[0]!.getAttribute('aria-label'),
           ]);
         };
+        const messageId = (row: Element) => {
+          const ids = new Set<string>();
+          const nodes = [
+            row,
+            ...Array.from(row.querySelectorAll('[data-message-id]')),
+          ];
+          let parent = row.parentElement;
+          while (parent && parent !== region && region.contains(parent)) {
+            if (rows().filter((other) => parent!.contains(other)).length !== 1)
+              break;
+            nodes.push(parent);
+            parent = parent.parentElement;
+          }
+          for (const node of nodes) {
+            const id = node.getAttribute('data-message-id');
+            if (id?.trim()) ids.add(id);
+          }
+          return ids.size === 1 ? [...ids][0] : undefined;
+        };
+        let stableRows: Element[] = [];
+        let stableSignatures: (string | null)[] = [];
+        let stableSince = performance.now();
         let baseline: Element[] = [];
         let signatures: (string | null)[] = [];
         let blocked = false;
@@ -923,27 +945,77 @@ async function conversation(
             const added = rows().filter(
               (row) => !baseline.includes(row) && sentRow(row) !== null,
             );
-            if (added.length !== 1) return undefined;
-            const row = added[0]!;
-            const ids = new Set<string>();
-            const nodes = [
-              row,
-              ...Array.from(row.querySelectorAll('[data-message-id]')),
-            ];
-            let parent = row.parentElement;
-            while (parent && parent !== region && region.contains(parent)) {
+            return added.length === 1 ? messageId(added[0]!) : undefined;
+          },
+          recovered: (firstAttemptAt: string) => {
+            if (!verify(false)) return null;
+            const first = Date.parse(firstAttemptAt);
+            if (!Number.isFinite(first)) return null;
+            const matches = rows().flatMap((row) => {
+              const signature = sentRow(row);
+              if (signature === null) return [];
+              const label = normalize(row.getAttribute('aria-label'));
+              const time = label.slice(3, label.indexOf(', You: '));
+              // Relative labels and minute-level timestamps overlapping the
+              // attempt are inconclusive. Never infer them from the current day.
               if (
-                rows().filter((other) => parent!.contains(other)).length !== 1
+                !/^\d{1,2} [A-Za-z]+ \d{4}, \d{1,2}:\d{2}(?::\d{2})?(?: [AP]M)?$/.test(
+                  time,
+                )
               )
-                break;
-              nodes.push(parent);
-              parent = parent.parentElement;
+                return [];
+              if (
+                normalize((JSON.parse(signature) as string[])[1]!) !==
+                `Enter, Message sent ${time} by You: ${normalize(body)}`
+              )
+                return [];
+              const timestamp = Date.parse(time);
+              const externalMessageId = messageId(row);
+              return timestamp > first && timestamp <= Date.now()
+                ? [
+                    {
+                      externalMessageId,
+                      matchedOutgoingAt: new Date(timestamp).toISOString(),
+                    },
+                  ]
+                : [];
+            });
+            const match = matches.length === 1 ? matches[0] : null;
+            return match?.externalMessageId
+              ? {
+                  externalMessageId: match.externalMessageId,
+                  matchedOutgoingAt: match.matchedOutgoingAt,
+                }
+              : null;
+          },
+          scrollToLatest: () => {
+            stableSince = performance.now();
+            for (
+              let node: Element | null = region;
+              node && scope.contains(node);
+              node = node.parentElement
+            )
+              if (node.scrollHeight > node.clientHeight)
+                node.scrollTop = node.scrollHeight;
+          },
+          tailReady: (quietMs: number) => {
+            const current = rows();
+            const signatures = current.map(sentRow);
+            if (
+              !verify(false) ||
+              current.length !== stableRows.length ||
+              current.some(
+                (row, index) =>
+                  row !== stableRows[index] ||
+                  signatures[index] !== stableSignatures[index],
+              )
+            ) {
+              stableRows = current;
+              stableSignatures = signatures;
+              stableSince = performance.now();
+              return false;
             }
-            for (const node of nodes) {
-              const id = node.getAttribute('data-message-id');
-              if (id?.trim()) ids.add(id);
-            }
-            return ids.size === 1 ? [...ids][0] : undefined;
+            return performance.now() - stableSince >= quietMs;
           },
           confirmed: () => {
             if (!verify(false)) return false;
@@ -955,6 +1027,11 @@ async function conversation(
             }
             observation.branch = 'unconfirmed';
             const current = rows();
+            if (
+              current.filter((row) => sentRow(row) !== null).length !==
+              signatures.filter((signature) => signature !== null).length + 1
+            )
+              return false;
             return current.some((row) => {
               const signature = sentRow(row);
               return (
@@ -1150,8 +1227,8 @@ export async function sendFacebook(
       .waitFor({ state: 'visible', timeout: timeoutMs });
     await actions.waitFor({ state: 'visible', timeout: timeoutMs });
     if ((await actions.count()) !== 1) throw unavailable('action_count');
-    // Only this run's profile action can supply identity when the popup header
-    // exposes a name button instead of a canonical recipient link.
+    // Bind either the existing popup or the profile action to this visible H1
+    // when its header exposes a name instead of a canonical recipient link.
     const actionIsButton = await actions.evaluate((action) =>
       action.matches('button, [role="button"]'),
     );
@@ -1177,12 +1254,177 @@ export async function sendFacebook(
       return actionIsButton &&
         headings.length === 1 &&
         name &&
-        editors.length === 0 &&
-        regions.length === 0
+        editors.length <= 1 &&
+        regions.length === editors.length
         ? { url: location.href, name }
         : undefined;
     }, actionIsButton);
-    await actions.click();
+    const existing = page
+      .locator(
+        '[contenteditable="true"][role="textbox"][data-lexical-editor="true"], [contenteditable="true"][role="textbox"][aria-placeholder="Aa"]',
+      )
+      .filter({ visible: true });
+    let reuse = false;
+    if (await existing.count()) {
+      if (!openedProfile || (await existing.count()) !== 1) throw unavailable();
+      const popup = await existing.evaluateHandle((editor, profile) => {
+        const normalize = (text: string | null) =>
+          (text ?? '')
+            .replace(
+              /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]|\ufe0e|\ufe0f/g,
+              '',
+            )
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase()
+            .replace(/(?:\s*[⌄▾▼∨˅›❯⌃▴▲‹❮〉〈>])+$/u, '')
+            .trim();
+        const visible = (node: Element) =>
+          node.getClientRects().length > 0 &&
+          getComputedStyle(node).visibility === 'visible' &&
+          !node.closest('[hidden], [aria-hidden="true"], [inert]');
+        for (
+          let scope = editor.parentElement;
+          scope && scope !== document.body;
+          scope = scope.parentElement
+        ) {
+          const regions = Array.from(
+            scope.querySelectorAll(
+              '[role="log"], [aria-label^="Messages in conversation with "]',
+            ),
+          ).filter(visible);
+          const closers = Array.from(
+            scope.querySelectorAll('button, [role="button"]'),
+          ).filter(
+            (node) =>
+              visible(node) &&
+              /^(?:close chat|закрити чат|закрыть чат)$/i.test(
+                (
+                  node.getAttribute('aria-label') ||
+                  node.textContent ||
+                  ''
+                ).trim(),
+              ),
+          );
+          if (!regions.length || !closers.length) continue;
+          if (
+            regions.length !== 1 ||
+            closers.length !== 1 ||
+            scope.querySelector('main, nav, [role="main"], [role="navigation"]')
+          )
+            return null;
+          let header = closers[0]!;
+          while (header.parentElement && header.parentElement !== scope)
+            header = header.parentElement;
+          if (header.contains(editor) || header.contains(regions[0]!))
+            return null;
+          const names = Array.from(
+            header.querySelectorAll('a, button, [role="button"], span'),
+          );
+          const identity = (href: string) => {
+            try {
+              const url = new URL(href, location.href);
+              if (
+                url.protocol !== 'https:' ||
+                !/^(www\.)?facebook\.com$/.test(url.hostname)
+              )
+                return null;
+              return url.pathname === '/profile.php'
+                ? url.searchParams.get('id')
+                : /^\/([\w.-]+)\/?$/.exec(url.pathname)?.[1]?.toLowerCase();
+            } catch {
+              return null;
+            }
+          };
+          const identities = Array.from(header.querySelectorAll('a[href]'))
+            .map((link) => identity(link.getAttribute('href')!))
+            .filter(Boolean);
+          const reuse =
+            identities.every((id) => id === identity(profile.url)) &&
+            names.some(
+              (node) =>
+                visible(node) &&
+                [node.textContent, node.getAttribute('aria-label')].some(
+                  (text) => normalize(text) === normalize(profile.name),
+                ),
+            );
+          return { scope, close: closers[0]!, reuse };
+        }
+        return null;
+      }, openedProfile);
+      try {
+        if (!(await popup.evaluate((popup) => Boolean(popup))))
+          throw unavailable();
+        reuse = await popup.evaluate((popup) => popup!.reuse);
+        if (!reuse) {
+          const close = (
+            await popup.evaluateHandle((popup) => popup!.close)
+          ).asElement();
+          if (!close) throw unavailable();
+          const guard = await close.evaluateHandle((button, popup) => {
+            const parent = button.parentElement;
+            let blocked = false;
+            const guard = (event: Event) => {
+              if (!event.composedPath().includes(button)) return;
+              blocked ||=
+                !button.isConnected ||
+                button.parentElement !== parent ||
+                !popup!.scope.contains(button) ||
+                !/^(?:close chat|закрити чат|закрыть чат)$/i.test(
+                  (
+                    button.getAttribute('aria-label') ||
+                    button.textContent ||
+                    ''
+                  ).trim(),
+                );
+              if (blocked) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+              }
+            };
+            const events = [
+              'pointerdown',
+              'mousedown',
+              'pointerup',
+              'mouseup',
+              'click',
+            ];
+            for (const boundary of [window, popup!.scope, button])
+              for (const event of events)
+                boundary.addEventListener(event, guard, {
+                  capture: true,
+                  passive: false,
+                });
+            return {
+              blocked: () => blocked,
+              cleanup: () => {
+                for (const boundary of [window, popup!.scope, button])
+                  for (const event of events)
+                    boundary.removeEventListener(event, guard, true);
+              },
+            };
+          }, popup);
+          try {
+            await close.click();
+            if (await guard.evaluate((guard) => guard.blocked()))
+              throw unavailable();
+          } finally {
+            await guard.evaluate((guard) => guard.cleanup()).catch(() => {});
+            await guard.dispose();
+          }
+          await page.waitForFunction(
+            (popup) =>
+              !popup!.scope.isConnected ||
+              !popup!.scope.getClientRects().length,
+            popup,
+            { timeout: timeoutMs },
+          );
+        }
+      } finally {
+        await popup.dispose();
+      }
+    }
+    if (!reuse) await actions.click();
     await check();
     phase = 'first_lookup';
     let state = await conversation(
@@ -1194,6 +1436,57 @@ export async function sendFacebook(
       openedProfile,
     );
     try {
+      if (!(await state.evaluate((state) => Boolean(state))))
+        throw unavailable();
+      // Establish the tail before baseline counting; virtualized history may
+      // otherwise replace old bubbles during dispatch and invalidate evidence.
+      await state.evaluate((state) => state?.scrollToLatest());
+      // Wait for loading and mounted-row replacements to settle before taking
+      // the baseline. A changing virtualized tail must stop us before dispatch.
+      await page.waitForFunction(
+        ({ state, quietMs }) => state?.tailReady(quietMs),
+        { state, quietMs: Math.min(200, timeoutMs / 2) },
+        { timeout: timeoutMs },
+      );
+      await state.dispose();
+      state = await conversation(
+        page,
+        target.handle,
+        body,
+        observe,
+        timeoutMs,
+        openedProfile,
+      );
+      if (draft?.recoveryFirstAttemptAt !== undefined) {
+        phase = 'recovery';
+        await page.waitForFunction(
+          ({ state, first }) => state?.recovered(first),
+          { state, first: draft.recoveryFirstAttemptAt },
+          { timeout: timeoutMs },
+        );
+        await check();
+        const recovered = await state.evaluate(
+          (state, first) => state?.recovered(first),
+          draft.recoveryFirstAttemptAt,
+        );
+        if (!recovered)
+          throw new SocialSendError(
+            'delivery_uncertain',
+            'Попередню доставку Facebook не підтверджено. Перевірте чат вручну; автоматичний повтор заблоковано.',
+          );
+        const count = await state.evaluate((state) => state!.outgoingCount());
+        return {
+          outcome: 'facebook_reconciled',
+          dialogUrl: target.canonicalUrl,
+          externalMessageId: recovered.externalMessageId,
+          observation: {
+            ...facts,
+            outgoingBefore: count,
+            outgoingAfter: count,
+            matchedOutgoingAt: recovered.matchedOutgoingAt,
+          },
+        };
+      }
       if (
         !(await state.evaluate(
           (state, previousBodies) =>
@@ -1304,8 +1597,8 @@ export async function sendFacebook(
       // Keep semantic detection separate from saturated telemetry counts.
       facts.newOutgoing = await state.evaluate((state) => state!.confirmed());
       // Keep the original page alive for transmission using the existing timeout,
-      // capped at ten seconds. Elapsed time is not proof of server delivery.
-      const until = Date.now() + Math.min(timeoutMs, 10000);
+      // without shortening it. Elapsed time is not proof of server delivery.
+      const until = Date.now() + timeoutMs;
       phase = 'transmission';
       while (Date.now() < until) {
         await page.waitForTimeout(Math.min(200, until - Date.now()));
@@ -1375,7 +1668,7 @@ export async function sendFacebook(
       caught.reasonUk += ` ${detail}`;
       throw caught;
     }
-    if (attempted)
+    if (attempted || draft?.recoveryFirstAttemptAt !== undefined)
       throw new SocialSendError(
         'delivery_uncertain',
         `[facebook/${phase}] Доставку не підтверджено. Перевірте чат вручну; не повторюйте надсилання автоматично. ${detail}`,
