@@ -83,8 +83,48 @@ export async function captureFailureShot(
     const facebookScreenshot = /^(?:www\.)?facebook\.com$/.test(
       new URL(page.url()).hostname,
     );
+    // With no visible composer there is no conversation to protect yet: keep the
+    // popup readable and record its visible text to learn what blocks the composer.
+    // Any doubt keeps the mask: only a confirmed zero count unmasks.
+    const composerAbsent =
+      facebookScreenshot &&
+      (await (async () => {
+        try {
+          return (
+            (await page
+              .locator('[contenteditable="true"][role="textbox"]')
+              .filter({ visible: true })
+              .count()) === 0
+          );
+        } catch {
+          return false;
+        }
+      })());
+    if (dom && composerAbsent)
+      Object.assign(dom, {
+        noComposerText: await page
+          .evaluate(() =>
+            Array.from(
+              document.querySelectorAll(
+                '[role="dialog"], [role="log"], [role="status"], [role="alert"], [aria-label^="Повідомлення в розмові"], [aria-label^="Messages in conversation"]',
+              ),
+            )
+              .filter((node) => node.getClientRects().length > 0)
+              .map((node) =>
+                (node.textContent ?? '')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+                  .slice(0, 300),
+              )
+              .filter(Boolean)
+              .slice(0, 6),
+          )
+          .catch(() => []),
+      });
     const redactedConversation =
-      facebookScreenshot && typeof page.locator === 'function'
+      facebookScreenshot &&
+      !composerAbsent &&
+      typeof page.locator === 'function'
         ? [
             page.locator(
               '[role="log"], [aria-label^="Messages in conversation"], [aria-label^="Повідомлення в розмові"], [role="dialog"], [contenteditable="true"], [role="article"]',
