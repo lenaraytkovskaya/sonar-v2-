@@ -624,6 +624,11 @@ export function SocialAccounts({
               {account.inboxSyncComplete === false && (
                 <p className="flex items-center gap-1 text-xs text-muted-foreground">
                   {uk.socialAccounts.syncPartialShort}
+                  {account.inboxSyncSkipped?.length ? (
+                    <span className="font-mono">
+                      {` (${account.inboxSyncSkipped.join(', ')})`}
+                    </span>
+                  ) : null}
                   <InfoTip>
                     <p>{uk.socialAccounts.syncPartial}</p>
                     <p className="mt-2">
