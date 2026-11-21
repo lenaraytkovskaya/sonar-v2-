@@ -108,6 +108,10 @@
       "types": "./dist/account-health.d.ts",
       "default": "./dist/account-health.js"
     },
+    "./campaign-run": {
+      "types": "./dist/campaign-run.d.ts",
+      "default": "./dist/campaign-run.js"
+    },
     "./form-replies": {
       "types": "./dist/form-replies.d.ts",
       "default": "./dist/form-replies.js"

@@ -3,7 +3,8 @@ import {
   RecentFailuresCallout,
   TaskOverview,
 } from '@/components/task-overview';
-import { PageHeader } from '@/components/shared';
+import Link from 'next/link';
+import { PageHeader, StatusBadge } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { InfoTip, Section } from '@/components/ui/layout';
 import { uk } from '@/i18n/uk';
@@ -32,14 +33,31 @@ export default async function Page({
   const { sonarPool } = await import('@sonar/db');
   const { manualExpenseReminders } = await import('@sonar/db/manual-expenses');
   const selected = validId(campaign) ? campaign : undefined;
-  const [data, campaigns, health, renewalData] = await Promise.all([
-    overviewMetrics(selected),
-    sonarPool.query<{ id: string; name: string }>(
-      'select id,name from campaigns order by created_at desc',
-    ),
-    accountHealth(),
-    manualExpenseReminders(),
-  ]);
+  const [data, campaigns, health, renewalData, campaignRows] =
+    await Promise.all([
+      overviewMetrics(selected),
+      sonarPool.query<{ id: string; name: string }>(
+        'select id,name from campaigns order by created_at desc',
+      ),
+      accountHealth(),
+      manualExpenseReminders(),
+      sonarPool.query<{
+        id: string;
+        name: string;
+        status: keyof typeof uk.campaign.statuses;
+        found: number;
+        ready: number;
+        contacted: number;
+        replied: number;
+      }>(
+        `select c.id,c.name,c.status,count(cc.company_id)::int as found,
+        count(*) filter (where co.status<>'new' and co.status<>'enriching')::int as ready,
+        count(*) filter (where co.status in ('contacted','replied','interested','deal'))::int as contacted,
+        count(*) filter (where co.status in ('replied','interested','deal'))::int as replied
+       from campaigns c left join campaign_companies cc on cc.campaign_id=c.id left join companies co on co.id=cc.company_id
+       where c.status<>'archived' group by c.id order by c.created_at desc`,
+      ),
+    ]);
   const t = uk.overview;
   const f = data.funnel;
   const kpis = [
@@ -175,6 +193,60 @@ export default async function Page({
           </div>
         </Section>
       </div>
+      <Section title={t.campaignsTitle}>
+        {campaignRows.rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t.campaignsEmpty}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="pb-2 font-medium">{t.campaignName}</th>
+                  <th className="pb-2 font-medium">{t.campaignState}</th>
+                  {(['found', 'ready', 'contacted', 'replied'] as const).map(
+                    (key) => (
+                      <th key={key} className="pb-2 text-right font-medium">
+                        {t.stages[key]}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {campaignRows.rows.map((row) => (
+                  <tr key={row.id} className="border-t border-border">
+                    <td className="py-2.5">
+                      <Link
+                        href={`/campaigns?campaign=${row.id}`}
+                        className="font-medium underline-offset-2 hover:underline"
+                      >
+                        {row.name}
+                      </Link>
+                    </td>
+                    <td className="py-2.5">
+                      <StatusBadge status={row.status}>
+                        {uk.campaign.statuses[row.status]}
+                      </StatusBadge>
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">
+                      {row.found}
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">
+                      {row.ready}
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">
+                      {row.contacted}
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">
+                      {row.replied}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
       <AccountHealthOverview health={health} />
       {renewalData.reminders.length > 0 && (
         <Section title={uk.finance.renewalReminders}>

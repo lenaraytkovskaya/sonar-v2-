@@ -128,7 +128,8 @@ export async function createBatch(
       !campaign ||
       !campaign.cities.length ||
       !campaign.queries.length ||
-      campaign.status === 'archived'
+      campaign.status === 'archived' ||
+      campaign.status === 'paused'
     )
       throw Error('Campaign not ready');
     const {

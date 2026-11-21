@@ -17,6 +17,7 @@ import { BatchList } from './batch-list';
 import { CampaignCompanies } from './campaign-companies';
 import { runAiJob } from '@/lib/ai-job';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { CampaignRunCard } from './campaign-run-card';
 type Row = CampaignInput & {
   id: string;
   google_progress?: Record<string, { exhausted: boolean; buffer: unknown[] }>;
@@ -44,6 +45,8 @@ const initial: CampaignInput = {
   status: 'draft',
   field_profile: 'contacts',
 };
+// Query tags shown before the rest is folded behind a button.
+const queryPreview = 5;
 function Chips({
   label,
   values,
@@ -110,6 +113,7 @@ export function CampaignPanel({
   });
   const { batches: batchProgress } = useTasks();
   const [open, setOpen] = useState(false);
+  const [allQueries, setAllQueries] = useState(false);
   const selectionChanged = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]),
@@ -167,7 +171,7 @@ export function CampaignPanel({
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
   }, [batchProgress]);
-  const act = async (kind: 'save' | 'start' | 'pause' | 'score') => {
+  const act = async (kind: 'save' | 'start' | 'score') => {
     setPending(true);
     setMessage('');
     try {
@@ -176,12 +180,7 @@ export function CampaignPanel({
       const data = campaignSchema.parse({
         ...form,
         budget_usd: Number(form.budget_usd),
-        status:
-          kind === 'pause'
-            ? 'paused'
-            : kind === 'start'
-              ? 'active'
-              : form.status,
+        status: kind === 'start' ? 'active' : form.status,
       });
       const r = await fetch('/api/campaigns', {
         method: 'POST',
@@ -325,42 +324,37 @@ export function CampaignPanel({
               >
                 {uk.crud.editCampaign}
               </CrudButton>
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  disabled={
-                    pending ||
-                    exhausted ||
-                    !form.cities.length ||
-                    !form.queries.length ||
-                    !campaignSchema.safeParse(form).success
-                  }
-                  onClick={() => void act('start')}
-                >
-                  {exhausted ? uk.google.exhausted : uk.campaign.start}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => void act('score')}
-                >
-                  {uk.campaign.recalculate}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => void act('pause')}
-                >
-                  {uk.campaign.pause}
-                </Button>
-              </div>
+              <CampaignRunCard
+                campaignId={selectedId}
+                status={
+                  rows.find((row) => row.id === selectedId)?.status ?? 'draft'
+                }
+                pending={pending}
+                startDisabled={
+                  exhausted ||
+                  !form.cities.length ||
+                  !form.queries.length ||
+                  !campaignSchema.safeParse(form).success
+                }
+                startLabel={exhausted ? uk.google.exhausted : uk.campaign.start}
+                onStart={() => void act('start')}
+                onScore={() => void act('score')}
+                onChanged={load}
+              />
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
+                  <span className="font-medium text-foreground">
+                    {uk.campaign.cities}:
+                  </span>{' '}
                   {rows.find((row) => row.id === selectedId)?.cities.join(', ')}
                 </p>
+                <p className="font-medium text-foreground">
+                  {uk.campaign.queries}:
+                </p>
                 <ul className="flex flex-wrap gap-2">
-                  {rows
-                    .find((row) => row.id === selectedId)
-                    ?.queries.map((query) => (
+                  {(rows.find((row) => row.id === selectedId)?.queries ?? [])
+                    .slice(0, allQueries ? undefined : queryPreview)
+                    .map((query) => (
                       <li
                         key={query}
                         className="max-w-full break-words rounded-full bg-chip px-3 py-1 text-foreground"
@@ -369,6 +363,23 @@ export function CampaignPanel({
                       </li>
                     ))}
                 </ul>
+                {(rows.find((row) => row.id === selectedId)?.queries.length ??
+                  0) > queryPreview && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setAllQueries(!allQueries)}
+                  >
+                    {allQueries
+                      ? uk.campaign.queriesLess
+                      : uk.campaign.queriesMore.replace(
+                          '{n}',
+                          String(
+                            (rows.find((row) => row.id === selectedId)?.queries
+                              .length ?? 0) - queryPreview,
+                          ),
+                        )}
+                  </Button>
+                )}
               </div>
               <BatchList key={selectedId} campaignId={selectedId} />
             </>
@@ -517,7 +528,7 @@ export function CampaignPanel({
               setSource('ai');
             }}
           />
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <label>
               {uk.campaign.batch_size}
               <select
@@ -548,22 +559,6 @@ export function CampaignPanel({
                 }
               >
                 {Object.entries(uk.campaign.modes).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {uk.campaign.status}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={form.status}
-                onChange={(e) =>
-                  update('status', e.target.value as CampaignInput['status'])
-                }
-              >
-                {Object.entries(uk.campaign.statuses).map(([k, v]) => (
                   <option key={k} value={k}>
                     {v}
                   </option>
@@ -680,40 +675,6 @@ export function CampaignPanel({
               <option value="basic">{uk.google.basic}</option>
             </select>
           </label>
-          <p className="text-sm text-muted-foreground">
-            {uk.campaign.saveFirst}
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              variant="outline"
-              disabled={
-                pending ||
-                exhausted ||
-                !form.cities.length ||
-                !form.queries.length ||
-                !campaignSchema.safeParse(form).success
-              }
-              onClick={() => void act('start')}
-            >
-              {exhausted ? uk.google.exhausted : uk.campaign.start}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={
-                pending || !id || !campaignSchema.safeParse(form).success
-              }
-              onClick={() => void act('score')}
-            >
-              {uk.campaign.recalculate}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={pending || !id}
-              onClick={() => void act('pause')}
-            >
-              {uk.campaign.pause}
-            </Button>
-          </div>
           {message && <p role="status">{message}</p>}
         </div>
       </CrudDialog>
