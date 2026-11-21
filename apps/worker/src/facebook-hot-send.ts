@@ -42,6 +42,9 @@ export async function sendFacebookHot(
 ): Promise<FacebookDispatchResult | null> {
   // A waiting send makes the background sweep step aside.
   hot.pendingSends++;
+  // Cut a sweep's page load short instead of waiting for it to time out.
+  if (hot.activeOps > 0)
+    void hot.page.evaluate(() => window.stop()).catch(() => {});
   return runOnHotPage<FacebookDispatchResult | null>(hot, async (page) => {
     const { target, threadId, body, ownId, timeoutMs } = input;
     if (!/^\d+$/.test(threadId) || !body.trim()) return null;

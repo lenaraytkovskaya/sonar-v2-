@@ -85,7 +85,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
             page,
             hrefs,
             seen,
-            45000,
+            20000,
             (line) => note(listener, line),
             () => hot.pendingSends > 0,
           );
