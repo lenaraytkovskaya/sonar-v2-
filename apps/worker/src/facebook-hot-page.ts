@@ -12,6 +12,13 @@ export interface HotPage {
   // Operations running or queued on the page, and sends waiting for it.
   activeOps: number;
   pendingSends: number;
+  events: string[];
+}
+
+/** Short timestamped line for the diagnostics; capped. */
+export function noteHot(hot: HotPage, line: string) {
+  hot.events.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+  if (hot.events.length > 40) hot.events.shift();
 }
 
 const pages = new Map<string, HotPage>();
@@ -25,6 +32,7 @@ export function registerHotPage(accountId: string, page: Page): HotPage {
     queue: Promise.resolve(),
     activeOps: 0,
     pendingSends: 0,
+    events: [],
   };
   pages.set(accountId, hot);
   return hot;

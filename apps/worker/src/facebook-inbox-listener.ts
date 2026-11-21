@@ -164,7 +164,9 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
               unread: snapshot.unread,
               threads: snapshot.threads?.length ?? 0,
               openLast: snapshot.open?.last ?? '',
-              log: listener.events.slice(-14),
+              log: [...listener.events, ...(hot?.events ?? [])]
+                .sort()
+                .slice(-16),
               page: snapshot.page,
               tabs: page
                 .context()
