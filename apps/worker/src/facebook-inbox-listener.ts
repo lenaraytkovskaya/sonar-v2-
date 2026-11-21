@@ -69,14 +69,23 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         const every =
           Number(await setting('social.inbox.listen_sweep_seconds', 20)) * 1000;
         if (Date.now() - lastSweep < every) return;
+        if (hot.pendingSends > 0 || hot.activeOps > 0) return;
         const changed = await runOnHotPage(hot, async (page) => {
           const snapshot = await readMessengerSnapshot(page);
-          const hrefs = (snapshot.threads ?? [])
+          const all = (snapshot.threads ?? [])
             .slice(0, 3)
             .map((thread) => thread.href);
+          if (!all.length) return [];
+          // One chat per sweep keeps the page free for sends; they take turns.
+          const hrefs = [all[turn++ % all.length]!];
           lastSweep = Date.now();
-          return sweepThreads(page, hrefs, seen, 45000, (line) =>
-            note(listener, line),
+          return sweepThreads(
+            page,
+            hrefs,
+            seen,
+            45000,
+            (line) => note(listener, line),
+            () => hot.pendingSends > 0,
           );
         });
         if (changed.length) {
@@ -99,6 +108,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
       }
     };
     let lastSweep = 0;
+    let turn = 0;
     const timer = setInterval(() => void run(), 5000);
     return () => {
       stopped = true;
@@ -148,6 +158,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         const end = await watchMessenger(page, {
           minGapMs,
           onEvent: (line) => note(listener, line),
+          paused: () => (hot?.activeOps ?? 0) > 0,
           onScan: (snapshot) => {
             listener.seen = {
               unread: snapshot.unread,

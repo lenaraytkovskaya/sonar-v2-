@@ -94,6 +94,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           observation: { newOutgoing: true, dispatchPerformed: true },
         });
         expect(calls).toEqual(['fill', 'send']);
+        expect(hot.pendingSends).toBe(0);
+        expect(hot.activeOps).toBe(0);
       } finally {
         await context.close();
       }

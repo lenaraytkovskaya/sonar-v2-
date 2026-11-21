@@ -40,7 +40,9 @@ export async function sendFacebookHot(
   hot: HotPage,
   input: HotSendInput,
 ): Promise<FacebookDispatchResult | null> {
-  return runOnHotPage(hot, async (page) => {
+  // A waiting send makes the background sweep step aside.
+  hot.pendingSends++;
+  return runOnHotPage<FacebookDispatchResult | null>(hot, async (page) => {
     const { target, threadId, body, ownId, timeoutMs } = input;
     if (!/^\d+$/.test(threadId) || !body.trim()) return null;
     const deadline = Date.now() + Math.min(timeoutMs, 20000);
@@ -156,5 +158,7 @@ export async function sendFacebookHot(
           .catch(() => {});
       return null;
     }
+  }).finally(() => {
+    hot.pendingSends--;
   });
 }
