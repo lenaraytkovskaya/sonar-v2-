@@ -1,8 +1,10 @@
+import type { BrowserContext } from 'playwright';
 import { resolveSocialSession } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { queueSocialInboxWake } from '@sonar/db/social-inbox';
 import type { SocialSessionAccount } from '@sonar/db/social-accounts';
 import { connectSocialProfile } from './social-profile-browser.js';
+import { probeNetwork } from './network-probe.js';
 import {
   focusThread,
   readMessengerSnapshot,
@@ -122,6 +124,37 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     };
   }
 
+  // Measures how the profile browser's connection behaves, every few minutes.
+  function startProbe(
+    accountId: string,
+    context: BrowserContext,
+    hot: HotPage,
+  ) {
+    let running = false;
+    let stopped = false;
+    const run = async () => {
+      if (running || stopped || closed || hot.pendingSends > 0) return;
+      running = true;
+      try {
+        const results = await probeNetwork(context);
+        await report(accountId, {
+          net: { ...results, probedAt: new Date().toISOString() },
+        });
+      } catch {
+        // A failed probe is just a missing data point.
+      } finally {
+        running = false;
+      }
+    };
+    const first = setTimeout(() => void run(), 20000);
+    const timer = setInterval(() => void run(), 180000);
+    return () => {
+      stopped = true;
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }
+
   async function listen(account: SocialSessionAccount, listener: Listener) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
@@ -140,6 +173,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         await stale.close().catch(() => {});
     let hot: HotPage | undefined;
     let sweeper: (() => void) | undefined;
+    let stopProbe: (() => void) | undefined;
     try {
       const timeoutMs = await timeout();
       page.setDefaultTimeout(timeoutMs);
@@ -156,6 +190,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         if (!hot) {
           hot = registerHotPage(account.id, page);
           sweeper = startSweeper(account.id, hot, listener);
+          stopProbe = startProbe(account.id, context, hot);
         }
         await report(account.id, { state: 'watching', error: null });
         const minGapMs =
@@ -227,6 +262,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
       }
     } finally {
       sweeper?.();
+      stopProbe?.();
       if (hot) unregisterHotPage(hot);
       // Never close the last window: that would shut the whole profile browser.
       if (context.pages().length > 1) await page.close().catch(() => {});
