@@ -7,7 +7,7 @@ import {
   dismissRestore,
   readFacebookThread,
 } from './facebook-inbox-browser.js';
-import { runOnHotPage, type HotPage } from './facebook-hot-page.js';
+import { noteHot, runOnHotPage, type HotPage } from './facebook-hot-page.js';
 
 const EDITOR =
   '[contenteditable="true"][role="textbox"][data-lexical-editor="true"]';
@@ -47,7 +47,11 @@ export async function sendFacebookHot(
     void hot.page.evaluate(() => window.stop()).catch(() => {});
   return runOnHotPage<FacebookDispatchResult | null>(hot, async (page) => {
     const { target, threadId, body, ownId, timeoutMs } = input;
-    if (!/^\d+$/.test(threadId) || !body.trim()) return null;
+    const decline = (why: string) => {
+      noteHot(hot, `send declined: ${why}`);
+      return null;
+    };
+    if (!/^\d+$/.test(threadId) || !body.trim()) return decline('input');
     const deadline = Date.now() + Math.min(timeoutMs, 20000);
     const left = () => Math.max(1, deadline - Date.now());
     const paths = [`/messages/e2ee/t/${threadId}`, `/messages/t/${threadId}`];
@@ -70,7 +74,7 @@ export async function sendFacebookHot(
             break;
           }
         }
-        if (!opened) return null;
+        if (!opened) return decline('chat not in list');
       }
       hot.primary = `${trimSlash(new URL(page.url()).pathname)}/`;
       await page
@@ -79,19 +83,21 @@ export async function sendFacebookHot(
         .waitFor({ state: 'visible', timeout: left() });
       const before = await readFacebookThread(page, ownId, 200);
       const first = before.messages[0];
+      if (before.skipped.length)
+        return decline(`read skipped ${before.skipped.slice(0, 2).join(',')}`);
+      if (!first || first.threadId !== threadId)
+        return decline('thread mismatch');
       if (
-        before.skipped.length ||
-        !first ||
-        first.threadId !== threadId ||
         before.messages.some(
           (message) =>
             socialTarget(message.peerProfile)?.handle !== target.handle,
         )
       )
-        return null;
+        return decline('peer mismatch');
       const editor = page.locator(EDITOR);
-      if ((await editor.count()) !== 1) return null;
-      if (normalize(await editor.innerText()) !== '') return null;
+      if ((await editor.count()) !== 1) return decline('composer count');
+      if (normalize(await editor.innerText()) !== '')
+        return decline('composer not empty');
       const known = new Set(before.messages.map((m) => m.externalMessageId));
       const outgoingBefore = before.messages.filter(
         (message) => message.direction === 'out',
@@ -102,7 +108,7 @@ export async function sendFacebookHot(
       await editor.fill(body);
       if (normalize(await editor.innerText()) !== normalize(body)) {
         await editor.fill('');
-        return null;
+        return decline('text mismatch');
       }
       await input.assertSession(left());
       // From here a failure can no longer fall back to the normal flow.
@@ -155,6 +161,10 @@ export async function sendFacebookHot(
       if (marked)
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
       // Before the dispatch an unexpected page state only means "not here".
+      noteHot(
+        hot,
+        `send error: ${error instanceof Error ? error.name : '?'} ${error instanceof Error ? error.message.slice(0, 60) : ''}`,
+      );
       if (filled)
         await page
           .locator(EDITOR)

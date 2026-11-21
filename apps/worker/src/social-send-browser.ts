@@ -2629,6 +2629,8 @@ export function createSocialSendBrowser(
           (cookie) =>
             cookie.name === 'c_user' && /^\d+$/.test(String(cookie.value)),
         )?.value;
+        if (account.channel === 'facebook' && providerThreadId && !hot)
+          console.warn('hot send unavailable: no live page or recovery draft');
         if (hot && ownId && (await hotSendEnabled())) {
           const result = await sendFacebookHot(hot, {
             target,
