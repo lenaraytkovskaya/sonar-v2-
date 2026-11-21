@@ -4,7 +4,7 @@ import {
   captureFacebookHot,
   captureFacebookInbox,
 } from './facebook-inbox-browser.js';
-import { getHotPage, runOnHotPage } from './facebook-hot-page.js';
+import { getHotPage, noteHot, runOnHotPage } from './facebook-hot-page.js';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
@@ -618,8 +618,10 @@ export function createSocialInboxAdapter(
             hot.dirty.clear();
             if (!hrefs.length)
               return { complete: false, skipped: ['pagination_unverified'] };
+            const startedAt = Date.now();
+            noteHot(hot, `import start chats=${hrefs.length}`);
             try {
-              return await runOnHotPage(hot, (page) =>
+              const imported = await runOnHotPage(hot, (page) =>
                 captureFacebookHot(
                   page,
                   actors[0]!.value,
@@ -634,7 +636,10 @@ export function createSocialInboxAdapter(
                   >,
                 ),
               );
+              noteHot(hot, `import done ${Date.now() - startedAt}ms`);
+              return imported;
             } catch (error) {
+              noteHot(hot, `import failed ${Date.now() - startedAt}ms`);
               hrefs.forEach((href) => hot.dirty.add(href));
               if (
                 error instanceof SocialSendError ||
