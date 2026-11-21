@@ -1133,6 +1133,9 @@ async function conversation(
 const facebookMessageActionName =
   /^(?:Message|Send message|Повідомлення|Надіслати повідомлення|Сообщение|Отправить сообщение)$/i;
 
+// Upper bound of the post-send observation; a shorter page timeout still wins.
+const TRANSMISSION_HOLD_MS = 6000;
+
 // Extra wait for an optional h1 after the message action is already visible.
 const HEADING_OBSERVE_MS = 2000;
 
@@ -1886,9 +1889,11 @@ export async function sendFacebook(
       facts.outgoingAfter = Math.min(99, outgoingAfter);
       // Keep semantic detection separate from saturated telemetry counts.
       facts.newOutgoing = await state.evaluate((state) => state!.confirmed());
-      // Keep the original page alive for transmission using the existing timeout,
-      // without shortening it. Elapsed time is not proof of server delivery.
-      const until = Date.now() + timeoutMs;
+      // Keep the original page alive briefly after the bubble is confirmed. The
+      // hold used to equal the whole page timeout, which made the CRM show
+      // "queued" for that long after the message had already been sent.
+      // Elapsed time is still not proof of server delivery.
+      const until = Date.now() + Math.min(timeoutMs, TRANSMISSION_HOLD_MS);
       phase = 'transmission';
       while (Date.now() < until) {
         await page.waitForTimeout(Math.min(200, until - Date.now()));
