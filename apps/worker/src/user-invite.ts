@@ -40,7 +40,14 @@ export async function runUserInviteSend(
       reasonUk:
         'Додайте активну поштову скриньку, з якої надсилати запрошення.',
     };
-  const base = (process.env.APP_URL ?? '').replace(/\/$/, '');
+  const base = (process.env.APP_URL ?? '').trim().replace(/\/$/, '');
+  // A relative link in the mail is useless: never send one.
+  if (!/^https?:\/\/[^\s/]+/.test(base))
+    return {
+      status: 'paused',
+      reasonCode: 'invite_url_missing',
+      reasonUk: 'Не задано адресу Sonar (APP_URL) для посилання в запрошенні.',
+    };
   try {
     await (
       send ??
