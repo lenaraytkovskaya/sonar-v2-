@@ -42,7 +42,15 @@ export async function createInvite(
     normalized,
   ]);
   if (existing) return { error: 'exists' };
-  const ttlHours = await numberSetting('auth.invite_ttl_hours', 72);
+  // 0 hours means the link never expires.
+  const {
+    rows: [ttlRow],
+  } = await sonarPool.query(
+    "select value from settings where key='auth.invite_ttl_hours'",
+  );
+  const configured = Number(ttlRow?.value);
+  const ttlHours =
+    Number.isSafeInteger(configured) && configured >= 0 ? configured : 72;
   const token = randomBytes(32).toString('base64url');
   const c = await sonarPool.connect();
   try {
@@ -55,7 +63,7 @@ export async function createInvite(
       rows: [invite],
     } = await c.query(
       `insert into user_invites(email,token,invited_by,expires_at)
-       values($1,$2,$3,now()+make_interval(hours=>$4)) returning id`,
+       values($1,$2,$3,case when $4::int=0 then null else now()+make_interval(hours=>$4::int) end) returning id`,
       [normalized, token, invitedBy, ttlHours],
     );
     await enqueueTask(
@@ -100,7 +108,7 @@ export async function getOpenInvite(token: string) {
     [token],
   );
   if (!invite) return { error: 'invalid' as const };
-  if (new Date(invite.expiresAt).getTime() <= Date.now())
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() <= Date.now())
     return { error: 'expired' as const };
   return { invite: { id: invite.id as string, email: invite.email as string } };
 }
@@ -124,7 +132,10 @@ export async function acceptInvite(
       await c.query('rollback');
       return { error: 'invalid' };
     }
-    if (new Date(invite.expires_at).getTime() <= Date.now()) {
+    if (
+      invite.expires_at &&
+      new Date(invite.expires_at).getTime() <= Date.now()
+    ) {
       await c.query('rollback');
       return { error: 'expired' };
     }

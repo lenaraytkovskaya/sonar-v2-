@@ -10,7 +10,7 @@ type Invite = {
   id: string;
   email: string;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
   sentAt: string | null;
 };
 const date = (value: string) =>
@@ -134,7 +134,9 @@ export function UsersPanel() {
                       ? `${uk.users.sent} ${date(item.sentAt)}`
                       : uk.users.notSent}
                     {' · '}
-                    {uk.users.expires} {date(item.expiresAt)}
+                    {item.expiresAt
+                      ? `${uk.users.expires} ${date(item.expiresAt)}`
+                      : uk.users.noExpiry}
                   </div>
                 </div>
                 <div className="flex gap-2">

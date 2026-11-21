@@ -104,5 +104,21 @@ it.skipIf(!enabled)(
       error: 'expired',
     });
     expect(await invites.getPasswordMinLength()).toBe(8);
+
+    // 0 hours: the link never expires.
+    const forever = `${randomUUID()}@example.invalid`;
+    emails.push(forever);
+    await sonarPool.query(
+      "insert into settings(key,value) values('auth.invite_ttl_hours','0'::jsonb) on conflict(key) do update set value='0'::jsonb",
+    );
+    await invites.createInvite(forever, inviter!);
+    expect(
+      (
+        await sonarPool.query(
+          'select expires_at from user_invites where email=$1',
+          [forever],
+        )
+      ).rows[0].expires_at,
+    ).toBeNull();
   },
 );
