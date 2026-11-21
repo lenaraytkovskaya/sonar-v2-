@@ -55,6 +55,8 @@ type Batch = {
   cost_usd: string;
   reason_uk: string | null;
   fixture: boolean;
+  companies: number;
+  enriched: number;
 };
 export function BatchList({ campaignId }: { campaignId: string }) {
   const { batches: progress } = useTasks();
@@ -118,6 +120,11 @@ export function BatchList({ campaignId }: { campaignId: string }) {
                     </p>
                   )}
                   {b.fixture && <p>{uk.google.fixture}</p>}
+                  {b.companies > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {uk.enrich.progress}: {b.enriched} / {b.companies}
+                    </p>
+                  )}
                 </td>
                 <td className="p-2">{b.found_new + b.found_known}</td>
                 <td className="p-2">{b.found_new}</td>

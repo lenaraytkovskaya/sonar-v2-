@@ -11,7 +11,10 @@ export async function GET(
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   const { sonarPool } = await import('@sonar/db');
   const { rows } = await sonarPool.query(
-    'select id,number,size,status,found_new,found_known,requests,cost_usd,reason_uk,started_at,finished_at,fixture from batches where campaign_id=$1 order by number desc',
+    `select b.id,b.number,b.size,b.status,b.found_new,b.found_known,b.requests,b.cost_usd,b.reason_uk,b.started_at,b.finished_at,b.fixture,
+      (select count(*)::int from campaign_companies cc where cc.batch_id=b.id) as companies,
+      (select count(*)::int from campaign_companies cc join companies co on co.id=cc.company_id where cc.batch_id=b.id and co.status not in ('new','enriching')) as enriched
+      from batches b where b.campaign_id=$1 order by b.number desc`,
     [id],
   );
   return Response.json({ batches: rows });

@@ -1,4 +1,10 @@
-import { prozorroCode, workerHealth, type WorkerHeartbeat } from '@sonar/core';
+import {
+  campaignPausedReasonCode,
+  campaignPausedReasonUk,
+  prozorroCode,
+  workerHealth,
+  type WorkerHeartbeat,
+} from '@sonar/core';
 import { enqueueCompanyScores } from './scoring.js';
 import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
@@ -44,7 +50,7 @@ export async function logActivity(
     [action, entityType, entityId, userId, details],
   );
 }
-async function transaction<T>(fn: (client: PoolClient) => Promise<T>) {
+export async function transaction<T>(fn: (client: PoolClient) => Promise<T>) {
   const client = await sonarPool.connect();
   try {
     await client.query('begin');
@@ -58,7 +64,7 @@ async function transaction<T>(fn: (client: PoolClient) => Promise<T>) {
     client.release();
   }
 }
-async function dispatch(
+export async function dispatch(
   client: PoolClient,
   id: string,
   type: string,
@@ -895,6 +901,18 @@ export async function runTask(
     );
     const task = rows[0];
     if (!task) return;
+    // A paused campaign holds its tasks; resuming the campaign queues them again.
+    if (
+      await (
+        await import('./campaign-run.js')
+      ).taskBlockedByPause(sonarPool, task)
+    ) {
+      await sonarPool.query(
+        "update tasks set status='paused',reason_code=$2,reason_uk=$3,finished_at=now() where id=$1 and status in ('queued','running')",
+        [task.id, campaignPausedReasonCode, campaignPausedReasonUk],
+      );
+      return;
+    }
     const release =
       type === 'google.company'
         ? await acquireGoogleCompanyLease(task.id)

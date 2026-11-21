@@ -155,7 +155,7 @@ export function FailureBadge({ inbox = false }: { inbox?: boolean }) {
   ) : null;
 }
 export function TaskOverview() {
-  const { tasks, failures, olderFailures, counts, error, batches, sentToday } =
+  const { tasks, failures, olderFailures, counts, error, sentToday } =
     useTasks();
   const [retryError, setRetryError] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
@@ -290,58 +290,6 @@ export function TaskOverview() {
           </details>
         )}
       </Section>
-      {batches.length > 0 && (
-        <Section title={uk.tasks.batches}>
-          <ul className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-            {batches.slice(0, 6).map((batch) => (
-              <li
-                key={batch.id}
-                className="space-y-3 rounded-lg border border-border p-4 text-sm"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">
-                      {batch.campaign_name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {batch.fixture ? uk.google.fixture : uk.google.estimated}{' '}
-                      · ${Number(batch.cost_usd).toFixed(3)}
-                    </p>
-                  </div>
-                  <StatusBadge status={batch.status}>
-                    {
-                      uk.tasks.status[
-                        batch.status as keyof typeof uk.tasks.status
-                      ]
-                    }
-                  </StatusBadge>
-                </div>
-                <ProgressRow
-                  label={uk.google.title}
-                  value={batch.found_new + batch.found_known}
-                  max={batch.size}
-                />
-                {batch.companies > 0 && (
-                  <ProgressRow
-                    label={
-                      batch.enriching > 0
-                        ? `${uk.enrich.progress} · ${uk.enrich.running}: ${batch.enriching}`
-                        : uk.enrich.progress
-                    }
-                    value={batch.enriched}
-                    max={batch.companies}
-                  />
-                )}
-                {batch.reason_uk && (
-                  <p className="text-xs text-muted-foreground">
-                    <FriendlyError reason={batch.reason_uk} />
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
       <Section
         title={uk.tasks.active}
         description={`${uk.email.sentToday}: ${sentToday}`}
