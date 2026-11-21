@@ -1,6 +1,6 @@
 {
   "name": "sonar",
-  "version": "2.22.4",
+  "version": "2.22.5",
   "private": true,
   "packageManager": "pnpm@10.34.9",
   "engines": {
