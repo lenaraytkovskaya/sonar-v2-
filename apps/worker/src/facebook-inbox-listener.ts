@@ -133,6 +133,16 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
               threads: snapshot.threads?.length ?? 0,
               openLast: snapshot.open?.last ?? '',
               page: snapshot.page,
+              tabs: page
+                .context()
+                .pages()
+                .map((tab) => {
+                  try {
+                    return new URL(tab.url()).pathname.slice(0, 40);
+                  } catch {
+                    return '?';
+                  }
+                }),
             };
           },
           stopped: () => listener.stop || closed,
