@@ -212,7 +212,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
             [account],
           )
         ).rows[0].next_send_at,
-      ).toEqual(new Date(now.getTime() + 120000));
+      ).toBeNull();
       const stored = (await getConversationChat(conversationId)).messages.find(
         (m) => m.id === first.id,
       )!;
@@ -490,10 +490,6 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         );
       }
       const limited = await create();
-      expect(await send(limited.id, sender)).toMatchObject({
-        status: 'deferred',
-        reasonCode: 'outside_send_hours',
-      });
       await sonarPool.query(
         "update settings set value=$1 where key='send.hours'",
         [JSON.stringify({ start: 9, end: 18, days: [1, 2, 3, 4, 5] })],

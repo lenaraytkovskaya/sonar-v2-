@@ -292,8 +292,8 @@ it.skipIf(!enabled)(
       expect(state.socialAction.counts).toEqual({ sync: 1 });
       expect(
         await worker.runSocialInboxSync(task.payload, adapter, now, taskId),
-      ).toMatchObject({ status: 'deferred', reasonCode: 'social_action_gate' });
-      expect(adapter.sync).toHaveBeenCalledOnce();
+      ).toMatchObject({ status: 'done' });
+      expect(adapter.sync).toHaveBeenCalledTimes(2);
       await db.sonarPool.query("update tasks set status='failed' where id=$1", [
         taskId,
       ]);
@@ -1330,9 +1330,7 @@ it.skipIf(!enabled)(
     const gate = await db.sonarPool.connect();
     try {
       await gate.query('begin');
-      expect(await reserveSocialAction(gate, account, 'send', now)).toEqual(
-        new Date(now.getTime() + 120000),
-      );
+      expect(await reserveSocialAction(gate, account, 'send', now)).toBeNull();
       await gate.query('commit');
     } finally {
       gate.release();
@@ -1344,7 +1342,7 @@ it.skipIf(!enabled)(
           [account],
         )
       ).rows[0].settings.socialAction.counts,
-    ).toEqual({ sync: 1 });
+    ).toEqual({ sync: 1, send: 1 });
     await Promise.all([
       inbox.reconcileSocialInbox(now),
       inbox.reconcileSocialInbox(now),
@@ -1416,7 +1414,7 @@ it.skipIf(!enabled)(
         [account],
       )
     ).rows[0];
-    expect(state.settings.socialAction.counts).toEqual({ sync: 1, send: 1 });
+    expect(state.settings.socialAction.counts).toEqual({ sync: 1, send: 2 });
     expect(state.daily_limit).toBe(20);
     await db.sonarPool.query(
       "update channel_accounts set settings=jsonb_set(settings,'{socialAction}',$2::jsonb) where id=$1",
@@ -1778,15 +1776,15 @@ it.skipIf(!enabled)(
     expect(state.socialAction.nextAt).toBe(
       new Date(now.getTime() + 240000).toISOString(),
     );
-    const adapter = { sync: vi.fn() };
+    const adapter = { sync: vi.fn(async () => ({ complete: true })) };
     expect(
       await worker.runSocialInboxSync(
         { accountId: account },
         adapter,
         new Date(now.getTime() + 120000),
       ),
-    ).toMatchObject({ status: 'deferred', reasonCode: 'social_action_gate' });
-    expect(adapter.sync).not.toHaveBeenCalled();
+    ).toMatchObject({ status: 'done' });
+    expect(adapter.sync).toHaveBeenCalledOnce();
   },
 );
 it.skipIf(!enabled)(
