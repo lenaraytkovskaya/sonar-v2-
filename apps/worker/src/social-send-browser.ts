@@ -2622,7 +2622,6 @@ export function createSocialSendBrowser(
           account.channel === 'facebook' &&
           providerThreadId &&
           !facebookDraft?.recoveryFirstAttemptAt &&
-          !facebookDraft?.previousBodies?.length &&
           facebookDraft?.previousBody === undefined
             ? getHotPage(account.id)
             : undefined;
