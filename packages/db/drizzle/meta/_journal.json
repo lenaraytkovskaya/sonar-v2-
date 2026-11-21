@@ -477,6 +477,13 @@
       "when": 1795000013000,
       "tag": "0067_social_recipient_check",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1795000014000,
+      "tag": "0068_social_inbox_listen",
+      "breakpoints": true
     }
   ]
 }

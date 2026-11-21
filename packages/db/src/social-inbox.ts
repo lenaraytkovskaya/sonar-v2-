@@ -618,3 +618,30 @@ export async function reconcileSocialInbox(now = new Date()) {
     return count;
   });
 }
+
+/** Queue an immediate sync for an account whose open Messenger page saw a change. */
+export async function queueSocialInboxWake(
+  accountId: string,
+  now = new Date(),
+) {
+  return transaction(async (c) => {
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
+    );
+    const {
+      rows: [pending],
+    } = await c.query(
+      "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and payload->>'mode'='listen' and status='queued' limit 1",
+      [accountId],
+    );
+    if (pending) return false;
+    await enqueueTask(
+      'social.inbox.sync',
+      `social.inbox.sync:${accountId}:${randomUUID()}`,
+      { accountId, mode: 'listen' },
+      c,
+      now,
+    );
+    return true;
+  });
+}
