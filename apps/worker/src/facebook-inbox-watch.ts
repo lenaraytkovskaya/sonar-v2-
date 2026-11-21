@@ -17,6 +17,8 @@ export interface MessengerSnapshot {
   threads?: MessengerThread[];
   // The chat currently open in the page and its newest message id.
   open?: { href: string; last: string };
+  // Diagnostics only: what the page shows besides the chat list.
+  page?: { path: string; hidden: boolean; dialog: string };
 }
 
 /** Language-independent view of the Messenger page: title counter, thread order and previews. */
@@ -50,8 +52,14 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
         ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
         : '',
     };
+    const dialog = document.querySelector('[role="dialog"]');
     return {
       open,
+      page: {
+        path: location.pathname,
+        hidden: document.hidden,
+        dialog: (dialog?.textContent ?? '').slice(0, 60),
+      },
       unread: counter ? Number(counter[1]) : 0,
       signature: rows.join('\n'),
       blocked,
@@ -114,6 +122,7 @@ export async function watchMessenger(
     minGapMs: number;
     scanMs?: number;
     reloadMs?: number;
+    onScan?: (snapshot: MessengerSnapshot) => void;
   },
 ): Promise<WatchEnd> {
   const started = Date.now();
@@ -128,6 +137,7 @@ export async function watchMessenger(
       setTimeout(resolve, options.scanMs ?? SCAN_MS),
     );
     const next = await readMessengerSnapshot(page);
+    options.onScan?.(next);
     if (next.blocked) return 'blocked';
     if (messengerChanged(previous, next)) {
       dirty = true;

@@ -645,12 +645,42 @@ export function createSocialInboxAdapter(
             }
           }
         }
+        if (hot) {
+          // Encrypted chats keep one active Messenger tab per browser profile, so
+          // the full pass runs in the same long-lived page instead of a second tab.
+          return runOnHotPage(hot, async (page) => {
+            hot.lastFullAt = Date.now();
+            try {
+              return await captureFacebookInbox(
+                page,
+                actors[0]!.value,
+                timeoutMs,
+                persistBatch,
+                undefined,
+                checkpoint.resumeAnchor,
+                Number(account.settings.inboxMaxThreads) || 50,
+                Number(account.settings.inboxMaxMessages) || 100,
+                (checkpoint.threadCursors ?? {}) as Record<
+                  string,
+                  { lastMessageId?: string }
+                >,
+              );
+            } finally {
+              // Leave the page on the chat list so the watcher keeps its baseline.
+              await page
+                .goto('https://www.facebook.com/messages/', {
+                  waitUntil: 'domcontentloaded',
+                  timeout: timeoutMs,
+                })
+                .catch(() => {});
+            }
+          });
+        }
         return browser.withPage(
           account,
           account.session,
           timeoutMs,
           async (page) => {
-            if (hot) hot.lastFullAt = Date.now();
             const result = await captureFacebookInbox(
               page,
               actors[0]!.value,
