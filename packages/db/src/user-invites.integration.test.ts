@@ -27,6 +27,9 @@ it.skipIf(!enabled)(
   async () => {
     const { sonarPool } = await import('./index.js');
     const invites = await import('./user-invites.js');
+    const tasks = await import('./tasks.js');
+    await tasks.boss.start();
+    await tasks.boss.createQueue('user.invite.send');
     const address = `${randomUUID()}@example.invalid`;
     emails.push(address);
     const {
