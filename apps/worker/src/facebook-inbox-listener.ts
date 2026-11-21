@@ -19,6 +19,7 @@ interface Listener {
   stop: boolean;
   done: Promise<void>;
   wakes: number;
+  seen?: Record<string, unknown>;
 }
 
 // Operators read this from the accounts API to see what the listener is doing.
@@ -69,6 +70,14 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           1000;
         const end = await watchMessenger(page, {
           minGapMs,
+          onScan: (snapshot) => {
+            listener.seen = {
+              unread: snapshot.unread,
+              threads: snapshot.threads?.length ?? 0,
+              openLast: snapshot.open?.last ?? '',
+              page: snapshot.page,
+            };
+          },
           stopped: () => listener.stop || closed,
           onChange: async (changed) => {
             for (const href of changed) hot?.dirty.add(href);
@@ -130,8 +139,10 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         )
       : { rows: [] as SocialSessionAccount[] };
     const wanted = new Set(rows.map((row) => row.id));
-    for (const [id, listener] of listeners)
+    for (const [id, listener] of listeners) {
       if (!wanted.has(id)) listener.stop = true;
+      else if (listener.seen) void report(id, { seen: listener.seen });
+    }
     for (const account of rows) {
       if (listeners.has(account.id)) continue;
       if ((retryAt.get(account.id) ?? 0) > Date.now()) continue;
