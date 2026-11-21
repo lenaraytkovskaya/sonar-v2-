@@ -505,6 +505,13 @@
       "when": 1795000017000,
       "tag": "0071_social_inbox_sweep",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1795000019000,
+      "tag": "0072_user_invites",
+      "breakpoints": true
     }
   ]
 }

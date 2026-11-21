@@ -24,6 +24,10 @@
       "types": "./dist/metrics.d.ts",
       "default": "./dist/metrics.js"
     },
+    "./user-invites": {
+      "types": "./dist/user-invites.d.ts",
+      "default": "./dist/user-invites.js"
+    },
     "./manual-expenses": {
       "types": "./dist/manual-expenses.d.ts",
       "default": "./dist/manual-expenses.js"

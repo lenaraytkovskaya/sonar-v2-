@@ -46,12 +46,14 @@ async function main() {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !name)
     throw new Error(uk.cli.required);
   const password = await secret(uk.cli.password);
-  if (password.length < 12 || password.length > 1024)
-    throw new Error(uk.cli.length);
+  if (password.length > 1024) throw new Error(uk.cli.length);
   if (password !== (await secret(uk.cli.confirm)))
     throw new Error(uk.cli.mismatch);
   const { sonarPool, registryPool } = await import('@sonar/db');
   try {
+    const { getPasswordMinLength } = await import('@sonar/db/user-invites');
+    if (password.length < (await getPasswordMinLength()))
+      throw new Error(uk.cli.length);
     const passwordHash = await hash(password);
     await sonarPool.query(
       'insert into users (email, name, password_hash) values ($1, $2, $3)',

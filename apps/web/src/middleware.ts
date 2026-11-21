@@ -6,6 +6,7 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (
     path === '/login' ||
+    path.startsWith('/invite/') ||
     path === '/api/health' ||
     path === '/api/webhooks/resend' ||
     path === '/api/webhooks/waha'

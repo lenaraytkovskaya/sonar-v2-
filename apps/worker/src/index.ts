@@ -20,6 +20,7 @@ import {
 } from './social-send.js';
 import { closeTelegramClients } from './telegram.js';
 import { registerEmailTasks } from './email.js';
+import { registerUserInviteTasks } from './user-invite.js';
 import { registerViberTasks } from './viber.js';
 import { registerAnalysisTasks } from './analysis.js';
 import { registerDraftTasks } from './drafts.js';
@@ -70,6 +71,7 @@ const started = (async () => {
   await boss.start();
   await boss.createQueue(queueName);
   await registerEmailTasks();
+  await registerUserInviteTasks();
   await registerViberTasks();
   await registerFormReplyTasks();
   await registerInboundTasks();
