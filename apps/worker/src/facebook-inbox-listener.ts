@@ -65,13 +65,16 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     const seen = new Map<string, string>();
     let running = false;
     let stopped = false;
+    // Sweeps that keep failing mean Facebook is slow or throttling: ease off.
+    let failStreak = 0;
     const run = async () => {
       if (running || stopped || listener.stop || closed) return;
       running = true;
       try {
         const every =
           Number(await setting('social.inbox.listen_sweep_seconds', 20)) * 1000;
-        if (Date.now() - lastSweep < every) return;
+        const wait = Math.min(15 * 60000, every * 2 ** Math.min(failStreak, 5));
+        if (Date.now() - lastSweep < wait) return;
         if (hot.pendingSends > 0 || hot.activeOps > 0) return;
         const changed = await runOnHotPage(hot, async (page) => {
           const snapshot = await readMessengerSnapshot(page);
@@ -83,14 +86,19 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           const hrefs = [all[turn++ % all.length]!];
           lastSweep = Date.now();
           hot.primary ??= all[0];
+          let failed = false;
           const found = await sweepThreads(
             page,
             hrefs,
             seen,
             20000,
-            (line) => note(listener, line),
+            (line) => {
+              note(listener, line);
+              if (line.includes(' failed ')) failed = true;
+            },
             () => hot.pendingSends > 0,
           );
+          failStreak = failed ? failStreak + 1 : 0;
           // Rest on the active chat so its new messages arrive live.
           if (hot.primary && hot.pendingSends === 0)
             await focusThread(page, hot.primary, 8000);

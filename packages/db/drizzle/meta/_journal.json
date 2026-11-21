@@ -519,6 +519,13 @@
       "when": 1795000020000,
       "tag": "0073_invite_no_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1795000021000,
+      "tag": "0074_sweep_interval",
+      "breakpoints": true
     }
   ]
 }
