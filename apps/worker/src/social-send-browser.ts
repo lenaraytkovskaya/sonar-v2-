@@ -31,6 +31,8 @@ import {
   inspectFacebookRecipient,
   sendFacebook,
 } from './facebook-send-browser.js';
+import { getHotPage } from './facebook-hot-page.js';
+import { sendFacebookHot } from './facebook-hot-send.js';
 import { captureFailureDom } from './social-failure-dom.js';
 import { navigateSocialPage } from './social-navigation.js';
 
@@ -2614,6 +2616,36 @@ export function createSocialSendBrowser(
           : failure('unavailable');
       let attempted = false;
       try {
+        // A known chat with a live Messenger page needs no new page load. The
+        // normal flow below stays the fallback until the first dispatch.
+        const hot =
+          account.channel === 'facebook' &&
+          providerThreadId &&
+          !facebookDraft?.recoveryFirstAttemptAt &&
+          !facebookDraft?.previousBodies?.length &&
+          facebookDraft?.previousBody === undefined
+            ? getHotPage(account.id)
+            : undefined;
+        const ownId = session.cookies.find(
+          (cookie) =>
+            cookie.name === 'c_user' && /^\d+$/.test(String(cookie.value)),
+        )?.value;
+        if (hot && ownId && (await hotSendEnabled())) {
+          const result = await sendFacebookHot(hot, {
+            target,
+            threadId: providerThreadId!,
+            body,
+            ownId: String(ownId),
+            timeoutMs,
+            beforeFill: async () => {
+              await facebookDraft?.beforeFill();
+            },
+            beforeSend,
+            assertSession: (sessionTimeoutMs) =>
+              assertSocialSession(hot.page, 'facebook', sessionTimeoutMs),
+          });
+          if (result) return result;
+        }
         return await withPage(
           account,
           session,
@@ -2729,5 +2761,14 @@ export function createSocialSendBrowser(
       browser = undefined;
     },
   };
+}
+async function hotSendEnabled() {
+  const { sonarPool } = await import('@sonar/db');
+  const {
+    rows: [row],
+  } = await sonarPool.query(
+    "select value from settings where key='social.send.hot_enabled'",
+  );
+  return row?.value === true;
 }
 export const socialSendBrowser = createSocialSendBrowser();
