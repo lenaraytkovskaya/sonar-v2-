@@ -445,7 +445,7 @@ async function restoreButton(page: Page, kind: 'close' | 'confirm') {
  * dialogs without restoring, as before. A rejected PIN is not retried and
  * pauses the account instead of choosing "don't restore" for the owner.
  */
-async function dismissRestore(page: Page, deadline: number) {
+export async function dismissRestore(page: Page, deadline: number) {
   const configured = process.env.FACEBOOK_RESTORE_PIN?.trim();
   const pin = configured && /^\d{6}$/.test(configured) ? configured : null;
   let pinTried = false;
@@ -656,6 +656,81 @@ export async function captureFacebookInbox(
         folders: { ...folderCursors },
       },
     });
+  }
+  return {
+    complete: false,
+    reason: 'unsupported_dom' as const,
+    skipped: [...skipped],
+  };
+}
+
+const THREAD_PATH = /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/;
+
+/**
+ * Imports only the chats a long-lived Messenger page saw change, by opening them
+ * inside the page (no new page load). Everything else about reading, cursors and
+ * persistence matches captureFacebookInbox.
+ */
+export async function captureFacebookHot(
+  page: Page,
+  ownId: string,
+  hrefs: string[],
+  timeoutMs: number,
+  persist: (batch: SocialInboxBatch) => Promise<void>,
+  resumeAnchor: Record<string, unknown> | null,
+  maxMessages = 100,
+  threadCursors: Record<string, { lastMessageId?: string }> = {},
+) {
+  const skipped = new Set([
+    'pagination_unverified',
+    'archived_folder_unverified',
+  ]);
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(1, deadline - Date.now());
+  for (const href of hrefs.slice(0, 5)) {
+    const path = href.split(/[?#]/)[0]!;
+    if (!THREAD_PATH.test(path)) continue;
+    if (Date.now() >= deadline) {
+      skipped.add('time_limit');
+      break;
+    }
+    try {
+      const link = page.locator(`a[href="${path}"]`).first();
+      if (!(await link.count())) {
+        skipped.add('history_unavailable');
+        continue;
+      }
+      await link.click({ timeout: left() });
+      await dismissRestore(page, deadline);
+      await page.waitForURL(
+        (url) => url.pathname.replace(/\/$/, '') === path.replace(/\/$/, ''),
+        { timeout: left() },
+      );
+      await page
+        .locator(`${logSelector} [data-message-id]`)
+        .first()
+        .waitFor({ state: 'visible', timeout: left() });
+      const read = await readFacebookThread(page, ownId, maxMessages);
+      const threadId = read.messages[0]?.threadId;
+      const previousId = threadId
+        ? threadCursors[threadId]?.lastMessageId
+        : undefined;
+      const previousIndex = previousId
+        ? read.messages.findIndex(
+            (message) => message.externalMessageId === previousId,
+          )
+        : -1;
+      if (previousIndex >= 0)
+        read.messages = read.messages.slice(previousIndex + 1);
+      await assertSessionNegatives(page, 'facebook');
+      read.skipped.forEach((reason) => skipped.add(reason));
+      await persist({ messages: read.messages, resumeAnchor });
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'TimeoutError')
+        throw error;
+      await assertSessionNegatives(page, 'facebook');
+      skipped.add('history_unavailable');
+    }
   }
   return {
     complete: false,

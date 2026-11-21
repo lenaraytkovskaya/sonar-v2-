@@ -4,6 +4,11 @@ import { queueSocialInboxWake } from '@sonar/db/social-inbox';
 import type { SocialSessionAccount } from '@sonar/db/social-accounts';
 import { connectSocialProfile } from './social-profile-browser.js';
 import { THREAD_LINKS, watchMessenger } from './facebook-inbox-watch.js';
+import {
+  registerHotPage,
+  unregisterHotPage,
+  type HotPage,
+} from './facebook-hot-page.js';
 
 const TICK_MS = 30000;
 const RETRY_MIN_MS = 30000;
@@ -43,6 +48,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
     const page = await context.newPage();
+    let hot: HotPage | undefined;
     try {
       const timeoutMs = await timeout();
       page.setDefaultTimeout(timeoutMs);
@@ -56,6 +62,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           .first()
           .waitFor({ timeout: timeoutMs });
         failures.delete(account.id);
+        if (!hot) hot = registerHotPage(account.id, page);
         await report(account.id, { state: 'watching', error: null });
         const minGapMs =
           Number(await setting('social.inbox.listen_min_gap_seconds', 15)) *
@@ -63,7 +70,8 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         const end = await watchMessenger(page, {
           minGapMs,
           stopped: () => listener.stop || closed,
-          onChange: async () => {
+          onChange: async (changed) => {
+            for (const href of changed) hot?.dirty.add(href);
             try {
               listener.wakes++;
               // A running sync cannot be moved up; ask again until it has
@@ -100,6 +108,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         if (end === 'stopped') return;
       }
     } finally {
+      if (hot) unregisterHotPage(hot);
       await page.close().catch(() => {});
     }
   }

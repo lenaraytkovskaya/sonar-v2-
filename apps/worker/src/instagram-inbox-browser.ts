@@ -1,12 +1,17 @@
 import type { Page, Response } from 'playwright';
 import { navigateSocialPage } from './social-navigation.js';
-import { captureFacebookInbox } from './facebook-inbox-browser.js';
+import {
+  captureFacebookHot,
+  captureFacebookInbox,
+} from './facebook-inbox-browser.js';
+import { getHotPage, runOnHotPage } from './facebook-hot-page.js';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
 } from '@sonar/core/social-inbox';
 import { isNewSocialInboxMessage } from '@sonar/core/social-inbox';
 import {
+  SocialSendError,
   SocialSessionCheckError,
   type SocialSessionCheckDiagnostic,
 } from '@sonar/core/social-session';
@@ -596,11 +601,56 @@ export function createSocialInboxAdapter(
         )
           throw new SocialSessionCheckError('unknown_auth');
         const timeoutMs = await timeout();
+        const hot = getHotPage(account.id);
+        if (hot) {
+          // The long-lived page already sees every change, so a regular run only
+          // imports the chats it flagged. A full pass still runs now and then as a
+          // safety net for anything the page missed.
+          const { sonarPool } = await import('@sonar/db');
+          const {
+            rows: [fullSetting],
+          } = await sonarPool.query(
+            "select value from settings where key='social.inbox.full_sync_seconds'",
+          );
+          const fullMs = (Number(fullSetting?.value) || 900) * 1000;
+          if (Date.now() - hot.lastFullAt < fullMs) {
+            const hrefs = [...hot.dirty];
+            hot.dirty.clear();
+            if (!hrefs.length)
+              return { complete: false, skipped: ['pagination_unverified'] };
+            try {
+              return await runOnHotPage(hot, (page) =>
+                captureFacebookHot(
+                  page,
+                  actors[0]!.value,
+                  hrefs,
+                  timeoutMs,
+                  persistBatch,
+                  checkpoint.resumeAnchor ?? null,
+                  Number(account.settings.inboxMaxMessages) || 100,
+                  (checkpoint.threadCursors ?? {}) as Record<
+                    string,
+                    { lastMessageId?: string }
+                  >,
+                ),
+              );
+            } catch (error) {
+              hrefs.forEach((href) => hot.dirty.add(href));
+              if (
+                error instanceof SocialSendError ||
+                error instanceof SocialSessionCheckError
+              )
+                throw error;
+              // Anything else: fall back to a full pass on a fresh page.
+            }
+          }
+        }
         return browser.withPage(
           account,
           account.session,
           timeoutMs,
           async (page) => {
+            if (hot) hot.lastFullAt = Date.now();
             const result = await captureFacebookInbox(
               page,
               actors[0]!.value,
