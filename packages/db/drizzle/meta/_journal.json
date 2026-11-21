@@ -512,6 +512,13 @@
       "when": 1795000019000,
       "tag": "0072_user_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795000020000,
+      "tag": "0073_invite_no_expiry",
+      "breakpoints": true
     }
   ]
 }
