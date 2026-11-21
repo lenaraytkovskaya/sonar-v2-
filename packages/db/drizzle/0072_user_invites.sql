@@ -12,5 +12,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS user_invites_open_email
   ON user_invites (lower(email)) WHERE accepted_at IS NULL;
 INSERT INTO settings(key,value) VALUES
   ('auth.password_min_length','8'::jsonb),
-  ('auth.invite_ttl_hours','72'::jsonb)
+  ('auth.invite_ttl_hours','72'::jsonb),
+  ('tasks.user.invite.send','{"retryLimit":3,"retryDelay":60,"expireInSeconds":120}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
