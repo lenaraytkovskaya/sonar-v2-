@@ -52,7 +52,7 @@ export async function sendFacebookHot(
       return null;
     };
     if (!/^\d+$/.test(threadId) || !body.trim()) return decline('input');
-    const deadline = Date.now() + Math.min(timeoutMs, 20000);
+    const deadline = Date.now() + Math.min(timeoutMs, 30000);
     const left = () => Math.max(1, deadline - Date.now());
     const paths = [`/messages/e2ee/t/${threadId}`, `/messages/t/${threadId}`];
     let marked = false;
@@ -64,12 +64,21 @@ export async function sendFacebookHot(
         for (const path of paths) {
           const link = page.locator(`a[href="${path}/"], a[href="${path}"]`);
           if (await link.count()) {
-            await link.first().click({ timeout: left() });
-            await dismissRestore(page, deadline);
-            await page.waitForURL(
-              (url) => paths.includes(trimSlash(url.pathname)),
-              { timeout: left() },
-            );
+            if (path.includes('/e2ee/')) {
+              // A click leaves an encrypted chat on "loading messages".
+              await page.goto(`https://www.facebook.com${path}/`, {
+                waitUntil: 'domcontentloaded',
+                timeout: left(),
+              });
+              await dismissRestore(page, deadline);
+            } else {
+              await link.first().click({ timeout: left() });
+              await dismissRestore(page, deadline);
+              await page.waitForURL(
+                (url) => paths.includes(trimSlash(url.pathname)),
+                { timeout: left() },
+              );
+            }
             opened = true;
             break;
           }
