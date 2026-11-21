@@ -184,14 +184,20 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
 
     it('sweeps the top chats and names the ones whose newest message moved', async () => {
       const context = await browser.newContext({ serviceWorkers: 'block' });
+      // What the "server" holds; an encrypted chat shows it only after a fresh load.
+      const server: Record<string, string> = {
+        '/messages/t/1': '1@msgr.1',
+        '/messages/e2ee/t/2': '2@msgr.1',
+      };
       await context.route('**/*', (route) =>
         route.fulfill({
           contentType: 'text/html',
           body: `<a href="/messages/t/1/">one</a><a href="/messages/e2ee/t/2/">two</a><a href="/messages/t/">root</a><div role="log" id="log"></div>
 <script>
-window.data = { '/messages/t/1': '1@msgr.1', '/messages/e2ee/t/2': '2@msgr.1' };
-const render = () => { document.getElementById('log').innerHTML = '<div data-message-id="' + window.data[location.pathname.replace(/\\/$/, '')] + '">x</div>'; };
+const data = ${JSON.stringify(server)};
+const render = () => { document.getElementById('log').innerHTML = '<div data-message-id="' + data[location.pathname.replace(/\\/$/, '')] + '">x</div>'; };
 document.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); history.pushState({}, '', a.getAttribute('href')); render(); }));
+render();
 </script>`,
         }),
       );
@@ -202,11 +208,7 @@ document.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) =>
       expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
       expect([...seen.keys()]).toEqual(['/messages/t/1', '/messages/e2ee/t/2']);
       expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
-      await page.evaluate(() => {
-        (window as unknown as { data: Record<string, string> }).data[
-          '/messages/e2ee/t/2'
-        ] = '2@msgr.2';
-      });
+      server['/messages/e2ee/t/2'] = '2@msgr.2';
       expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([
         '/messages/e2ee/t/2/',
       ]);
