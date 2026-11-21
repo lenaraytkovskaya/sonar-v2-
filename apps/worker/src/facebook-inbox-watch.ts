@@ -242,8 +242,17 @@ export async function sweepThreads(
           ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
           : '';
       });
+    const startedAt = Date.now();
     try {
-      if (new URL(page.url()).pathname.replace(/\/$/, '') !== path) {
+      // An encrypted chat only shows what arrived since it was last loaded when
+      // the page is loaded afresh; opening it by a click inside the page keeps
+      // the old content. Other chats update in place, so a click is enough.
+      if (/\/e2ee\//.test(path)) {
+        await page.goto(`https://www.facebook.com${path}/`, {
+          waitUntil: 'domcontentloaded',
+          timeout: left(),
+        });
+      } else if (new URL(page.url()).pathname.replace(/\/$/, '') !== path) {
         const link = page.locator(`a[href="${href}"]`).first();
         if (!(await link.count())) continue;
         await link.click({ timeout: left() });
@@ -262,13 +271,13 @@ export async function sweepThreads(
       const previous = seen.get(path);
       seen.set(path, id);
       log(
-        `sweep ${path.slice(-6)} last=${id.slice(-6)} prev=${(previous ?? '-').slice(-6)}`,
+        `sweep ${path.slice(-6)} last=${id.slice(-6)} prev=${(previous ?? '-').slice(-6)} ${Date.now() - startedAt}ms`,
       );
       if (previous !== undefined && previous !== id) changed.push(href);
     } catch (error) {
       // A chat that does not open in time is simply tried again next sweep.
       log(
-        `sweep ${path.slice(-6)} failed ${error instanceof Error ? error.name : '?'}`,
+        `sweep ${path.slice(-6)} failed ${error instanceof Error ? error.name : '?'} ${Date.now() - startedAt}ms`,
       );
     }
   }

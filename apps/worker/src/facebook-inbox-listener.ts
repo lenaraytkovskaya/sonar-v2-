@@ -75,7 +75,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
             .slice(0, 3)
             .map((thread) => thread.href);
           lastSweep = Date.now();
-          return sweepThreads(page, hrefs, seen, 15000, (line) =>
+          return sweepThreads(page, hrefs, seen, 45000, (line) =>
             note(listener, line),
           );
         });
