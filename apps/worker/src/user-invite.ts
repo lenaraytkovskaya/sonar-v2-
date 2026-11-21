@@ -16,7 +16,10 @@ export async function runUserInviteSend(
     'select id,email,token,expires_at from user_invites where id=$1 and accepted_at is null',
     [input.inviteId],
   );
-  if (!invite || new Date(invite.expires_at).getTime() <= Date.now())
+  if (
+    !invite ||
+    (invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now())
+  )
     return {
       status: 'skipped',
       reasonCode: 'invite_closed',

@@ -1675,6 +1675,7 @@ export const uk = {
     sent: 'Лист надіслано',
     notSent: 'Лист ще не надіслано',
     expires: 'Діє до',
+    noExpiry: 'Без обмеження строку',
     revoke: 'Скасувати',
     resend: 'Надіслати знову',
     since: 'З',
