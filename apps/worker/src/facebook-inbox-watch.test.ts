@@ -213,6 +213,32 @@ document.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) =>
       await context.close();
     });
 
+    it('survives a navigation of the watched page', async () => {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      await context.route('**/*', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: '<title>Messenger</title><a href="/messages/t/1/"><span dir="auto">a</span></a>',
+        }),
+      );
+      const page = await context.newPage();
+      await page.goto('https://www.facebook.com/messages/');
+      let stop = false;
+      const run = watchMessenger(page, {
+        onChange: async () => {},
+        stopped: () => stop,
+        minGapMs: 0,
+        scanMs: 10,
+      });
+      for (let i = 0; i < 5; i++) {
+        await page.reload();
+        await page.waitForTimeout(20);
+      }
+      stop = true;
+      expect(await run).toBe('stopped');
+      await context.close();
+    });
+
     it('reacts to the title counter', async () => {
       const page = await browser.newPage();
       await page.setContent(html('hello'));

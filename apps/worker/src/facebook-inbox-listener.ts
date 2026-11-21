@@ -101,6 +101,16 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
   async function listen(account: SocialSessionAccount, listener: Listener) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
+    // Encrypted chats keep one active Messenger tab per profile. Tabs left by a
+    // previous worker process (a deploy kills it mid-run) silence this one, so
+    // they are closed before the listener opens its own.
+    for (const stale of context.pages())
+      if (
+        /^https:\/\/(?:www\.)?facebook\.com\/(?:messages|home\.php)/.test(
+          stale.url(),
+        )
+      )
+        await stale.close().catch(() => {});
     const page = await context.newPage();
     let hot: HotPage | undefined;
     let sweeper: (() => void) | undefined;
