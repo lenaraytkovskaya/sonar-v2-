@@ -701,8 +701,11 @@ export async function captureFacebookHot(
     'archived_folder_unverified',
   ]);
   const deadline = Date.now() + timeoutMs;
-  const left = () => Math.max(1, deadline - Date.now());
+  let chatDeadline = deadline;
+  const left = () => Math.max(1, chatDeadline - Date.now());
   for (const href of hrefs.slice(0, 5)) {
+    // One slow chat must not use up the budget of the others.
+    chatDeadline = Math.min(deadline, Date.now() + 30000);
     const path = href.split(/[?#]/)[0]!;
     if (!THREAD_PATH.test(path)) continue;
     if (Date.now() >= deadline) {
@@ -714,7 +717,8 @@ export async function captureFacebookHot(
       const alreadyOpen =
         new URL(page.url()).pathname.replace(/\/$/, '') ===
         path.replace(/\/$/, '');
-      if (!alreadyOpen && !(await link.count())) {
+      const encrypted = /\/e2ee\//.test(path);
+      if (!alreadyOpen && !encrypted && !(await link.count())) {
         skipped.add('history_unavailable');
         continue;
       }
@@ -722,11 +726,24 @@ export async function captureFacebookHot(
         pathname.replace(/\/$/, '') === path.replace(/\/$/, '');
       // A chat that is already open needs no click.
       if (!same(new URL(page.url()).pathname)) {
-        await link.click({ timeout: left() });
-        await dismissRestore(page, deadline);
-        await page.waitForURL((url) => same(url.pathname), {
-          timeout: left(),
-        });
+        if (encrypted) {
+          // A click inside the page leaves an encrypted chat on "loading
+          // messages"; only a fresh load shows what arrived meanwhile.
+          await page.goto(
+            `https://www.facebook.com${path.replace(/\/$/, '')}/`,
+            {
+              waitUntil: 'domcontentloaded',
+              timeout: left(),
+            },
+          );
+          await dismissRestore(page, deadline);
+        } else {
+          await link.click({ timeout: left() });
+          await dismissRestore(page, deadline);
+          await page.waitForURL((url) => same(url.pathname), {
+            timeout: left(),
+          });
+        }
       }
       await page
         .locator(`${logSelector} [data-message-id]`)
