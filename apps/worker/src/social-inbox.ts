@@ -401,11 +401,24 @@ export async function runSocialInboxSync(
       (account.settings.inboxSync as { failureCount?: unknown } | undefined)
         ?.failureCount,
     );
-    const failureCount = complete
+    // Coverage notes that every run carries (pagination, archive, empty request
+    // lists) make a run "incomplete" for the UI but are not failures: they must
+    // not push the next poll out with the failure back-off.
+    const informationalSkips = new Set([
+      'pagination_unverified',
+      'archived_folder_unverified',
+      'requests_empty_or_unverified',
+      'requests_preview_only',
+    ]);
+    const healthy =
+      !result.reason &&
+      conflicts.length === 0 &&
+      (result.skipped ?? []).every((reason) => informationalSkips.has(reason));
+    const failureCount = healthy
       ? 0
       : Math.max(0, Number.isSafeInteger(priorFailures) ? priorFailures : 0) +
         1;
-    const scheduledPollAt = complete
+    const scheduledPollAt = healthy
       ? nextPollAt
       : nextSocialInboxFailureAt(
           now,
