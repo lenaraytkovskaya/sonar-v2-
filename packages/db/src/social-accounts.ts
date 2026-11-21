@@ -79,6 +79,7 @@ export interface SocialAccount {
   inboxSyncComplete: boolean | null;
   inboxSyncCreated: number | null;
   inboxSyncSkipped: string[] | null;
+  inboxListener: Record<string, unknown> | null;
   inboxSyncCheckedAt: string | null;
   inboxSyncErrorUk: string | null;
   failureShotKinds: string[];
@@ -524,6 +525,7 @@ export async function listSocialAccounts(
     (a.settings->'inboxSync'->>'complete')::boolean as "inboxSyncComplete",
     (a.settings->'inboxSync'->>'created')::int as "inboxSyncCreated",
     a.settings->'inboxSync'->'lastFailure'->'skipped' as "inboxSyncSkipped",
+    a.settings->'inboxListener' as "inboxListener",
     a.settings->'inboxSync'->>'checkedAt' as "inboxSyncCheckedAt",
     a.settings->'inboxSync'->>'errorUk' as "inboxSyncErrorUk",
     case when $1::uuid is null or a.owner_id=$1::uuid then coalesce(array(select key from jsonb_each(coalesce(a.settings->'failureShots','{}'::jsonb)) shot(key,value) order by (value->>'at')::timestamptz desc),array[]::text[]) else array[]::text[] end as "failureShotKinds",

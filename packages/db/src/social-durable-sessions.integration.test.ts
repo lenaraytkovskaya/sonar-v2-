@@ -276,7 +276,7 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
           {
             socialAction: {
               day: new Date(time + 180000).toISOString().slice(0, 10),
-              counts: { send: totalLimit - 1, sync: 1 },
+              counts: { send: totalLimit - 1, check: 1 },
             },
           },
         ],

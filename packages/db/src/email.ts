@@ -1319,7 +1319,10 @@ export async function sendEmailMessage(
         now,
         zone,
         config['send.hours'] as SendHours,
-        account.next_send_at ?? undefined,
+        // An operator reply inside a conversation ignores the outreach pause.
+        channel === 'social' && m.source === 'reply'
+          ? undefined
+          : (account.next_send_at ?? undefined),
         hoursExempt,
       );
     } catch {
@@ -1433,7 +1436,12 @@ export async function sendEmailMessage(
       );
     }
     if (channel === 'social' && !facebookRecovery) {
-      const runAt = await reserveSocialAction(c, account.id, 'send', now);
+      const runAt = await reserveSocialAction(
+        c,
+        account.id,
+        m.source === 'reply' ? 'reply' : 'send',
+        now,
+      );
       if (runAt)
         return finish(
           deferred(
@@ -1448,9 +1456,13 @@ export async function sendEmailMessage(
         messageId,
         day,
       ]);
-    const nextSendAt = new Date(
-      now.getTime() + (min + Math.floor(random() * (max - min + 1))) * 1000,
-    );
+    const nextSendAt =
+      channel === 'social' && m.source === 'reply'
+        ? (account.next_send_at ?? null)
+        : new Date(
+            now.getTime() +
+              (min + Math.floor(random() * (max - min + 1))) * 1000,
+          );
     if (!facebookRecovery)
       await c.query(
         'update channel_accounts set sent_day=case when $4 then sent_day else $2 end,attempt_count=case when $4 then attempt_count when sent_day=$2 then attempt_count+1 else 1 end,next_send_at=$3 where id=$1',

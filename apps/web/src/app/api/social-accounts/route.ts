@@ -306,6 +306,7 @@ async function handle(request: Request, method: string) {
       inboxSyncComplete: account.inboxSyncComplete,
       inboxSyncCreated: account.inboxSyncCreated,
       inboxSyncSkipped: account.inboxSyncSkipped,
+      inboxListener: account.inboxListener,
       inboxSyncCheckedAt: account.inboxSyncCheckedAt,
       inboxSyncErrorUk: account.inboxSyncErrorUk,
       failureShotKinds: account.failureShotKinds,
