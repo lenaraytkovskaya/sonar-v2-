@@ -28,6 +28,11 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
     const threads = Array.from(
       document.querySelectorAll<HTMLAnchorElement>(links),
     )
+      .filter((link) =>
+        /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(
+          link.getAttribute('href') ?? '',
+        ),
+      )
       .slice(0, 15)
       .map((link) => ({
         href: link.getAttribute('href') ?? '',
@@ -153,4 +158,61 @@ export async function watchMessenger(
     }
   }
   return 'stopped';
+}
+
+const THREAD_HREF = /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/;
+
+/**
+ * Encrypted chats do not refresh their list preview or the title counter live,
+ * only the open chat updates. A sweep therefore opens the top chats of the list
+ * one by one (inside the shared page) and compares the newest message id of each
+ * with the previous sweep. Returns the chats that changed since then.
+ */
+export async function sweepThreads(
+  page: Page,
+  hrefs: string[],
+  seen: Map<string, string>,
+  budgetMs: number,
+): Promise<string[]> {
+  const changed: string[] = [];
+  const deadline = Date.now() + budgetMs;
+  for (const href of hrefs) {
+    if (!THREAD_HREF.test(href) || Date.now() >= deadline) continue;
+    const path = href.replace(/\/$/, '');
+    const left = () => Math.max(1, deadline - Date.now());
+    const lastId = () =>
+      page.evaluate(() => {
+        const log = document.querySelector('[role="log"]');
+        const ids = log
+          ? Array.from(log.querySelectorAll('[data-message-id]'))
+          : [];
+        return ids.length
+          ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
+          : '';
+      });
+    try {
+      if (new URL(page.url()).pathname.replace(/\/$/, '') !== path) {
+        const link = page.locator(`a[href="${href}"]`).first();
+        if (!(await link.count())) continue;
+        await link.click({ timeout: left() });
+        await page.waitForURL(
+          (url) => url.pathname.replace(/\/$/, '') === path,
+          { timeout: left() },
+        );
+      }
+      await page.waitForFunction(
+        () => !!document.querySelector('[role="log"] [data-message-id]'),
+        undefined,
+        { timeout: left() },
+      );
+      const id = await lastId();
+      if (!id) continue;
+      const previous = seen.get(path);
+      seen.set(path, id);
+      if (previous !== undefined && previous !== id) changed.push(href);
+    } catch {
+      // A chat that does not open in time is simply tried again next sweep.
+    }
+  }
+  return changed;
 }
