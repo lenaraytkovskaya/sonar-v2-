@@ -9,6 +9,9 @@ export interface HotPage {
   // Last time a full (every chat) import ran through this page.
   lastFullAt: number;
   queue: Promise<unknown>;
+  // Operations running or queued on the page, and sends waiting for it.
+  activeOps: number;
+  pendingSends: number;
 }
 
 const pages = new Map<string, HotPage>();
@@ -20,6 +23,8 @@ export function registerHotPage(accountId: string, page: Page): HotPage {
     dirty: new Set(),
     lastFullAt: 0,
     queue: Promise.resolve(),
+    activeOps: 0,
+    pendingSends: 0,
   };
   pages.set(accountId, hot);
   return hot;
@@ -39,7 +44,13 @@ export function runOnHotPage<T>(
   hot: HotPage,
   operation: (page: Page) => Promise<T>,
 ): Promise<T> {
-  const result = hot.queue.catch(() => {}).then(() => operation(hot.page));
+  hot.activeOps++;
+  const result = hot.queue
+    .catch(() => {})
+    .then(() => operation(hot.page))
+    .finally(() => {
+      hot.activeOps--;
+    });
   hot.queue = result;
   return result;
 }

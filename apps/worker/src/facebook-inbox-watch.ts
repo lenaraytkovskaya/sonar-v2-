@@ -161,6 +161,9 @@ export async function watchMessenger(
     reloadMs?: number;
     onScan?: (snapshot: MessengerSnapshot) => void;
     onEvent?: (line: string) => void;
+    // While true the page is being driven by an importer or a send: its own
+    // navigation and read marks are not news, so the baseline just follows.
+    paused?: () => boolean;
   },
 ): Promise<WatchEnd> {
   const started = Date.now();
@@ -186,6 +189,10 @@ export async function watchMessenger(
       )
         continue;
       throw error;
+    }
+    if (options.paused?.()) {
+      previous = next;
+      continue;
     }
     options.onScan?.(next);
     if (next.open && previous.open && next.open.last !== previous.open.last)
@@ -225,10 +232,12 @@ export async function sweepThreads(
   seen: Map<string, string>,
   budgetMs: number,
   log: (line: string) => void = () => {},
+  shouldStop: () => boolean = () => false,
 ): Promise<string[]> {
   const changed: string[] = [];
   const deadline = Date.now() + budgetMs;
   for (const href of hrefs) {
+    if (shouldStop()) break;
     if (!THREAD_HREF.test(href) || Date.now() >= deadline) continue;
     const path = href.replace(/\/$/, '');
     const left = () => Math.max(1, deadline - Date.now());

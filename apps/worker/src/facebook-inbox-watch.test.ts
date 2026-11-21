@@ -215,6 +215,33 @@ render();
       await context.close();
     });
 
+    it('ignores changes made while the page is driven by someone else', async () => {
+      const page = await browser.newPage();
+      await page.setContent(html('hello'));
+      let wakes = 0;
+      let paused = true;
+      let stop = false;
+      const run = watchMessenger(page, {
+        onChange: async () => {
+          wakes++;
+        },
+        stopped: () => stop,
+        paused: () => paused,
+        minGapMs: 0,
+        scanMs: 30,
+      });
+      await page.evaluate(() => {
+        document.querySelectorAll('span')[1]!.textContent = 'driven';
+      });
+      await page.waitForTimeout(200);
+      paused = false;
+      await page.waitForTimeout(200);
+      stop = true;
+      await run;
+      expect(wakes).toBe(0);
+      await page.close();
+    });
+
     it('survives a navigation of the watched page', async () => {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', (route) =>
