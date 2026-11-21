@@ -484,6 +484,13 @@
       "when": 1795000014000,
       "tag": "0068_social_inbox_listen",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795000015000,
+      "tag": "0069_social_inbox_full_sync",
+      "breakpoints": true
     }
   ]
 }

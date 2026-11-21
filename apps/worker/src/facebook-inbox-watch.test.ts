@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
+  changedThreads,
   messengerChanged,
   readMessengerSnapshot,
   watchMessenger,
@@ -31,6 +32,36 @@ describe('messengerChanged', () => {
   });
   it('does not fire while the list is empty', () => {
     expect(messengerChanged(snap(), snap({ signature: '' }))).toBe(false);
+  });
+});
+
+describe('changedThreads', () => {
+  const threads = (...rows: [string, string][]) =>
+    rows.map(([href, text]) => ({ href, text }));
+  it('names chats whose preview moved or that are new', () => {
+    const before = snap({ threads: threads(['/messages/t/1/', 'a|x']) });
+    const after = snap({
+      threads: threads(['/messages/t/2/', 'b|y'], ['/messages/t/1/', 'a|z']),
+    });
+    expect(changedThreads(before, after)).toEqual([
+      '/messages/t/2/',
+      '/messages/t/1/',
+    ]);
+  });
+  it('falls back to the top of the list on a bare counter rise', () => {
+    const rows = threads(['/messages/t/1/', 'a'], ['/messages/t/2/', 'b']);
+    expect(
+      changedThreads(
+        snap({ threads: rows }),
+        snap({ threads: rows, unread: 1 }),
+      ),
+    ).toEqual(['/messages/t/1/', '/messages/t/2/']);
+  });
+  it('names nothing when nothing changed', () => {
+    const rows = threads(['/messages/t/1/', 'a']);
+    expect(
+      changedThreads(snap({ threads: rows }), snap({ threads: rows })),
+    ).toEqual([]);
   });
 });
 

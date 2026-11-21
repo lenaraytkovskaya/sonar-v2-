@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
+  captureFacebookHot,
   captureFacebookInbox,
   readFacebookRequestPreviews,
   readFacebookThread,
@@ -101,6 +102,35 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(
           (await readFacebookThread(page, '100000000000002')).messages,
         ).toHaveLength(4);
+      } finally {
+        await context.close();
+      }
+    });
+    it('imports only the flagged chat by opening it inside the open page', async () => {
+      const { page, context, navigations } = await fixture();
+      try {
+        await page.goto('https://www.facebook.com/messages/');
+        const batches: SocialInboxBatch[] = [];
+        const result = await captureFacebookHot(
+          page,
+          '100000000000002',
+          [path, '/messages/t/999/', 'not-a-thread'],
+          5000,
+          async (batch) => {
+            batches.push(batch);
+          },
+          { keep: true },
+          100,
+          { '900000000000001': { lastMessageId: '100000000000001@msgr.6' } },
+        );
+        expect(navigations).toContain(path);
+        expect(batches).toHaveLength(1);
+        expect(batches[0]!.resumeAnchor).toEqual({ keep: true });
+        expect(batches[0]!.messages.map((m) => m.externalMessageId)).toEqual([
+          '100000000000001@msgr.7',
+          '100000000000001@msgr.8',
+        ]);
+        expect(result.skipped).toContain('history_unavailable');
       } finally {
         await context.close();
       }

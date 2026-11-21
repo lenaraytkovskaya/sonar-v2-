@@ -410,8 +410,10 @@ export async function runSocialInboxSync(
       'requests_empty_or_unverified',
       'requests_preview_only',
     ]);
+    // "unsupported_dom" is the standing marker of a pass that cannot prove the
+    // whole history; with only coverage notes it is not a failure either.
     const healthy =
-      !result.reason &&
+      (!result.reason || result.reason === 'unsupported_dom') &&
       conflicts.length === 0 &&
       (result.skipped ?? []).every((reason) => informationalSkips.has(reason));
     const failureCount = healthy
