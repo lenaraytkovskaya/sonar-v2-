@@ -555,6 +555,25 @@ export async function persistSocialInboxBatch(
     }
     for (const [conversationId, observed] of observations)
       await orderFacebookConversation(c, conversationId, observed);
+    // The peer's "seen" marker covers our messages up to and including the one
+    // it sits on, so every earlier sent message of that chat is read too.
+    for (const receipt of batch.receipts ?? []) {
+      if (
+        receipt.seenMessageId.length > 1000 ||
+        /[\p{Cc}]/u.test(receipt.seenMessageId)
+      )
+        continue;
+      await c.query(
+        `update messages o set status='read',reason_uk=null
+         from messages s join conversations v on v.id=s.conversation_id
+         where (s.account_id=$1 or v.account_id=$1) and s.channel='social'
+           and s.direction='out' and s.external_message_id=$2
+           and o.conversation_id=s.conversation_id and o.direction='out'
+           and o.status in ('sent','delivered')
+           and coalesce(o.sent_at,o.created_at)<=coalesce(s.sent_at,s.created_at)`,
+        [accountId, receipt.seenMessageId],
+      );
+    }
     await c.query(
       "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('resumeAnchor',$2::jsonb)) where id=$1",
       [accountId, JSON.stringify(batch.resumeAnchor)],

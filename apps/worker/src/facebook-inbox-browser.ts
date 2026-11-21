@@ -75,7 +75,9 @@ export async function readFacebookThread(
         )?.[1];
       const skipped: string[] = [];
       const messages: SocialInboxMessage[] = [];
-      const result = () => ({ messages, skipped });
+      // Newest own message carrying the peer's small "seen" avatar.
+      let seenMessageId: string | undefined;
+      const result = () => ({ messages, skipped, seenMessageId, threadId });
       if (!threadId || logs.length !== 1) {
         skipped.push('thread_boundary_unverified');
         return result();
@@ -244,6 +246,7 @@ export async function readFacebookThread(
             occurredAt = date.toISOString();
         }
         const outgoing = labelOwn || sender === ownId;
+        if (outgoing && node.querySelector('img')) seenMessageId = id;
         messages.push({
           externalMessageId: id,
           providerOrder,
@@ -605,6 +608,8 @@ export async function captureFacebookInbox(
     let read: Awaited<ReturnType<typeof readFacebookThread>> = {
       messages: [],
       skipped: [],
+      seenMessageId: undefined,
+      threadId: undefined,
     };
     try {
       await navigate(url, end);
@@ -637,6 +642,16 @@ export async function captureFacebookInbox(
     folderCursors.chats = ordered[(index + 1) % ordered.length];
     await persist({
       messages: read.messages,
+      ...(read.seenMessageId && read.threadId
+        ? {
+            receipts: [
+              {
+                threadId: read.threadId,
+                seenMessageId: read.seenMessageId,
+              },
+            ],
+          }
+        : {}),
       resumeAnchor: {
         threadUrl: url,
         nextThreadUrl: ordered[(index + 1) % ordered.length],
@@ -731,7 +746,20 @@ export async function captureFacebookHot(
         read.messages = read.messages.slice(previousIndex + 1);
       await assertSessionNegatives(page, 'facebook');
       read.skipped.forEach((reason) => skipped.add(reason));
-      await persist({ messages: read.messages, resumeAnchor });
+      await persist({
+        messages: read.messages,
+        ...(read.seenMessageId && read.threadId
+          ? {
+              receipts: [
+                {
+                  threadId: read.threadId,
+                  seenMessageId: read.seenMessageId,
+                },
+              ],
+            }
+          : {}),
+        resumeAnchor,
+      });
     } catch (error) {
       if (!(error instanceof Error) || error.name !== 'TimeoutError')
         throw error;

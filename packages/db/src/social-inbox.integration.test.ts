@@ -973,6 +973,53 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
+  'marks our sent messages read up to the one the peer has seen',
+  async () => {
+    const profile = 'https://www.facebook.com/receipt_peer/';
+    const first = {
+      ...message('receipt-out-1', 'out', profile),
+      occurredAt: '2026-11-14T09:00:00Z',
+    };
+    const second = {
+      ...message('receipt-out-2', 'out', profile),
+      occurredAt: '2026-11-14T09:01:00Z',
+    };
+    await inbox.persistSocialInboxBatch(account, 'facebook', {
+      messages: [first, second],
+      resumeAnchor: null,
+    });
+    const statuses = async () =>
+      (
+        await db.sonarPool.query(
+          "select external_message_id as id,status from messages where account_id=$1 and external_message_id like 'receipt-out-%' order by external_message_id",
+          [account],
+        )
+      ).rows;
+    expect(await statuses()).toEqual([
+      { id: 'receipt-out-1', status: 'sent' },
+      { id: 'receipt-out-2', status: 'sent' },
+    ]);
+    await inbox.persistSocialInboxBatch(account, 'facebook', {
+      messages: [],
+      receipts: [{ threadId: first.threadId, seenMessageId: 'receipt-out-1' }],
+      resumeAnchor: null,
+    });
+    expect(await statuses()).toEqual([
+      { id: 'receipt-out-1', status: 'read' },
+      { id: 'receipt-out-2', status: 'sent' },
+    ]);
+    await inbox.persistSocialInboxBatch(account, 'facebook', {
+      messages: [],
+      receipts: [{ threadId: first.threadId, seenMessageId: 'receipt-out-2' }],
+      resumeAnchor: null,
+    });
+    expect(await statuses()).toEqual([
+      { id: 'receipt-out-1', status: 'read' },
+      { id: 'receipt-out-2', status: 'read' },
+    ]);
+  },
+);
+it.skipIf(!enabled)(
   'keeps ambiguous peers without a company and never hides old same-body outgoing messages',
   async () => {
     await db.sonarPool.query(

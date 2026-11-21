@@ -598,6 +598,7 @@ export const uk = {
     copy: 'Скопіювати текст',
     openContact: 'Відкрити профіль або форму',
     facebookDispatched: 'Відправлено, перевірте в чаті',
+    facebookRead: 'Прочитано',
     verifyFacebook: 'Відкрити чат або профіль для перевірки',
     manualSent: 'Позначити надісланим',
     manuallyMarked: 'Позначено вручну',
