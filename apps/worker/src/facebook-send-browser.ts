@@ -1916,6 +1916,11 @@ export async function sendFacebook(
         }
       }
       facts.observationMs = Date.now() - observationStarted;
+      // Temporary probe: record the structure of the status marker under the
+      // sent bubble (labels and roles only) to learn delivered/read markers.
+      await captureFailure?.('status_probe', Date.now() - startedAt).catch(
+        () => {},
+      );
       // Floating chat has no thread URL: preserve its verified profile link.
       return {
         outcome: 'facebook_dispatched_unconfirmed',
