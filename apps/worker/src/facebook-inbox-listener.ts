@@ -26,7 +26,13 @@ interface Listener {
   done: Promise<void>;
   wakes: number;
   seen?: Record<string, unknown>;
+  events: string[];
 }
+
+const note = (listener: Listener, line: string) => {
+  listener.events.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+  if (listener.events.length > 40) listener.events.shift();
+};
 
 // Operators read this from the accounts API to see what the listener is doing.
 async function report(accountId: string, patch: Record<string, unknown>) {
@@ -69,7 +75,9 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
             .slice(0, 3)
             .map((thread) => thread.href);
           lastSweep = Date.now();
-          return sweepThreads(page, hrefs, seen, 15000);
+          return sweepThreads(page, hrefs, seen, 15000, (line) =>
+            note(listener, line),
+          );
         });
         if (changed.length) {
           for (const href of changed) hot.dirty.add(href);
@@ -137,11 +145,13 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           1000;
         const end = await watchMessenger(page, {
           minGapMs,
+          onEvent: (line) => note(listener, line),
           onScan: (snapshot) => {
             listener.seen = {
               unread: snapshot.unread,
               threads: snapshot.threads?.length ?? 0,
               openLast: snapshot.open?.last ?? '',
+              log: listener.events.slice(-14),
               page: snapshot.page,
               tabs: page
                 .context()
@@ -228,6 +238,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         stop: false,
         done: Promise.resolve(),
         wakes: 0,
+        events: [],
       };
       void report(account.id, { state: 'starting', error: null });
       listener.done = listen(account, listener)

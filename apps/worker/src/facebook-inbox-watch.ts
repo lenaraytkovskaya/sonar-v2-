@@ -160,6 +160,7 @@ export async function watchMessenger(
     scanMs?: number;
     reloadMs?: number;
     onScan?: (snapshot: MessengerSnapshot) => void;
+    onEvent?: (line: string) => void;
   },
 ): Promise<WatchEnd> {
   const started = Date.now();
@@ -187,6 +188,12 @@ export async function watchMessenger(
       throw error;
     }
     options.onScan?.(next);
+    if (next.open && previous.open && next.open.last !== previous.open.last)
+      options.onEvent?.(
+        `open ${next.open.href.slice(-6)} ${previous.open.last.slice(-6)}>${next.open.last.slice(-6)}`,
+      );
+    if (next.unread !== previous.unread)
+      options.onEvent?.(`unread ${previous.unread}>${next.unread}`);
     if (next.blocked) return 'blocked';
     if (messengerChanged(previous, next)) {
       dirty = true;
@@ -217,6 +224,7 @@ export async function sweepThreads(
   hrefs: string[],
   seen: Map<string, string>,
   budgetMs: number,
+  log: (line: string) => void = () => {},
 ): Promise<string[]> {
   const changed: string[] = [];
   const deadline = Date.now() + budgetMs;
@@ -253,9 +261,15 @@ export async function sweepThreads(
       if (!id) continue;
       const previous = seen.get(path);
       seen.set(path, id);
+      log(
+        `sweep ${path.slice(-6)} last=${id.slice(-6)} prev=${(previous ?? '-').slice(-6)}`,
+      );
       if (previous !== undefined && previous !== id) changed.push(href);
-    } catch {
+    } catch (error) {
       // A chat that does not open in time is simply tried again next sweep.
+      log(
+        `sweep ${path.slice(-6)} failed ${error instanceof Error ? error.name : '?'}`,
+      );
     }
   }
   return changed;
