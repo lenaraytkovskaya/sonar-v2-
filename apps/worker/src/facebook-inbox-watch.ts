@@ -15,6 +15,8 @@ export interface MessengerSnapshot {
   signature: string;
   blocked: boolean;
   threads?: MessengerThread[];
+  // The chat currently open in the page and its newest message id.
+  open?: { href: string; last: string };
 }
 
 /** Language-independent view of the Messenger page: title counter, thread order and previews. */
@@ -38,7 +40,18 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
       !!document.querySelector(
         'input[autocomplete="one-time-code"], input[aria-label="PIN"]',
       );
+    const log = document.querySelector('[role="log"]');
+    const ids = log
+      ? Array.from(log.querySelectorAll('[data-message-id]'))
+      : [];
+    const open = {
+      href: location.pathname,
+      last: ids.length
+        ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
+        : '',
+    };
     return {
+      open,
       unread: counter ? Number(counter[1]) : 0,
       signature: rows.join('\n'),
       blocked,
@@ -47,11 +60,24 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
   }, THREAD_LINKS);
 }
 
+// A new message in the chat that stays open moves neither the list preview nor
+// the title counter, so the newest message id of the open chat is watched too.
+function openChatMoved(previous: MessengerSnapshot, next: MessengerSnapshot) {
+  return (
+    !!previous.open &&
+    !!next.open &&
+    previous.open.href === next.open.href &&
+    next.open.last !== '' &&
+    next.open.last !== previous.open.last
+  );
+}
+
 export function messengerChanged(
   previous: MessengerSnapshot,
   next: MessengerSnapshot,
 ) {
   return (
+    openChatMoved(previous, next) ||
     next.unread > previous.unread ||
     (next.signature !== '' && next.signature !== previous.signature)
   );
@@ -70,6 +96,7 @@ export function changedThreads(
   const changed = (next.threads ?? [])
     .filter((thread) => before.get(thread.href) !== thread.text)
     .map((thread) => thread.href);
+  if (openChatMoved(previous, next) && next.open) changed.push(next.open.href);
   if (changed.length) return changed;
   return next.unread > previous.unread
     ? (next.threads ?? []).slice(0, fallback).map((thread) => thread.href)

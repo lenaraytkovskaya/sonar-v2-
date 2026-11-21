@@ -696,16 +696,23 @@ export async function captureFacebookHot(
     }
     try {
       const link = page.locator(`a[href="${path}"]`).first();
-      if (!(await link.count())) {
+      const alreadyOpen =
+        new URL(page.url()).pathname.replace(/\/$/, '') ===
+        path.replace(/\/$/, '');
+      if (!alreadyOpen && !(await link.count())) {
         skipped.add('history_unavailable');
         continue;
       }
-      await link.click({ timeout: left() });
-      await dismissRestore(page, deadline);
-      await page.waitForURL(
-        (url) => url.pathname.replace(/\/$/, '') === path.replace(/\/$/, ''),
-        { timeout: left() },
-      );
+      const same = (pathname: string) =>
+        pathname.replace(/\/$/, '') === path.replace(/\/$/, '');
+      // A chat that is already open needs no click.
+      if (!same(new URL(page.url()).pathname)) {
+        await link.click({ timeout: left() });
+        await dismissRestore(page, deadline);
+        await page.waitForURL((url) => same(url.pathname), {
+          timeout: left(),
+        });
+      }
       await page
         .locator(`${logSelector} [data-message-id]`)
         .first()

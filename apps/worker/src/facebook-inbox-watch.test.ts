@@ -57,6 +57,27 @@ describe('changedThreads', () => {
       ),
     ).toEqual(['/messages/t/1/', '/messages/t/2/']);
   });
+  it('names the open chat when its newest message changes', () => {
+    const open = (last: string, href = '/messages/e2ee/t/5') => ({
+      href,
+      last,
+    });
+    expect(
+      changedThreads(snap({ open: open('a@1') }), snap({ open: open('a@2') })),
+    ).toEqual(['/messages/e2ee/t/5']);
+    expect(
+      changedThreads(
+        snap({ open: open('a@1') }),
+        snap({ open: open('b@9', '/messages/e2ee/t/6') }),
+      ),
+    ).toEqual([]);
+    expect(
+      messengerChanged(
+        snap({ open: open('a@1') }),
+        snap({ open: open('a@2') }),
+      ),
+    ).toBe(true);
+  });
   it('names nothing when nothing changed', () => {
     const rows = threads(['/messages/t/1/', 'a']);
     expect(
@@ -126,6 +147,37 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
       expect(await run).toBe('blocked');
       expect(wakes).toBe(0);
+      await page.close();
+    });
+
+    it('wakes when a message lands in the chat that stays open', async () => {
+      const page = await browser.newPage();
+      await page.setContent(
+        `${html('hello')}<div role="log"><div data-message-id="1@msgr.1">a</div></div>`,
+      );
+      const woken: string[][] = [];
+      let stop = false;
+      const run = watchMessenger(page, {
+        onChange: async (changed) => {
+          woken.push(changed);
+        },
+        stopped: () => stop,
+        minGapMs: 0,
+        scanMs: 50,
+      });
+      await page.evaluate(() => {
+        document
+          .querySelector('[role="log"]')!
+          .insertAdjacentHTML(
+            'beforeend',
+            '<div data-message-id="1@msgr.2">b</div>',
+          );
+      });
+      await page.waitForTimeout(300);
+      stop = true;
+      await run;
+      expect(woken).toHaveLength(1);
+      expect(woken[0]).toHaveLength(1);
       await page.close();
     });
 
