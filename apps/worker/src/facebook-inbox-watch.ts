@@ -130,6 +130,24 @@ export function changedThreads(
     : [];
 }
 
+async function firstSnapshot(page: Page) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await readMessengerSnapshot(page);
+    } catch (error) {
+      if (
+        attempt < 20 &&
+        error instanceof Error &&
+        /context was destroyed|navigat/i.test(error.message)
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export type WatchEnd = 'blocked' | 'reload' | 'stopped';
 
 /** Poll a loaded Messenger page and call onChange on every new activity, at most once per minGapMs. */
@@ -145,7 +163,7 @@ export async function watchMessenger(
   },
 ): Promise<WatchEnd> {
   const started = Date.now();
-  let previous = await readMessengerSnapshot(page);
+  let previous = await firstSnapshot(page);
   let lastWake = 0;
   let dirty = false;
   const pending = new Set<string>();
@@ -155,7 +173,19 @@ export async function watchMessenger(
     await new Promise((resolve) =>
       setTimeout(resolve, options.scanMs ?? SCAN_MS),
     );
-    const next = await readMessengerSnapshot(page);
+    let next: MessengerSnapshot;
+    try {
+      next = await readMessengerSnapshot(page);
+    } catch (error) {
+      // A navigation by the importer or a reload destroys the page context for
+      // a moment; that is not a reason to drop the listener.
+      if (
+        error instanceof Error &&
+        /context was destroyed|navigat/i.test(error.message)
+      )
+        continue;
+      throw error;
+    }
     options.onScan?.(next);
     if (next.blocked) return 'blocked';
     if (messengerChanged(previous, next)) {
