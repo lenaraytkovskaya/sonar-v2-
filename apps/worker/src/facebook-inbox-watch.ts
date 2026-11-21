@@ -175,6 +175,8 @@ export async function watchMessenger(
     reloadMs?: number;
     onScan?: (snapshot: MessengerSnapshot) => void;
     onEvent?: (line: string) => void;
+    // Consecutive scans without a single chat link before the page is reloaded.
+    emptyReloadScans?: number;
     // While true the page is being driven by an importer or a send: its own
     // navigation and read marks are not news, so the baseline just follows.
     paused?: () => boolean;
@@ -185,6 +187,7 @@ export async function watchMessenger(
   let lastWake = 0;
   let dirty = false;
   const pending = new Set<string>();
+  let emptyScans = 0;
   while (!options.stopped()) {
     if (Date.now() - started >= (options.reloadMs ?? RELOAD_MS))
       return 'reload';
@@ -216,6 +219,12 @@ export async function watchMessenger(
     if (next.unread !== previous.unread)
       options.onEvent?.(`unread ${previous.unread}>${next.unread}`);
     if (next.blocked) return 'blocked';
+    // A dead page (network error, stuck load) shows no chats at all: reload it.
+    emptyScans = (next.threads?.length ?? 0) === 0 ? emptyScans + 1 : 0;
+    if (emptyScans >= (options.emptyReloadScans ?? 15)) {
+      options.onEvent?.('empty page, reloading');
+      return 'reload';
+    }
     if (messengerChanged(previous, next)) {
       dirty = true;
       for (const href of changedThreads(previous, next)) pending.add(href);

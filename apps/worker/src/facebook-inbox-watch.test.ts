@@ -275,6 +275,23 @@ render();
       await context.close();
     });
 
+    it('asks for a reload when the page shows no chats for a while', async () => {
+      const page = await browser.newPage();
+      await page.setContent('<title>Error</title><p>no network</p>');
+      const events: string[] = [];
+      const end = await watchMessenger(page, {
+        onChange: async () => {},
+        onEvent: (line) => events.push(line),
+        stopped: () => false,
+        minGapMs: 0,
+        scanMs: 10,
+        emptyReloadScans: 5,
+      });
+      expect(end).toBe('reload');
+      expect(events).toContain('empty page, reloading');
+      await page.close();
+    });
+
     it('survives a navigation of the watched page', async () => {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', (route) =>
