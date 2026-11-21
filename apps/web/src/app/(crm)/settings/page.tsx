@@ -13,12 +13,20 @@ export default async function Page({
       <PageHeader
         {...uk.pages.settings}
         actions={
-          <Link
-            href="/demo"
-            className="inline-flex min-h-9 items-center rounded-lg border border-border bg-surface px-3 text-sm font-medium shadow-xs hover:bg-raised"
-          >
-            {uk.demo.link}
-          </Link>
+          <>
+            <Link
+              href="/settings/users"
+              className="inline-flex min-h-9 items-center rounded-lg border border-border bg-surface px-3 text-sm font-medium shadow-xs hover:bg-raised"
+            >
+              {uk.users.link}
+            </Link>
+            <Link
+              href="/demo"
+              className="inline-flex min-h-9 items-center rounded-lg border border-border bg-surface px-3 text-sm font-medium shadow-xs hover:bg-raised"
+            >
+              {uk.demo.link}
+            </Link>
+          </>
         }
       />
       <SettingsPanel key={section} section={section} />
