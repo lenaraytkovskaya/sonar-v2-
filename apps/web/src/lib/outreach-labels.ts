@@ -80,14 +80,16 @@ export const messageStatus = (status: string, message?: DeliveryContext) =>
         message?.source === 'manual' &&
         ['social', 'form', 'call'].includes(message.channel)
       ? uk.outreach.manuallyMarked
-      : facebookDispatched(status, message)
-        ? uk.outreach.facebookDispatched
-        : (uk.email.statuses[status as keyof typeof uk.email.statuses] ??
-          (status === 'skipped'
-            ? uk.outreach.skipped
-            : status === 'received'
-              ? uk.inbound.received
-              : status));
+      : status === 'read' && message?.channel === 'social'
+        ? uk.outreach.facebookRead
+        : facebookDispatched(status, message)
+          ? uk.outreach.facebookDispatched
+          : (uk.email.statuses[status as keyof typeof uk.email.statuses] ??
+            (status === 'skipped'
+              ? uk.outreach.skipped
+              : status === 'received'
+                ? uk.inbound.received
+                : status));
 export function socialUnavailableNotice(
   value: string,
   reasonUk?: string | null,

@@ -34,8 +34,11 @@ export type SocialInboxMessage = {
   incomplete?: boolean;
   incompleteReasonUk?: string;
 };
+export type SocialInboxReceipt = { threadId: string; seenMessageId: string };
 export type SocialInboxBatch = {
   messages: SocialInboxMessage[];
+  // The peer has seen our messages up to and including this one.
+  receipts?: SocialInboxReceipt[];
   resumeAnchor: Record<string, unknown> | null;
 };
 

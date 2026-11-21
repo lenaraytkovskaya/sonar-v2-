@@ -216,6 +216,20 @@ render();
       await context.close();
     });
 
+    it('adds the id of the own message carrying the seen avatar to the open chat key', async () => {
+      const page = await browser.newPage();
+      await page.setContent(
+        `${html('hello')}<div role="log" style="width:400px"><div data-message-id="1@msgr.1">a</div><div data-message-id="1@msgr.2">b<img alt="seen" width="14" height="14" style="margin-left:360px"></div></div>`,
+      );
+      const snapshot = await readMessengerSnapshot(page);
+      expect(snapshot.open?.last).toBe('1@msgr.2|1@msgr.2');
+      await page.evaluate(() => {
+        document.querySelector('img')!.remove();
+      });
+      expect((await readMessengerSnapshot(page)).open?.last).toBe('1@msgr.2|');
+      await page.close();
+    });
+
     it('ignores changes made while the page is driven by someone else', async () => {
       const page = await browser.newPage();
       await page.setContent(html('hello'));

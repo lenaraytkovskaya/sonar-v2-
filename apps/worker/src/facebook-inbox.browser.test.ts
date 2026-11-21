@@ -135,6 +135,25 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await context.close();
       }
     });
+    it("reports the newest own message that carries the peer's seen avatar", async () => {
+      const { page, context } = await fixture();
+      try {
+        // The captured chat already shows the seen avatar under our last message.
+        const read = await readFacebookThread(page, '100000000000002');
+        expect(read.seenMessageId).toBe('100000000000001@msgr.6');
+        expect(read.threadId).toBe('900000000000001');
+        await page.evaluate(() => {
+          document
+            .querySelectorAll('[data-message-id="100000000000001@msgr.6"] img')
+            .forEach((img) => img.remove());
+        });
+        expect(
+          (await readFacebookThread(page, '100000000000002')).seenMessageId,
+        ).toBeUndefined();
+      } finally {
+        await context.close();
+      }
+    });
     it('reads Facebook request previews without opening or accepting them', async () => {
       const { page, context, navigations } = await fixture((url) =>
         url === '/messages/requests/' ? requestsFixture : captured,

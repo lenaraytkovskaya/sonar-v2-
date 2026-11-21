@@ -56,11 +56,24 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
     const ids = log
       ? Array.from(log.querySelectorAll('[data-message-id]'))
       : [];
+    // The peer's "seen" avatar sits at the right edge under our own message.
+    let seenId = '';
+    if (log) {
+      const box = log.getBoundingClientRect();
+      for (const row of ids)
+        for (const img of Array.from(row.querySelectorAll('img'))) {
+          const at = img.getBoundingClientRect();
+          if (at.width && at.left + at.width / 2 > box.left + box.width * 0.6)
+            seenId = row.getAttribute('data-message-id') ?? '';
+        }
+    }
     const open = {
       href: location.pathname,
-      last: ids.length
-        ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
-        : '',
+      last: `${
+        ids.length
+          ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
+          : ''
+      }|${seenId}`,
     };
     const dialog = document.querySelector('[role="dialog"]');
     return {
@@ -94,7 +107,8 @@ function openChatMoved(previous: MessengerSnapshot, next: MessengerSnapshot) {
     !!previous.open &&
     !!next.open &&
     previous.open.href === next.open.href &&
-    next.open.last !== '' &&
+    previous.open.last.split('|')[0] !== '' &&
+    next.open.last.split('|')[0] !== '' &&
     next.open.last !== previous.open.last
   );
 }
@@ -247,9 +261,16 @@ export async function sweepThreads(
         const ids = log
           ? Array.from(log.querySelectorAll('[data-message-id]'))
           : [];
-        return ids.length
-          ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
-          : '';
+        if (!ids.length || !log) return '';
+        const box = log.getBoundingClientRect();
+        let seenId = '';
+        for (const row of ids)
+          for (const img of Array.from(row.querySelectorAll('img'))) {
+            const at = img.getBoundingClientRect();
+            if (at.width && at.left + at.width / 2 > box.left + box.width * 0.6)
+              seenId = row.getAttribute('data-message-id') ?? '';
+          }
+        return `${ids[ids.length - 1]!.getAttribute('data-message-id') ?? ''}|${seenId}`;
       });
     const startedAt = Date.now();
     try {
