@@ -90,6 +90,7 @@ export async function captureFailureShot(
       facebookScreenshot &&
       (stage === 'confirmation' ||
         stage === 'transmission' ||
+        stage === 'status_probe' ||
         (await (async () => {
           try {
             return (
@@ -121,6 +122,38 @@ export async function captureFailureShot(
               .filter(Boolean)
               .slice(0, 6),
           )
+          .catch(() => []),
+      });
+    if (dom && stage === 'status_probe')
+      Object.assign(dom, {
+        statusMarkers: await page
+          .evaluate(() => {
+            const rows = Array.from(
+              document.querySelectorAll('[data-message-id]'),
+            ).filter((node) => node.getClientRects().length > 0);
+            const last = rows.at(-1);
+            if (!last) return [];
+            const scope =
+              last.closest('[role="article"]') ?? last.parentElement ?? last;
+            return [scope, ...Array.from(scope.querySelectorAll('*'))]
+              .slice(0, 60)
+              .map((node) => ({
+                tag: node.tagName.toLowerCase(),
+                role: node.getAttribute('role'),
+                label: node.getAttribute('aria-label')?.slice(0, 80) ?? null,
+                alt: node.getAttribute('alt')?.slice(0, 40) ?? null,
+                title: node.getAttribute('title')?.slice(0, 40) ?? null,
+                roledescription:
+                  node.getAttribute('aria-roledescription')?.slice(0, 30) ??
+                  null,
+                data: node
+                  .getAttributeNames()
+                  .filter((name) => name.startsWith('data-')),
+                svg: Boolean(node.querySelector('svg')),
+                img: node.tagName === 'IMG',
+                kids: node.children.length,
+              }));
+          })
           .catch(() => []),
       });
     const redactedConversation =
