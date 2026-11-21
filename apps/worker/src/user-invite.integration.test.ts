@@ -23,7 +23,7 @@ it.skipIf(!enabled)(
   async () => {
     const { sonarPool } = await import('@sonar/db');
     const { runUserInviteSend } = await import('./user-invite.js');
-    process.env.APP_URL = 'https://sonar.example';
+    delete process.env.APP_URL;
     const {
       rows: [invite],
     } = await sonarPool.query(
@@ -40,6 +40,14 @@ it.skipIf(!enabled)(
       [`from-${randomUUID()}@example.invalid`],
     );
     accounts.push(account.id);
+    expect(
+      await runUserInviteSend({ inviteId: invite.id }, send),
+    ).toMatchObject({
+      status: 'paused',
+      reasonCode: 'invite_url_missing',
+    });
+    expect(send).not.toHaveBeenCalled();
+    process.env.APP_URL = 'https://sonar.example';
     expect(
       await runUserInviteSend({ inviteId: invite.id }, send),
     ).toMatchObject({
