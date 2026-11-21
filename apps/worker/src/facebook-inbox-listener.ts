@@ -64,13 +64,29 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           minGapMs,
           stopped: () => listener.stop || closed,
           onChange: async () => {
-            listener.wakes++;
-            const queued = await queueSocialInboxWake(account.id);
-            await report(account.id, {
-              wakes: listener.wakes,
-              lastWakeAt: new Date().toISOString(),
-              lastWakeQueued: queued,
-            });
+            try {
+              listener.wakes++;
+              // A running sync cannot be moved up; ask again until it has
+              // finished so the change is not left for the regular interval.
+              let wake = await queueSocialInboxWake(account.id);
+              for (let tries = 0; wake === 'running' && tries < 12; tries++) {
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+                if (listener.stop || closed) break;
+                wake = await queueSocialInboxWake(account.id);
+              }
+              await report(account.id, {
+                wakes: listener.wakes,
+                lastWakeAt: new Date().toISOString(),
+                lastWake: wake,
+              });
+            } catch (error) {
+              await report(account.id, {
+                lastWakeError:
+                  error instanceof Error
+                    ? error.message.slice(0, 200)
+                    : 'unknown',
+              });
+            }
           },
         });
         if (end === 'blocked') {

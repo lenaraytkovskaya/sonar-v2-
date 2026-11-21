@@ -619,29 +619,45 @@ export async function reconcileSocialInbox(now = new Date()) {
   });
 }
 
-/** Queue an immediate sync for an account whose open Messenger page saw a change. */
+export type SocialInboxWake = 'queued' | 'advanced' | 'running' | 'due';
+
+/** Bring the next inbox sync of an account forward after its open Messenger page saw a change. */
 export async function queueSocialInboxWake(
   accountId: string,
   now = new Date(),
-) {
+): Promise<SocialInboxWake> {
   return transaction(async (c) => {
     await c.query(
       "select pg_advisory_xact_lock(hashtextextended('social-inbox-reconcile',0))",
     );
+    // One open sync per account is enforced by a unique index, so a change
+    // either starts the first one, moves the queued one up, or waits for the
+    // running one.
     const {
-      rows: [pending],
+      rows: [open],
     } = await c.query(
-      "select id from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and payload->>'mode'='listen' and status='queued' limit 1",
+      "select id,status from tasks where type='social.inbox.sync' and payload->>'accountId'=$1 and status in ('queued','running') limit 1",
       [accountId],
     );
-    if (pending) return false;
-    await enqueueTask(
-      'social.inbox.sync',
-      `social.inbox.sync:${accountId}:${randomUUID()}`,
-      { accountId, mode: 'listen' },
-      c,
-      now,
+    if (!open) {
+      await enqueueTask(
+        'social.inbox.sync',
+        `social.inbox.sync:${accountId}:${randomUUID()}`,
+        { accountId, mode: 'listen' },
+        c,
+        now,
+      );
+      return 'queued';
+    }
+    if (open.status === 'running') return 'running';
+    await c.query(
+      "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',coalesce(settings->'inboxSync','{}'::jsonb)||jsonb_build_object('nextPollAt',$2::text)) where id=$1",
+      [accountId, now.toISOString()],
     );
-    return true;
+    const moved = await c.query(
+      "update pgboss.job set start_after=$2 where name='social.inbox.sync' and data->>'taskId'=$1 and state in ('created','retry') and start_after>$2",
+      [open.id, now],
+    );
+    return moved.rowCount ? 'advanced' : 'due';
   });
 }
