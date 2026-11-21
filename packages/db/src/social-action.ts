@@ -4,7 +4,7 @@ import type { PoolClient } from 'pg';
 export async function reserveSocialAction(
   c: PoolClient,
   accountId: string,
-  action: 'send' | 'sync' | 'fetch' | 'check' | 'keepalive',
+  action: 'send' | 'reply' | 'sync' | 'fetch' | 'check' | 'keepalive',
   now: Date,
   dailyLimit?: number,
 ): Promise<Date | null> {
@@ -32,18 +32,24 @@ export async function reserveSocialAction(
   const runtime = account.settings.socialAction ?? {};
   const day = now.toISOString().slice(0, 10);
   const counts = runtime.day === day ? (runtime.counts ?? {}) : {};
+  // Reading the inbox and answering inside an open conversation are not cold
+  // outreach: they neither wait for the shared pause nor use the shared quota,
+  // so a chat behaves like a messenger instead of queueing behind polling.
+  const free = action === 'sync' || action === 'reply';
   if (
-    Object.values(counts).reduce<number>(
-      (total, value) => total + Number(value),
-      0,
-    ) >= totalLimit ||
+    (!free &&
+      Object.entries(counts).reduce<number>(
+        (total, [key, value]) =>
+          key === 'sync' || key === 'reply' ? total : total + Number(value),
+        0,
+      ) >= totalLimit) ||
     (dailyLimit !== undefined && (counts[action] ?? 0) >= dailyLimit)
   )
     return new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
     );
   const next = Date.parse(runtime.nextAt ?? '');
-  if (next > now.getTime()) return new Date(next);
+  if (!free && next > now.getTime()) return new Date(next);
   await c.query(
     "update channel_accounts set settings=jsonb_set(settings,'{socialAction}',$2::jsonb) where id=$1",
     [
@@ -51,7 +57,9 @@ export async function reserveSocialAction(
       JSON.stringify({
         day,
         counts: { ...counts, [action]: (counts[action] ?? 0) + 1 },
-        nextAt: new Date(now.getTime() + gap * 1000).toISOString(),
+        nextAt: free
+          ? (runtime.nextAt ?? new Date(now.getTime()).toISOString())
+          : new Date(now.getTime() + gap * 1000).toISOString(),
       }),
     ],
   );

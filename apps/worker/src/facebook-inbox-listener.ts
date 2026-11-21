@@ -13,6 +13,17 @@ const BLOCKED_RETRY_MS = 10 * 60 * 1000;
 interface Listener {
   stop: boolean;
   done: Promise<void>;
+  wakes: number;
+}
+
+// Operators read this from the accounts API to see what the listener is doing.
+async function report(accountId: string, patch: Record<string, unknown>) {
+  await sonarPool
+    .query(
+      "update channel_accounts set settings=jsonb_set(settings,'{inboxListener}',coalesce(settings->'inboxListener','{}'::jsonb)||$2::jsonb) where id=$1",
+      [accountId, JSON.stringify({ ...patch, at: new Date().toISOString() })],
+    )
+    .catch(() => {});
 }
 
 export function startFacebookInboxListener(timeout: () => Promise<number>) {
@@ -45,6 +56,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           .first()
           .waitFor({ timeout: timeoutMs });
         failures.delete(account.id);
+        await report(account.id, { state: 'watching', error: null });
         const minGapMs =
           Number(await setting('social.inbox.listen_min_gap_seconds', 15)) *
           1000;
@@ -52,10 +64,17 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           minGapMs,
           stopped: () => listener.stop || closed,
           onChange: async () => {
-            await queueSocialInboxWake(account.id);
+            listener.wakes++;
+            const queued = await queueSocialInboxWake(account.id);
+            await report(account.id, {
+              wakes: listener.wakes,
+              lastWakeAt: new Date().toISOString(),
+              lastWakeQueued: queued,
+            });
           },
         });
         if (end === 'blocked') {
+          await report(account.id, { state: 'blocked' });
           retryAt.set(account.id, Date.now() + BLOCKED_RETRY_MS);
           console.warn('facebook inbox listener stopped: login or PIN dialog', {
             accountId: account.id,
@@ -91,7 +110,12 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     for (const account of rows) {
       if (listeners.has(account.id)) continue;
       if ((retryAt.get(account.id) ?? 0) > Date.now()) continue;
-      const listener: Listener = { stop: false, done: Promise.resolve() };
+      const listener: Listener = {
+        stop: false,
+        done: Promise.resolve(),
+        wakes: 0,
+      };
+      void report(account.id, { state: 'starting', error: null });
       listener.done = listen(account, listener)
         .catch((error) => {
           const count = (failures.get(account.id) ?? 0) + 1;
@@ -101,6 +125,11 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
             Date.now() +
               Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** Math.min(count, 5)),
           );
+          void report(account.id, {
+            state: 'error',
+            error:
+              error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+          });
           console.warn('facebook inbox listener failed', {
             accountId: account.id,
             message: error instanceof Error ? error.message : String(error),
