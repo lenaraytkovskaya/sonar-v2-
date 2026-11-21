@@ -5,7 +5,6 @@ import {
   captureFacebookInbox,
 } from './facebook-inbox-browser.js';
 import { getHotPage, runOnHotPage } from './facebook-hot-page.js';
-import { sonarPool } from '@sonar/db';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
@@ -607,6 +606,7 @@ export function createSocialInboxAdapter(
           // The long-lived page already sees every change, so a regular run only
           // imports the chats it flagged. A full pass still runs now and then as a
           // safety net for anything the page missed.
+          const { sonarPool } = await import('@sonar/db');
           const {
             rows: [fullSetting],
           } = await sonarPool.query(
