@@ -109,17 +109,19 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
   async function listen(account: SocialSessionAccount, listener: Listener) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
+    const page = await context.newPage();
     // Encrypted chats keep one active Messenger tab per profile. Tabs left by a
     // previous worker process (a deploy kills it mid-run) silence this one, so
-    // they are closed before the listener opens its own.
+    // they are closed - but only after our own tab exists: closing the last
+    // window would shut the whole profile browser down.
     for (const stale of context.pages())
       if (
+        stale !== page &&
         /^https:\/\/(?:www\.)?facebook\.com\/(?:messages|home\.php)/.test(
           stale.url(),
         )
       )
         await stale.close().catch(() => {});
-    const page = await context.newPage();
     let hot: HotPage | undefined;
     let sweeper: (() => void) | undefined;
     try {
@@ -206,7 +208,9 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     } finally {
       sweeper?.();
       if (hot) unregisterHotPage(hot);
-      await page.close().catch(() => {});
+      // Never close the last window: that would shut the whole profile browser.
+      if (context.pages().length > 1) await page.close().catch(() => {});
+      else await page.goto('about:blank').catch(() => {});
     }
   }
 
