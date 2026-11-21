@@ -18,7 +18,12 @@ export interface MessengerSnapshot {
   // The chat currently open in the page and its newest message id.
   open?: { href: string; last: string };
   // Diagnostics only: what the page shows besides the chat list.
-  page?: { path: string; hidden: boolean; dialog: string };
+  page?: {
+    path: string;
+    hidden: boolean;
+    dialog: string;
+    notes: string[];
+  };
 }
 
 /** Language-independent view of the Messenger page: title counter, thread order and previews. */
@@ -64,6 +69,15 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
         path: location.pathname,
         hidden: document.hidden,
         dialog: (dialog?.textContent ?? '').slice(0, 60),
+        // Banners and alerts, e.g. a notice that Messenger is active elsewhere.
+        notes: Array.from(
+          document.querySelectorAll(
+            '[role="alert"], [role="status"], [role="banner"]',
+          ),
+        )
+          .map((node) => (node.textContent ?? '').trim().slice(0, 80))
+          .filter(Boolean)
+          .slice(0, 4),
       },
       unread: counter ? Number(counter[1]) : 0,
       signature: rows.join('\n'),
