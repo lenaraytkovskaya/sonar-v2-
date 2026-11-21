@@ -4,6 +4,7 @@ import { queueSocialInboxWake } from '@sonar/db/social-inbox';
 import type { SocialSessionAccount } from '@sonar/db/social-accounts';
 import { connectSocialProfile } from './social-profile-browser.js';
 import {
+  focusThread,
   readMessengerSnapshot,
   sweepThreads,
   THREAD_LINKS,
@@ -79,7 +80,8 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           // One chat per sweep keeps the page free for sends; they take turns.
           const hrefs = [all[turn++ % all.length]!];
           lastSweep = Date.now();
-          return sweepThreads(
+          hot.primary ??= all[0];
+          const found = await sweepThreads(
             page,
             hrefs,
             seen,
@@ -87,6 +89,10 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
             (line) => note(listener, line),
             () => hot.pendingSends > 0,
           );
+          // Rest on the active chat so its new messages arrive live.
+          if (hot.primary && hot.pendingSends === 0)
+            await focusThread(page, hot.primary, 8000);
+          return found;
         });
         if (changed.length) {
           for (const href of changed) hot.dirty.add(href);
@@ -183,6 +189,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           stopped: () => listener.stop || closed,
           onChange: async (changed) => {
             for (const href of changed) hot?.dirty.add(href);
+            if (hot && changed[0]) hot.primary = changed[0];
             try {
               listener.wakes++;
               // A running sync cannot be moved up; ask again until it has

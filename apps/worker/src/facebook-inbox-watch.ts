@@ -292,3 +292,20 @@ export async function sweepThreads(
   }
   return changed;
 }
+
+/** Brings the page back to a chat by a click inside it; failures are ignored. */
+export async function focusThread(page: Page, href: string, budgetMs: number) {
+  const path = href.replace(/\/$/, '');
+  if (!THREAD_HREF.test(href)) return;
+  try {
+    if (new URL(page.url()).pathname.replace(/\/$/, '') === path) return;
+    const link = page.locator(`a[href="${href}"]`).first();
+    if (!(await link.count())) return;
+    await link.click({ timeout: budgetMs });
+    await page.waitForURL((url) => url.pathname.replace(/\/$/, '') === path, {
+      timeout: budgetMs,
+    });
+  } catch {
+    // The next sweep or send opens it again.
+  }
+}
