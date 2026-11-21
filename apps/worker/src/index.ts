@@ -10,6 +10,7 @@ import {
 } from './social-login.js';
 import { registerInboundTasks } from './inbound.js';
 import { registerSocialInboxTasks } from './social-inbox.js';
+import { startFacebookInboxListener } from './facebook-inbox-listener.js';
 import { createSocialInboxAdapter } from './instagram-inbox-browser.js';
 import { socialPageTimeout } from './social-send.js';
 import { registerSocialTasks, closeSocialBrowser } from './social.js';
@@ -42,6 +43,7 @@ import {
 } from '@sonar/db/tasks';
 let stopping = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+let stopListener: (() => Promise<void>) | undefined;
 const startedAt = new Date().toISOString();
 const version = (() => {
   try {
@@ -72,6 +74,7 @@ const started = (async () => {
   await registerFormReplyTasks();
   await registerInboundTasks();
   await registerSocialInboxTasks(createSocialInboxAdapter(socialPageTimeout));
+  stopListener = startFacebookInboxListener(socialPageTimeout);
   await registerDraftTasks();
   await registerAnalysisTasks();
   await registerScoringTasks();
@@ -135,6 +138,7 @@ async function stop() {
   stopping = true;
   await started.catch(() => {});
   clearInterval(heartbeatTimer);
+  await stopListener?.();
   await closeTelegramClients();
   await closeTaskQueue();
   await closeSocialBrowser();
