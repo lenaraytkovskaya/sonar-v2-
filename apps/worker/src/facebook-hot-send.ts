@@ -69,6 +69,7 @@ export async function sendFacebookHot(
         }
         if (!opened) return null;
       }
+      hot.primary = `${trimSlash(new URL(page.url()).pathname)}/`;
       await page
         .locator(`${LOG} [data-message-id]`)
         .first()

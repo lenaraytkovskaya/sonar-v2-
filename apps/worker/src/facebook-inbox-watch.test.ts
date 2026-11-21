@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
   changedThreads,
+  focusThread,
   sweepThreads,
   messengerChanged,
   readMessengerSnapshot,
@@ -240,6 +241,24 @@ render();
       await run;
       expect(wakes).toBe(0);
       await page.close();
+    });
+
+    it('rests on the chosen chat by a click and ignores a missing one', async () => {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      await context.route('**/*', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `<a href="/messages/t/1/">one</a><a href="/messages/e2ee/t/2/">two</a>
+<script>document.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); history.pushState({}, '', a.getAttribute('href')); }));</script>`,
+        }),
+      );
+      const page = await context.newPage();
+      await page.goto('https://www.facebook.com/messages/');
+      await focusThread(page, '/messages/e2ee/t/2/', 3000);
+      expect(new URL(page.url()).pathname).toBe('/messages/e2ee/t/2/');
+      await focusThread(page, '/messages/t/999/', 500);
+      expect(new URL(page.url()).pathname).toBe('/messages/e2ee/t/2/');
+      await context.close();
     });
 
     it('survives a navigation of the watched page', async () => {

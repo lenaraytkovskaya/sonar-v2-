@@ -13,6 +13,9 @@ export interface HotPage {
   activeOps: number;
   pendingSends: number;
   events: string[];
+  // The chat the page rests on between operations: the most recently active one,
+  // so its new messages arrive live instead of waiting for the next sweep.
+  primary?: string;
 }
 
 /** Short timestamped line for the diagnostics; capped. */
