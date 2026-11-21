@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import {
   changedThreads,
+  sweepThreads,
   messengerChanged,
   readMessengerSnapshot,
   watchMessenger,
@@ -179,6 +180,37 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       expect(woken).toHaveLength(1);
       expect(woken[0]).toHaveLength(1);
       await page.close();
+    });
+
+    it('sweeps the top chats and names the ones whose newest message moved', async () => {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      await context.route('**/*', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `<a href="/messages/t/1/">one</a><a href="/messages/e2ee/t/2/">two</a><a href="/messages/t/">root</a><div role="log" id="log"></div>
+<script>
+window.data = { '/messages/t/1': '1@msgr.1', '/messages/e2ee/t/2': '2@msgr.1' };
+const render = () => { document.getElementById('log').innerHTML = '<div data-message-id="' + window.data[location.pathname.replace(/\\/$/, '')] + '">x</div>'; };
+document.querySelectorAll('a').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); history.pushState({}, '', a.getAttribute('href')); render(); }));
+</script>`,
+        }),
+      );
+      const page = await context.newPage();
+      await page.goto('https://www.facebook.com/messages/');
+      const seen = new Map<string, string>();
+      const hrefs = ['/messages/t/1/', '/messages/e2ee/t/2/', '/messages/t/'];
+      expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
+      expect([...seen.keys()]).toEqual(['/messages/t/1', '/messages/e2ee/t/2']);
+      expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
+      await page.evaluate(() => {
+        (window as unknown as { data: Record<string, string> }).data[
+          '/messages/e2ee/t/2'
+        ] = '2@msgr.2';
+      });
+      expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([
+        '/messages/e2ee/t/2/',
+      ]);
+      await context.close();
     });
 
     it('reacts to the title counter', async () => {

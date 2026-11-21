@@ -3,9 +3,15 @@ import { sonarPool } from '@sonar/db';
 import { queueSocialInboxWake } from '@sonar/db/social-inbox';
 import type { SocialSessionAccount } from '@sonar/db/social-accounts';
 import { connectSocialProfile } from './social-profile-browser.js';
-import { THREAD_LINKS, watchMessenger } from './facebook-inbox-watch.js';
+import {
+  readMessengerSnapshot,
+  sweepThreads,
+  THREAD_LINKS,
+  watchMessenger,
+} from './facebook-inbox-watch.js';
 import {
   registerHotPage,
+  runOnHotPage,
   unregisterHotPage,
   type HotPage,
 } from './facebook-hot-page.js';
@@ -45,11 +51,59 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     return (row?.value as T | undefined) ?? fallback;
   }
 
+  // Opens the top chats now and then and wakes the sync when one of them moved.
+  function startSweeper(accountId: string, hot: HotPage, listener: Listener) {
+    const seen = new Map<string, string>();
+    let running = false;
+    let stopped = false;
+    const run = async () => {
+      if (running || stopped || listener.stop || closed) return;
+      running = true;
+      try {
+        const every =
+          Number(await setting('social.inbox.listen_sweep_seconds', 20)) * 1000;
+        if (Date.now() - lastSweep < every) return;
+        const changed = await runOnHotPage(hot, async (page) => {
+          const snapshot = await readMessengerSnapshot(page);
+          const hrefs = (snapshot.threads ?? [])
+            .slice(0, 3)
+            .map((thread) => thread.href);
+          lastSweep = Date.now();
+          return sweepThreads(page, hrefs, seen, 15000);
+        });
+        if (changed.length) {
+          for (const href of changed) hot.dirty.add(href);
+          listener.wakes++;
+          const wake = await queueSocialInboxWake(accountId);
+          await report(accountId, {
+            wakes: listener.wakes,
+            lastWakeAt: new Date().toISOString(),
+            lastWake: `sweep:${wake}`,
+          });
+        }
+      } catch (error) {
+        await report(accountId, {
+          lastWakeError:
+            error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        });
+      } finally {
+        running = false;
+      }
+    };
+    let lastSweep = 0;
+    const timer = setInterval(() => void run(), 5000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }
+
   async function listen(account: SocialSessionAccount, listener: Listener) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
     const page = await context.newPage();
     let hot: HotPage | undefined;
+    let sweeper: (() => void) | undefined;
     try {
       const timeoutMs = await timeout();
       page.setDefaultTimeout(timeoutMs);
@@ -63,7 +117,10 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           .first()
           .waitFor({ timeout: timeoutMs });
         failures.delete(account.id);
-        if (!hot) hot = registerHotPage(account.id, page);
+        if (!hot) {
+          hot = registerHotPage(account.id, page);
+          sweeper = startSweeper(account.id, hot, listener);
+        }
         await report(account.id, { state: 'watching', error: null });
         const minGapMs =
           Number(await setting('social.inbox.listen_min_gap_seconds', 15)) *
@@ -117,6 +174,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         if (end === 'stopped') return;
       }
     } finally {
+      sweeper?.();
       if (hot) unregisterHotPage(hot);
       await page.close().catch(() => {});
     }
