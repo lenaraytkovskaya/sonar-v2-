@@ -9,6 +9,7 @@ import {
   Radar,
   LayoutDashboard,
   Megaphone,
+  Package,
   Building2,
   Inbox,
   Radio,
@@ -34,6 +35,7 @@ import { BuildVersion } from './build-version';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
+  ['/products', 'products', Package],
   ['/companies', 'companies', Building2],
   ['/inbox', 'inbox', Inbox],
   ['/channels', 'channels', Radio],
