@@ -20,19 +20,22 @@ it('recovers paid legacy batch responses under their original language and index
       return {
         rows: [{ id: 'old', config: legacy, requests: 1, cursor: { pair: 0 } }],
       };
-    if (sql.startsWith('select s.meta'))
+    if (sql.includes('left join spend_events') && values?.[0] === 'old')
       return {
-        rows:
-          values?.[1] === 'google.request:old:0:%'
-            ? [
-                {
-                  text: JSON.stringify({
-                    places: [{ id: 'paid-place' }],
-                    nextPageToken: 'paid-token',
-                  }),
-                },
-              ]
-            : [],
+        rows: [
+          {
+            idempotency_key: 'google.request:old:0:0',
+            payload: {},
+            meta: {
+              response: {
+                text: JSON.stringify({
+                  places: [{ id: 'paid-place' }],
+                  nextPageToken: 'paid-token',
+                }),
+              },
+            },
+          },
+        ],
       };
     return { rows: [] };
   });
@@ -45,9 +48,9 @@ it('recovers paid legacy batch responses under their original language and index
   expect(progress['["q1","c1","en"]']).toBeUndefined();
   expect(
     query.mock.calls
-      .filter(([sql]) => sql.startsWith('select s.meta'))
-      .map(([, values]) => values?.[1]),
-  ).toEqual([0, 1, 2, 3].map((i) => `google.request:old:${i}:%`));
+      .filter(([sql]) => sql.includes('left join spend_events'))
+      .map(([, values]) => values),
+  ).toEqual([['old']]);
 });
 it('refuses to refetch a paid first page when no recoverable receipt exists', async () => {
   const query = vi
