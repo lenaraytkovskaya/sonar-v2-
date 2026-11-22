@@ -24,6 +24,7 @@ import { CrudButton, CrudDialog } from './crud-dialog';
 import { CampaignFormFields } from './campaign-form-fields';
 import { Callout } from './ui/layout';
 import { CampaignRunCard } from './campaign-run-card';
+import { CampaignRunning } from './campaign-running';
 type Row = CampaignInput & {
   id: string;
   google_progress?: GoogleProgress;
@@ -34,6 +35,7 @@ export function CampaignPanel({
   defaults,
   defaultWeights,
   googlePriceUsd,
+  pollMs,
 }: {
   defaults: CampaignDefaults;
   defaultWeights: CampaignInput['scoring_weights'];
@@ -54,6 +56,7 @@ export function CampaignPanel({
   const [allQueries, setAllQueries] = useState(false);
   const selectionChanged = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [progressVersion, setProgressVersion] = useState(0);
   const [rows, setRows] = useState<Row[]>([]),
     [id, setId] = useState<string | null>(null),
     [form, setForm] = useState(initialForm),
@@ -200,6 +203,7 @@ export function CampaignPanel({
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
       );
     } finally {
+      setProgressVersion((value) => value + 1);
       setPending(false);
     }
   };
@@ -307,13 +311,22 @@ export function CampaignPanel({
                 startLabel={exhausted ? uk.google.exhausted : uk.campaign.start}
                 onStart={() => void act('start')}
                 onScore={() => void act('score')}
-                onChanged={load}
+                onChanged={async () => {
+                  setProgressVersion((value) => value + 1);
+                  await load();
+                }}
               />
               {!open && message && (
                 <div role="status">
                   <Callout tone={messageTone}>{message}</Callout>
                 </div>
               )}
+              <CampaignRunning
+                key={selectedId}
+                campaignId={selectedId}
+                pollMs={pollMs}
+                refreshToken={progressVersion}
+              />
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   <span className="font-medium text-foreground">
