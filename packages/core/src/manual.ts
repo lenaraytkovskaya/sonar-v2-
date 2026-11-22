@@ -74,6 +74,13 @@ export function normalizeManualContact(
     if (!website.safeParse(value).success) return null;
     return { kind, value: new URL(value).href, rank: 70 };
   }
+  if (kind === 'viber') {
+    // A plain number is enough: sending opens the chat by E.164 number.
+    const phone = /^[+\d\s().-]+$/.test(value)
+      ? normalizePhone(value, country)
+      : null;
+    if (phone) return { kind, value: phone, rank: 100 };
+  }
   if (!value.startsWith('viber:') && !website.safeParse(value).success)
     return null;
   const contact = linkedContact(value, 'https://manual.invalid/');
