@@ -1,5 +1,4 @@
 'use client';
-import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
@@ -17,12 +16,13 @@ import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader, StatusBadge } from './shared';
-import { AiAssist } from './ai-assist';
 import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
 import { CampaignCompanies } from './campaign-companies';
 import { runAiJob } from '@/lib/ai-job';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { CampaignFormFields } from './campaign-form-fields';
+import { Callout } from './ui/layout';
 import { CampaignRunCard } from './campaign-run-card';
 type Row = CampaignInput & {
   id: string;
@@ -30,61 +30,10 @@ type Row = CampaignInput & {
 };
 // Query tags shown before the rest is folded behind a button.
 const queryPreview = 5;
-function Chips({
-  label,
-  values,
-  onChange,
-}: {
-  label: string;
-  values: string[];
-  onChange: (v: string[]) => void;
-}) {
-  const [input, setInput] = useState('');
-  const add = () => {
-    if (input.trim()) {
-      onChange([...new Set([...values, input.trim()])]);
-      setInput('');
-    }
-  };
-  return (
-    <fieldset className="space-y-2">
-      <legend>{label}</legend>
-      <div className="flex flex-wrap gap-2">
-        {values.map((v) => (
-          <button
-            type="button"
-            aria-label={`${uk.campaign.remove}: ${v}`}
-            className="min-h-9 max-w-full rounded-full bg-chip px-3 break-words"
-            key={v}
-            onClick={() => onChange(values.filter((x) => x !== v))}
-          >
-            {v} ×
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input
-          aria-label={label}
-          value={input}
-          maxLength={200}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <Button variant="outline" onClick={add}>
-          {uk.campaign.add}
-        </Button>
-      </div>
-    </fieldset>
-  );
-}
 export function CampaignPanel({
   defaults,
   defaultWeights,
+  googlePriceUsd,
 }: {
   defaults: CampaignDefaults;
   defaultWeights: CampaignInput['scoring_weights'];
@@ -99,6 +48,7 @@ export function CampaignPanel({
   });
   const { batches: batchProgress } = useTasks();
   const [open, setOpen] = useState(false);
+  const editorForm = useRef<HTMLFormElement>(null);
   const [products, setProducts] = useState<ProductDto[]>([]);
   const [allQueries, setAllQueries] = useState(false);
   const selectionChanged = useRef(false);
@@ -110,6 +60,14 @@ export function CampaignPanel({
     [source, setSource] = useState('form'),
     [pending, setPending] = useState(false),
     [message, setMessage] = useState('');
+  const messageTone = [
+    uk.ai.saved,
+    uk.campaign.queued,
+    uk.campaign.scoreQueued,
+    uk.campaign.filled,
+  ].some((value) => value === message)
+    ? 'ok'
+    : 'err';
   const savedProgress = rows.find((row) => row.id === id)?.google_progress;
   const exhausted =
     form.queries.length > 0 &&
@@ -118,12 +76,6 @@ export function CampaignPanel({
       const p = savedProgress?.[JSON.stringify([query, city, language])];
       return p?.exhausted && !p.buffer.length;
     });
-  const update = <K extends keyof CampaignInput>(
-    key: K,
-    value: CampaignInput[K],
-  ) => {
-    setForm({ ...form, [key]: value });
-  };
   const loadProducts = async () => {
     const response = await fetch('/api/products');
     if (!response.ok) throw Error(uk.ai.error);
@@ -169,19 +121,36 @@ export function CampaignPanel({
     void load().catch(() => setMessage(uk.ai.error));
   }, [batchProgress]);
   const act = async (kind: 'save' | 'start' | 'score') => {
+    if (open && kind === 'save' && !editorForm.current?.reportValidity())
+      return;
     setPending(true);
     setMessage('');
     try {
       if (kind === 'start' && !form.product_id)
         throw Error(uk.campaign.productRequired);
-      const data = campaignSchema
+      const parsed = campaignSchema
         .omit({ offer: true, outreach_goal: true })
         .strip()
-        .parse({
+        .safeParse({
           ...form,
           budget_usd: Number(form.budget_usd),
           status: kind === 'start' ? 'active' : form.status,
         });
+      if (!parsed.success) {
+        const key = parsed.error.issues[0]?.path[0];
+        const label =
+          typeof key === 'string'
+            ? (uk.campaign as Record<string, unknown>)[
+                key === 'language_code' ? 'language_codes' : key
+              ]
+            : undefined;
+        throw Error(
+          typeof label === 'string'
+            ? uk.campaign.invalidField(label)
+            : uk.ai.invalid,
+        );
+      }
+      const data = parsed.data;
       const r = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -339,6 +308,11 @@ export function CampaignPanel({
                 onScore={() => void act('score')}
                 onChanged={load}
               />
+              {!open && message && (
+                <div role="status">
+                  <Callout tone={messageTone}>{message}</Callout>
+                </div>
+              )}
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   <span className="font-medium text-foreground">
@@ -384,10 +358,10 @@ export function CampaignPanel({
           ) : (
             <p>{uk.crud.selectCampaign}</p>
           )}
-          {!open && message && <p role="status">{message}</p>}
         </Card>
       </div>
       <CrudDialog
+        wide
         open={open}
         onOpenChange={(next) => {
           setOpen(next);
@@ -405,21 +379,37 @@ export function CampaignPanel({
                 : initialForm(),
             );
             setSource('form');
+            setDescription('');
+            setMessage('');
           }
         }}
         title={id ? uk.crud.editCampaign : uk.campaign.create}
         pending={pending}
         draft={{ form, description }}
         actions={
-          <Button
-            disabled={pending || !campaignSchema.safeParse(form).success}
-            onClick={() => void act('save')}
-          >
-            {uk.ai.save}
-          </Button>
+          <>
+            {message && (
+              <p
+                role="status"
+                className={`max-w-xs text-sm ${messageTone === 'err' ? 'text-err' : 'text-muted-foreground'}`}
+              >
+                {message}
+              </p>
+            )}
+            <Button disabled={pending} onClick={() => void act('save')}>
+              {pending ? uk.ai.pending : uk.ai.save}
+            </Button>
+          </>
         }
       >
-        <div className="min-w-0 space-y-5">
+        <form
+          ref={editorForm}
+          className="min-w-0 space-y-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act('save');
+          }}
+        >
           <label className="block">
             {uk.campaign.describe}
             <Input
@@ -431,6 +421,7 @@ export function CampaignPanel({
             />
           </label>
           <Button
+            type="button"
             disabled={pending || !description.trim()}
             onClick={() => void suggest()}
           >
@@ -439,217 +430,22 @@ export function CampaignPanel({
           <p className="text-sm text-muted-foreground">
             {uk.campaign.suggestHint}
           </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {(['name', 'country_code'] as const).map((key) => (
-              <label key={key}>
-                {uk.campaign[key]}
-                <Input
-                  value={form[key]}
-                  maxLength={200}
-                  onChange={(e) => update(key, e.target.value)}
-                />
-              </label>
-            ))}
-          </div>
-          <Chips
-            key={`${id}:languages`}
-            label={uk.campaign.language_codes}
-            values={form.language_codes ?? [form.language_code]}
-            onChange={(language_codes) =>
-              setForm({
-                ...form,
-                language_codes,
-                language_code: language_codes[0] ?? 'uk',
-              })
-            }
-          />
-          <Chips
-            key={`${id}:cities`}
-            label={uk.campaign.cities}
-            values={form.cities}
-            onChange={(v) => update('cities', v)}
-          />
-          <Chips
-            key={`${id}:queries`}
-            label={uk.campaign.queries}
-            values={form.queries}
-            onChange={(v) => update('queries', v)}
-          />
-          <div className="space-y-2">
-            <label className="block">
-              {uk.campaign.product}
-              <select
-                className="mt-2 min-h-11 w-full rounded-lg border border-border bg-surface px-3"
-                value={form.product_id ?? ''}
-                onChange={(event) =>
-                  update('product_id', event.target.value || null)
-                }
-              >
-                <option value="">{uk.campaign.productRequired}</option>
-                {products
-                  .filter(
-                    (product) =>
-                      product.status === 'active' ||
-                      product.id === form.product_id,
-                  )
-                  .map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name}
-                      {product.status === 'archived'
-                        ? ` (${uk.campaign.archivedProduct})`
-                        : ''}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <p className="text-xs text-muted-foreground">
-              {uk.campaign.productHint}
-            </p>
-            <Link
-              href="/products"
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-accent underline"
-            >
-              {uk.campaign.manageProducts}
-            </Link>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label>
-              {uk.campaign.batch_size}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={form.batch_size}
-                onChange={(e) =>
-                  update(
-                    'batch_size',
-                    Number(e.target.value) as CampaignInput['batch_size'],
-                  )
-                }
-              >
-                {[20, 50, 100, 200].map((n) => (
-                  <option key={n}>{n}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {uk.campaign.send_mode}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={form.send_mode}
-                onChange={(e) =>
-                  update(
-                    'send_mode',
-                    e.target.value as CampaignInput['send_mode'],
-                  )
-                }
-              >
-                {Object.entries(uk.campaign.modes).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <fieldset>
-            <legend>{uk.campaign.channels}</legend>
-            <div className="flex flex-wrap gap-4">
-              {Object.entries(form.channels).map(([key, v]) => (
-                <label className="flex min-h-9 items-center gap-2" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={v}
-                    onChange={(e) =>
-                      update('channels', {
-                        ...form.channels,
-                        [key]: e.target.checked,
-                      })
-                    }
-                  />
-                  {
-                    uk.campaign.channelNames[
-                      key as keyof typeof uk.campaign.channelNames
-                    ]
-                  }
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <label className="block">
-            {uk.campaign.min_score}
-            <Input
-              type="number"
-              min={0}
-              max={100}
-              value={form.min_score}
-              onChange={(e) => update('min_score', Number(e.target.value))}
+          {open && (
+            <CampaignFormFields
+              form={form}
+              products={products}
+              progress={savedProgress ?? {}}
+              priceUsd={googlePriceUsd}
+              pending={pending}
+              onError={setMessage}
+              onChange={(patch, ai) => {
+                setForm((current) => ({ ...current, ...patch }));
+                setSource(ai ? 'ai' : 'form');
+                setMessage('');
+              }}
             />
-          </label>
-          <AiAssist
-            text={String(form.min_score)}
-            onApply={(v) => {
-              const n = Number(v);
-              if (Number.isFinite(n) && n >= 0 && n <= 100)
-                update('min_score', n);
-              else setMessage(uk.ai.invalid);
-            }}
-          />
-          <fieldset className="space-y-3">
-            <legend>{uk.campaign.scoring_weights}</legend>
-            {Object.entries(form.scoring_weights).map(([key, v]) => (
-              <label className="flex min-h-9 items-center gap-4" key={key}>
-                {uk.campaign.weights[key as keyof typeof uk.campaign.weights] ??
-                  key}
-                <input
-                  aria-label={
-                    uk.campaign.weights[
-                      key as keyof typeof uk.campaign.weights
-                    ] ?? key
-                  }
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={v}
-                  onChange={(e) =>
-                    update('scoring_weights', {
-                      ...form.scoring_weights,
-                      [key]: Number(e.target.value),
-                    })
-                  }
-                />
-                {v}
-              </label>
-            ))}
-          </fieldset>
-          <AiAssist
-            text={JSON.stringify(form.scoring_weights)}
-            onApply={(text) => {
-              try {
-                const scoring_weights = JSON.parse(text);
-                const parsed = campaignSchema.safeParse({
-                  ...form,
-                  scoring_weights,
-                });
-                if (
-                  !parsed.success ||
-                  Object.keys(scoring_weights).some(
-                    (key) => !(key in defaultWeights),
-                  ) ||
-                  Object.keys(defaultWeights).some(
-                    (key) => !(key in scoring_weights),
-                  )
-                )
-                  throw Error();
-                update('scoring_weights', parsed.data.scoring_weights);
-                setSource('ai');
-              } catch {
-                setMessage(uk.ai.invalid);
-              }
-            }}
-          />
-          {message && <p role="status">{message}</p>}
-        </div>
+          )}
+        </form>
       </CrudDialog>
       {selectedId && (
         <Card className="mt-4 p-4">
