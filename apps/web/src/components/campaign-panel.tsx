@@ -322,7 +322,7 @@ export function CampaignPanel({
                 </div>
               )}
               <CampaignRunning
-                key={selectedId}
+                key={`running:${selectedId}`}
                 campaignId={selectedId}
                 pollMs={pollMs}
                 refreshToken={progressVersion}
