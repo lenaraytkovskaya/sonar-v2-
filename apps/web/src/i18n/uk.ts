@@ -1537,6 +1537,7 @@ export const uk = {
     charged: 'Списано',
     notCharged: 'Не списано',
     active: 'Зараз у роботі',
+    campaignMissing: 'Кампанію не знайдено.',
     failures: 'Помилки та паузи',
     older: 'Старіші',
     unknown: 'Завдання Sonar',

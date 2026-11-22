@@ -38,6 +38,7 @@ export function CampaignPanel({
   defaults: CampaignDefaults;
   defaultWeights: CampaignInput['scoring_weights'];
   googlePriceUsd: number;
+  pollMs: number;
 }) {
   const initialForm = () => createCampaignDraft(defaults, defaultWeights);
   const withWeights = (row: CampaignInput): CampaignInput => ({

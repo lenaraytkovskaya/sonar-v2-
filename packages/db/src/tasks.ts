@@ -9,6 +9,7 @@ import { enqueueCompanyScores } from './scoring.js';
 import { randomUUID } from 'node:crypto';
 import { PgBoss, type Db } from 'pg-boss';
 import type { PoolClient } from 'pg';
+import { campaignTaskScope } from './campaign-task-scope.js';
 import { sonarPool } from './index.js';
 export const queueName = 'system.registry_ping';
 // Producers use an existing schema; only the worker starts pg-boss maintenance.
@@ -1422,28 +1423,33 @@ export async function readWorkerHealth(now = new Date()) {
   );
 }
 
-export async function overviewFailures() {
+export async function overviewFailures(campaignId?: string) {
   const { rows: config } = await sonarPool.query(
     "select value from settings where key='tasks.failure_visible_days'",
   );
   const configuredDays = Number(config[0]?.value ?? 7);
   const days =
     Number.isFinite(configuredDays) && configuredDays >= 0 ? configuredDays : 7;
+  const source = campaignId ? 'scoped' : 'tasks';
+  const group = campaignId
+    ? 'type,is_old,status,reason_code,reason_uk'
+    : 'type,is_old';
+  const identity = "case when result->>'billingPending'='true' then id end";
   const { rows } = await sonarPool.query(
     `
-    with unresolved as (
+    with ${campaignId ? `scoped as (select t.* from tasks t where ${campaignTaskScope('$2')}),` : ''} unresolved as (
       select *,coalesce(finished_at,started_at,created_at)<now()-$1*interval '1 day' as is_old
-      from tasks where status in ('failed','paused') and dismissed_at is null
+      from ${source} tasks where status in ('failed','paused') and dismissed_at is null
         -- A later successful run of the same job on the same subject resolves the failure.
-        and not exists(select 1 from tasks d where d.type=tasks.type and d.subject_id is not distinct from tasks.subject_id and d.status='done' and d.created_at>tasks.created_at)
+        and not exists(select 1 from ${source} d where d.type=tasks.type and d.subject_id is not distinct from tasks.subject_id and d.status='done' and d.created_at>tasks.created_at)
     ), latest as (
-      select distinct on (type,is_old,case when result->>'billingPending'='true' then id end)
+      select distinct on (${group},${identity})
         id,type,status,reason_uk,result,created_at,is_old,
-        count(*) over (partition by type,is_old)::int as repetitions
+        count(*) over (partition by ${group}${campaignId ? `,${identity}` : ''})::int as repetitions
       from unresolved
-      order by type,is_old,case when result->>'billingPending'='true' then id end,created_at desc,id desc
+      order by ${group},${identity},created_at desc,id desc
     ) select * from latest order by created_at desc`,
-    [days],
+    campaignId ? [days, campaignId] : [days],
   );
   return {
     failures: rows.filter((task) => !task.is_old),
