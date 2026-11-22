@@ -16,7 +16,7 @@ import {
   scoreTone,
   StatusBadge,
 } from '@/components/shared';
-import { ManualEntry, DeleteManualContact } from '@/components/manual-entry';
+import { ManualEntry, ContactActions } from '@/components/manual-entry';
 import { ManualSource } from '@/components/manual-source';
 import { CompanyTabs } from '@/components/company-tabs';
 import { CompanyAnalysis } from '@/components/company-analysis';
@@ -413,9 +413,15 @@ export default async function Page({
             </div>
           ))}
         </div>
-        {contact.source === 'manual' && (
-          <DeleteManualContact companyId={id} contactId={contact.id} />
-        )}
+        <ContactActions
+          companyId={id}
+          contact={{
+            id: contact.id,
+            kind: contact.kind,
+            value: contact.value,
+            note: String(contact.meta?.note ?? ''),
+          }}
+        />
       </li>
     );
   };

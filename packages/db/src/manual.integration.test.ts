@@ -238,12 +238,36 @@ it.skipIf(!enabled)(
         },
       });
       const automatic = detail!.contacts.find((c) => c.source === 'website')!;
+      // An automatically found contact can be deleted, and a rescan must not bring it back.
+      await manual.deleteContact(company.id, automatic.id, userId);
+      await sonarPool.query(
+        "insert into contacts(company_id,kind,value,normalized,source) values($1,$2,$3,$4,'website')",
+        [company.id, automatic.kind, automatic.value, automatic.normalized],
+      );
+      expect(
+        (await manual.getCompany(company.id))?.contacts.some(
+          (c) =>
+            c.normalized === automatic.normalized && c.kind === automatic.kind,
+        ),
+      ).toBe(false);
+      // Editing takes ownership: the corrected contact becomes manual and the old value stays gone.
+      const edited = await manual.updateContact(
+        company.id,
+        phone.id,
+        { value: '512 345 670', note: 'Corrected' },
+        userId,
+      );
+      expect(edited).toMatchObject({
+        normalized: '+48512345670',
+        source: 'manual',
+        meta: { note: 'Corrected', edited_by: userId },
+      });
       await expect(
-        manual.deleteManualContact(company.id, automatic.id, userId),
-      ).rejects.toMatchObject({ code: 'manualOnly' });
-      await manual.deleteManualContact(company.id, phone.id, userId);
+        manual.updateContact(company.id, phone.id, { value: '12' }, userId),
+      ).rejects.toMatchObject({ code: 'invalidContact' });
+      await manual.deleteContact(company.id, phone.id, userId);
       await expect(
-        manual.deleteManualContact(company.id, phone.id, userId),
+        manual.deleteContact(company.id, phone.id, userId),
       ).rejects.toMatchObject({ code: 'contactNotFound' });
       expect((await manual.getCompany(company.id))?.history).toEqual(
         expect.arrayContaining([

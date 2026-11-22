@@ -226,47 +226,156 @@ export function ManualEntry({
   );
 }
 
-export function DeleteManualContact({
+const editableKinds = [
+  'email',
+  'phone',
+  'telegram',
+  'whatsapp',
+  'viber',
+  'form',
+  'social',
+];
+
+export function ContactActions({
   companyId,
-  contactId,
+  contact,
 }: {
   companyId: string;
-  contactId: string;
+  contact: { id: string; kind: string; value: string; note: string };
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [open, setOpen] = useState(false);
+  const [values, setValues] = useState({
+    value: contact.value,
+    note: contact.note,
+  });
+  const send = async (init: RequestInit, query = '') => {
+    setPending(true);
+    setError('');
+    try {
+      const response = await fetch(
+        `/api/companies/${companyId}/contacts${query}`,
+        init,
+      );
+      if (!response.ok)
+        throw Error((await response.json()).error ?? uk.ai.error);
+      return true;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : uk.ai.error);
+      return false;
+    } finally {
+      setPending(false);
+    }
+  };
   return (
     <>
       <RowActions
         disabled={pending}
         actions={[
+          ...(editableKinds.includes(contact.kind)
+            ? [
+                {
+                  kind: 'edit' as const,
+                  label: uk.manual.editContact,
+                  onSelect: () => {
+                    setError('');
+                    setOpen(true);
+                  },
+                },
+              ]
+            : []),
           {
             kind: 'delete',
             label: uk.manual.deleteContact,
             danger: true,
             confirm: uk.actions.deleteContactConfirm,
             onSelect: async () => {
-              setPending(true);
-              setError('');
-              try {
-                const response = await fetch(
-                  `/api/companies/${companyId}/contacts?contactId=${contactId}`,
-                  { method: 'DELETE' },
-                );
-                if (!response.ok)
-                  throw Error((await response.json()).error ?? uk.ai.error);
+              if (await send({ method: 'DELETE' }, `?contactId=${contact.id}`))
                 router.refresh();
-              } catch (error) {
-                setError(error instanceof Error ? error.message : uk.ai.error);
-              } finally {
-                setPending(false);
-              }
             },
           },
         ]}
       />
-      {error && (
+      <CrudDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={uk.manual.editContact}
+        pending={pending}
+        draft={values}
+        actions={
+          <Button
+            type="submit"
+            form={`edit-contact-${contact.id}`}
+            disabled={pending}
+          >
+            {pending ? uk.ai.pending : uk.manual.saveContact}
+          </Button>
+        }
+      >
+        <form
+          id={`edit-contact-${contact.id}`}
+          className="space-y-4"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (
+              await send({
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contactId: contact.id, ...values }),
+              })
+            ) {
+              setOpen(false);
+              router.refresh();
+            }
+          }}
+        >
+          <label>
+            {uk.manual.fields.value}
+            <Input
+              className="min-h-[44px]"
+              value={values.value}
+              required
+              maxLength={2000}
+              onChange={(event) =>
+                setValues((current) => ({
+                  ...current,
+                  value: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <div>
+            <label>
+              {uk.manual.fields.note}
+              <Input
+                className="min-h-[44px]"
+                value={values.note}
+                maxLength={2000}
+                onChange={(event) =>
+                  setValues((current) => ({
+                    ...current,
+                    note: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <AiAssist
+              text={values.note}
+              onApply={(text) =>
+                setValues((current) => ({ ...current, note: text }))
+              }
+            />
+          </div>
+          {error && (
+            <p role="alert" className="text-err">
+              {error}
+            </p>
+          )}
+        </form>
+      </CrudDialog>
+      {error && !open && (
         <p role="alert" className="text-err">
           {error}
         </p>

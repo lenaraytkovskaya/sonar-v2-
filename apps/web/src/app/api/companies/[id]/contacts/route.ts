@@ -2,6 +2,20 @@ import { apiUser, validId } from '@/lib/api-access';
 import { manualContactSchema } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { manualEntryResponse } from '@/lib/manual-entry-response';
+function parseEdit(body: unknown) {
+  if (!body || typeof body !== 'object') return null;
+  const { contactId, value, note, ...rest } = body as Record<string, unknown>;
+  if (
+    Object.keys(rest).length ||
+    typeof contactId !== 'string' ||
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.length > 2000 ||
+    (note !== undefined && (typeof note !== 'string' || note.length > 2000))
+  )
+    return null;
+  return { contactId, value: value.trim(), note: note?.trim() };
+}
 async function mutate(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -11,15 +25,25 @@ async function mutate(
   const { id } = await context.params;
   if (!validId(id))
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { addManualContact, deleteManualContact } =
+  const { addManualContact, deleteContact, updateContact } =
     await import('@sonar/db/companies');
   try {
     if (request.method === 'DELETE') {
       const contactId = new URL(request.url).searchParams.get('contactId');
       if (!validId(contactId))
         return Response.json({ error: uk.ai.invalid }, { status: 400 });
-      await deleteManualContact(id, contactId, user.id);
+      await deleteContact(id, contactId, user.id);
       return new Response(null, { status: 204 });
+    }
+    if (request.method === 'PATCH') {
+      const body = parseEdit(await request.json().catch(() => null));
+      if (!body || !validId(body.contactId))
+        return Response.json(
+          { error: uk.manual.errors.invalidContact },
+          { status: 400 },
+        );
+      const { contactId, ...input } = body;
+      return Response.json(await updateContact(id, contactId, input, user.id));
     }
     const parsed = manualContactSchema.safeParse(
       await request.json().catch(() => null),
@@ -36,4 +60,4 @@ async function mutate(
     return manualEntryResponse(error);
   }
 }
-export { mutate as POST, mutate as DELETE };
+export { mutate as POST, mutate as PATCH, mutate as DELETE };
