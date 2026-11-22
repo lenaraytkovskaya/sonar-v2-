@@ -32,6 +32,15 @@ it('normalizes manual contacts like site contacts with company-country phones', 
       ?.value,
   ).toBe('https://sonar.test/');
 });
+it('accepts a plain phone number as a Viber contact', () => {
+  for (const raw of ['+380671234567', '067 123 45 67', '0671234567'])
+    expect(normalizeManualContact({ kind: 'viber', value: raw }, 'UA')).toEqual(
+      { kind: 'viber', value: '+380671234567', rank: 100 },
+    );
+  expect(
+    normalizeManualContact({ kind: 'viber', value: '123' }, 'UA'),
+  ).toBeNull();
+});
 it('rejects invalid addresses, mismatched messengers and unsafe form URLs', () => {
   for (const [kind, value] of [
     ['email', 'a@'],
