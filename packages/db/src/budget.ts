@@ -9,6 +9,7 @@ import {
 } from '@sonar/core';
 import { sonarPool } from './index.js';
 import { logActivity } from './tasks.js';
+import { campaignTaskScope } from './campaign-task-scope.js';
 export class BillingUncertain extends Error {
   constructor(readonly cause?: string) {
     super(
@@ -95,8 +96,8 @@ async function checkCampaignBudget(
     rows: [spent],
   } = await client.query(
     `select coalesce(sum(cost),0) as cost from (
-        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1
-        union all select (t.result->>'billingEstimate')::numeric from tasks t left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1 and t.result->>'billingPending'='true'
+        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id where ${campaignTaskScope('$1', false)}
+        union all select (t.result->>'billingEstimate')::numeric from tasks t where ${campaignTaskScope('$1', false)} and t.result->>'billingPending'='true'
       ) usage`,
     [campaign?.id ?? null],
   );
@@ -230,7 +231,7 @@ export async function runBudgetedRequest(
       const {
         rows: [campaign],
       } = await client.query(
-        `select c.id,c.budget_usd from tasks t left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) join campaigns c on c.id=coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id) where t.id=$1`,
+        `select c.id,c.budget_usd from tasks t join campaigns c on ${campaignTaskScope('c.id', false)} where t.id=$1`,
         [taskId],
       );
       if (!campaign && !['ai.inbound', 'ai.reply'].includes(task.type))
