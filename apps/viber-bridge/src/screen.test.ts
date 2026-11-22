@@ -309,6 +309,27 @@ it('ignores a full-width violet banner when looking for message bubbles', () => 
   expect(bubbles.map(({ side, top }) => [side, top])).toEqual([['right', 300]]);
 });
 
+it('ignores a banner under the chat header even when the chat bounds include a side panel', () => {
+  const width = 1280;
+  const height = 900;
+  const pixels = new Uint8Array(width * height * 3);
+  const paint = (l: number, t: number, r: number, b: number, c: number[]) => {
+    for (let y = t; y < b; y++)
+      for (let x = l; x < r; x++) pixels.set(c, (y * width + x) * 3);
+  };
+  paint(0, 0, width, height, [239, 242, 247]);
+  paint(304, 113, 865, 242, [30, 20, 110]);
+  paint(700, 404, 852, 461, [117, 97, 255]);
+  const bubbles = messageBubbleRegions(
+    pixels,
+    width,
+    height,
+    { left: 300, right: 1280 },
+    112,
+  );
+  expect(bubbles.map(({ side, top }) => [side, top])).toEqual([['right', 404]]);
+});
+
 it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
   const image = syntheticBubblePixels();
   const bubbles = messageBubbleRegions(
