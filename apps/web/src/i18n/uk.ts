@@ -1652,6 +1652,10 @@ export const uk = {
     model: 'Модель',
     cost: 'Вартість',
   },
+  products: {
+    invalid: 'Перевірте дані товару.',
+    missing: 'Товар не знайдено.',
+  },
   appName: 'Sonar',
   unauthorized: 'Увійдіть, щоб продовжити.',
   cli: {

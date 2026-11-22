@@ -115,6 +115,10 @@
     "./form-replies": {
       "types": "./dist/form-replies.d.ts",
       "default": "./dist/form-replies.js"
+    },
+    "./products": {
+      "types": "./dist/products.d.ts",
+      "default": "./dist/products.js"
     }
   },
   "files": [
