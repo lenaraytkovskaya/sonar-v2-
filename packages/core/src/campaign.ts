@@ -10,6 +10,7 @@ const country = z
 export const campaignSchema = z
   .object({
     name: text,
+    product_id: z.uuid().nullable().optional(),
     country_code: country,
     language_code: languageCode.default('uk'),
     language_codes: z

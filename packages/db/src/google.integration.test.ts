@@ -11,6 +11,7 @@ it.skipIf(!enabled)(
       await import('../../../apps/worker/src/google.js');
     const prefix = randomUUID();
     const campaigns: string[] = [];
+    let productId: string | undefined;
     const { rows: original } = await sonarPool.query(
       "select key,value from settings where key='budget.monthly_usd'",
     );
@@ -21,8 +22,8 @@ it.skipIf(!enabled)(
       const {
         rows: [c],
       } = await sonarPool.query(
-        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,$3,'{}') returning id`,
-        [prefix, budget, JSON.stringify(channels)],
+        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights,product_id) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,$3,'{}',$4) returning id`,
+        [prefix, budget, JSON.stringify(channels), productId],
       );
       campaigns.push(c.id);
       return c.id;
@@ -36,6 +37,12 @@ it.skipIf(!enabled)(
       regularOpeningHours: { weekdayDescriptions: ['Monday: 9–18'] },
     });
     try {
+      productId = (
+        await sonarPool.query(
+          'insert into products(name) values($1) returning id',
+          [prefix],
+        )
+      ).rows[0].id;
       await sonarPool.query(
         "insert into settings(key,value) values('budget.monthly_usd','100') on conflict(key) do update set value=excluded.value",
       );
@@ -162,9 +169,13 @@ it.skipIf(!enabled)(
         ).toEqual(frozenProfile);
       }
       const blockedCampaign = await campaign(0.5, { email: true });
+      await sonarPool.query(
+        'update campaigns set product_id=null where id=$1',
+        [blockedCampaign],
+      );
       await expect(
         createBatch(blockedCampaign, null, randomUUID(), false, false),
-      ).rejects.toThrow('Заповніть пропозицію кампанії');
+      ).rejects.toThrow('Оберіть продукт');
       expect(
         (
           await sonarPool.query(
@@ -173,10 +184,10 @@ it.skipIf(!enabled)(
           )
         ).rows[0].count,
       ).toBe(0);
-      await sonarPool.query(
-        "update campaigns set offer='Пропозиція для ніші' where id=$1",
-        [blockedCampaign],
-      );
+      await sonarPool.query('update campaigns set product_id=$2 where id=$1', [
+        blockedCampaign,
+        productId,
+      ]);
       expect(
         await createBatch(blockedCampaign, null, randomUUID(), false, false),
       ).toHaveProperty('id');
@@ -638,6 +649,7 @@ it.skipIf(!enabled)(
       await sonarPool.query('delete from campaigns where id=any($1::uuid[])', [
         campaigns,
       ]);
+      await sonarPool.query('delete from products where id=$1', [productId]);
       await sonarPool.query(
         "delete from settings where key='budget.monthly_usd'",
       );

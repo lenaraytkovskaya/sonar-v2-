@@ -13,7 +13,7 @@ export async function POST(
   const body = await request.json().catch(() => null);
   if (!validId(body?.requestId))
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
-  const { createBatch, ContinuationUnavailable, CampaignOfferRequired } =
+  const { createBatch, ContinuationUnavailable, CampaignProductRequired } =
     await import('@sonar/db/batches');
   try {
     return Response.json(await createBatch(id, user.id, body.requestId), {
@@ -27,8 +27,11 @@ export async function POST(
       );
     if (error instanceof ContinuationUnavailable)
       return Response.json({ error: error.message }, { status: 409 });
-    if (error instanceof CampaignOfferRequired)
-      return Response.json({ error: error.message }, { status: 409 });
+    if (error instanceof CampaignProductRequired)
+      return Response.json(
+        { error: uk.campaign.productRequired },
+        { status: 409 },
+      );
     return Response.json({ error: uk.ai.invalid }, { status: 400 });
   }
 }

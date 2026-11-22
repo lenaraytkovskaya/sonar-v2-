@@ -9,7 +9,6 @@ import {
   type GooglePage,
   type CampaignInput,
   type GoogleProfile,
-  campaignOfferRequired,
 } from '@sonar/core';
 import { checkGooglePlanBudget } from './budget.js';
 import { sonarPool } from './index.js';
@@ -52,9 +51,9 @@ export function resultsExhausted(
   );
 }
 export class ContinuationUnavailable extends Error {}
-export class CampaignOfferRequired extends Error {
+export class CampaignProductRequired extends Error {
   constructor() {
-    super('Заповніть пропозицію кампанії перед запуском надсилання.');
+    super('Оберіть продукт');
   }
 }
 // Recover only persisted evidence. Never pay for page one to reconstruct a cursor.
@@ -147,8 +146,15 @@ export async function createBatch(
       await client.query('commit');
       return existing;
     }
-    if (campaignOfferRequired(campaign.channels, campaign.offer))
-      throw new CampaignOfferRequired();
+    if (
+      !campaign.product_id ||
+      !(
+        await client.query('select id from products where id=$1', [
+          campaign.product_id,
+        ])
+      ).rows[0]
+    )
+      throw new CampaignProductRequired();
     const progress = await campaignProgress(client, campaignId);
     if (
       resultsExhausted(

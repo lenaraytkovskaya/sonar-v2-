@@ -1420,6 +1420,7 @@ export const uk = {
   },
   campaign: {
     create: 'Нова кампанія',
+    productRequired: 'Оберіть продукт',
     name: 'Назва',
     country_code: 'Країна (ISO-2)',
     language_code: 'Мова',

@@ -258,6 +258,7 @@ export const campaigns = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
+    productId: uuid('product_id').references(() => products.id),
     googleProgress: jsonb('google_progress').notNull().default({}),
     fieldProfile: text('field_profile').notNull().default('contacts'),
     countryCode: text('country_code').notNull(),
