@@ -568,6 +568,13 @@
       "when": 1795305605000,
       "tag": "0080_campaign_niche_suggestions",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1795305606000,
+      "tag": "0081_campaign_defaults",
+      "breakpoints": true
     }
   ]
 }
