@@ -173,3 +173,8 @@ it('defaults new campaigns to manual and validates outreach thresholds', () => {
   );
   expect(filled.outreach_goal).toBe('Познайомитися');
 });
+it('accepts only the complete contacts profile for campaigns', () => {
+  expect(
+    campaignSchema.safeParse({ ...form, field_profile: 'basic' }).success,
+  ).toBe(false);
+});

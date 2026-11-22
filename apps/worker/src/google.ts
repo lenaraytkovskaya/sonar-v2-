@@ -5,6 +5,7 @@ import {
   normalizeWebsite,
   googleCity,
   googlePageSchema,
+  profilesSchema,
   googleSearchPairs,
   BudgetExceeded,
   PaidHttpError,
@@ -186,6 +187,18 @@ export async function runGoogleBatch(
       let page: GooglePage;
       const buffered = state!.buffer.length > 0;
       try {
+        // Frozen batch profiles remain historical evidence; future calls use the current full mask and tariff.
+        let profile = config.profile;
+        if (!buffered) {
+          const {
+            rows: [setting],
+          } = await client.query(
+            "select value from settings where key='google.field_profiles'",
+          );
+          profile = profilesSchema
+            .parse(setting?.value)
+            .find((value) => value.id === 'contacts')!;
+        }
         if (buffered) {
           page = { places: state!.buffer };
         } else if (batch.fixture) {
@@ -197,7 +210,7 @@ export async function runGoogleBatch(
               pageSize: 20,
               ...(cursor.token ? { pageToken: cursor.token } : {}),
             },
-            config.profile,
+            profile,
           );
           page = googlePageSchema.parse(
             typeof fixtureResult === 'string'
@@ -207,7 +220,7 @@ export async function runGoogleBatch(
         } else {
           const response = await runBudgetedRequest(
             'google_places',
-            config.profile.priceUsd,
+            profile.priceUsd,
             task.id,
             async () => {
               await client.query(
@@ -222,18 +235,18 @@ export async function runGoogleBatch(
                 ...(cursor.token ? { pageToken: cursor.token } : {}),
               };
               const searchResult = injectedSearch
-                ? await search!(input, config.profile)
-                : await rawSearch(input, config.profile);
+                ? await search!(input, profile)
+                : await rawSearch(input, profile);
               const rawText =
                 typeof searchResult === 'string'
                   ? searchResult
                   : JSON.stringify(searchResult);
               return {
                 id: task.id,
-                model: config.profile.sku,
+                model: profile.sku,
                 text: rawText,
                 units: 1,
-                costUsd: config.profile.priceUsd,
+                costUsd: profile.priceUsd,
                 costBasis: 'estimated_tariff',
               };
             },
@@ -353,6 +366,16 @@ export async function runGoogleBatch(
               config.retentionDays,
             ],
           );
+          if (place.regularOpeningHours)
+            await tx.query(
+              `insert into company_facts(company_id,kind,value,source,source_url,expires_at) values($1,'google_opening_hours',$2,'google',$3,now()+$4*interval '1 day') on conflict(company_id,kind,source,(md5(value::text))) do update set found_at=now(),expires_at=excluded.expires_at`,
+              [
+                company.id,
+                JSON.stringify(place.regularOpeningHours),
+                place.googleMapsUri ?? null,
+                config.retentionDays,
+              ],
+            );
           const link = await tx.query(
             'insert into campaign_companies(campaign_id,company_id,batch_id) values($1,$2,$3) on conflict do nothing returning company_id',
             [batch.campaign_id, company.id, batchId],

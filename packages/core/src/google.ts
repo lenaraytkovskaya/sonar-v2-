@@ -20,6 +20,7 @@ export const contactFields = [
   'places.internationalPhoneNumber',
   'places.rating',
   'places.userRatingCount',
+  'places.regularOpeningHours',
 ];
 export const profileSchema = z
   .object({
@@ -35,12 +36,12 @@ export const profileSchema = z
       ctx.addIssue({ code: 'custom', message: 'Required fields' });
     if (
       p.id === 'contacts' &&
-      (!p.fields.includes('places.websiteUri') ||
+      (!contactFields.every((field) => p.fields.includes(field)) ||
         p.sku !== 'Text Search Enterprise')
     )
       ctx.addIssue({
         code: 'custom',
-        message: 'Contacts requires website and Enterprise',
+        message: 'Contacts requires the complete field mask and Enterprise',
       });
     if (
       p.id === 'basic' &&
@@ -95,6 +96,15 @@ const googlePlaceSchema = z.object({
   internationalPhoneNumber: z.string().optional().catch(undefined),
   rating: z.number().optional().catch(undefined),
   userRatingCount: z.number().optional().catch(undefined),
+  regularOpeningHours: z
+    .object({
+      openNow: z.boolean().optional(),
+      weekdayDescriptions: z.array(z.string()).optional(),
+      periods: z.array(z.unknown()).optional(),
+    })
+    .passthrough()
+    .optional()
+    .catch(undefined),
 });
 export const googlePageSchema = z.object({
   places: z

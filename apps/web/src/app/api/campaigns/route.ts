@@ -5,11 +5,10 @@ export async function GET(request: Request) {
   if (!(await apiUser(request)))
     return Response.json({ error: uk.unauthorized }, { status: 401 });
   const { sonarPool } = await import('@sonar/db');
-  const [{ rows: campaigns }, { rows: presets }] = await Promise.all([
-    sonarPool.query('select * from campaigns order by created_at desc'),
-    sonarPool.query('select * from campaign_presets order by name'),
-  ]);
-  return Response.json({ campaigns, presets });
+  const { rows: campaigns } = await sonarPool.query(
+    'select * from campaigns order by created_at desc',
+  );
+  return Response.json({ campaigns });
 }
 export async function POST(request: Request) {
   const user = await apiUser(request, true);

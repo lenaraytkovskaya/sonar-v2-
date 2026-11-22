@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import {
   createGoogleClient,
+  contactFields,
   createGoogleClientRaw,
   googlePageSchema,
   googleCity,
@@ -11,7 +12,7 @@ import {
 const profile = {
   id: 'contacts' as const,
   name: 'Contacts',
-  fields: ['places.id', 'places.websiteUri', 'nextPageToken'],
+  fields: contactFields,
   priceUsd: 0.035,
   sku: 'Text Search Enterprise' as const,
 };
@@ -32,7 +33,7 @@ it('uses POST, explicit field mask and exact pagination input', async () => {
   expect(request.method).toBe('POST');
   expect(request.headers).toMatchObject({
     'X-Goog-Api-Key': 'stub-key',
-    'X-Goog-FieldMask': 'places.id,places.websiteUri,nextPageToken',
+    'X-Goog-FieldMask': contactFields.join(','),
   });
   expect(JSON.parse(request.body as string)).toEqual(input);
 });
@@ -169,4 +170,24 @@ it('normalizes locality aliases to the campaign language and keeps a different l
     googleCity([{ longText: 'Potsdam', types: ['locality'] }], 'Berlin', 'de'),
   ).toBe('Potsdam');
   expect(googleCity(undefined, 'Warszawa', 'pl')).toBe('Warszawa');
+});
+it('keeps structured opening hours and rejects incomplete contact masks', () => {
+  const regularOpeningHours = {
+    openNow: true,
+    weekdayDescriptions: ['Monday: 9–18'],
+    periods: [{ open: { day: 1, hour: 9 } }],
+    nextCloseTime: '2026-11-23T18:00:00Z',
+  };
+  expect(
+    googlePageSchema.parse({ places: [{ id: 'p', regularOpeningHours }] })
+      .places[0]?.regularOpeningHours,
+  ).toEqual(regularOpeningHours);
+  expect(
+    profileSchema.safeParse({
+      ...profile,
+      fields: contactFields.filter(
+        (field) => field !== 'places.regularOpeningHours',
+      ),
+    }).success,
+  ).toBe(false);
 });

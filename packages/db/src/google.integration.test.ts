@@ -1,5 +1,5 @@
 import { afterAll, expect, it, vi } from 'vitest';
-import { PaidHttpError } from '@sonar/core';
+import { PaidHttpError, contactFields } from '@sonar/core';
 import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
@@ -33,6 +33,7 @@ it.skipIf(!enabled)(
       websiteUri: 'https://www.example.com',
       nationalPhoneNumber: '044 222 33 44',
       businessStatus: 'OPERATIONAL',
+      regularOpeningHours: { weekdayDescriptions: ['Monday: 9–18'] },
     });
     try {
       await sonarPool.query(
@@ -85,6 +86,81 @@ it.skipIf(!enabled)(
           )
         ).rows[0].found,
       ).toBe(9);
+      expect(
+        (
+          await sonarPool.query(
+            "select count(*)::int as n from company_facts f join campaign_companies cc on cc.company_id=f.company_id where cc.batch_id=$1 and f.kind='google_opening_hours' and f.source='google' and f.expires_at>f.found_at",
+            [languageBatch.id],
+          )
+        ).rows[0].n,
+      ).toBe(9);
+      const staleProfile = {
+        id: 'basic',
+        name: 'Old',
+        fields: ['places.id', 'nextPageToken'],
+        priceUsd: 0.001,
+        sku: 'Text Search Pro',
+      };
+      for (const id of ['basic', 'contacts']) {
+        const frozenProfile =
+          id === 'basic'
+            ? staleProfile
+            : {
+                ...staleProfile,
+                id,
+                fields: ['places.id', 'places.websiteUri', 'nextPageToken'],
+                sku: 'Text Search Enterprise',
+              };
+        const staleBatch = await createBatch(
+          await campaign(),
+          null,
+          randomUUID(),
+          false,
+          false,
+        );
+        await sonarPool.query(
+          "update batches set config=jsonb_set(config,'{profile}',$2::jsonb) where id=$1",
+          [staleBatch.id, JSON.stringify(frozenProfile)],
+        );
+        const configuredProfile = (
+          await sonarPool.query(
+            "select value from settings where key='google.field_profiles'",
+          )
+        ).rows[0].value.find(
+          (profile: { id: string }) => profile.id === 'contacts',
+        );
+        const currentSearch = vi.fn(
+          async (
+            _input: unknown,
+            profile: { fields: string[]; priceUsd: number },
+          ) => {
+            expect(profile.fields).toEqual(
+              expect.arrayContaining(contactFields),
+            );
+            expect(profile.priceUsd).toBe(configuredProfile.priceUsd);
+            return { places: [] };
+          },
+        );
+        await runGoogleBatch(staleBatch.id, currentSearch);
+        expect(currentSearch).toHaveBeenCalledTimes(1);
+        expect(
+          Number(
+            (
+              await sonarPool.query(
+                'select cost_usd from spend_events s join tasks t on t.id=s.task_id where t.batch_id=$1',
+                [staleBatch.id],
+              )
+            ).rows[0].cost_usd,
+          ),
+        ).toBe(configuredProfile.priceUsd);
+        expect(
+          (
+            await sonarPool.query('select config from batches where id=$1', [
+              staleBatch.id,
+            ])
+          ).rows[0].config.profile,
+        ).toEqual(frozenProfile);
+      }
       const blockedCampaign = await campaign(0.5, { email: true });
       await expect(
         createBatch(blockedCampaign, null, randomUUID(), false, false),
@@ -428,6 +504,10 @@ it.skipIf(!enabled)(
           units: 1,
         }),
       );
+      await sonarPool.query(
+        "update batches set config=jsonb_set(config,'{profile}',$2::jsonb) where id=$1",
+        [recovery.id, JSON.stringify(staleProfile)],
+      );
       const never = vi.fn(async () => {
         throw Error('Must reuse paid response');
       });
@@ -535,6 +615,10 @@ it.skipIf(!enabled)(
       await sonarPool.query(
         "delete from activity_log where details->>'campaignId'=any($1::text[]) or entity_id=any($1::text[])",
         [campaigns],
+      );
+      await sonarPool.query(
+        'delete from company_facts where company_id in(select id from companies where place_id like $1)',
+        [prefix + '%'],
       );
       await sonarPool.query(
         'delete from contacts where company_id in(select id from companies where place_id like $1)',

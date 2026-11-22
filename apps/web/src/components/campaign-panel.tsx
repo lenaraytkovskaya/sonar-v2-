@@ -120,9 +120,6 @@ export function CampaignPanel({
   const selectionChanged = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]),
-    [presets, setPresets] = useState<
-      { id: string; name: string; data: CampaignInput }[]
-    >([]),
     [id, setId] = useState<string | null>(null),
     [form, setForm] = useState(initialForm),
     [description, setDescription] = useState(''),
@@ -164,7 +161,6 @@ export function CampaignPanel({
         );
       }
     }
-    setPresets(d.presets);
   };
   useEffect(() => {
     void load(true).catch(() => setMessage(uk.ai.error));
@@ -424,27 +420,6 @@ export function CampaignPanel({
       >
         <div className="min-w-0 space-y-5">
           <label className="block">
-            {uk.campaign.presets}
-            <select
-              className="mt-2 min-h-9 w-full rounded-lg border border-border bg-surface px-3"
-              value=""
-              onChange={(e) => {
-                const preset = presets.find((p) => p.id === e.target.value);
-                if (preset) {
-                  setId(null);
-                  setForm(withWeights(preset.data));
-                }
-              }}
-            >
-              <option value="">{uk.campaign.presets}</option>
-              {presets.map((p) => (
-                <option value={p.id} key={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
             {uk.campaign.describe}
             <Input
               value={description}
@@ -675,19 +650,6 @@ export function CampaignPanel({
               }
             }}
           />
-          <label className="block">
-            {uk.google.profile}
-            <select
-              className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-              value={form.field_profile}
-              onChange={(e) =>
-                update('field_profile', e.target.value as 'contacts' | 'basic')
-              }
-            >
-              <option value="contacts">{uk.google.contacts}</option>
-              <option value="basic">{uk.google.basic}</option>
-            </select>
-          </label>
           {message && <p role="status">{message}</p>}
         </div>
       </CrudDialog>

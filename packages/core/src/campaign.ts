@@ -44,7 +44,7 @@ export const campaignSchema = z
       z.string().min(1).max(80),
       z.number().int().min(0).max(100),
     ),
-    field_profile: z.enum(['contacts', 'basic']).default('contacts'),
+    field_profile: z.literal('contacts').default('contacts'),
     status: z.enum(['draft', 'active', 'paused', 'archived']),
   })
   .strict();

@@ -167,7 +167,7 @@ export async function createBatch(
     const config = Object.fromEntries(settings.map((r) => [r.key, r.value]));
     const profile = profilesSchema
       .parse(config['google.field_profiles'])
-      .find((p) => p.id === campaign.field_profile);
+      .find((p) => p.id === 'contacts');
     if (!profile) throw Error('Profile missing');
     if (!fixture)
       await checkGooglePlanBudget(

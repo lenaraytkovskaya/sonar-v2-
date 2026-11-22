@@ -185,9 +185,12 @@ export default async function Page({
     (fact) =>
       fact.source !== 'registry' &&
       fact.source !== 'prozorro' &&
-      !['social_profile', 'manual_source', 'google_place'].includes(
-        fact.kind,
-      ) &&
+      ![
+        'social_profile',
+        'manual_source',
+        'google_place',
+        'google_opening_hours',
+      ].includes(fact.kind) &&
       !['page_text', 'registry_rejected', 'website_candidate'].includes(
         fact.kind,
       ),
@@ -251,6 +254,15 @@ export default async function Page({
   const google = googleFact?.value;
   const openingHours =
     google?.regularOpeningHours?.weekdayDescriptions?.join('; ') ||
+    facts
+      .find(
+        (fact) =>
+          fact.kind === 'google_opening_hours' &&
+          fact.source === 'google' &&
+          fact.source_url === c.google_maps_uri &&
+          (!fact.expires_at || new Date(fact.expires_at) > new Date()),
+      )
+      ?.value?.weekdayDescriptions?.join('; ') ||
     formatOpeningHours(
       facts.find(
         (fact) =>
