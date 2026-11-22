@@ -2,9 +2,9 @@ import {
   campaignInactiveReasonCode,
   campaignPausedReasonCode,
   campaignPauseScopes,
-  campaignPauseTypes,
 } from '@sonar/core';
 import type { PoolClient } from 'pg';
+import { campaignTaskScope } from './campaign-task-scope.js';
 import { sonarPool } from './index.js';
 import { dispatch, logActivity, transaction } from './tasks.js';
 
@@ -12,13 +12,8 @@ type Db = Pick<PoolClient, 'query'>;
 type TaskRef = { type: string; payload: Record<string, unknown> };
 
 const list = (types: string[]) => types.map((type) => `'${type}'`).join(',');
-// Tasks of one campaign, whichever way the task names it. $1 is the campaign id.
-const inCampaign = `(
-  (t.type in (${list(campaignPauseTypes('campaign'))}) and t.payload->>'campaignId'=$1::text)
-  or (t.type in (${list(campaignPauseTypes('message'))}) and exists(select 1 from messages m join conversations v on v.id=m.conversation_id where m.id::text=t.payload->>'messageId' and v.campaign_id=$1))
-  or (t.type in (${list(campaignPauseTypes('batch'))}) and exists(select 1 from batches b where b.id::text=t.payload->>'batchId' and b.campaign_id=$1))
-  or (t.type in (${list(campaignPauseTypes('company'))}) and exists(select 1 from campaign_companies cc where cc.company_id::text=t.payload->>'companyId' and cc.campaign_id=$1))
-)`;
+// Only existing pause-managed types are dispatched; ownership matches the read-only card.
+const inCampaign = `(t.type in (${list(Object.keys(campaignPauseScopes))}) and ${campaignTaskScope()})`;
 
 async function campaignIdsOfTask(db: Db, task: TaskRef): Promise<string[]> {
   const rule = campaignPauseScopes[task.type];
@@ -104,14 +99,12 @@ export async function campaignRunState(campaignId: string) {
       sonarPool.query(
         `select count(*) filter (where t.status in ('queued','running'))::int as active,
          count(*) filter (where t.status='paused' and t.reason_code in ('${campaignPausedReasonCode}','${campaignInactiveReasonCode}'))::int as held
-       from tasks t where ${inCampaign}`,
+       from tasks t where ${campaignTaskScope()}`,
         [campaignId],
       ),
       sonarPool.query(
         `select coalesce(sum(s.cost_usd),0) as spent from spend_events s join tasks t on t.id=s.task_id
-         left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid
-         left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid)
-         where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1`,
+         where ${campaignTaskScope('$1', false)}`,
         [campaignId],
       ),
     ]);
