@@ -29,6 +29,60 @@ export const users = pgTable('users', {
     .notNull()
     .defaultNow(),
 });
+export const products = pgTable(
+  'products',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    tagline: text('tagline').notNull().default(''),
+    description: text('description').notNull().default(''),
+    audience: text('audience').notNull().default(''),
+    benefits: text('benefits').notNull().default(''),
+    terms: text('terms').notNull().default(''),
+    links: jsonb('links')
+      .$type<{ label: string; url: string }[]>()
+      .notNull()
+      .default([]),
+    photos: jsonb('photos').$type<string[]>().notNull().default([]),
+    videos: jsonb('videos').$type<string[]>().notNull().default([]),
+    status: text('status')
+      .$type<'active' | 'archived'>()
+      .notNull()
+      .default('active'),
+    createdBy: uuid('created_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check(
+      'products_name_length',
+      sql`char_length(trim(${t.name})) between 1 and 120`,
+    ),
+    check(
+      'products_description_length',
+      sql`char_length(${t.description}) <= 20000`,
+    ),
+    check('products_status', sql`${t.status} in ('active','archived')`),
+    check(
+      'products_links_limit',
+      sql`jsonb_typeof(${t.links}) = 'array' and jsonb_array_length(${t.links}) <= 20`,
+    ),
+    check(
+      'products_photos_limit',
+      sql`jsonb_typeof(${t.photos}) = 'array' and jsonb_array_length(${t.photos}) <= 30`,
+    ),
+    check(
+      'products_videos_limit',
+      sql`jsonb_typeof(${t.videos}) = 'array' and jsonb_array_length(${t.videos}) <= 10`,
+    ),
+  ],
+);
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
   value: jsonb('value').notNull(),
