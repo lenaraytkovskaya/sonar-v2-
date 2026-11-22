@@ -116,3 +116,26 @@ it('bounds numeric and structured AI suggestions without changing config keys', 
     ),
   ).toThrow();
 });
+it('accepts only an exact eligible product choice and rejects invented or ambiguous names', async () => {
+  const { campaignProductSuggestion } = await import('./campaign-editor.js');
+  const active = { id: 'active-id', name: 'Active', status: 'active' as const };
+  const archived = {
+    id: 'archive-id',
+    name: 'Archived',
+    status: 'archived' as const,
+  };
+  const products = [active, archived];
+  expect(campaignProductSuggestion('Active', products)).toBe(active.id);
+  expect(campaignProductSuggestion(active.id, products)).toBe(active.id);
+  expect(campaignProductSuggestion('Archived', products, archived.id)).toBe(
+    archived.id,
+  );
+  for (const value of ['Invented', 'Archived', archived.id, ''])
+    expect(() => campaignProductSuggestion(value, products)).toThrow();
+  expect(() =>
+    campaignProductSuggestion('Active', [
+      ...products,
+      { ...active, id: 'other-id' },
+    ]),
+  ).toThrow();
+});

@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { parseCampaignChips } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { AiAssist } from './ai-assist';
@@ -45,11 +45,16 @@ export function CampaignChips({
   onError: (label: string) => void;
 }) {
   const [input, setInput] = useState('');
+  const element = useRef<HTMLInputElement>(null);
   const apply = (text: string, ai = false) => {
     try {
       change(parseCampaignChips(text, kind), ai);
       setInput('');
+      element.current?.setCustomValidity('');
     } catch {
+      element.current?.setCustomValidity(
+        uk.campaign.invalidField(uk.campaign[kind]),
+      );
       onError(uk.campaign[kind]);
     }
   };
@@ -79,7 +84,15 @@ export function CampaignChips({
           value={input}
           maxLength={200}
           disabled={disabled}
-          onChange={(event) => setInput(event.target.value)}
+          ref={element}
+          onBlur={add}
+          onInvalid={() => onError(uk.campaign[kind])}
+          onChange={(event) => {
+            setInput(event.target.value);
+            event.target.setCustomValidity(
+              event.target.value.trim() ? uk.campaign.chipPending : '',
+            );
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault();
@@ -96,7 +109,9 @@ export function CampaignChips({
           {uk.campaign.add}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">{uk.campaign.hints[kind]}</p>
+      <p className="text-xs text-muted-foreground">
+        {uk.campaign.hints[kind]} {uk.campaign.chipPending}
+      </p>
       <AiAssist
         text={values.join('\n') || input}
         onApply={(text) => apply(text, true)}

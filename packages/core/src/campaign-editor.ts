@@ -92,3 +92,18 @@ export function campaignWeightsSuggestion(text: string, keys: string[]) {
 }
 export const campaignChannelsSuggestion = (text: string) =>
   campaignDefaultsSchema.shape.channels.parse(JSON.parse(text));
+export function campaignProductSuggestion(
+  text: string,
+  products: { id: string; name: string; status: 'active' | 'archived' }[],
+  selectedId?: string | null,
+) {
+  const value = text.trim();
+  const eligible = products.filter(
+    (product) => product.status === 'active' || product.id === selectedId,
+  );
+  const exactId = eligible.find((product) => product.id === value);
+  if (exactId) return exactId.id;
+  const names = eligible.filter((product) => product.name === value);
+  if (names.length !== 1) throw Error('Select an existing eligible product');
+  return names[0]!.id;
+}

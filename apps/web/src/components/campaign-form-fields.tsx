@@ -8,6 +8,7 @@ import {
   campaignNumericSuggestion,
   campaignWeightsSuggestion,
   campaignChannelsSuggestion,
+  campaignProductSuggestion,
   type CampaignInput,
   type ProductDto,
   type GoogleProgress,
@@ -85,9 +86,10 @@ export function CampaignFormFields({
       ) : (
         <Input
           type="number"
+          onInvalid={() => invalid(uk.campaign[key])}
           min={0}
           max={key === 'min_score' ? 100 : 100000}
-          step={key === 'min_score' ? 1 : 'any'}
+          step="any"
           value={Number.isFinite(form[key]) ? form[key] : ''}
           onChange={(event) =>
             onChange({
@@ -154,12 +156,13 @@ export function CampaignFormFields({
             values={languages}
             disabled={pending}
             onError={invalid}
-            change={(values, ai) =>
+            change={(values, ai) => {
               onChange(
                 { language_codes: values, language_code: values[0] ?? '' },
                 ai,
-              )
-            }
+              );
+              if (!values.length) invalid(uk.campaign.language_codes);
+            }}
           />
           <p className="text-xs text-muted-foreground">
             {uk.campaign.languageCost(languages.length)}
@@ -220,6 +223,24 @@ export function CampaignFormFields({
             <p className="text-xs text-muted-foreground">
               {uk.campaign.productHint}
             </p>
+            <AiAssist
+              disabled={pending}
+              text={
+                products.find((product) => product.id === form.product_id)
+                  ?.name ??
+                products
+                  .filter((product) => product.status === 'active')
+                  .map((product) => product.name)
+                  .join('\n')
+              }
+              onApply={apply(uk.campaign.product, (text) => ({
+                product_id: campaignProductSuggestion(
+                  text,
+                  products,
+                  form.product_id,
+                ),
+              }))}
+            />
             <Link
               href="/products"
               target="_blank"
