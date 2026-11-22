@@ -292,6 +292,7 @@ export default async function Page({
     'phone',
     'telegram',
     'whatsapp',
+    'viber',
     'form',
     'social',
   ];

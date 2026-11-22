@@ -64,6 +64,19 @@ it.skipIf(!enabled)(
         null as unknown as string,
       );
       expect(marked.status).toBe('sent');
+      // A Viber contact (plain number) opens a Viber dialog.
+      const viber = randomUUID();
+      await db.sonarPool.query(
+        "insert into contacts(id,company_id,kind,value,normalized,source) values($1,$2,'viber','+380671234567','+380671234567','manual')",
+        [viber, company],
+      );
+      const {
+        rows: [viberDialog],
+      } = await db.sonarPool.query(
+        'select channel from conversations where id=$1',
+        [await inbound.ensureContactConversation(viber)],
+      );
+      expect(viberDialog.channel).toBe('viber');
     } finally {
       await queue.stop();
       await db.sonarPool.query(
