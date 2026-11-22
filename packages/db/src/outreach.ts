@@ -11,6 +11,7 @@ import type { PoolClient } from 'pg';
 import { assertFacebookBinding } from './social-inbox.js';
 import { canonicalSocialPeer } from '@sonar/core/social-inbox';
 import { findMessagePlaceholder, selectOutreachContacts } from '@sonar/core';
+import { campaignOfferContext } from './product-context.js';
 import { sonarPool } from './index.js';
 import {
   EmailValidationError,
@@ -280,6 +281,8 @@ export async function enqueueOutreachDrafts(
       `select a.channels,a.status,a.offer,a.min_score::float8,s.score::float8 from campaigns a join analyses an on an.campaign_id=a.id join campaign_companies cc on cc.campaign_id=a.id and cc.company_id=an.company_id left join company_scores s on s.company_id=an.company_id and s.campaign_id=a.id where a.id=$2 and an.company_id=$1 and an.id=$3`,
       [companyId, campaignId, analysisId],
     );
+    if (campaign)
+      campaign.offer = (await campaignOfferContext(campaignId, c)).offer;
     if (
       !campaign ||
       campaign.status !== 'active' ||
@@ -324,8 +327,8 @@ export async function enqueueDraft(
     );
     if (!campaign?.analysis_id)
       invalid('Спочатку виконайте ШІ-аналіз компанії в цій кампанії.');
-    if (!campaign.offer?.trim())
-      invalid('Заповніть пропозицію кампанії перед створенням чернетки.');
+    if (!(await campaignOfferContext(input.campaignId, c)).offer.trim())
+      invalid('Оберіть продукт кампанії перед створенням чернетки.');
     if (campaign.score === null || campaign.score < campaign.min_score)
       invalid('Оцінка компанії нижча за поріг кампанії.');
     const [contact] = await eligibleContacts(
@@ -399,6 +402,7 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
     "select key,value from settings where key like 'draft.%' or key in ('company.about','contact.name','ai.models','ai.model.cheap','ai.reasoning')",
   );
   const config = Object.fromEntries(settings.map((r) => [r.key, r.value]));
+  const knowledge = await campaignOfferContext(input.campaignId);
   const snapshot = {
     existingMessageId: existing[0]?.id,
     sender: {
@@ -409,15 +413,21 @@ export async function draftSnapshot(input: DraftInput, taskId: string) {
     },
     channel: eligible.channel,
     contact,
-    analysis: row.analysis,
+    analysis: knowledge.productId
+      ? {
+          summary: row.analysis.summary ?? row.analysis.description,
+          language: row.analysis.language,
+          best_channel: row.analysis.best_channel,
+        }
+      : row.analysis,
     company: {
       id: row.id,
       name: row.name,
       website: row.website,
       countryCode: row.country_code,
     },
-    offer: row.offer,
-    outreachGoal: row.outreach_goal,
+    offer: knowledge.offer,
+    outreachGoal: knowledge.outreachGoal,
     languageCode: row.language_code,
     about:
       typeof config['company.about'] === 'string'

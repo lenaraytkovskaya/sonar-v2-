@@ -119,6 +119,10 @@
     "./products": {
       "types": "./dist/products.d.ts",
       "default": "./dist/products.js"
+    },
+    "./product-context": {
+      "types": "./dist/product-context.d.ts",
+      "default": "./dist/product-context.js"
     }
   },
   "files": [

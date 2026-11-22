@@ -9,6 +9,7 @@ import {
 } from '@sonar/core';
 import { sonarPool } from '@sonar/db';
 import { enqueueOutreachDrafts } from '@sonar/db/outreach';
+import { campaignOfferContext } from '@sonar/db/product-context';
 import { analysisSnapshot } from '@sonar/db/analysis';
 import {
   BillingUncertain,
@@ -26,11 +27,11 @@ export async function runCompanyAnalysis(
   const {
     rows: [existing],
   } = await sonarPool.query(
-    'select id,result,cost_usd,(select offer from campaigns where id=$2) as campaign_offer from analyses where company_id=$1 and campaign_id=$2 and version=$3',
+    'select id,result,cost_usd from analyses where company_id=$1 and campaign_id=$2 and version=$3',
     [input.companyId, input.campaignId, input.version],
   );
   if (existing) {
-    if (existing.campaign_offer?.trim())
+    if ((await campaignOfferContext(input.campaignId)).offer.trim())
       await enqueueOutreachDrafts(
         input.companyId,
         input.campaignId,
