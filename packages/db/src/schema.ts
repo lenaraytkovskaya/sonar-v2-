@@ -262,6 +262,7 @@ export const campaigns = pgTable(
     fieldProfile: text('field_profile').notNull().default('contacts'),
     countryCode: text('country_code').notNull(),
     languageCode: text('language_code').notNull(),
+    languageCodes: text('language_codes').array().notNull().default(['uk']),
     cities: text('cities').array().notNull(),
     queries: text('queries').array().notNull(),
     offer: text('offer').notNull(),

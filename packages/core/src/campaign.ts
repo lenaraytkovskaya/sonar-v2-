@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getCountries } from 'libphonenumber-js/max';
 const text = z.string().trim().min(1).max(200);
+const languageCode = z.string().regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/);
 const country = z
   .string()
   .refine((v) =>
@@ -10,7 +11,13 @@ export const campaignSchema = z
   .object({
     name: text,
     country_code: country,
-    language_code: z.string().regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/),
+    language_code: languageCode.default('uk'),
+    language_codes: z
+      .array(languageCode)
+      .min(1)
+      .max(20)
+      .refine((v) => new Set(v).size === v.length)
+      .optional(),
     cities: z.array(text).max(100),
     queries: z.array(text).max(100),
     offer: z.string().max(20000).default(''),
@@ -61,6 +68,12 @@ export const campaignSuggestionSchema = campaignSchema
     path: ['offer'],
     message: 'An offer requires company.about',
   });
+export function normalizeCampaignLanguages<
+  T extends { language_code?: string; language_codes?: string[] },
+>(input: T) {
+  const language_codes = input.language_codes ?? [input.language_code ?? 'uk'];
+  return { ...input, language_codes, language_code: language_codes[0]! };
+}
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type CampaignSuggestion = z.infer<typeof campaignSuggestionSchema>;
 export function campaignOfferRequired(
@@ -138,12 +151,13 @@ export function applyCampaignSuggestion(
   suggestion: CampaignSuggestion,
 ): CampaignInput {
   const { needs_about, ...fields } = suggestion;
-  return {
+  return normalizeCampaignLanguages({
     ...form,
     ...fields,
+    language_codes: form.language_codes ?? [form.language_code],
     // An empty suggested offer never wipes a message the person already wrote.
     offer: !needs_about && fields.offer.trim() ? fields.offer : form.offer,
     outreach_goal: fields.outreach_goal?.trim() || form.outreach_goal || '',
     queries: cleanCampaignQueries(fields.queries, fields.cities),
-  };
+  });
 }
