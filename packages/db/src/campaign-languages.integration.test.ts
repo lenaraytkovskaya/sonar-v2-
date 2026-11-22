@@ -1,9 +1,15 @@
-import { expect, it } from 'vitest';
+import { afterAll, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+
+afterAll(async () => {
+  if (process.env.RUN_DB_TESTS !== '1') return;
+  const { sonarPool, registryPool } = await import('./index.js');
+  await Promise.all([sonarPool.end(), registryPool.end()]);
+});
 it.skipIf(process.env.RUN_DB_TESTS !== '1')(
   'migrates paid and fixture cursors with original languages and idempotent data steps',
   async () => {
-    const { sonarPool, registryPool } = await import('./index.js');
+    const { sonarPool } = await import('./index.js');
     const client = await sonarPool.connect();
     const query = 'repair "special"\\name';
     const city = 'Київ';
@@ -106,7 +112,6 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
     } finally {
       await client.query('rollback');
       client.release();
-      await Promise.all([sonarPool.end(), registryPool.end()]);
     }
   },
 );
@@ -114,7 +119,7 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
 it.skipIf(process.env.RUN_DB_TESTS !== '1')(
   'does not fail the migration when a paid cursor language cannot be determined',
   async () => {
-    const { sonarPool, registryPool } = await import('./index.js');
+    const { sonarPool } = await import('./index.js');
     const client = await sonarPool.connect();
     const key = JSON.stringify(['unknown query', 'unknown city']);
     const paid = { pages: 2, token: 'paid', exhausted: false, buffer: [] };
@@ -158,7 +163,6 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
     } finally {
       await client.query('rollback');
       client.release();
-      await Promise.all([sonarPool.end(), registryPool.end()]);
     }
   },
 );
