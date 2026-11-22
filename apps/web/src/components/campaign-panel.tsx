@@ -2,145 +2,88 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
-  campaignOfferRequired,
+  createCampaignDraft,
+  type CampaignDefaults,
+  type GoogleProgress,
+  normalizeCampaignLanguages,
+  googleSearchPairs,
   applyCampaignSuggestion,
   campaignSuggestionSchema,
   type CampaignInput,
+  type ProductDto,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, PageHeader, StatusBadge } from './shared';
-import { AiAssist } from './ai-assist';
 import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
 import { CampaignCompanies } from './campaign-companies';
 import { runAiJob } from '@/lib/ai-job';
 import { CrudButton, CrudDialog } from './crud-dialog';
+import { CampaignFormFields } from './campaign-form-fields';
+import { Callout } from './ui/layout';
 import { CampaignRunCard } from './campaign-run-card';
+import { CampaignRunning } from './campaign-running';
 type Row = CampaignInput & {
   id: string;
-  google_progress?: Record<string, { exhausted: boolean; buffer: unknown[] }>;
-};
-const initial: CampaignInput = {
-  name: '',
-  country_code: 'UA',
-  language_code: 'uk',
-  cities: [],
-  queries: [],
-  offer: '',
-  outreach_goal: '',
-  min_score: 40,
-  batch_size: 20,
-  budget_usd: 0,
-  channels: {
-    email: true,
-    telegram: false,
-    whatsapp: false,
-    viber: false,
-    forms: false,
-  },
-  send_mode: 'manual',
-  scoring_weights: {},
-  status: 'draft',
-  field_profile: 'contacts',
+  google_progress?: GoogleProgress;
 };
 // Query tags shown before the rest is folded behind a button.
 const queryPreview = 5;
-function Chips({
-  label,
-  values,
-  onChange,
-}: {
-  label: string;
-  values: string[];
-  onChange: (v: string[]) => void;
-}) {
-  const [input, setInput] = useState('');
-  const add = () => {
-    if (input.trim()) {
-      onChange([...new Set([...values, input.trim()])]);
-      setInput('');
-    }
-  };
-  return (
-    <fieldset className="space-y-2">
-      <legend>{label}</legend>
-      <div className="flex flex-wrap gap-2">
-        {values.map((v) => (
-          <button
-            type="button"
-            aria-label={`${uk.campaign.remove}: ${v}`}
-            className="min-h-9 max-w-full rounded-full bg-chip px-3 break-words"
-            key={v}
-            onClick={() => onChange(values.filter((x) => x !== v))}
-          >
-            {v} ×
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input
-          aria-label={label}
-          value={input}
-          maxLength={200}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <Button variant="outline" onClick={add}>
-          {uk.campaign.add}
-        </Button>
-      </div>
-    </fieldset>
-  );
-}
 export function CampaignPanel({
+  defaults,
   defaultWeights,
+  googlePriceUsd,
+  pollMs,
 }: {
+  defaults: CampaignDefaults;
   defaultWeights: CampaignInput['scoring_weights'];
+  googlePriceUsd: number;
+  pollMs: number;
 }) {
-  const initialForm = { ...initial, scoring_weights: defaultWeights };
+  const initialForm = () => createCampaignDraft(defaults, defaultWeights);
   const withWeights = (row: CampaignInput): CampaignInput => ({
-    ...row,
+    ...normalizeCampaignLanguages(row),
     outreach_goal: row.outreach_goal ?? '',
-    min_score: Number(row.min_score ?? 40),
+    min_score: Number(row.min_score),
     scoring_weights: { ...defaultWeights, ...row.scoring_weights },
   });
   const { batches: batchProgress } = useTasks();
   const [open, setOpen] = useState(false);
+  const editorForm = useRef<HTMLFormElement>(null);
+  const [products, setProducts] = useState<ProductDto[]>([]);
   const [allQueries, setAllQueries] = useState(false);
   const selectionChanged = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [progressVersion, setProgressVersion] = useState(0);
   const [rows, setRows] = useState<Row[]>([]),
-    [presets, setPresets] = useState<
-      { id: string; name: string; data: CampaignInput }[]
-    >([]),
     [id, setId] = useState<string | null>(null),
     [form, setForm] = useState(initialForm),
     [description, setDescription] = useState(''),
     [source, setSource] = useState('form'),
     [pending, setPending] = useState(false),
     [message, setMessage] = useState('');
+  const messageTone = [
+    uk.ai.saved,
+    uk.campaign.queued,
+    uk.campaign.scoreQueued,
+    uk.campaign.filled,
+  ].some((value) => value === message)
+    ? 'ok'
+    : 'err';
   const savedProgress = rows.find((row) => row.id === id)?.google_progress;
   const exhausted =
     form.queries.length > 0 &&
     form.cities.length > 0 &&
-    form.queries.every((query) =>
-      form.cities.every((city) => {
-        const p = savedProgress?.[JSON.stringify([query, city])];
-        return p?.exhausted && !p.buffer.length;
-      }),
-    );
-  const update = <K extends keyof CampaignInput>(
-    key: K,
-    value: CampaignInput[K],
-  ) => {
-    setForm({ ...form, [key]: value });
+    googleSearchPairs(form).every(({ query, city, language }) => {
+      const p = savedProgress?.[JSON.stringify([query, city, language])];
+      return p?.exhausted && !p.buffer.length;
+    });
+  const loadProducts = async () => {
+    const response = await fetch('/api/products');
+    if (!response.ok) throw Error(uk.ai.error);
+    setProducts((await response.json()).products);
   };
   const load = async (selectFromUrl = false) => {
     const r = await fetch('/api/campaigns');
@@ -163,25 +106,55 @@ export function CampaignPanel({
         );
       }
     }
-    setPresets(d.presets);
   };
   useEffect(() => {
-    void load(true).catch(() => setMessage(uk.ai.error));
+    void Promise.all([load(true), loadProducts()]).catch(() =>
+      setMessage(uk.ai.error),
+    );
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => {
+      void loadProducts().catch(() => setMessage(uk.ai.error));
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [open]);
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
   }, [batchProgress]);
   const act = async (kind: 'save' | 'start' | 'score') => {
+    if (open && kind === 'save' && !editorForm.current?.reportValidity())
+      return;
     setPending(true);
     setMessage('');
     try {
-      if (kind === 'start' && campaignOfferRequired(form.channels, form.offer))
-        throw Error(uk.campaign.offerRequired);
-      const data = campaignSchema.parse({
-        ...form,
-        budget_usd: Number(form.budget_usd),
-        status: kind === 'start' ? 'active' : form.status,
-      });
+      if (kind === 'start' && !form.product_id)
+        throw Error(uk.campaign.productRequired);
+      const parsed = campaignSchema
+        .omit({ offer: true, outreach_goal: true })
+        .strip()
+        .safeParse({
+          ...form,
+          budget_usd: Number(form.budget_usd),
+          status: kind === 'start' ? 'active' : form.status,
+        });
+      if (!parsed.success) {
+        const key = parsed.error.issues[0]?.path[0];
+        const label =
+          typeof key === 'string'
+            ? (uk.campaign as Record<string, unknown>)[
+                key === 'language_code' ? 'language_codes' : key
+              ]
+            : undefined;
+        throw Error(
+          typeof label === 'string'
+            ? uk.campaign.invalidField(label)
+            : uk.ai.invalid,
+        );
+      }
+      const data = parsed.data;
       const r = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -190,7 +163,7 @@ export function CampaignPanel({
       if (!r.ok) throw Error(uk.ai.invalid);
       const row = await r.json();
       setId(row.id);
-      setForm({ ...data });
+      setForm({ ...form, ...data });
       setSource('form');
       if (kind === 'start') {
         const start = await fetch(`/api/campaigns/${row.id}/start`, {
@@ -230,6 +203,7 @@ export function CampaignPanel({
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
       );
     } finally {
+      setProgressVersion((value) => value + 1);
       setPending(false);
     }
   };
@@ -241,19 +215,17 @@ export function CampaignPanel({
         action: 'campaign',
         text: description,
         context: JSON.stringify({
-          language: form.language_code,
+          country: form.country_code,
+          languages: form.language_codes ?? [form.language_code],
           cities: form.cities,
           queries: form.queries,
-          outreach_goal: form.outreach_goal,
         }),
       });
       const suggestion = campaignSuggestionSchema.parse(r.suggestion);
       const next = applyCampaignSuggestion(form, suggestion);
       setForm(next);
       setSource('ai');
-      setMessage(
-        suggestion.needs_about ? uk.campaign.needsAbout : uk.campaign.filled,
-      );
+      setMessage(uk.campaign.filled);
     } catch (e) {
       setMessage(
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
@@ -339,7 +311,21 @@ export function CampaignPanel({
                 startLabel={exhausted ? uk.google.exhausted : uk.campaign.start}
                 onStart={() => void act('start')}
                 onScore={() => void act('score')}
-                onChanged={load}
+                onChanged={async () => {
+                  setProgressVersion((value) => value + 1);
+                  await load();
+                }}
+              />
+              {!open && message && (
+                <div role="status">
+                  <Callout tone={messageTone}>{message}</Callout>
+                </div>
+              )}
+              <CampaignRunning
+                key={`running:${selectedId}`}
+                campaignId={selectedId}
+                pollMs={pollMs}
+                refreshToken={progressVersion}
               />
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
@@ -386,10 +372,10 @@ export function CampaignPanel({
           ) : (
             <p>{uk.crud.selectCampaign}</p>
           )}
-          {!open && message && <p role="status">{message}</p>}
         </Card>
       </div>
       <CrudDialog
+        wide
         open={open}
         onOpenChange={(next) => {
           setOpen(next);
@@ -404,45 +390,40 @@ export function CampaignPanel({
                       budget_usd: Number(saved.budget_usd),
                     }),
                   )
-                : initialForm,
+                : initialForm(),
             );
             setSource('form');
+            setDescription('');
+            setMessage('');
           }
         }}
         title={id ? uk.crud.editCampaign : uk.campaign.create}
         pending={pending}
         draft={{ form, description }}
         actions={
-          <Button
-            disabled={pending || !campaignSchema.safeParse(form).success}
-            onClick={() => void act('save')}
-          >
-            {uk.ai.save}
-          </Button>
+          <>
+            {message && (
+              <p
+                role="status"
+                className={`max-w-xs text-sm ${messageTone === 'err' ? 'text-err' : 'text-muted-foreground'}`}
+              >
+                {message}
+              </p>
+            )}
+            <Button disabled={pending} onClick={() => void act('save')}>
+              {pending ? uk.ai.pending : uk.ai.save}
+            </Button>
+          </>
         }
       >
-        <div className="min-w-0 space-y-5">
-          <label className="block">
-            {uk.campaign.presets}
-            <select
-              className="mt-2 min-h-9 w-full rounded-lg border border-border bg-surface px-3"
-              value=""
-              onChange={(e) => {
-                const preset = presets.find((p) => p.id === e.target.value);
-                if (preset) {
-                  setId(null);
-                  setForm(withWeights(preset.data));
-                }
-              }}
-            >
-              <option value="">{uk.campaign.presets}</option>
-              {presets.map((p) => (
-                <option value={p.id} key={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        <form
+          ref={editorForm}
+          className="min-w-0 space-y-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act('save');
+          }}
+        >
           <label className="block">
             {uk.campaign.describe}
             <Input
@@ -454,6 +435,7 @@ export function CampaignPanel({
             />
           </label>
           <Button
+            type="button"
             disabled={pending || !description.trim()}
             onClick={() => void suggest()}
           >
@@ -462,221 +444,22 @@ export function CampaignPanel({
           <p className="text-sm text-muted-foreground">
             {uk.campaign.suggestHint}
           </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {(['name', 'country_code', 'language_code'] as const).map((key) => (
-              <label key={key}>
-                {uk.campaign[key]}
-                <Input
-                  value={form[key]}
-                  maxLength={200}
-                  onChange={(e) => update(key, e.target.value)}
-                />
-              </label>
-            ))}
-          </div>
-          <Chips
-            key={`${id}:cities`}
-            label={uk.campaign.cities}
-            values={form.cities}
-            onChange={(v) => update('cities', v)}
-          />
-          <Chips
-            key={`${id}:queries`}
-            label={uk.campaign.queries}
-            values={form.queries}
-            onChange={(v) => update('queries', v)}
-          />
-          <label className="block">
-            {uk.campaign.outreach_goal}
-            <textarea
-              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
-              value={form.outreach_goal}
-              maxLength={20000}
-              onChange={(e) => update('outreach_goal', e.target.value)}
+          {open && (
+            <CampaignFormFields
+              form={form}
+              products={products}
+              progress={savedProgress ?? {}}
+              priceUsd={googlePriceUsd}
+              pending={pending}
+              onError={setMessage}
+              onChange={(patch, ai) => {
+                setForm((current) => ({ ...current, ...patch }));
+                setSource(ai ? 'ai' : 'form');
+                setMessage('');
+              }}
             />
-          </label>
-          <AiAssist
-            text={form.outreach_goal}
-            onApply={(v) => update('outreach_goal', v)}
-          />
-          <label className="block">
-            {uk.campaign.offer}
-            <span className="block text-sm text-muted-foreground">
-              {uk.campaign.offerHint}
-            </span>
-            <textarea
-              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
-              value={form.offer}
-              maxLength={20000}
-              onChange={(e) => update('offer', e.target.value)}
-            />
-          </label>
-          <p className="text-sm text-muted-foreground">
-            {uk.campaign.offerNeedsAbout}
-          </p>
-          <AiAssist
-            text={form.offer}
-            campaignOfferContext={JSON.stringify({
-              name: form.name,
-              language: form.language_code,
-              cities: form.cities,
-              queries: form.queries,
-              outreach_goal: form.outreach_goal,
-            })}
-            onApply={(v) => {
-              update('offer', v);
-              setSource('ai');
-            }}
-          />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label>
-              {uk.campaign.batch_size}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={form.batch_size}
-                onChange={(e) =>
-                  update(
-                    'batch_size',
-                    Number(e.target.value) as CampaignInput['batch_size'],
-                  )
-                }
-              >
-                {[20, 50, 100, 200].map((n) => (
-                  <option key={n}>{n}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {uk.campaign.send_mode}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={form.send_mode}
-                onChange={(e) =>
-                  update(
-                    'send_mode',
-                    e.target.value as CampaignInput['send_mode'],
-                  )
-                }
-              >
-                {Object.entries(uk.campaign.modes).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <fieldset>
-            <legend>{uk.campaign.channels}</legend>
-            <div className="flex flex-wrap gap-4">
-              {Object.entries(form.channels).map(([key, v]) => (
-                <label className="flex min-h-9 items-center gap-2" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={v}
-                    onChange={(e) =>
-                      update('channels', {
-                        ...form.channels,
-                        [key]: e.target.checked,
-                      })
-                    }
-                  />
-                  {
-                    uk.campaign.channelNames[
-                      key as keyof typeof uk.campaign.channelNames
-                    ]
-                  }
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <label className="block">
-            {uk.campaign.min_score}
-            <Input
-              type="number"
-              min={0}
-              max={100}
-              value={form.min_score}
-              onChange={(e) => update('min_score', Number(e.target.value))}
-            />
-          </label>
-          <AiAssist
-            text={String(form.min_score)}
-            onApply={(v) => {
-              const n = Number(v);
-              if (Number.isFinite(n) && n >= 0 && n <= 100)
-                update('min_score', n);
-              else setMessage(uk.ai.invalid);
-            }}
-          />
-          <fieldset className="space-y-3">
-            <legend>{uk.campaign.scoring_weights}</legend>
-            {Object.entries(form.scoring_weights).map(([key, v]) => (
-              <label className="flex min-h-9 items-center gap-4" key={key}>
-                {uk.campaign.weights[key as keyof typeof uk.campaign.weights] ??
-                  key}
-                <input
-                  aria-label={
-                    uk.campaign.weights[
-                      key as keyof typeof uk.campaign.weights
-                    ] ?? key
-                  }
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={v}
-                  onChange={(e) =>
-                    update('scoring_weights', {
-                      ...form.scoring_weights,
-                      [key]: Number(e.target.value),
-                    })
-                  }
-                />
-                {v}
-              </label>
-            ))}
-          </fieldset>
-          <AiAssist
-            text={JSON.stringify(form.scoring_weights)}
-            onApply={(text) => {
-              try {
-                const scoring_weights = JSON.parse(text);
-                const parsed = campaignSchema.safeParse({
-                  ...form,
-                  scoring_weights,
-                });
-                if (
-                  !parsed.success ||
-                  Object.keys(scoring_weights).some(
-                    (key) => !(key in defaultWeights),
-                  ) ||
-                  Object.keys(defaultWeights).some(
-                    (key) => !(key in scoring_weights),
-                  )
-                )
-                  throw Error();
-                update('scoring_weights', parsed.data.scoring_weights);
-                setSource('ai');
-              } catch {
-                setMessage(uk.ai.invalid);
-              }
-            }}
-          />
-          <label className="block">
-            {uk.google.profile}
-            <select
-              className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-              value={form.field_profile}
-              onChange={(e) =>
-                update('field_profile', e.target.value as 'contacts' | 'basic')
-              }
-            >
-              <option value="contacts">{uk.google.contacts}</option>
-              <option value="basic">{uk.google.basic}</option>
-            </select>
-          </label>
-          {message && <p role="status">{message}</p>}
-        </div>
+          )}
+        </form>
       </CrudDialog>
       {selectedId && (
         <Card className="mt-4 p-4">

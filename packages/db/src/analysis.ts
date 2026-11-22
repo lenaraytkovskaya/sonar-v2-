@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { campaignOfferContext } from './product-context.js';
 import { sonarPool } from './index.js';
 
 export async function enqueueCompanyAnalysis(
@@ -113,6 +114,9 @@ export async function analysisSnapshot(
     [companyId, campaignId],
   );
   if (!input) return null;
+  const knowledge = await campaignOfferContext(campaignId);
+  input.offer = knowledge.offer;
+  input.outreach_goal = knowledge.outreachGoal;
   const pageLimit = Math.floor(4000 / Math.max(1, input.pages.length));
   input.pages = input.pages.map((p: { source_url: string; value: unknown }) => {
     const text = String(p.value).slice(0, pageLimit);
@@ -122,8 +126,18 @@ export async function analysisSnapshot(
     "select key,value from settings where key like 'analysis.%' or key in ('company.about','ai.models','ai.model.cheap','ai.reasoning')",
   );
   const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-  if (typeof task?.payload?.analysisPrompt === 'string')
-    config['analysis.prompt'] = task.payload.analysisPrompt;
+  if (typeof task?.payload?.analysisPrompt === 'string') {
+    const marker = '[product-knowledge-v1]';
+    const current = String(config['analysis.prompt']);
+    const suffix = current.includes(marker)
+      ? current.slice(current.indexOf(marker))
+      : '';
+    config['analysis.prompt'] =
+      task.payload.analysisPrompt +
+      (suffix && !task.payload.analysisPrompt.includes(marker)
+        ? `\n${suffix}`
+        : '');
+  }
   const snapshot = {
     ...input,
     about:

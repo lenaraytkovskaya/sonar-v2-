@@ -9,15 +9,22 @@ it.skipIf(!enabled)(
       await import('./companies.js');
     const { createBatch } = await import('./batches.js');
     const prefix = randomUUID();
+    let productId: string | undefined;
     let campaignId: string | undefined;
     let otherCampaignId: string | undefined;
     const ids: string[] = [];
     try {
+      productId = (
+        await sonarPool.query(
+          'insert into products(name) values($1) returning id',
+          [prefix],
+        )
+      ).rows[0].id;
       const {
         rows: [campaign],
       } = await sonarPool.query(
-        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,.5,'{}','{}') returning id`,
-        [prefix],
+        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights,product_id) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,.5,'{}','{}',$2) returning id`,
+        [prefix, productId],
       );
       campaignId = campaign.id;
       const batch = await createBatch(
@@ -92,7 +99,7 @@ it.skipIf(!enabled)(
       const {
         rows: [otherCampaign],
       } = await sonarPool.query(
-        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) select $1,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights from campaigns where id=$2 returning id`,
+        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights,product_id) select $1,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights,product_id from campaigns where id=$2 returning id`,
         [`${prefix}-other`, campaignId],
       );
       otherCampaignId = otherCampaign.id;
@@ -262,6 +269,7 @@ it.skipIf(!enabled)(
       await sonarPool.query('delete from campaigns where id=any($1::uuid[])', [
         [campaignId, otherCampaignId].filter(Boolean),
       ]);
+      await sonarPool.query('delete from products where id=$1', [productId]);
     }
   },
 );

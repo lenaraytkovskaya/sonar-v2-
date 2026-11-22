@@ -9,6 +9,7 @@ import {
 } from '@sonar/core';
 import { normalizeTelegramRecipient } from '@sonar/core/telegram';
 import { normalizeWhatsAppRecipient } from '@sonar/core/whatsapp';
+import { campaignOfferContext } from './product-context.js';
 import { sonarPool } from './index.js';
 import {
   canonicalConversation,
@@ -530,6 +531,11 @@ export async function getConversationHistory(conversationId: string) {
     'select id,name,offer,outreach_goal as "outreachGoal",language_code as "languageCode" from campaigns where id=$1',
     [chat.conversation?.campaignId ?? null],
   );
+  if (campaign) {
+    const knowledge = await campaignOfferContext(campaign.id);
+    campaign.offer = knowledge.offer;
+    campaign.outreachGoal = knowledge.outreachGoal;
+  }
   return {
     ...chat,
     company: company ?? null,

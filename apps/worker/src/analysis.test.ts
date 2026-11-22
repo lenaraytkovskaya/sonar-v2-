@@ -1,8 +1,13 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { BudgetExceeded, OpenRouterError } from '@sonar/core';
-const { query, snapshot, budgeted, draft } = vi.hoisted(() => ({
+const { query, snapshot, budgeted, draft, knowledge } = vi.hoisted(() => ({
   query: vi.fn(),
+  knowledge: vi.fn(async () => ({
+    offer: 'Product knowledge',
+    outreachGoal: '',
+    productId: 'product',
+  })),
   snapshot: vi.fn(),
   budgeted: vi.fn(async (_s, _e, _id, run) => run()),
   draft: vi.fn(async () => {}),
@@ -11,6 +16,9 @@ vi.mock('@sonar/db', () => ({
   sonarPool: { query, connect: async () => ({ query, release: vi.fn() }) },
 }));
 vi.mock('@sonar/db/outreach', () => ({ enqueueOutreachDrafts: draft }));
+vi.mock('@sonar/db/product-context', () => ({
+  campaignOfferContext: knowledge,
+}));
 vi.mock('@sonar/db/analysis', () => ({ analysisSnapshot: snapshot }));
 vi.mock('@sonar/db/budget', async (original) => ({
   ...(await original<object>()),
@@ -164,7 +172,7 @@ it('reuses a persisted analysis without calling OpenRouter', async () => {
         id: 'prior',
         result: answer,
         cost_usd: '0.0001',
-        campaign_offer: 'Пропозиція',
+        campaign_offer: '',
       },
     ],
   });
@@ -172,6 +180,7 @@ it('reuses a persisted analysis without calling OpenRouter', async () => {
     status: 'done',
     result: { analysisId: 'prior' },
   });
+  expect(knowledge).toHaveBeenCalledWith('campaign');
   expect(budgeted).not.toHaveBeenCalled();
   expect(snapshot).not.toHaveBeenCalled();
   expect(draft).toHaveBeenCalledWith('company', 'campaign', 'prior');

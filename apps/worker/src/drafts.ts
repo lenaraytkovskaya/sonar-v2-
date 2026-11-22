@@ -41,7 +41,7 @@ export async function runOutreachDraft(
     return {
       status: 'skipped',
       reasonCode: 'campaign_offer_missing',
-      reasonUk: 'Заповніть пропозицію кампанії перед створенням чернетки.',
+      reasonUk: 'Оберіть продукт кампанії перед створенням чернетки.',
     };
   const config = data.config;
   const maxUsd = Number(config['draft.max_usd']),

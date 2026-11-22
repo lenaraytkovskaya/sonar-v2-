@@ -115,6 +115,18 @@
     "./form-replies": {
       "types": "./dist/form-replies.d.ts",
       "default": "./dist/form-replies.js"
+    },
+    "./products": {
+      "types": "./dist/products.d.ts",
+      "default": "./dist/products.js"
+    },
+    "./product-context": {
+      "types": "./dist/product-context.d.ts",
+      "default": "./dist/product-context.js"
+    },
+    "./task-overview": {
+      "types": "./dist/task-overview.d.ts",
+      "default": "./dist/task-overview.js"
     }
   },
   "files": [

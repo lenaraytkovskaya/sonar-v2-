@@ -15,6 +15,20 @@ describe('URL tab state', () => {
       expected,
     );
   });
+  it('maps legacy Prozorro links to the combined registry tab without changing other URLs', () => {
+    const query = new URLSearchParams('tab=prozorro&campaignId=campaign');
+    expect(
+      selectedTab(query, 'tab', ['googleMaps', 'registry'], 'googleMaps', {
+        prozorro: 'registry',
+      }),
+    ).toBe('registry');
+    expect(query.get('campaignId')).toBe('campaign');
+    expect(
+      selectedTab(query, 'tab', ['googleMaps'], 'googleMaps', {
+        prozorro: 'registry',
+      }),
+    ).toBe('googleMaps');
+  });
   it('routes legacy forms tabs to contact details', () => {
     const channelTabs = ['contact-details', 'email', 'facebook', 'telegram'];
     expect(

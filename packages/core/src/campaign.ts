@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getCountries } from 'libphonenumber-js/max';
 const text = z.string().trim().min(1).max(200);
+const languageCode = z.string().regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/);
 const country = z
   .string()
   .refine((v) =>
@@ -9,8 +10,15 @@ const country = z
 export const campaignSchema = z
   .object({
     name: text,
+    product_id: z.uuid().nullable().optional(),
     country_code: country,
-    language_code: z.string().regex(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/),
+    language_code: languageCode.default('uk'),
+    language_codes: z
+      .array(languageCode)
+      .min(1)
+      .max(20)
+      .refine((v) => new Set(v).size === v.length)
+      .optional(),
     cities: z.array(text).max(100),
     queries: z.array(text).max(100),
     offer: z.string().max(20000).default(''),
@@ -37,7 +45,7 @@ export const campaignSchema = z
       z.string().min(1).max(80),
       z.number().int().min(0).max(100),
     ),
-    field_profile: z.enum(['contacts', 'basic']).default('contacts'),
+    field_profile: z.literal('contacts').default('contacts'),
     status: z.enum(['draft', 'active', 'paused', 'archived']),
   })
   .strict();
@@ -48,27 +56,30 @@ export const campaignSuggestionSchema = campaignSchema
     language_code: true,
     cities: true,
     queries: true,
-    offer: true,
-    outreach_goal: true,
   })
   .extend({
     cities: z.array(text).min(1).max(100),
     queries: z.array(text).min(5).max(20),
-    // Older completed tasks do not contain this flag.
-    needs_about: z.boolean().default(false),
+    // Read completed legacy suggestions, but never apply their sales content.
+    offer: z.string().max(20000).optional(),
+    outreach_goal: z.string().max(20000).optional(),
+    needs_about: z.boolean().optional(),
   })
-  .refine((v) => !v.needs_about || v.offer === '', {
-    path: ['offer'],
-    message: 'An offer requires company.about',
-  });
+  .transform(({ name, country_code, language_code, cities, queries }) => ({
+    name,
+    country_code,
+    language_code,
+    cities,
+    queries,
+  }));
+export function normalizeCampaignLanguages<
+  T extends { language_code?: string; language_codes?: string[] },
+>(input: T) {
+  const language_codes = input.language_codes ?? [input.language_code ?? 'uk'];
+  return { ...input, language_codes, language_code: language_codes[0]! };
+}
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type CampaignSuggestion = z.infer<typeof campaignSuggestionSchema>;
-export function campaignOfferRequired(
-  channels: CampaignInput['channels'],
-  offer: string,
-): boolean {
-  return Object.values(channels).some(Boolean) && !offer.trim();
-}
 export function parseCampaignSuggestion(raw: string) {
   return campaignSuggestionSchema.parse(JSON.parse(raw));
 }
@@ -137,13 +148,15 @@ export function applyCampaignSuggestion(
   form: CampaignInput,
   suggestion: CampaignSuggestion,
 ): CampaignInput {
-  const { needs_about, ...fields } = suggestion;
-  return {
+  const languages = form.language_codes ?? [form.language_code];
+  return normalizeCampaignLanguages({
     ...form,
-    ...fields,
-    // An empty suggested offer never wipes a message the person already wrote.
-    offer: !needs_about && fields.offer.trim() ? fields.offer : form.offer,
-    outreach_goal: fields.outreach_goal?.trim() || form.outreach_goal || '',
-    queries: cleanCampaignQueries(fields.queries, fields.cities),
-  };
+    language_codes:
+      languages.length > 1 ? languages : [suggestion.language_code],
+    name: suggestion.name,
+    country_code: suggestion.country_code,
+    language_code: suggestion.language_code,
+    cities: suggestion.cities,
+    queries: cleanCampaignQueries(suggestion.queries, suggestion.cities),
+  });
 }

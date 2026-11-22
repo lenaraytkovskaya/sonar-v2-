@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import type { WorkerHealth } from '@sonar/core';
+import { orderedTaskTypes, type WorkerHealth } from '@sonar/core';
 import {
   createContext,
   useContext,
@@ -13,7 +13,7 @@ import { Callout, Section } from '@/components/ui/layout';
 import { Button } from '@/components/ui/button';
 import { ScanSummary, StatusBadge, type ScanResult } from './shared';
 import { FriendlyError } from './friendly-error';
-type Task = {
+export type Task = {
   id: string;
   type: string;
   subject_id?: string;
@@ -45,7 +45,7 @@ type Batch = {
   enriching: number;
   enriched: number;
 };
-type Count = { type: string; status: string; count: number };
+export type Count = { type: string; status: string; count: number };
 function useTaskPolling() {
   const [data, setData] = useState<{
     batches: Batch[];
@@ -162,13 +162,6 @@ export function TaskOverview() {
   const [reconciling, setReconciling] = useState<string | null>(null);
   const name = (type: string) =>
     (uk.tasks.names as Record<string, string>)[type] ?? uk.tasks.unknown;
-  const active = [
-    ...new Set(
-      counts
-        .filter((x) => ['queued', 'running'].includes(x.status))
-        .map((x) => x.type),
-    ),
-  ];
   const retry = async (id: string, action = 'retry', charged?: boolean) => {
     setPending(id);
     try {
@@ -290,94 +283,138 @@ export function TaskOverview() {
           </details>
         )}
       </Section>
-      <Section
-        title={uk.tasks.active}
+      <TaskActivitySection
+        tasks={tasks}
+        counts={counts}
+        activeOnly
         description={`${uk.email.sentToday}: ${sentToday}`}
-      >
-        {active.length === 0 && (
-          <p className="text-sm text-muted-foreground">{uk.tasks.empty}</p>
-        )}
-        {active.length > 0 && (
-          <ul className="grid gap-4 md:grid-cols-2">
-            {active.map((type) => {
-              const rows = counts.filter((x) => x.type === type);
-              const total = rows.reduce((s, x) => s + x.count, 0);
-              const done = rows
-                .filter((x) => x.status === 'done')
-                .reduce((s, x) => s + x.count, 0);
-              return (
-                <li key={type} className="space-y-1.5 text-sm">
-                  <ProgressRow label={name(type)} value={done} max={total} />
-                  <div className="flex flex-wrap gap-1">
-                    {rows.map((x) => (
-                      <StatusBadge key={x.status} status={x.status}>
-                        {
-                          uk.tasks.status[
-                            x.status as keyof typeof uk.tasks.status
-                          ]
-                        }
-                        : {x.count}
-                      </StatusBadge>
-                    ))}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <ul className="mt-5 divide-y divide-border border-t border-border">
-          {tasks
-            // Registry health checks repeat every few minutes; one line is enough.
-            .filter(
-              (task, index, all) =>
-                task.type !== 'system.registry_ping' ||
-                all.findIndex((other) => other.type === task.type) === index,
-            )
-            .slice(0, 5)
-            .map((task) => (
-              <li
-                key={task.id}
-                className="flex min-w-0 flex-wrap items-start justify-between gap-2 py-2.5 text-sm break-words"
-              >
-                <span className="min-w-0">
-                  {name(task.type)}
-                  {task.company_name && (
-                    <span className="text-muted-foreground">
-                      {' '}
-                      · {task.company_name}
-                    </span>
-                  )}
-                  {task.reason_uk && (
+      />
+    </div>
+  );
+}
+
+export function TaskActivitySection({
+  tasks,
+  counts,
+  failures = [],
+  activeOnly = false,
+  description,
+  emptyText = uk.tasks.empty,
+}: {
+  tasks: Task[];
+  counts: Count[];
+  failures?: Task[];
+  activeOnly?: boolean;
+  description?: string;
+  emptyText?: string;
+}) {
+  const active = orderedTaskTypes(counts, activeOnly);
+  const name = (type: string) =>
+    (uk.tasks.names as Record<string, string>)[type] ?? uk.tasks.unknown;
+  return (
+    <Section title={uk.tasks.active} description={description}>
+      {active.length === 0 && (
+        <p className="text-sm text-muted-foreground">{emptyText}</p>
+      )}
+      {active.length > 0 && (
+        <ul className="grid gap-4 md:grid-cols-2">
+          {active.map((type) => {
+            const rows = counts.filter((x) => x.type === type);
+            const total = rows.reduce((s, x) => s + x.count, 0);
+            const done = rows
+              .filter((x) => x.status === 'done')
+              .reduce((s, x) => s + x.count, 0);
+            return (
+              <li key={type} className="space-y-1.5 text-sm">
+                <ProgressRow label={name(type)} value={done} max={total} />
+                <div className="flex flex-wrap gap-1">
+                  {rows.map((x) => (
+                    <StatusBadge key={x.status} status={x.status}>
+                      {
+                        uk.tasks.status[
+                          x.status as keyof typeof uk.tasks.status
+                        ]
+                      }
+                      : {x.count}
+                    </StatusBadge>
+                  ))}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <ul className="mt-5 divide-y divide-border border-t border-border">
+        {tasks
+          // Registry health checks repeat every few minutes; one line is enough.
+          .filter(
+            (task, index, all) =>
+              task.type !== 'system.registry_ping' ||
+              all.findIndex((other) => other.type === task.type) === index,
+          )
+          .slice(0, 5)
+          .map((task) => (
+            <li
+              key={task.id}
+              className="flex min-w-0 flex-wrap items-start justify-between gap-2 py-2.5 text-sm break-words"
+            >
+              <span className="min-w-0">
+                {name(task.type)}
+                {task.company_name && (
+                  <span className="text-muted-foreground">
+                    {' '}
+                    · {task.company_name}
+                  </span>
+                )}
+                {task.reason_uk && (
+                  <span className="block text-xs text-muted-foreground">
+                    <FriendlyError reason={task.reason_uk} />
+                  </span>
+                )}
+                {task.type === 'site.scan' && (
+                  <ScanSummary result={task.result} />
+                )}
+                {task.type === 'system.registry_ping' &&
+                  task.result?.approximate && (
                     <span className="block text-xs text-muted-foreground">
-                      <FriendlyError reason={task.reason_uk} />
+                      {uk.tasks.approximate}:{' '}
+                      {Object.entries(task.result.counts ?? {})
+                        .map(
+                          ([table, count]) =>
+                            `${uk.tasks.registryTables[table as keyof typeof uk.tasks.registryTables] ?? table}: ${count ?? uk.tasks.estimateUnavailable}`,
+                        )
+                        .join(' / ')}
                     </span>
                   )}
-                  {task.type === 'site.scan' && (
-                    <ScanSummary result={task.result} />
-                  )}
-                  {task.type === 'system.registry_ping' &&
-                    task.result?.approximate && (
-                      <span className="block text-xs text-muted-foreground">
-                        {uk.tasks.approximate}:{' '}
-                        {Object.entries(task.result.counts ?? {})
-                          .map(
-                            ([table, count]) =>
-                              `${uk.tasks.registryTables[table as keyof typeof uk.tasks.registryTables] ?? table}: ${count ?? uk.tasks.estimateUnavailable}`,
-                          )
-                          .join(' / ')}
-                      </span>
-                    )}
-                </span>
+              </span>
+              <StatusBadge status={task.status}>
+                {uk.tasks.status[task.status as keyof typeof uk.tasks.status] ??
+                  task.status}
+              </StatusBadge>
+            </li>
+          ))}
+      </ul>
+      {failures.length > 0 && (
+        <details className="mt-4 border-t border-border pt-3">
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            {uk.tasks.failures} ({failures.length})
+          </summary>
+          <ul className="mt-3 space-y-3 text-sm">
+            {failures.map((task) => (
+              <li key={task.id} className="break-words">
+                {name(task.type)}{' '}
                 <StatusBadge status={task.status}>
-                  {uk.tasks.status[
-                    task.status as keyof typeof uk.tasks.status
-                  ] ?? task.status}
+                  {uk.tasks.status[task.status as keyof typeof uk.tasks.status]}
                 </StatusBadge>
+                <div className="mt-1 text-muted-foreground">
+                  <FriendlyError reason={task.reason_uk ?? uk.tasks.unknown} />
+                </div>
               </li>
             ))}
-        </ul>
-      </Section>
-    </div>
+          </ul>
+        </details>
+      )}
+    </Section>
   );
 }
 

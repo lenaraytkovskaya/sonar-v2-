@@ -1,5 +1,5 @@
 import { afterAll, expect, it, vi } from 'vitest';
-import { PaidHttpError } from '@sonar/core';
+import { PaidHttpError, contactFields } from '@sonar/core';
 import { randomUUID } from 'node:crypto';
 const enabled = process.env.RUN_DB_TESTS === '1';
 it.skipIf(!enabled)(
@@ -11,6 +11,7 @@ it.skipIf(!enabled)(
       await import('../../../apps/worker/src/google.js');
     const prefix = randomUUID();
     const campaigns: string[] = [];
+    let productId: string | undefined;
     const { rows: original } = await sonarPool.query(
       "select key,value from settings where key='budget.monthly_usd'",
     );
@@ -21,8 +22,8 @@ it.skipIf(!enabled)(
       const {
         rows: [c],
       } = await sonarPool.query(
-        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,$3,'{}') returning id`,
-        [prefix, budget, JSON.stringify(channels)],
+        `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,scoring_weights,product_id) values($1,'UA','uk',ARRAY['Київ'],ARRAY['СТО'],'',20,$2,$3,'{}',$4) returning id`,
+        [prefix, budget, JSON.stringify(channels), productId],
       );
       campaigns.push(c.id);
       return c.id;
@@ -33,8 +34,15 @@ it.skipIf(!enabled)(
       websiteUri: 'https://www.example.com',
       nationalPhoneNumber: '044 222 33 44',
       businessStatus: 'OPERATIONAL',
+      regularOpeningHours: { weekdayDescriptions: ['Monday: 9–18'] },
     });
     try {
+      productId = (
+        await sonarPool.query(
+          'insert into products(name) values($1) returning id',
+          [prefix],
+        )
+      ).rows[0].id;
       await sonarPool.query(
         "insert into settings(key,value) values('budget.monthly_usd','100') on conflict(key) do update set value=excluded.value",
       );
@@ -42,10 +50,132 @@ it.skipIf(!enabled)(
         "insert into companies(place_id,name) values($1,'Known')",
         [place(100).id],
       );
+      await expect(
+        createBatch(await campaign(0.035), null, randomUUID(), false, false),
+      ).rejects.toThrow('бюджет');
+      const multilingual = await campaign();
+      await sonarPool.query(
+        "update campaigns set queries=ARRAY['q1','q2'],cities=ARRAY['c1','c2'],language_codes=ARRAY['uk','en'] where id=$1",
+        [multilingual],
+      );
+      const languageBatch = await createBatch(
+        multilingual,
+        null,
+        randomUUID(),
+        true,
+        false,
+      );
+      const languageSearch = vi.fn(
+        async (input: { textQuery: string; languageCode: string }) => ({
+          places: [
+            place(9000),
+            {
+              ...place(9001),
+              id: `${prefix}-${input.textQuery}-${input.languageCode}`,
+            },
+          ],
+        }),
+      );
+      await runGoogleBatch(languageBatch.id, languageSearch);
+      expect(languageSearch).toHaveBeenCalledTimes(8);
+      expect(
+        new Set(
+          languageSearch.mock.calls.map(
+            ([input]) => `${input.textQuery}:${input.languageCode}`,
+          ),
+        ).size,
+      ).toBe(8);
+      expect(
+        (
+          await sonarPool.query(
+            'select found_new+found_known as found from batches where id=$1',
+            [languageBatch.id],
+          )
+        ).rows[0].found,
+      ).toBe(9);
+      expect(
+        (
+          await sonarPool.query(
+            "select count(*)::int as n from company_facts f join campaign_companies cc on cc.company_id=f.company_id where cc.batch_id=$1 and f.kind='google_opening_hours' and f.source='google' and f.expires_at>f.found_at",
+            [languageBatch.id],
+          )
+        ).rows[0].n,
+      ).toBe(9);
+      const staleProfile = {
+        id: 'basic',
+        name: 'Old',
+        fields: ['places.id', 'nextPageToken'],
+        priceUsd: 0.001,
+        sku: 'Text Search Pro',
+      };
+      for (const id of ['basic', 'contacts']) {
+        const frozenProfile =
+          id === 'basic'
+            ? staleProfile
+            : {
+                ...staleProfile,
+                id,
+                fields: ['places.id', 'places.websiteUri', 'nextPageToken'],
+                sku: 'Text Search Enterprise',
+              };
+        const staleBatch = await createBatch(
+          await campaign(),
+          null,
+          randomUUID(),
+          false,
+          false,
+        );
+        await sonarPool.query(
+          "update batches set config=jsonb_set(config,'{profile}',$2::jsonb) where id=$1",
+          [staleBatch.id, JSON.stringify(frozenProfile)],
+        );
+        const configuredProfile = (
+          await sonarPool.query(
+            "select value from settings where key='google.field_profiles'",
+          )
+        ).rows[0].value.find(
+          (profile: { id: string }) => profile.id === 'contacts',
+        );
+        const currentSearch = vi.fn(
+          async (
+            _input: unknown,
+            profile: { fields: string[]; priceUsd: number },
+          ) => {
+            expect(profile.fields).toEqual(
+              expect.arrayContaining(contactFields),
+            );
+            expect(profile.priceUsd).toBe(configuredProfile.priceUsd);
+            return { places: [] };
+          },
+        );
+        await runGoogleBatch(staleBatch.id, currentSearch);
+        expect(currentSearch).toHaveBeenCalledTimes(1);
+        expect(
+          Number(
+            (
+              await sonarPool.query(
+                'select cost_usd from spend_events s join tasks t on t.id=s.task_id where t.batch_id=$1',
+                [staleBatch.id],
+              )
+            ).rows[0].cost_usd,
+          ),
+        ).toBe(configuredProfile.priceUsd);
+        expect(
+          (
+            await sonarPool.query('select config from batches where id=$1', [
+              staleBatch.id,
+            ])
+          ).rows[0].config.profile,
+        ).toEqual(frozenProfile);
+      }
       const blockedCampaign = await campaign(0.5, { email: true });
+      await sonarPool.query(
+        'update campaigns set product_id=null where id=$1',
+        [blockedCampaign],
+      );
       await expect(
         createBatch(blockedCampaign, null, randomUUID(), false, false),
-      ).rejects.toThrow('Заповніть пропозицію кампанії');
+      ).rejects.toThrow('Оберіть продукт');
       expect(
         (
           await sonarPool.query(
@@ -54,10 +184,10 @@ it.skipIf(!enabled)(
           )
         ).rows[0].count,
       ).toBe(0);
-      await sonarPool.query(
-        "update campaigns set offer='Пропозиція для ніші' where id=$1",
-        [blockedCampaign],
-      );
+      await sonarPool.query('update campaigns set product_id=$2 where id=$1', [
+        blockedCampaign,
+        productId,
+      ]);
       expect(
         await createBatch(blockedCampaign, null, randomUUID(), false, false),
       ).toHaveProperty('id');
@@ -201,7 +331,7 @@ it.skipIf(!enabled)(
         await createBatch(rejectedCampaign, null, randomUUID(), false, false),
       ).toEqual({ exhausted: true });
       const forbidden = await createBatch(
-        await campaign(0.035),
+        await campaign(0.5),
         null,
         randomUUID(),
         false,
@@ -300,11 +430,15 @@ it.skipIf(!enabled)(
       release();
       await ongoing;
       const limit = await createBatch(
-        await campaign(0.035),
+        await campaign(0.5),
         null,
         randomUUID(),
         false,
         false,
+      );
+      await sonarPool.query(
+        'update campaigns set budget_usd=0.035 where id=$1',
+        [limit.campaign_id],
       );
       const limited = vi.fn(async () => ({
         places: [place(400)],
@@ -315,7 +449,7 @@ it.skipIf(!enabled)(
         reasonCode: 'budget_exceeded',
       });
       expect(limited).toHaveBeenCalledTimes(1);
-      const concurrentCampaign = await campaign(0.035);
+      const concurrentCampaign = await campaign(0.5);
       const first = await createBatch(
         concurrentCampaign,
         null,
@@ -329,6 +463,10 @@ it.skipIf(!enabled)(
         randomUUID(),
         false,
         false,
+      );
+      await sonarPool.query(
+        'update campaigns set budget_usd=0.035 where id=$1',
+        [concurrentCampaign],
       );
       const parallel = vi.fn(async () => {
         await new Promise((r) => setTimeout(r, 50));
@@ -376,6 +514,10 @@ it.skipIf(!enabled)(
           costUsd: 0.035,
           units: 1,
         }),
+      );
+      await sonarPool.query(
+        "update batches set config=jsonb_set(config,'{profile}',$2::jsonb) where id=$1",
+        [recovery.id, JSON.stringify(staleProfile)],
       );
       const never = vi.fn(async () => {
         throw Error('Must reuse paid response');
@@ -486,6 +628,10 @@ it.skipIf(!enabled)(
         [campaigns],
       );
       await sonarPool.query(
+        'delete from company_facts where company_id in(select id from companies where place_id like $1)',
+        [prefix + '%'],
+      );
+      await sonarPool.query(
         'delete from contacts where company_id in(select id from companies where place_id like $1)',
         [prefix + '%'],
       );
@@ -503,6 +649,7 @@ it.skipIf(!enabled)(
       await sonarPool.query('delete from campaigns where id=any($1::uuid[])', [
         campaigns,
       ]);
+      await sonarPool.query('delete from products where id=$1', [productId]);
       await sonarPool.query(
         "delete from settings where key='budget.monthly_usd'",
       );
