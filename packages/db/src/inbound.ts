@@ -683,6 +683,7 @@ export async function ensureContactConversation(
       'email',
       'telegram',
       'whatsapp',
+      'viber',
       ...manualChannels,
     ].includes(contact.kind)
       ? contact.kind
