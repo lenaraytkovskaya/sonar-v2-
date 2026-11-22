@@ -132,15 +132,11 @@ export async function campaignProgress(
       // Never replace a newer page/token with a lower-index receipt.
       if ((progress[stateKey]?.pages ?? 0) > pageIndex + 1) continue;
       const page = googlePageSchema.parse(JSON.parse(row.meta.response.text));
-      let end = -1;
-      page.places.forEach((place, i) => {
-        if (ids.has(place.id)) end = i;
-      });
       progress[stateKey] = {
         pages: pageIndex + 1,
         token: page.nextPageToken,
         exhausted: !page.nextPageToken || pageIndex >= 2,
-        buffer: page.places.slice(end + 1),
+        buffer: page.places.filter((place) => !ids.has(place.id)),
       };
     }
   }
