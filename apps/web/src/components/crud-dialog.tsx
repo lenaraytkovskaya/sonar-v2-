@@ -32,6 +32,7 @@ export function CrudDialog({
   onOpenChange,
   title,
   pending = false,
+  wide = false,
   draft,
   children,
   actions,
@@ -40,6 +41,7 @@ export function CrudDialog({
   onOpenChange: (open: boolean) => void;
   title: string;
   pending?: boolean;
+  wide?: boolean;
   draft: unknown;
   children: ReactNode;
   actions?: ReactNode;
@@ -81,7 +83,12 @@ export function CrudDialog({
             )
               event.preventDefault();
           }}
-          className="fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-xl"
+          className={cn(
+            'fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden border border-border bg-surface text-foreground shadow-xl',
+            wide
+              ? 'h-[100dvh] max-h-[100dvh] w-full max-w-none rounded-none sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-5xl sm:rounded-xl'
+              : 'max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-3xl rounded-xl',
+          )}
           onOpenAutoFocus={() => {
             returnFocus.current = document.activeElement as HTMLElement;
             returnRegion.current =
@@ -114,7 +121,12 @@ export function CrudDialog({
               <X aria-hidden="true" />
             </Button>
           </div>
-          <div className="min-h-0 overflow-y-auto overscroll-contain p-4">
+          <div
+            className={cn(
+              'min-h-0 overflow-y-auto overscroll-contain p-4',
+              wide && 'flex-1',
+            )}
+          >
             <fieldset
               className="min-w-0 space-y-4"
               disabled={pending}
