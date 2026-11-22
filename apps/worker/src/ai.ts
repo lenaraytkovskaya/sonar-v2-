@@ -61,7 +61,7 @@ export async function runAiAssist(
     };
   const context =
     input.action === 'campaign'
-      ? JSON.stringify({ 'company.about': about, context: input.context ?? '' })
+      ? JSON.stringify({ context: input.context ?? '' })
       : input.action === 'campaign_offer'
         ? JSON.stringify({
             'company.about': about,
@@ -134,12 +134,7 @@ export async function runAiAssist(
         return {
           status: 'done',
           result: {
-            suggestion: (() => {
-              const suggestion = parseCampaignSuggestion(response.text);
-              return about
-                ? { ...suggestion, needs_about: false }
-                : { ...suggestion, offer: '', needs_about: true };
-            })(),
+            suggestion: parseCampaignSuggestion(response.text),
             costUsd: response.costUsd,
           },
         };

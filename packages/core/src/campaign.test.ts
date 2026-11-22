@@ -1,7 +1,6 @@
 import { expect, it } from 'vitest';
 import {
   campaignSchema,
-  campaignOfferRequired,
   parseCampaignSuggestion,
   cleanCampaignQueries,
   applyCampaignSuggestion,
@@ -18,10 +17,12 @@ const suggestion = {
     'шиномонтаж',
     'діагностика авто',
   ],
-  offer: 'Доброго дня',
 };
 const form = {
   ...suggestion,
+  offer: 'Legacy offer',
+  outreach_goal: 'Legacy goal',
+  product_id: '83d7c52f-6aaa-47b1-aa49-c40d738cc44e',
   batch_size: 20,
   budget_usd: 0.5,
   channels: { email: true, telegram: false, whatsapp: false, forms: false },
@@ -38,35 +39,16 @@ it('validates form limits, real ISO country and supported batch sizes', () => {
     { budget_usd: NaN },
     { scoring_weights: { website: 101 } },
     { name: '' },
+    { product_id: 'invented' },
   ])
     expect(campaignSchema.safeParse({ ...form, ...change }).success).toBe(
       false,
     );
 });
-it('requires an offer only when a sending channel is enabled', () => {
-  expect(campaignOfferRequired(form.channels, '  ')).toBe(true);
-  expect(campaignOfferRequired(form.channels, 'Dental clinic growth')).toBe(
-    false,
-  );
-  expect(
-    campaignOfferRequired(
-      {
-        email: false,
-        telegram: false,
-        whatsapp: false,
-        viber: false,
-        forms: false,
-      },
-      '',
-    ),
-  ).toBe(false);
-});
 it('accepts structured AI JSON and rejects prose, markdown and incomplete suggestions', () => {
-  expect(parseCampaignSuggestion(JSON.stringify(suggestion))).toEqual({
-    ...suggestion,
-    needs_about: false,
-    outreach_goal: '',
-  });
+  expect(parseCampaignSuggestion(JSON.stringify(suggestion))).toEqual(
+    suggestion,
+  );
   for (const text of [
     'broken',
     '```json\n{}\n```',
@@ -76,19 +58,18 @@ it('accepts structured AI JSON and rejects prose, markdown and incomplete sugges
     expect(() => parseCampaignSuggestion(text)).toThrow();
 });
 
-it('accepts needs_about and legacy suggestions, but rejects inconsistent or malformed flags', () => {
-  expect(parseCampaignSuggestion(JSON.stringify(suggestion)).needs_about).toBe(
-    false,
-  );
-  expect(
-    parseCampaignSuggestion(
-      JSON.stringify({ ...suggestion, offer: '', needs_about: true }),
-    ).needs_about,
-  ).toBe(true);
+it('reads completed legacy suggestions without exposing sales fields and rejects invented product IDs', () => {
+  for (const legacy of [
+    { offer: 'Old offer', outreach_goal: 'Old goal', needs_about: false },
+    { offer: '', needs_about: true },
+  ])
+    expect(
+      parseCampaignSuggestion(JSON.stringify({ ...suggestion, ...legacy })),
+    ).toEqual(suggestion);
   for (const change of [
     { needs_about: 'true' },
-    { needs_about: true },
     { needs_about: null },
+    { product_id: form.product_id },
   ])
     expect(() =>
       parseCampaignSuggestion(JSON.stringify({ ...suggestion, ...change })),
@@ -143,17 +124,22 @@ it('escapes punctuation, keeps unrelated words and does not match parts of multi
 });
 it('applies cleaned suggestions without leaking metadata into the strict campaign schema', () => {
   const input = campaignSchema.parse(form);
-  const result = applyCampaignSuggestion(input, {
+  const unsafeSuggestion = {
     ...suggestion,
     needs_about: true,
-    offer: '',
+    offer: 'Do not apply',
+    outreach_goal: 'Do not apply',
+    product_id: 'another-product',
     queries: ['СТО Київ', 'сто Києва', 'Київ'],
-  });
+  };
+  const result = applyCampaignSuggestion(input, unsafeSuggestion);
   expect(result.queries).toEqual(['СТО']);
   expect(result.offer).toBe(input.offer);
   expect(campaignSchema.safeParse(result).success).toBe(true);
   expect(result).not.toHaveProperty('needs_about');
-  expect(input.offer).toBe(suggestion.offer);
+  expect(result.outreach_goal).toBe(input.outreach_goal);
+  expect(result.product_id).toBe(input.product_id);
+  expect(input.offer).toBe('Legacy offer');
 });
 
 it('defaults new campaigns to manual and validates outreach thresholds', () => {
@@ -171,10 +157,25 @@ it('defaults new campaigns to manual and validates outreach thresholds', () => {
       JSON.stringify({ ...suggestion, outreach_goal: 'Познайомитися' }),
     ),
   );
-  expect(filled.outreach_goal).toBe('Познайомитися');
+  expect(filled.outreach_goal).toBe(parsed.outreach_goal);
 });
 it('accepts only the complete contacts profile for campaigns', () => {
   expect(
     campaignSchema.safeParse({ ...form, field_profile: 'basic' }).success,
   ).toBe(false);
 });
+it.each([
+  { languages: ['uk'], expected: ['pl'] },
+  { languages: ['uk', 'en'], expected: ['uk', 'en'] },
+])(
+  'applies suggested language only without an explicit multi-language choice (%j)',
+  ({ languages, expected }) => {
+    const input = campaignSchema.parse({ ...form, language_codes: languages });
+    const result = applyCampaignSuggestion(input, {
+      ...suggestion,
+      language_code: 'pl',
+    });
+    expect(result.language_codes).toEqual(expected);
+    expect(result.language_code).toBe(expected[0]);
+  },
+);

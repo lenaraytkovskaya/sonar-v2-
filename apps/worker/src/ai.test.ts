@@ -36,7 +36,7 @@ const instruction = migration.split('$prompt$')[1];
 const campaignOfferInstruction = migration.split('$prompt$')[3];
 beforeEach(() => vi.clearAllMocks());
 it.each(['Обладнання для СТО.', '', '   ', undefined])(
-  'passes authoritative company.about separately from recipient context (%s)',
+  'builds niche suggestions without sender-profile or generated sales content (%s)',
   async (about) => {
     query.mockResolvedValue({
       rows: Object.entries({
@@ -70,21 +70,25 @@ it.each(['Обладнання для СТО.', '', '   ', undefined])(
       { content: string }[],
       number,
     ];
-    expect(message[1][1]!.content).toContain(
-      `"company.about":"${about?.trim() ?? ''}"`,
-    );
+    expect(message[1][1]!.content).not.toContain('"company.about":');
+    if (about?.trim())
+      expect(message[1][1]!.content).not.toContain(about.trim());
     expect(message[1][1]!.content).toContain('"context":"recipient context"');
     expect(message[1][1]!.content).toContain(instruction);
     expect(result).toMatchObject({
       status: 'done',
       result: {
         suggestion: {
-          offer: about?.trim() ? suggestion.offer : '',
-          outreach_goal: suggestion.outreach_goal,
-          needs_about: !about?.trim(),
+          name: suggestion.name,
+          country_code: suggestion.country_code,
+          queries: suggestion.queries,
         },
       },
     });
+    for (const key of ['offer', 'outreach_goal', 'needs_about', 'product_id'])
+      expect(
+        (result.result as { suggestion: object }).suggestion,
+      ).not.toHaveProperty(key);
     expect(complete).toHaveBeenCalledTimes(1);
     expect(budgeted).toHaveBeenCalledTimes(1);
   },

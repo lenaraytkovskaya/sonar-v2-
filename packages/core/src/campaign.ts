@@ -56,19 +56,22 @@ export const campaignSuggestionSchema = campaignSchema
     language_code: true,
     cities: true,
     queries: true,
-    offer: true,
-    outreach_goal: true,
   })
   .extend({
     cities: z.array(text).min(1).max(100),
     queries: z.array(text).min(5).max(20),
-    // Older completed tasks do not contain this flag.
-    needs_about: z.boolean().default(false),
+    // Read completed legacy suggestions, but never apply their sales content.
+    offer: z.string().max(20000).optional(),
+    outreach_goal: z.string().max(20000).optional(),
+    needs_about: z.boolean().optional(),
   })
-  .refine((v) => !v.needs_about || v.offer === '', {
-    path: ['offer'],
-    message: 'An offer requires company.about',
-  });
+  .transform(({ name, country_code, language_code, cities, queries }) => ({
+    name,
+    country_code,
+    language_code,
+    cities,
+    queries,
+  }));
 export function normalizeCampaignLanguages<
   T extends { language_code?: string; language_codes?: string[] },
 >(input: T) {
@@ -77,12 +80,6 @@ export function normalizeCampaignLanguages<
 }
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type CampaignSuggestion = z.infer<typeof campaignSuggestionSchema>;
-export function campaignOfferRequired(
-  channels: CampaignInput['channels'],
-  offer: string,
-): boolean {
-  return Object.values(channels).some(Boolean) && !offer.trim();
-}
 export function parseCampaignSuggestion(raw: string) {
   return campaignSuggestionSchema.parse(JSON.parse(raw));
 }
@@ -151,14 +148,15 @@ export function applyCampaignSuggestion(
   form: CampaignInput,
   suggestion: CampaignSuggestion,
 ): CampaignInput {
-  const { needs_about, ...fields } = suggestion;
+  const languages = form.language_codes ?? [form.language_code];
   return normalizeCampaignLanguages({
     ...form,
-    ...fields,
-    language_codes: form.language_codes ?? [form.language_code],
-    // An empty suggested offer never wipes a message the person already wrote.
-    offer: !needs_about && fields.offer.trim() ? fields.offer : form.offer,
-    outreach_goal: fields.outreach_goal?.trim() || form.outreach_goal || '',
-    queries: cleanCampaignQueries(fields.queries, fields.cities),
+    language_codes:
+      languages.length > 1 ? languages : [suggestion.language_code],
+    name: suggestion.name,
+    country_code: suggestion.country_code,
+    language_code: suggestion.language_code,
+    cities: suggestion.cities,
+    queries: cleanCampaignQueries(suggestion.queries, suggestion.cities),
   });
 }
