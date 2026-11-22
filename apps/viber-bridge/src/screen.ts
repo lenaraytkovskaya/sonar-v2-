@@ -307,7 +307,9 @@ export function messageBubbleRegions(
           write < 1500 ||
           boxWidth < 100 ||
           boxHeight < 28 ||
-          boxWidth >= chatWidth * 0.9
+          boxWidth >= chatWidth * 0.9 ||
+          // Touching the top edge of the scanned area means a banner under the chat header.
+          minY <= headerBottom + 4
         )
           continue;
         const rgb = [
