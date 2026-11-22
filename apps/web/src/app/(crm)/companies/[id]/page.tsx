@@ -1,7 +1,7 @@
 import { channelLabel } from '@/lib/outreach-labels';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { ExternalLink, MapPin, Star } from 'lucide-react';
+import { ExternalLink, Star } from 'lucide-react';
 import { validId } from '@/lib/api-access';
 import { notFound } from 'next/navigation';
 import {
@@ -26,7 +26,7 @@ import { SiteScan } from '@/components/site-scan';
 import { WebsiteCandidate } from '@/components/website-candidate';
 import { RegistryMatch } from '@/components/registry-match';
 import { LocalTime } from '@/components/local-time';
-import { ScanSummary, Score } from '@/components/shared';
+import { Score } from '@/components/shared';
 import { cn } from '@/lib/utils';
 import { ChannelIcon } from '@/components/channel-icon';
 import { WhatsAppRetry } from '@/components/whatsapp-retry';
@@ -171,16 +171,7 @@ export default async function Page({
     prozorroCompanyCodes(id),
   ]);
   if (!data) notFound();
-  const {
-    company: c,
-    contacts,
-    campaigns,
-    history,
-    facts,
-    scans,
-    scores,
-    analyses,
-  } = data;
+  const { company: c, contacts, campaigns, facts, scores, analyses } = data;
   const siteFacts = facts.filter(
     (fact) =>
       fact.source !== 'registry' &&
@@ -209,6 +200,27 @@ export default async function Page({
       fact.source === 'registry' &&
       !['registry_entity', 'registry_candidates'].includes(fact.kind),
   );
+  const identityKinds = [
+    'edrpou',
+    'rnokpp',
+    'legal_name',
+    'short_name',
+    'director',
+    'founders',
+    'kved',
+    'legal_form',
+  ];
+  const identityFacts = registryFacts.filter((fact) =>
+    identityKinds.includes(fact.kind),
+  );
+  const registryDetails = registryFacts.filter(
+    (fact) => !identityKinds.includes(fact.kind),
+  );
+  const entityType = facts.find((fact) => fact.kind === 'registry_entity')
+    ?.value?.type;
+  const companyCodes = [
+    ...new Set(codes.flatMap((fact) => (fact.code ? [fact.code] : []))),
+  ];
   const registryName = registryFacts.find((fact) =>
     ['short_name', 'legal_name'].includes(fact.kind),
   );
@@ -587,17 +599,6 @@ export default async function Page({
                         current={c.google_maps_uri}
                         menuAction
                       />
-                      {map && (
-                        <a
-                          className="inline-flex min-h-11 items-center gap-1 text-sm text-accent"
-                          href={map}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <MapPin aria-hidden="true" className="size-4" />
-                          {uk.company.maps}
-                        </a>
-                      )}
                     </div>
                   }
                 >
@@ -619,6 +620,15 @@ export default async function Page({
                             ) : (
                               (google?.formattedAddress ?? c.address)
                             )
+                          ) : map ? (
+                            <a
+                              className="break-all text-accent"
+                              href={map}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {map}
+                            </a>
                           ) : (
                             uk.company.noData
                           ),
@@ -794,7 +804,10 @@ export default async function Page({
                           ]
                         }{' '}
                         · <LocalTime value={fact.found_at} dateOnly />
-                        <SourceLink url={fact.source_url} />
+                        {normalizeWebsite(fact.source_url ?? undefined)
+                          ?.website !== fact.site.website && (
+                          <SourceLink url={fact.source_url} />
+                        )}
                       </p>
                       <WebsiteCandidate companyId={id} factId={fact.id} />
                     </div>
@@ -847,13 +860,30 @@ export default async function Page({
                               (uk.scanner.captchas[
                                 fact.value as keyof typeof uk.scanner.captchas
                               ] ?? String(fact.value))
+                            ) : typeof fact.value === 'string' &&
+                              /^https?:\/\/\S+$/.test(fact.value) &&
+                              normalizeWebsite(fact.value) ? (
+                              <a
+                                className="break-all text-accent"
+                                href={normalizeWebsite(fact.value)!.website}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {fact.value}
+                              </a>
                             ) : typeof fact.value === 'string' ? (
                               fact.value
                             ) : (
                               JSON.stringify(fact.value)
                             )}
                           </span>
-                          <SourceLink url={fact.source_url} />
+                          {!(
+                            typeof fact.value === 'string' &&
+                            /^https?:\/\/\S+$/.test(fact.value) &&
+                            normalizeWebsite(fact.value)?.website ===
+                              normalizeWebsite(fact.source_url ?? undefined)
+                                ?.website
+                          ) && <SourceLink url={fact.source_url} />}
                         </p>
                       )}
                     </div>
@@ -883,12 +913,84 @@ export default async function Page({
             label: uk.company.sectionTabs.registry,
             content: (
               <div className="min-w-0 space-y-3">
+                <Section title={uk.company.sectionTabs.registry}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {companyCodes.map((code) => (
+                      <span
+                        key={code}
+                        className="font-mono text-base font-semibold"
+                      >
+                        {code}
+                      </span>
+                    ))}
+                    {entityType && (
+                      <span className="rounded-full bg-chip px-2 py-1 text-xs">
+                        {uk.registry.entityTypes[
+                          entityType as keyof typeof uk.registry.entityTypes
+                        ] ?? entityType}
+                      </span>
+                    )}
+                    {[
+                      ...new Set(
+                        codes
+                          .filter((fact) => fact.code)
+                          .map((fact) => fact.source),
+                      ),
+                      ...(registryFacts.length ? ['registry'] : []),
+                      ...(prozorro ? ['prozorro'] : []),
+                    ]
+                      .filter(
+                        (source, index, all) => all.indexOf(source) === index,
+                      )
+                      .map((source) => (
+                        <span
+                          key={source}
+                          className="rounded-full bg-chip px-2 py-1 text-xs"
+                        >
+                          {uk.company.sources[
+                            source as keyof typeof uk.company.sources
+                          ] ?? source}
+                        </span>
+                      ))}
+                  </div>
+                  <DetailList
+                    items={identityFacts
+                      .filter(
+                        (fact) => !['edrpou', 'rnokpp'].includes(fact.kind),
+                      )
+                      .map((fact) => ({
+                        label:
+                          uk.registry.kinds[
+                            fact.kind as keyof typeof uk.registry.kinds
+                          ] ?? fact.kind,
+                        value:
+                          fact.kind === 'founders' && Array.isArray(fact.value)
+                            ? fact.value
+                                .map(
+                                  (founder: {
+                                    name: string | null;
+                                    role: string;
+                                  }) =>
+                                    [founder.name, founder.role]
+                                      .filter(Boolean)
+                                      .join(' · '),
+                                )
+                                .join('; ')
+                            : String(fact.value),
+                      }))}
+                  />
+                  {!companyCodes.length && !identityFacts.length && (
+                    <p className="text-sm text-muted-foreground">
+                      {uk.registry.empty}
+                    </p>
+                  )}
+                </Section>
                 <Section title={uk.company.registry}>
                   <ManualSource companyId={id} source="registry" />
                   <RegistryMatch companyId={c.id} candidates={candidates} />
-                  {registryFacts.length > 0 && (
+                  {registryDetails.length > 0 && (
                     <dl className="grid sm:grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-                      {registryFacts.map((fact) => (
+                      {registryDetails.map((fact) => (
                         <div key={fact.id} className="contents">
                           <dt className="text-muted-foreground">
                             {uk.registry.kinds[
@@ -930,6 +1032,13 @@ export default async function Page({
                       <LocalTime value={registryFacts[0].found_at} dateOnly />
                     </p>
                   )}
+                </Section>
+                <Section title={uk.prozorro.title}>
+                  <ProzorroCompany
+                    companyId={id}
+                    snapshot={prozorro}
+                    allowManualCode={!companyCodes.length}
+                  />
                 </Section>
               </div>
             ),
@@ -1095,117 +1204,6 @@ export default async function Page({
                         </li>
                       );
                     })}
-                  </ul>
-                </Section>
-              </div>
-            ),
-          },
-          {
-            key: 'prozorro',
-            label: uk.company.sectionTabs.prozorro,
-            content: (
-              <div className="min-w-0 space-y-3">
-                <Section title={uk.prozorro.title}>
-                  <ProzorroCompany
-                    companyId={id}
-                    snapshot={prozorro}
-                    allowManualCode={!codes.some((fact) => fact.code)}
-                  />
-                </Section>
-              </div>
-            ),
-          },
-          {
-            key: 'history',
-            label: uk.company.sectionTabs.history,
-            content: (
-              <div className="min-w-0 space-y-3">
-                <Section
-                  title={`${uk.company.history} · ${history.length + scans.length}`}
-                >
-                  {campaigns.map((row) => (
-                    <p
-                      key={row.id}
-                      className="flex flex-wrap items-center gap-2"
-                    >
-                      <Link
-                        className="text-accent"
-                        href={'/campaigns?campaign=' + row.id}
-                      >
-                        {row.name}
-                      </Link>{' '}
-                      {row.batch_id ? (
-                        <>
-                          <span>
-                            {uk.company.batch} #{row.number}
-                          </span>
-                          <StatusBadge status={row.status}>
-                            {
-                              uk.tasks.status[
-                                row.status as keyof typeof uk.tasks.status
-                              ]
-                            }
-                          </StatusBadge>
-                        </>
-                      ) : (
-                        uk.manual.withoutBatch
-                      )}{' '}
-                      <LocalTime value={row.added_at} />
-                    </p>
-                  ))}
-                  {scans.map((scan) => (
-                    <div key={scan.id}>
-                      <p className="flex flex-wrap items-center gap-2">
-                        {uk.scanner.title}
-                        <StatusBadge status={scan.status}>
-                          {
-                            uk.tasks.status[
-                              scan.status as keyof typeof uk.tasks.status
-                            ]
-                          }
-                        </StatusBadge>
-                        <LocalTime value={scan.created_at} />
-                      </p>
-                      {scan.reason_uk && (
-                        <p className="text-muted-foreground">
-                          {scan.reason_uk}
-                        </p>
-                      )}
-                      <ScanSummary result={scan.result} />
-                    </div>
-                  ))}
-                  <ul className="space-y-1">
-                    {history.map((row) => (
-                      <li key={row.id}>
-                        {row.action === 'company.source.manual'
-                          ? uk.manualSource.history
-                          : row.action === 'company.website.adopted'
-                            ? uk.company.websiteAdopted
-                            : row.action === 'company.found'
-                              ? uk.company.added
-                              : (uk.manual.activities[
-                                  row.action as keyof typeof uk.manual.activities
-                                ] ??
-                                uk.scanner.activities[
-                                  row.action as keyof typeof uk.scanner.activities
-                                ] ??
-                                uk.registry.activities[
-                                  row.action as keyof typeof uk.registry.activities
-                                ] ??
-                                uk.company.activity)}{' '}
-                        <span className="text-xs text-muted-foreground">
-                          · {row.user_name ?? uk.appName} ·{' '}
-                          <LocalTime value={row.created_at} />
-                        </span>
-                        {row.action === 'company.source.manual' && (
-                          <p className="break-all text-xs text-muted-foreground">
-                            {String(row.details?.target ?? '')}
-                            {row.details?.previous &&
-                              ` · ${uk.manualSource.previous}: ${String(row.details.previous)}`}
-                          </p>
-                        )}
-                      </li>
-                    ))}
                   </ul>
                 </Section>
               </div>

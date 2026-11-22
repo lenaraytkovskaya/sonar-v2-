@@ -14,6 +14,8 @@ export function CompanyTabs({
   const { active, select, visited } = useUrlTab(
     tabs.map((tab) => tab.key),
     tabs[0]?.key ?? '',
+    'tab',
+    { prozorro: 'registry' },
   );
   useEffect(() => {
     document.getElementById(`${id}-tab-${active}`)?.scrollIntoView({
