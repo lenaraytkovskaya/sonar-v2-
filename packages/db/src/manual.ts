@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import {
   manualCompanySchema,
   manualContactSchema,
@@ -19,7 +20,6 @@ export type ManualEntryErrorCode =
   | 'duplicateContact'
   | 'duplicateCompany'
   | 'contactBlocked'
-  | 'manualOnly'
   | 'contactNotFound';
 export class ManualEntryError extends Error {
   constructor(
@@ -32,6 +32,26 @@ export class ManualEntryError extends Error {
 const fail = (code: ManualEntryErrorCode): never => {
   throw new ManualEntryError(code);
 };
+async function assertNotBlocked(
+  c: PoolClient,
+  company: { id: string; domain: string | null },
+  kind: string,
+  normalized: string,
+) {
+  const contactDomain =
+    kind === 'email'
+      ? normalized.split('@')[1]
+      : kind === 'form'
+        ? new URL(normalized).hostname
+        : null;
+  const {
+    rows: [block],
+  } = await c.query(
+    `select reason from do_not_contact where company_id=$1 or (kind='company' and value_normalized=$1::text) or (kind=$2 and value_normalized=$3) or (kind='domain' and lower(value_normalized) in (lower($4),lower($5))) limit 1`,
+    [company.id, kind, normalized, company.domain, contactDomain],
+  );
+  if (block) throw new ManualEntryError('contactBlocked', block.reason);
+}
 
 export async function addManualContact(
   companyId: string,
@@ -57,19 +77,12 @@ export async function addManualContact(
     if (['refused', 'do_not_contact'].includes(company.status))
       fail('contactBlocked');
     const normalized = contact!.value;
-    const contactDomain =
-      data.kind === 'email'
-        ? normalized.split('@')[1]
-        : data.kind === 'form'
-          ? new URL(normalized).hostname
-          : null;
-    const {
-      rows: [block],
-    } = await c.query(
-      `select reason from do_not_contact where company_id=$1 or (kind='company' and value_normalized=$1::text) or (kind=$2 and value_normalized=$3) or (kind='domain' and lower(value_normalized) in (lower($4),lower($5))) limit 1`,
-      [companyId, data.kind, normalized, company.domain, contactDomain],
+    await assertNotBlocked(c, company, data.kind, normalized);
+    // The person adds it on purpose, so an earlier removal no longer applies.
+    await c.query(
+      'delete from contact_suppressions where company_id=$1 and kind=$2 and normalized=$3',
+      [companyId, data.kind, normalized],
     );
-    if (block) throw new ManualEntryError('contactBlocked', block.reason);
     const {
       rows: [row],
     } = await c.query(
@@ -96,7 +109,14 @@ export async function addManualContact(
   });
 }
 
-export async function deleteManualContact(
+const suppress = (c: PoolClient, contact: Record<string, string>) =>
+  c.query(
+    'insert into contact_suppressions(company_id,kind,normalized) values($1,$2,$3) on conflict do nothing',
+    [contact.company_id, contact.kind, contact.normalized],
+  );
+
+/** Delete any contact; one found automatically is remembered so a rescan does not bring it back. */
+export async function deleteContact(
   companyId: string,
   contactId: string,
   userId: string,
@@ -109,14 +129,16 @@ export async function deleteManualContact(
       [contactId, companyId],
     );
     if (!contact) fail('contactNotFound');
-    if (contact.source !== 'manual') fail('manualOnly');
     await c.query(
       'update conversations set contact_id=null where contact_id=$1',
       [contactId],
     );
     await c.query('delete from contacts where id=$1', [contactId]);
+    if (contact.source !== 'manual') await suppress(c, contact);
     await logActivity(
-      'contact.manual.deleted',
+      contact.source === 'manual'
+        ? 'contact.manual.deleted'
+        : 'contact.deleted',
       'company',
       companyId,
       userId,
@@ -129,6 +151,90 @@ export async function deleteManualContact(
       c,
     );
     return { id: contactId };
+  });
+}
+
+/** Correct the value or note of any contact; the person now owns it, so it becomes manual. */
+export async function updateContact(
+  companyId: string,
+  contactId: string,
+  input: { value: string; note?: string },
+  userId: string,
+) {
+  return transaction(async (c) => {
+    const {
+      rows: [company],
+    } = await c.query(
+      `select c.*,coalesce(c.country_code,(select a.country_code from campaign_companies cc join campaigns a on a.id=cc.campaign_id where cc.company_id=c.id order by cc.added_at desc limit 1)) as country from companies c where c.id=$1 for update`,
+      [companyId],
+    );
+    if (!company) fail('companyNotFound');
+    const {
+      rows: [contact],
+    } = await c.query(
+      'select * from contacts where id=$1 and company_id=$2 for update',
+      [contactId, companyId],
+    );
+    if (!contact) fail('contactNotFound');
+    // Kinds the manual form cannot create (website, booking, ...) cannot be edited either.
+    const parsed = manualContactSchema.safeParse({
+      kind: contact.kind,
+      value: input.value,
+      note: input.note,
+    });
+    if (!parsed.success) fail('invalidContact');
+    const next = normalizeManualContact(
+      parsed.data!,
+      company.country as CountryCode,
+    );
+    if (!next) fail('invalidContact');
+    const changed = next!.value !== contact.normalized;
+    if (changed) {
+      await assertNotBlocked(c, company, contact.kind, next!.value);
+      const {
+        rows: [duplicate],
+      } = await c.query(
+        'select 1 from contacts where company_id=$1 and kind=$2 and normalized=$3 and id<>$4',
+        [companyId, contact.kind, next!.value, contactId],
+      );
+      if (duplicate) fail('duplicateContact');
+      await c.query(
+        'delete from contact_suppressions where company_id=$1 and kind=$2 and normalized=$3',
+        [companyId, contact.kind, next!.value],
+      );
+      if (contact.source !== 'manual') await suppress(c, contact);
+    }
+    const {
+      rows: [row],
+    } = await c.query(
+      `update contacts set value=$2,normalized=$3,source='manual',rank=$4,
+         meta=case when $5 then meta-'whatsapp_unavailable'-'telegram_unavailable'-'viber_unavailable' else meta end
+           || jsonb_build_object('note',$6::text,'edited_by',$7::text)
+       where id=$1 returning *`,
+      [
+        contactId,
+        parsed.data!.value,
+        next!.value,
+        next!.rank,
+        changed,
+        parsed.data!.note ?? String(contact.meta?.note ?? ''),
+        userId,
+      ],
+    );
+    await logActivity(
+      'contact.edited',
+      'company',
+      companyId,
+      userId,
+      {
+        contactId,
+        kind: contact.kind,
+        from: contact.normalized,
+        to: next!.value,
+      },
+      c,
+    );
+    return row;
   });
 }
 

@@ -740,7 +740,9 @@ export const uk = {
   manual: {
     addCompany: 'Додати компанію',
     addContact: 'Додати контакт',
-    deleteContact: 'Видалити ручний контакт',
+    editContact: 'Редагувати контакт',
+    deleteContact: 'Видалити контакт',
+    saveContact: 'Зберегти',
     chooseCampaign: 'Оберіть кампанію',
     withoutBatch: 'Додано вручну, без порції',
     fields: {
@@ -794,7 +796,6 @@ export const uk = {
       duplicateCompany:
         'Компанія з таким сайтом або назвою в цьому місті й країні вже існує.',
       contactBlocked: 'Контакт не додано: контактування заборонено.',
-      manualOnly: 'Можна видаляти лише ручні контакти.',
       contactNotFound: 'Контакт не знайдено.',
     },
     activities: {

@@ -427,6 +427,21 @@ export const contacts = pgTable(
   (t) => [unique('contact_unique').on(t.companyId, t.kind, t.normalized)],
 );
 
+export const contactSuppressions = pgTable(
+  'contact_suppressions',
+  {
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'cascade' }),
+    kind: contactKind('kind').notNull(),
+    normalized: text('normalized').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.kind, t.normalized] })],
+);
+
 export const companyFacts = pgTable(
   'company_facts',
   {
