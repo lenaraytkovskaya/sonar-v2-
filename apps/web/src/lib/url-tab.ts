@@ -3,8 +3,10 @@ export function selectedTab(
   parameter: string,
   keys: readonly string[],
   fallback: string,
+  aliases: Readonly<Record<string, string>> = {},
 ) {
-  const value = query.get(parameter);
+  const raw = query.get(parameter);
+  const value = raw === null ? null : (aliases[raw] ?? raw);
   return value !== null && keys.includes(value) ? value : fallback;
 }
 

@@ -7,9 +7,10 @@ export function useUrlTab(
   keys: readonly string[],
   fallback: string,
   parameter = 'tab',
+  aliases: Readonly<Record<string, string>> = {},
 ) {
   const query = useSearchParams();
-  const active = selectedTab(query, parameter, keys, fallback);
+  const active = selectedTab(query, parameter, keys, fallback, aliases);
   const [visited, setVisited] = useState([active]);
   useEffect(() => {
     setVisited((previous) =>
