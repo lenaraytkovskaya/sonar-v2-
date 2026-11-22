@@ -3,6 +3,9 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
+  createCampaignDraft,
+  type CampaignDefaults,
+  type GoogleProgress,
   normalizeCampaignLanguages,
   googleSearchPairs,
   applyCampaignSuggestion,
@@ -23,32 +26,7 @@ import { CrudButton, CrudDialog } from './crud-dialog';
 import { CampaignRunCard } from './campaign-run-card';
 type Row = CampaignInput & {
   id: string;
-  google_progress?: Record<string, { exhausted: boolean; buffer: unknown[] }>;
-};
-const initial: CampaignInput = {
-  name: '',
-  product_id: null,
-  country_code: 'UA',
-  language_code: 'uk',
-  language_codes: ['uk'],
-  cities: [],
-  queries: [],
-  offer: '',
-  outreach_goal: '',
-  min_score: 40,
-  batch_size: 20,
-  budget_usd: 0,
-  channels: {
-    email: true,
-    telegram: false,
-    whatsapp: false,
-    viber: false,
-    forms: false,
-  },
-  send_mode: 'manual',
-  scoring_weights: {},
-  status: 'draft',
-  field_profile: 'contacts',
+  google_progress?: GoogleProgress;
 };
 // Query tags shown before the rest is folded behind a button.
 const queryPreview = 5;
@@ -105,15 +83,18 @@ function Chips({
   );
 }
 export function CampaignPanel({
+  defaults,
   defaultWeights,
 }: {
+  defaults: CampaignDefaults;
   defaultWeights: CampaignInput['scoring_weights'];
+  googlePriceUsd: number;
 }) {
-  const initialForm = { ...initial, scoring_weights: defaultWeights };
+  const initialForm = () => createCampaignDraft(defaults, defaultWeights);
   const withWeights = (row: CampaignInput): CampaignInput => ({
     ...normalizeCampaignLanguages(row),
     outreach_goal: row.outreach_goal ?? '',
-    min_score: Number(row.min_score ?? 40),
+    min_score: Number(row.min_score),
     scoring_weights: { ...defaultWeights, ...row.scoring_weights },
   });
   const { batches: batchProgress } = useTasks();
@@ -421,7 +402,7 @@ export function CampaignPanel({
                       budget_usd: Number(saved.budget_usd),
                     }),
                   )
-                : initialForm,
+                : initialForm(),
             );
             setSource('form');
           }
