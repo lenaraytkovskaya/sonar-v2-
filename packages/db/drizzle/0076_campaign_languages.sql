@@ -27,8 +27,13 @@ BEGIN
           AND t.idempotency_key LIKE 'google.request:' || b.id::text || ':' || ((q.n-1)*jsonb_array_length(b.config->'cities')+city.n-1)::text || ':%'
         ORDER BY t.created_at DESC,s.created_at DESC LIMIT 1;
         IF origin IS NULL THEN
+          -- Fail open: a failing migration would leave production down (the deploy has no rollback).
+          -- Assume the campaign's current language and leave an audit trail for a human to review.
           IF coalesce((item.value->>'pages')::int,0)>0 OR item.value ? 'token' OR jsonb_array_length(coalesce(item.value->'buffer','[]'::jsonb))>0 THEN
-            RAISE EXCEPTION 'Cannot safely determine original Google cursor language for campaign % key %',c.id,item.key;
+            RAISE WARNING 'Assuming campaign language % for Google cursor of campaign % key %',c.language_code,c.id,item.key;
+            INSERT INTO activity_log(user_id,action,entity_type,entity_id,details)
+              VALUES(NULL,'campaign.google_cursor_language_assumed','campaign',c.id::text,
+                jsonb_build_object('key',item.key,'assumedLanguage',c.language_code));
           END IF;
           origin := c.language_code;
         END IF;

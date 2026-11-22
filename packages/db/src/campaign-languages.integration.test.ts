@@ -110,3 +110,55 @@ it.skipIf(process.env.RUN_DB_TESTS !== '1')(
     }
   },
 );
+
+it.skipIf(process.env.RUN_DB_TESTS !== '1')(
+  'does not fail the migration when a paid cursor language cannot be determined',
+  async () => {
+    const { sonarPool, registryPool } = await import('./index.js');
+    const client = await sonarPool.connect();
+    const key = JSON.stringify(['unknown query', 'unknown city']);
+    const paid = { pages: 2, token: 'paid', exhausted: false, buffer: [] };
+    try {
+      await client.query('begin');
+      await client.query(
+        "create temp table campaigns(id uuid,language_code text,google_progress jsonb,language_codes text[] default ARRAY['uk']) on commit drop",
+      );
+      await client.query(
+        'create temp table batches(id uuid,campaign_id uuid,config jsonb,fixture boolean default false) on commit drop',
+      );
+      await client.query(
+        'create temp table tasks(id uuid,batch_id uuid,type text,status text,idempotency_key text,created_at timestamptz) on commit drop',
+      );
+      await client.query(
+        'create temp table spend_events(task_id uuid,meta jsonb,created_at timestamptz) on commit drop',
+      );
+      await client.query(
+        'insert into campaigns(id,language_code,google_progress) values(gen_random_uuid(),$1,$2)',
+        ['pl', JSON.stringify({ [key]: paid })],
+      );
+      const migration = readFileSync(
+        new URL('../drizzle/0076_campaign_languages.sql', import.meta.url),
+        'utf8',
+      );
+      // Fail open: the deploy has no rollback, so the data step must never abort.
+      await client.query(migration.split('--> statement-breakpoint')[1]!);
+      const {
+        rows: [row],
+      } = await client.query('select google_progress from campaigns');
+      expect(
+        row.google_progress[
+          JSON.stringify(['unknown query', 'unknown city', 'pl'])
+        ],
+      ).toEqual(paid);
+      const { rows: audit } = await client.query(
+        "select details from activity_log where action='campaign.google_cursor_language_assumed'",
+      );
+      expect(audit).toHaveLength(1);
+      expect(audit[0].details.assumedLanguage).toBe('pl');
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await Promise.all([sonarPool.end(), registryPool.end()]);
+    }
+  },
+);
