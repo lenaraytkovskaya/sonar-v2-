@@ -50,6 +50,33 @@ it.skipIf(!enabled)(
       expect(migrated.improve).toBe(oldActions.improve);
       expect(migrated.custom_action).toBe(oldActions.custom_action);
       expect(migrated.campaign).toContain('center plus 8-15');
+      const nicheMigration = readFileSync(
+        new URL(
+          '../drizzle/0080_campaign_niche_suggestions.sql',
+          import.meta.url,
+        ),
+        'utf8',
+      );
+      await sonarPool.query(nicheMigration);
+      const niche = (
+        await sonarPool.query(
+          "select value from settings where key='ai.actions'",
+        )
+      ).rows[0].value;
+      expect(niche.campaign).toContain(migrated.campaign);
+      expect(niche.campaign).toContain('[campaign-niche-v1]');
+      expect(niche).toMatchObject({
+        improve: oldActions.improve,
+        custom_action: oldActions.custom_action,
+      });
+      await sonarPool.query(nicheMigration);
+      expect(
+        (
+          await sonarPool.query(
+            "select value from settings where key='ai.actions'",
+          )
+        ).rows[0].value,
+      ).toEqual(niche);
       // Restore normal actions for the remaining handler cases.
       await sonarPool.query(
         "update settings set value=$1 where key='ai.actions'",

@@ -1,13 +1,14 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
   normalizeCampaignLanguages,
   googleSearchPairs,
-  campaignOfferRequired,
   applyCampaignSuggestion,
   campaignSuggestionSchema,
   type CampaignInput,
+  type ProductDto,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
@@ -26,6 +27,7 @@ type Row = CampaignInput & {
 };
 const initial: CampaignInput = {
   name: '',
+  product_id: null,
   country_code: 'UA',
   language_code: 'uk',
   language_codes: ['uk'],
@@ -116,6 +118,7 @@ export function CampaignPanel({
   });
   const { batches: batchProgress } = useTasks();
   const [open, setOpen] = useState(false);
+  const [products, setProducts] = useState<ProductDto[]>([]);
   const [allQueries, setAllQueries] = useState(false);
   const selectionChanged = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -140,6 +143,11 @@ export function CampaignPanel({
   ) => {
     setForm({ ...form, [key]: value });
   };
+  const loadProducts = async () => {
+    const response = await fetch('/api/products');
+    if (!response.ok) throw Error(uk.ai.error);
+    setProducts((await response.json()).products);
+  };
   const load = async (selectFromUrl = false) => {
     const r = await fetch('/api/campaigns');
     if (!r.ok) throw Error(uk.ai.error);
@@ -163,8 +171,19 @@ export function CampaignPanel({
     }
   };
   useEffect(() => {
-    void load(true).catch(() => setMessage(uk.ai.error));
+    void Promise.all([load(true), loadProducts()]).catch(() =>
+      setMessage(uk.ai.error),
+    );
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => {
+      void loadProducts().catch(() => setMessage(uk.ai.error));
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [open]);
   useEffect(() => {
     void load().catch(() => setMessage(uk.ai.error));
   }, [batchProgress]);
@@ -172,13 +191,16 @@ export function CampaignPanel({
     setPending(true);
     setMessage('');
     try {
-      if (kind === 'start' && campaignOfferRequired(form.channels, form.offer))
-        throw Error(uk.campaign.offerRequired);
-      const data = campaignSchema.parse({
-        ...form,
-        budget_usd: Number(form.budget_usd),
-        status: kind === 'start' ? 'active' : form.status,
-      });
+      if (kind === 'start' && !form.product_id)
+        throw Error(uk.campaign.productRequired);
+      const data = campaignSchema
+        .omit({ offer: true, outreach_goal: true })
+        .strip()
+        .parse({
+          ...form,
+          budget_usd: Number(form.budget_usd),
+          status: kind === 'start' ? 'active' : form.status,
+        });
       const r = await fetch('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -187,7 +209,7 @@ export function CampaignPanel({
       if (!r.ok) throw Error(uk.ai.invalid);
       const row = await r.json();
       setId(row.id);
-      setForm({ ...data });
+      setForm({ ...form, ...data });
       setSource('form');
       if (kind === 'start') {
         const start = await fetch(`/api/campaigns/${row.id}/start`, {
@@ -238,19 +260,17 @@ export function CampaignPanel({
         action: 'campaign',
         text: description,
         context: JSON.stringify({
-          language: form.language_code,
+          country: form.country_code,
+          languages: form.language_codes ?? [form.language_code],
           cities: form.cities,
           queries: form.queries,
-          outreach_goal: form.outreach_goal,
         }),
       });
       const suggestion = campaignSuggestionSchema.parse(r.suggestion);
       const next = applyCampaignSuggestion(form, suggestion);
       setForm(next);
       setSource('ai');
-      setMessage(
-        suggestion.needs_about ? uk.campaign.needsAbout : uk.campaign.filled,
-      );
+      setMessage(uk.campaign.filled);
     } catch (e) {
       setMessage(
         e instanceof Error && !('issues' in e) ? e.message : uk.ai.invalid,
@@ -474,48 +494,45 @@ export function CampaignPanel({
             values={form.queries}
             onChange={(v) => update('queries', v)}
           />
-          <label className="block">
-            {uk.campaign.outreach_goal}
-            <textarea
-              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
-              value={form.outreach_goal}
-              maxLength={20000}
-              onChange={(e) => update('outreach_goal', e.target.value)}
-            />
-          </label>
-          <AiAssist
-            text={form.outreach_goal}
-            onApply={(v) => update('outreach_goal', v)}
-          />
-          <label className="block">
-            {uk.campaign.offer}
-            <span className="block text-sm text-muted-foreground">
-              {uk.campaign.offerHint}
-            </span>
-            <textarea
-              className="mt-2 min-h-24 w-full rounded-lg border border-border bg-surface p-3"
-              value={form.offer}
-              maxLength={20000}
-              onChange={(e) => update('offer', e.target.value)}
-            />
-          </label>
-          <p className="text-sm text-muted-foreground">
-            {uk.campaign.offerNeedsAbout}
-          </p>
-          <AiAssist
-            text={form.offer}
-            campaignOfferContext={JSON.stringify({
-              name: form.name,
-              language: form.language_code,
-              cities: form.cities,
-              queries: form.queries,
-              outreach_goal: form.outreach_goal,
-            })}
-            onApply={(v) => {
-              update('offer', v);
-              setSource('ai');
-            }}
-          />
+          <div className="space-y-2">
+            <label className="block">
+              {uk.campaign.product}
+              <select
+                className="mt-2 min-h-11 w-full rounded-lg border border-border bg-surface px-3"
+                value={form.product_id ?? ''}
+                onChange={(event) =>
+                  update('product_id', event.target.value || null)
+                }
+              >
+                <option value="">{uk.campaign.productRequired}</option>
+                {products
+                  .filter(
+                    (product) =>
+                      product.status === 'active' ||
+                      product.id === form.product_id,
+                  )
+                  .map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name}
+                      {product.status === 'archived'
+                        ? ` (${uk.campaign.archivedProduct})`
+                        : ''}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {uk.campaign.productHint}
+            </p>
+            <Link
+              href="/products"
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-accent underline"
+            >
+              {uk.campaign.manageProducts}
+            </Link>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <label>
               {uk.campaign.batch_size}
