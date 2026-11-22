@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   campaignSchema,
+  normalizeCampaignLanguages,
+  googleSearchPairs,
   campaignOfferRequired,
   applyCampaignSuggestion,
   campaignSuggestionSchema,
@@ -26,6 +28,7 @@ const initial: CampaignInput = {
   name: '',
   country_code: 'UA',
   language_code: 'uk',
+  language_codes: ['uk'],
   cities: [],
   queries: [],
   offer: '',
@@ -106,7 +109,7 @@ export function CampaignPanel({
 }) {
   const initialForm = { ...initial, scoring_weights: defaultWeights };
   const withWeights = (row: CampaignInput): CampaignInput => ({
-    ...row,
+    ...normalizeCampaignLanguages(row),
     outreach_goal: row.outreach_goal ?? '',
     min_score: Number(row.min_score ?? 40),
     scoring_weights: { ...defaultWeights, ...row.scoring_weights },
@@ -130,12 +133,10 @@ export function CampaignPanel({
   const exhausted =
     form.queries.length > 0 &&
     form.cities.length > 0 &&
-    form.queries.every((query) =>
-      form.cities.every((city) => {
-        const p = savedProgress?.[JSON.stringify([query, city])];
-        return p?.exhausted && !p.buffer.length;
-      }),
-    );
+    googleSearchPairs(form).every(({ query, city, language }) => {
+      const p = savedProgress?.[JSON.stringify([query, city, language])];
+      return p?.exhausted && !p.buffer.length;
+    });
   const update = <K extends keyof CampaignInput>(
     key: K,
     value: CampaignInput[K],
@@ -463,7 +464,7 @@ export function CampaignPanel({
             {uk.campaign.suggestHint}
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
-            {(['name', 'country_code', 'language_code'] as const).map((key) => (
+            {(['name', 'country_code'] as const).map((key) => (
               <label key={key}>
                 {uk.campaign[key]}
                 <Input
@@ -474,6 +475,18 @@ export function CampaignPanel({
               </label>
             ))}
           </div>
+          <Chips
+            key={`${id}:languages`}
+            label={uk.campaign.language_codes}
+            values={form.language_codes ?? [form.language_code]}
+            onChange={(language_codes) =>
+              setForm({
+                ...form,
+                language_codes,
+                language_code: language_codes[0] ?? 'uk',
+              })
+            }
+          />
           <Chips
             key={`${id}:cities`}
             label={uk.campaign.cities}

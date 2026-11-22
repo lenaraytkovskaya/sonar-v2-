@@ -2,11 +2,16 @@ import type { PoolClient } from 'pg';
 import {
   profilesSchema,
   googlePageSchema,
+  googleSearchPairs,
+  googlePairKey,
+  normalizeCampaignLanguages,
+  plannedGoogleRequests,
   type GooglePage,
   type CampaignInput,
   type GoogleProfile,
   campaignOfferRequired,
 } from '@sonar/core';
+import { checkGooglePlanBudget } from './budget.js';
 import { sonarPool } from './index.js';
 import { enqueueTask, logActivity } from './tasks.js';
 export type BatchConfig = CampaignInput & {
@@ -21,8 +26,7 @@ export type PairProgress = {
   reason?: string;
 };
 export type Progress = Record<string, PairProgress>;
-export const pairKey = (query: string, city: string) =>
-  JSON.stringify([query, city]);
+export const pairKey = googlePairKey;
 export const emptyProgress = (): PairProgress => ({
   pages: 0,
   exhausted: false,
@@ -32,16 +36,19 @@ export function resultsExhausted(
   queries: string[],
   cities: string[],
   progress: Progress,
+  languages: string[],
 ) {
+  const pairs = googleSearchPairs({
+    queries,
+    cities,
+    language_codes: languages,
+  });
   return (
-    queries.length > 0 &&
-    cities.length > 0 &&
-    queries.every((q) =>
-      cities.every((c) => {
-        const p = progress[pairKey(q, c)];
-        return p?.exhausted && !p.buffer.length;
-      }),
-    )
+    pairs.length > 0 &&
+    pairs.every((pair) => {
+      const state = progress[pairKey(pair.query, pair.city, pair.language)];
+      return state?.exhausted && !state.buffer.length;
+    })
   );
 }
 export class ContinuationUnavailable extends Error {}
@@ -68,9 +75,7 @@ export async function campaignProgress(
     [campaignId],
   );
   for (const batch of batches) {
-    const pairs = batch.config.queries.flatMap((query: string) =>
-      batch.config.cities.map((city: string) => ({ query, city })),
-    );
+    const pairs = googleSearchPairs(batch.config);
     for (const [index, pair] of pairs.entries()) {
       const { rows: responses } = await client.query(
         `select s.meta->'response'->>'text' as text from tasks t join spend_events s on s.task_id=t.id where t.batch_id=$1 and t.idempotency_key like $2 and s.meta ? 'response' order by t.created_at`,
@@ -94,7 +99,7 @@ export async function campaignProgress(
       page.places.forEach((place, i) => {
         if (ids.has(place.id)) end = i;
       });
-      progress[pairKey(pair.query, pair.city)] = {
+      progress[pairKey(pair.query, pair.city, pair.language)] = {
         pages: responses.length,
         token: page.nextPageToken,
         exhausted: !page.nextPageToken || responses.length >= 3,
@@ -145,7 +150,14 @@ export async function createBatch(
     if (campaignOfferRequired(campaign.channels, campaign.offer))
       throw new CampaignOfferRequired();
     const progress = await campaignProgress(client, campaignId);
-    if (resultsExhausted(campaign.queries, campaign.cities, progress)) {
+    if (
+      resultsExhausted(
+        campaign.queries,
+        campaign.cities,
+        progress,
+        normalizeCampaignLanguages(campaign).language_codes,
+      )
+    ) {
       await client.query('commit');
       return { exhausted: true };
     }
@@ -157,6 +169,12 @@ export async function createBatch(
       .parse(config['google.field_profiles'])
       .find((p) => p.id === campaign.field_profile);
     if (!profile) throw Error('Profile missing');
+    if (!fixture)
+      await checkGooglePlanBudget(
+        client,
+        campaignId,
+        plannedGoogleRequests(campaign, progress) * profile.priceUsd,
+      );
     const retentionDays = Number(config['retention.google_days']);
     if (
       !Number.isInteger(retentionDays) ||

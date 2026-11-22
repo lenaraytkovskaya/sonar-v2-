@@ -5,6 +5,7 @@ import {
   normalizeWebsite,
   googleCity,
   googlePageSchema,
+  googleSearchPairs,
   BudgetExceeded,
   PaidHttpError,
   type GoogleSearch,
@@ -82,9 +83,7 @@ export async function runGoogleBatch(
       process.env.GOOGLE_PLACES_API_KEY ?? '',
     );
     const config = initial.config as BatchConfig;
-    const pairs = config.queries.flatMap((query) =>
-      config.cities.map((city) => ({ query, city })),
-    );
+    const pairs = googleSearchPairs(config);
     await client.query(
       "update batches set status='running',reason_uk=null,started_at=coalesce(started_at,now()),finished_at=null where id=$1",
       [batchId],
@@ -103,12 +102,13 @@ export async function runGoogleBatch(
       )
         return await pause('campaign_paused', 'Кампанію призупинено.');
       const pairIndex = pairs.findIndex((pair) => {
-        const p = progress[pairKey(pair.query, pair.city)];
+        const p = progress[pairKey(pair.query, pair.city, pair.language)];
         return !p || !p.exhausted || p.buffer.length;
       });
       const pair = pairs[pairIndex]!;
       const state = pair
-        ? (progress[pairKey(pair.query, pair.city)] ??= emptyProgress())
+        ? (progress[pairKey(pair.query, pair.city, pair.language)] ??=
+            emptyProgress())
         : null;
       const cursor = {
         pair: pairIndex,
@@ -176,6 +176,7 @@ export async function runGoogleBatch(
           {
             query: pair.query,
             city: pair.city,
+            language: pair.language,
             page: cursor.page,
             hasPageToken: Boolean(cursor.token),
             buffered: state!.buffer.length > 0,
@@ -191,7 +192,7 @@ export async function runGoogleBatch(
           const fixtureResult = await search(
             {
               textQuery: `${pair.query} ${pair.city}`,
-              languageCode: config.language_code,
+              languageCode: pair.language,
               regionCode: config.country_code,
               pageSize: 20,
               ...(cursor.token ? { pageToken: cursor.token } : {}),
@@ -215,7 +216,7 @@ export async function runGoogleBatch(
               );
               const input = {
                 textQuery: `${pair.query} ${pair.city}`,
-                languageCode: config.language_code,
+                languageCode: pair.language,
                 regionCode: config.country_code,
                 pageSize: 20 as const,
                 ...(cursor.token ? { pageToken: cursor.token } : {}),
@@ -321,7 +322,7 @@ export async function runGoogleBatch(
           const city = googleCity(
             place.addressComponents,
             pair.city,
-            config.language_code,
+            pair.language,
           );
           const country =
             place.addressComponents?.find((c) => c.types.includes('country'))

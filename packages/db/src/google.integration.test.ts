@@ -42,6 +42,49 @@ it.skipIf(!enabled)(
         "insert into companies(place_id,name) values($1,'Known')",
         [place(100).id],
       );
+      await expect(
+        createBatch(await campaign(0.035), null, randomUUID(), false, false),
+      ).rejects.toThrow('бюджет');
+      const multilingual = await campaign();
+      await sonarPool.query(
+        "update campaigns set queries=ARRAY['q1','q2'],cities=ARRAY['c1','c2'],language_codes=ARRAY['uk','en'] where id=$1",
+        [multilingual],
+      );
+      const languageBatch = await createBatch(
+        multilingual,
+        null,
+        randomUUID(),
+        true,
+        false,
+      );
+      const languageSearch = vi.fn(
+        async (input: { textQuery: string; languageCode: string }) => ({
+          places: [
+            place(9000),
+            {
+              ...place(9001),
+              id: `${prefix}-${input.textQuery}-${input.languageCode}`,
+            },
+          ],
+        }),
+      );
+      await runGoogleBatch(languageBatch.id, languageSearch);
+      expect(languageSearch).toHaveBeenCalledTimes(8);
+      expect(
+        new Set(
+          languageSearch.mock.calls.map(
+            ([input]) => `${input.textQuery}:${input.languageCode}`,
+          ),
+        ).size,
+      ).toBe(8);
+      expect(
+        (
+          await sonarPool.query(
+            'select found_new+found_known as found from batches where id=$1',
+            [languageBatch.id],
+          )
+        ).rows[0].found,
+      ).toBe(9);
       const blockedCampaign = await campaign(0.5, { email: true });
       await expect(
         createBatch(blockedCampaign, null, randomUUID(), false, false),
@@ -201,7 +244,7 @@ it.skipIf(!enabled)(
         await createBatch(rejectedCampaign, null, randomUUID(), false, false),
       ).toEqual({ exhausted: true });
       const forbidden = await createBatch(
-        await campaign(0.035),
+        await campaign(0.5),
         null,
         randomUUID(),
         false,
@@ -300,11 +343,15 @@ it.skipIf(!enabled)(
       release();
       await ongoing;
       const limit = await createBatch(
-        await campaign(0.035),
+        await campaign(0.5),
         null,
         randomUUID(),
         false,
         false,
+      );
+      await sonarPool.query(
+        'update campaigns set budget_usd=0.035 where id=$1',
+        [limit.campaign_id],
       );
       const limited = vi.fn(async () => ({
         places: [place(400)],
@@ -315,7 +362,7 @@ it.skipIf(!enabled)(
         reasonCode: 'budget_exceeded',
       });
       expect(limited).toHaveBeenCalledTimes(1);
-      const concurrentCampaign = await campaign(0.035);
+      const concurrentCampaign = await campaign(0.5);
       const first = await createBatch(
         concurrentCampaign,
         null,
@@ -329,6 +376,10 @@ it.skipIf(!enabled)(
         randomUUID(),
         false,
         false,
+      );
+      await sonarPool.query(
+        'update campaigns set budget_usd=0.035 where id=$1',
+        [concurrentCampaign],
       );
       const parallel = vi.fn(async () => {
         await new Promise((r) => setTimeout(r, 50));

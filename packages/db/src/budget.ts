@@ -86,6 +86,45 @@ async function usage(client: PoolClient, service: string) {
     serviceSpentUsd: Number(spent.service),
   };
 }
+async function checkCampaignBudget(
+  client: PoolClient,
+  campaign: { id: string; budget_usd: string } | undefined,
+  estimateUsd: number,
+) {
+  const {
+    rows: [spent],
+  } = await client.query(
+    `select coalesce(sum(cost),0) as cost from (
+        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1
+        union all select (t.result->>'billingEstimate')::numeric from tasks t left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1 and t.result->>'billingPending'='true'
+      ) usage`,
+    [campaign?.id ?? null],
+  );
+  // 0 means no separate campaign cap; the monthly and service budgets still apply.
+  if (
+    campaign &&
+    moneyUnits(Number(campaign.budget_usd)) > 0n &&
+    moneyUnits(Number(spent.cost)) + moneyUnits(estimateUsd) >
+      moneyUnits(Number(campaign.budget_usd))
+  )
+    throw new BudgetExceeded('campaign');
+}
+export async function checkGooglePlanBudget(
+  client: PoolClient,
+  campaignId: string,
+  estimateUsd: number,
+) {
+  if (estimateUsd === 0) return;
+  await client.query('select pg_advisory_xact_lock(719401)');
+  checkBudget(await usage(client, 'google_places'), estimateUsd);
+  const {
+    rows: [campaign],
+  } = await client.query('select id,budget_usd from campaigns where id=$1', [
+    campaignId,
+  ]);
+  if (!campaign) throw Error('Campaign missing');
+  await checkCampaignBudget(client, campaign, estimateUsd);
+}
 // The transaction lock protects only checking and reserving. Durable reservations
 // count toward usage while external requests run concurrently, including after a crash.
 export async function runBudgetedRequest(
@@ -196,23 +235,7 @@ export async function runBudgetedRequest(
       );
       if (!campaign && !['ai.inbound', 'ai.reply'].includes(task.type))
         throw Error('Paid request requires campaign');
-      const {
-        rows: [spent],
-      } = await client.query(
-        `select coalesce(sum(cost),0) as cost from (
-        select s.cost_usd as cost from spend_events s join tasks t on t.id=s.task_id left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1
-        union all select (t.result->>'billingEstimate')::numeric from tasks t left join batches b on b.id=t.batch_id left join messages m on m.id=(t.payload->>'messageId')::uuid left join conversations v on v.id=coalesce(m.conversation_id,(t.payload->>'conversationId')::uuid) where coalesce(b.campaign_id,(t.payload->>'campaignId')::uuid,v.campaign_id)=$1 and t.result->>'billingPending'='true'
-      ) usage`,
-        [campaign?.id ?? null],
-      );
-      // 0 means no separate campaign cap; the monthly and service budgets still apply.
-      if (
-        campaign &&
-        moneyUnits(Number(campaign.budget_usd)) > 0n &&
-        moneyUnits(Number(spent.cost)) + moneyUnits(estimateUsd) >
-          moneyUnits(Number(campaign.budget_usd))
-      )
-        throw new BudgetExceeded('campaign');
+      await checkCampaignBudget(client, campaign, estimateUsd);
     }
     await client.query(
       `update tasks set result=coalesce(result,'{}'::jsonb)||$2::jsonb where id=$1`,

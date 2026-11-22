@@ -1413,6 +1413,8 @@ export const uk = {
     title: 'Пошук у Google Maps',
     price: 'Ціна одного запиту, USD',
     estimated: 'Оцінка за тарифом, не рахунок Google',
+    preflightBudget:
+      'Недостатньо бюджету для всіх запланованих сторінок Google. Збільште ліміт або скоротіть пошук.',
     retention: 'Зберігання даних Google, днів',
     fixture: 'Фікстура Google — без API та білінгу',
   },
@@ -1421,6 +1423,7 @@ export const uk = {
     name: 'Назва',
     country_code: 'Країна (ISO-2)',
     language_code: 'Мова',
+    language_codes: 'Мови пошуку (коди)',
     cities: 'Міста',
     queries: 'Пошукові запити',
     outreach_goal: 'Мета звернення',

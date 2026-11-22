@@ -1,4 +1,5 @@
 import { apiUser, validId } from '@/lib/api-access';
+import { BudgetExceeded } from '@sonar/core';
 import { uk } from '@/i18n/uk';
 export async function POST(
   request: Request,
@@ -19,6 +20,11 @@ export async function POST(
       status: 202,
     });
   } catch (error) {
+    if (error instanceof BudgetExceeded)
+      return Response.json(
+        { error: uk.google.preflightBudget },
+        { status: 409 },
+      );
     if (error instanceof ContinuationUnavailable)
       return Response.json({ error: error.message }, { status: 409 });
     if (error instanceof CampaignOfferRequired)

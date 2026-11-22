@@ -1,5 +1,9 @@
 import { enqueueCampaignScores } from './scoring.js';
-import { campaignSchema, type CampaignInput } from '@sonar/core';
+import {
+  campaignSchema,
+  normalizeCampaignLanguages,
+  type CampaignInput,
+} from '@sonar/core';
 import { sonarPool } from './index.js';
 import { logActivity } from './tasks.js';
 export async function saveCampaign(
@@ -9,7 +13,7 @@ export async function saveCampaign(
   userId: string,
   source = 'form',
 ) {
-  const data = campaignSchema.parse(input);
+  const data = normalizeCampaignLanguages(campaignSchema.parse(input));
   const client = await sonarPool.connect();
   try {
     await client.query('begin');
@@ -37,15 +41,16 @@ export async function saveCampaign(
       data.field_profile,
       data.outreach_goal,
       data.min_score,
+      data.language_codes,
     ];
     // Status changes only through start, pause and resume: a stale form must not undo a pause.
     const { rows } = id
       ? await client.query(
-          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_revision=scoring_revision+case when scoring_weights<>$11::jsonb then 1 else 0 end,scoring_weights=$11,field_profile=$12,outreach_goal=$13,min_score=$14,updated_at=now() where id=$15 returning *`,
+          `update campaigns set name=$1,country_code=$2,language_code=$3,cities=$4,queries=$5,offer=$6,batch_size=$7,budget_usd=$8,channels=$9,send_mode=$10,scoring_revision=scoring_revision+case when scoring_weights<>$11::jsonb then 1 else 0 end,scoring_weights=$11,field_profile=$12,outreach_goal=$13,min_score=$14,language_codes=$15,updated_at=now() where id=$16 returning *`,
           [...values.filter((_, index) => index !== 11), id],
         )
       : await client.query(
-          `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,send_mode,scoring_weights,status,field_profile,outreach_goal,min_score,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
+          `insert into campaigns(name,country_code,language_code,cities,queries,offer,batch_size,budget_usd,channels,send_mode,scoring_weights,status,field_profile,outreach_goal,min_score,language_codes,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
           [...values, userId],
         );
     if (!rows[0]) throw Error('Campaign missing');
