@@ -434,9 +434,15 @@ export function CompanyChat({
   const router = useRouter();
   const [data, setData] = useState(initial);
   const contacts = data.contacts.filter((contact) =>
-    ['email', 'form', 'social', 'phone', 'telegram', 'whatsapp'].includes(
-      contact.kind,
-    ),
+    [
+      'email',
+      'form',
+      'social',
+      'phone',
+      'telegram',
+      'whatsapp',
+      'viber',
+    ].includes(contact.kind),
   );
   const [contactId, setContactId] = useState(
     selectedContact ?? contacts[0]?.id ?? '',
