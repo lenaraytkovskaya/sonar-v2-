@@ -48,3 +48,4 @@ export * from './campaign-pause.js';
 export * from './products.js';
 export * from './google-plan.js';
 export * from './campaign-editor.js';
+export { getCountries } from 'libphonenumber-js/max';
