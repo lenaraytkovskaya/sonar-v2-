@@ -288,6 +288,27 @@ it('does not trust a URI-opened chat header without the recipient number', () =>
   );
 });
 
+it('ignores a full-width violet banner when looking for message bubbles', () => {
+  const width = 640;
+  const height = 500;
+  const pixels = new Uint8Array(width * height * 3);
+  const paint = (l: number, t: number, r: number, b: number, c: number[]) => {
+    for (let y = t; y < b; y++)
+      for (let x = l; x < r; x++) pixels.set(c, (y * width + x) * 3);
+  };
+  paint(0, 0, width, height, [239, 242, 247]);
+  paint(20, 112, 620, 240, [51, 37, 136]); // "Not in your contact list" banner.
+  paint(480, 300, 600, 340, [117, 97, 255]); // The real outgoing bubble.
+  const bubbles = messageBubbleRegions(
+    pixels,
+    width,
+    height,
+    { left: 20, right: 620 },
+    110,
+  );
+  expect(bubbles.map(({ side, top }) => [side, top])).toEqual([['right', 300]]);
+});
+
 it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
   const image = syntheticBubblePixels();
   const bubbles = messageBubbleRegions(

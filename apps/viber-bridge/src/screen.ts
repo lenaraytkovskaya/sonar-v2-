@@ -301,8 +301,15 @@ export function messageBubbleRegions(
         }
         const boxWidth = maxX - minX + 1;
         const boxHeight = maxY - minY + 1;
-        if (write < 1500 || boxWidth < 100 || boxHeight < 28) continue;
         const chatWidth = bounds.right - bounds.left;
+        // A banner (e.g. "not in your contact list") spans the whole chat and is not a message.
+        if (
+          write < 1500 ||
+          boxWidth < 100 ||
+          boxHeight < 28 ||
+          boxWidth >= chatWidth * 0.9
+        )
+          continue;
         const rgb = [
           ((color >> 8) & 15) * 17,
           ((color >> 4) & 15) * 17,
