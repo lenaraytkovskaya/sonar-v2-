@@ -7,11 +7,18 @@ import {
   groupOcrLinesWithinBounds,
   classifyViberModal,
   chatColumnBounds,
+  chatgptPanelHeader,
   chatHeaderMatchesRecipient,
   desktopPresenceState,
   normalizeOcr,
   messageTimeAtOrAfter,
   outgoingScreenConfirmed,
+  outgoingBubbleText,
+  outgoingSliceConfirmed,
+  sameBubbleColumn,
+  deriveMessageBodyTop,
+  unfilledEmojiBody,
+  bubbleContentSignature,
   parseTsvWords,
   phoneFromOcrLines,
   screenMessageId,
@@ -28,6 +35,9 @@ import {
   copyMenuPoint,
   copyMenuSearchRegion,
   exactOptionPoint,
+  myNotesMenuPoint,
+  isMyNotesTitle,
+  hasMyNotesHeader,
   clipboardChanged,
   normalizeMessageText,
   visibleTimeText,
@@ -36,6 +46,14 @@ import {
   daySeparatorAt,
   visibleMessageTimestamp,
 } from './screen.js';
+
+it('tracks a long bubble body after its protruding footer tail scrolls out of view', () => {
+  // Authorized My Notes capture: tail x=510..860, visible body x=511..852.
+  const tail = { left: 510, right: 860 };
+  expect(sameBubbleColumn({ left: 511, right: 852 }, tail)).toBe(true);
+  expect(sameBubbleColumn({ left: 300, right: 650 }, tail)).toBe(false);
+  expect(sameBubbleColumn({ left: 510, right: 600 }, tail)).toBe(false);
+});
 
 function syntheticBubblePixels() {
   const width = 640;
@@ -351,6 +369,9 @@ it('finds a very short outgoing message bubble', () => {
 });
 
 it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps message text intact', () => {
+  // Visible timestamps and day separators share the fixture's local wall clock.
+  const localTime = (hours: number, minutes: number, seconds = 0) =>
+    new Date(2026, 10, 18, hours, minutes, seconds);
   const image = syntheticBubblePixels();
   const bubbles = messageBubbleRegions(
     image.pixels,
@@ -376,8 +397,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     {
       threadId: 'screen:+380638215990',
       from: '+380637058571',
-      since: new Date('2026-11-18T17:11:00Z'),
-      reference: new Date('2026-11-18T17:20:00Z'),
+      since: localTime(17, 11),
+      reference: localTime(17, 20),
       region: bubbles[0]!,
       copiedText: 'перше повідомлення\nз двох рядків',
       daySeparator: new Date(2026, 10, 18),
@@ -385,7 +406,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   );
   expect(first).toMatchObject({
     text: 'перше повідомлення\nз двох рядків',
-    at: '2026-11-18T17:12:00.000Z',
+    at: localTime(17, 12).toISOString(),
   });
   const ocrLines = [
     { text: 'перше повідомлення', left: 0, top: 0, right: 90 },
@@ -404,8 +425,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   const fallback = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
     from: '+380637058571',
-    since: new Date('2026-11-18T17:11:00Z'),
-    reference: new Date('2026-11-18T17:20:00Z'),
+    since: localTime(17, 11),
+    reference: localTime(17, 20),
     region: bubbles[0]!,
     copiedText: fallbackText,
     daySeparator: new Date(2026, 10, 18),
@@ -413,8 +434,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   const copiedLater = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
     from: '+380637058571',
-    since: new Date('2026-11-18T17:11:00Z'),
-    reference: new Date('2026-11-18T17:20:00Z'),
+    since: localTime(17, 11),
+    reference: localTime(17, 20),
     region: bubbles[0]!,
     copiedText: 'перше повідомлення\nз двох рядків',
     dedupeText: fallbackText,
@@ -434,8 +455,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       {
         threadId: 'screen:+380638215990',
         from: '+380637058571',
-        since: new Date('2026-11-18T17:11:00Z'),
-        reference: new Date('2026-11-18T17:20:00Z'),
+        since: localTime(17, 11),
+        reference: localTime(17, 20),
         region: {
           left: 200,
           top: 100,
@@ -455,8 +476,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       {
         threadId: 'screen:+380638215990',
         from: '+380637058571',
-        since: new Date('2026-11-18T17:11:00Z'),
-        reference: new Date('2026-11-18T17:20:00Z'),
+        since: localTime(17, 11),
+        reference: localTime(17, 20),
         region: bubbles[1]!,
         copiedText: 'outgoing text',
       },
@@ -471,8 +492,8 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       {
         threadId: 'screen:+380638215990',
         from: '+380637058571',
-        since: new Date('2026-11-18T17:11:00Z'),
-        reference: new Date('2026-11-18T17:20:00Z'),
+        since: localTime(17, 11),
+        reference: localTime(17, 20),
         region: bubbles[2]!,
         copiedText: 'друге повідомлення',
         daySeparator: new Date(2026, 10, 18),
@@ -480,14 +501,14 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     ),
   ).toMatchObject({
     text: 'друге повідомлення',
-    at: '2026-11-18T17:13:00.000Z',
+    at: localTime(17, 13).toISOString(),
   });
   expect(
     inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
       from: '+380637058571',
-      since: new Date('2026-11-18T17:11:00Z'),
-      reference: new Date('2026-11-18T17:20:00Z'),
+      since: localTime(17, 11),
+      reference: localTime(17, 20),
       region: bubbles[1]!,
     }),
   ).toBeNull();
@@ -495,13 +516,13 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
       from: '+380637058571',
-      since: new Date('2026-11-18T17:12:35Z'),
-      reference: new Date('2026-11-18T17:20:00Z'),
+      since: localTime(17, 12, 35),
+      reference: localTime(17, 20),
       region: bubbles[0]!,
       copiedText: 'same minute',
       daySeparator: new Date(2026, 10, 18),
     }),
-  ).toMatchObject({ text: 'same minute', at: '2026-11-18T17:12:00.000Z' });
+  ).toMatchObject({ text: 'same minute', at: localTime(17, 12).toISOString() });
 });
 
 it('infers inbound bubbles from left-column text and timestamps when colors blend into wallpaper', () => {
@@ -891,4 +912,274 @@ it('finds Copy in a live test Viber menu below the cursor without selecting Dele
     width: 700,
     height: 630,
   });
+});
+
+it('keeps colored footer ink outside the timestamp-bearing outgoing chat slice', () => {
+  const image = syntheticBubblePixels();
+  image.pixels.set([117, 71, 174], (400 * image.width + 600) * 3);
+  const regions = messageBubbleRegions(
+    image.pixels,
+    image.width,
+    image.height,
+    { left: 20, right: 620 },
+    110,
+  ).filter((region) => region.outgoingColor);
+  expect(regions.at(-1)?.top).toBe(400);
+  const lines = [
+    { text: 'New message', left: 335, top: 325, right: 450 },
+    { text: '12:30', left: 400, top: 352, right: 440 },
+  ];
+  const visible = regions
+    .map((region) => ({ ...region, ...outgoingBubbleText(lines, region) }))
+    .filter((bubble) => bubble.messageTime);
+  expect(
+    visible.map(({ top, text, messageTime }) => ({ top, text, messageTime })),
+  ).toEqual([{ top: 310, text: 'New message', messageTime: '12:30' }]);
+});
+
+it('opens only a unique exact My Notes entry in the own-profile menu', () => {
+  const menu = { text: 'My Notes', left: 73, top: 355, right: 137 };
+  expect(myNotesMenuPoint([menu], 1280, 900)).toEqual({ x: 105, y: 365 });
+  expect(
+    myNotesMenuPoint([{ ...menu, text: 'My Notes and more' }], 1280, 900),
+  ).toBeNull();
+  expect(
+    myNotesMenuPoint([{ ...menu, left: 375, right: 450, top: 60 }], 1280, 900),
+  ).toBeNull();
+  expect(myNotesMenuPoint([menu, { ...menu, top: 480 }], 1280, 900)).toBeNull();
+  expect(myNotesMenuPoint([], 1280, 900)).toBeNull();
+});
+
+it('derives the ChatGPT divider from the observed sidebar header when it is left of 74 percent', () => {
+  const separators = [300, 520, 852, 868, 1000];
+  const word = { text: 'ChatGPT', left: 932, top: 33 };
+  expect(chatgptPanelHeader([word], 1280, 900, separators)).toEqual(word);
+  for (const text of ['chatept', 'CchatGpt'])
+    expect(
+      chatgptPanelHeader([{ ...word, text }], 1280, 900, separators)?.text,
+    ).toBe(text);
+  expect(
+    chatgptPanelHeader([{ ...word, text: 'ChatGPxx' }], 1280, 900, separators),
+  ).toBeUndefined();
+  expect(chatColumnBounds(1280, separators, true, word.left)).toEqual({
+    left: 300,
+    right: 868,
+  });
+  expect(
+    chatgptPanelHeader([{ ...word, top: 13 }], 1280, 900, separators),
+  ).toBeUndefined();
+  expect(
+    chatgptPanelHeader([{ ...word, top: 300 }], 1280, 900, separators),
+  ).toBeUndefined();
+  expect(chatgptPanelHeader([word], 1280, 900, [300])).toBeUndefined();
+});
+
+it('recognizes the canonical My Notes header despite a leading OCR icon', () => {
+  expect(isMyNotesTitle('© My Notes')).toBe(true);
+  expect(isMyNotesTitle('My Notes')).toBe(true);
+  expect(isMyNotesTitle('Мої нотатки')).toBe(true);
+  expect(isMyNotesTitle('My Notes junk')).toBe(false);
+  expect(isMyNotesTitle('My Notes 123')).toBe(false);
+});
+
+it('recognizes My Notes from adjacent raw header words despite tall-avatar OCR grouping', () => {
+  const words = [
+    { text: 'о', left: 317, top: 53, width: 46, height: 46 },
+    { text: 'My', left: 378, top: 69, width: 24, height: 18 },
+    { text: 'Notes', left: 409, top: 69, width: 50, height: 14 },
+    { text: 'Qo', left: 794, top: 66, width: 56, height: 20 },
+  ];
+  const bounds = { left: 300, right: 868 };
+  expect(hasMyNotesHeader(words, bounds)).toBe(true);
+  expect(
+    hasMyNotesHeader(
+      words.map((word) => ({ ...word, top: word.top + 200 })),
+      bounds,
+    ),
+  ).toBe(false);
+  expect(
+    hasMyNotesHeader(
+      words.map((word) => ({ ...word, left: word.left - 300 })),
+      bounds,
+    ),
+  ).toBe(false);
+  expect(
+    hasMyNotesHeader(
+      words.map((word) =>
+        word.text === 'Notes' ? { ...word, text: 'Contacts' } : word,
+      ),
+      bounds,
+    ),
+  ).toBe(false);
+  expect(
+    hasMyNotesHeader(
+      words.map((word) =>
+        word.text === 'Notes' ? { ...word, top: 40 } : word,
+      ),
+      bounds,
+    ),
+  ).toBe(false);
+  expect(
+    hasMyNotesHeader(
+      words.map((word) =>
+        word.text === 'Notes' ? { ...word, left: 600 } : word,
+      ),
+      bounds,
+    ),
+  ).toBe(false);
+});
+
+it('uses the complete pixel banner boundary for clipped giant messages even when OCR misses it', () => {
+  const width = 1280,
+    height = 900,
+    bounds = { left: 300, right: 868 };
+  const pixels = new Uint8Array(width * height * 3);
+  const paint = (
+    left: number,
+    top: number,
+    right: number,
+    bottom: number,
+    color: number[],
+  ) => {
+    for (let y = top; y < bottom; y++)
+      for (let x = left; x < right; x++) pixels.set(color, (y * width + x) * 3);
+  };
+  for (const bannerEnd of [112, 164, 202, 242]) {
+    paint(0, 0, width, height, [239, 242, 247]);
+    paint(300, 0, 868, 112, [255, 255, 255]);
+    if (bannerEnd > 112) paint(300, 112, 868, bannerEnd, [48, 32, 128]);
+    paint(468, bannerEnd, 852, 763, [117, 97, 255]);
+    const top = deriveMessageBodyTop(pixels, width, height, bounds, 64);
+    expect(top).toBe(bannerEnd);
+    const [region] = messageBubbleRegions(
+      pixels,
+      width,
+      height,
+      bounds,
+      top,
+      850,
+    ).filter((region) => region.outgoingColor);
+    expect(region?.top).toBe(bannerEnd);
+    const text =
+      'A beginning of a very long message '.repeat(10) +
+      'A sufficiently long ending of that same message '.repeat(10);
+    const bubble = {
+      ...region!,
+      text: text.slice(-150),
+      messageTime: '12:30',
+      status: 'sent' as const,
+      clipped: region!.top <= top + 4,
+    };
+    const reference = new Date('2026-11-23T12:30:00');
+    const before = {
+      observedAt: reference.toISOString(),
+      composer: '',
+      bubbles: [],
+    };
+    const after = { ...before, bubbles: [bubble] };
+    expect(bubble.clipped).toBe(true);
+    expect(outgoingSliceConfirmed(text, before, after, reference)).toBe(false);
+    expect(
+      outgoingSliceConfirmed(
+        text,
+        before,
+        { ...after, bubbles: [{ ...bubble, prefixText: text.slice(0, 150) }] },
+        reference,
+      ),
+    ).toBe(true);
+  }
+});
+
+it('does not accept a future payload time as message metadata', () => {
+  const reference = new Date('2026-11-23T03:15:00');
+  const before = {
+    observedAt: reference.toISOString(),
+    composer: '',
+    bubbles: [],
+  };
+  const after = {
+    ...before,
+    observedAt: new Date(reference.getTime() + 1000).toISOString(),
+    bubbles: [
+      {
+        left: 400,
+        top: 300,
+        right: 600,
+        bottom: 360,
+        side: 'right' as const,
+        text: 'Expected message',
+        messageTime: '12:30',
+        status: 'sent' as const,
+      },
+    ],
+  };
+  expect(
+    outgoingSliceConfirmed('Expected message', before, after, reference),
+  ).toBe(false);
+});
+
+it('associates a transparent emoji glyph with its badge while excluding chrome and reactions', () => {
+  const width = 640,
+    height = 500,
+    pixels = new Uint8Array(width * height * 3);
+  const paint = (
+    l: number,
+    t: number,
+    r: number,
+    b: number,
+    color: number[],
+  ) => {
+    for (let y = t; y < b; y++)
+      for (let x = l; x < r; x++) pixels.set(color, (y * width + x) * 3);
+  };
+  paint(0, 0, width, height, [240, 242, 245]);
+  paint(530, 350, 610, 376, [117, 97, 255]);
+  const badge = {
+    left: 530,
+    top: 350,
+    right: 610,
+    bottom: 376,
+    side: 'right' as const,
+  };
+  paint(0, 200, width, 225, [15, 90, 180]); // Full-width banner is not an isolated glyph.
+  paint(280, 275, 360, 290, [180, 180, 180]); // Centered date.
+  paint(535, 300, 550, 320, [240, 60, 70]); // Reaction on the left of the badge's body.
+  paint(620, 260, 640, 330, [0, 0, 0]); // Profile card is outside the chat badge.
+  expect(unfilledEmojiBody(pixels, width, height, badge, 250)).toBeNull();
+  paint(560, 290, 590, 294, [0, 0, 0]);
+  paint(560, 341, 590, 345, [0, 0, 0]);
+  paint(560, 290, 564, 345, [0, 0, 0]);
+  paint(586, 290, 590, 345, [0, 0, 0]);
+  const body = unfilledEmojiBody(pixels, width, height, badge, 250)!;
+  expect(body).toEqual({ left: 560, top: 290, right: 590, bottom: 345 });
+  expect(
+    bubbleContentSignature(pixels, width, height, {
+      ...badge,
+      top: body.top,
+      unfilled: true,
+      bodyRegion: body,
+    }),
+  ).toHaveLength(384);
+});
+
+it('bounds own-profile menu OCR to the left column before locating My Notes', () => {
+  const words = [
+    { text: 'My', left: 73, top: 355, width: 19, height: 13 },
+    { text: 'Notes', left: 98, top: 355, width: 39, height: 10 },
+    {
+      text: 'A giant chat line at the same height',
+      left: 520,
+      top: 355,
+      width: 300,
+      height: 14,
+    },
+  ];
+  expect(myNotesMenuPoint(groupOcrLines(words), 1280, 900)).toBeNull();
+  expect(
+    myNotesMenuPoint(
+      groupOcrLinesWithinBounds(words, { left: 0, right: 300 }),
+      1280,
+      900,
+    ),
+  ).toEqual({ x: 105, y: 365 });
 });

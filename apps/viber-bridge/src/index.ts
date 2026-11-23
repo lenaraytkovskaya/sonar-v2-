@@ -1,17 +1,22 @@
 import { createServer } from 'node:http';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { accountDatabase, readMessages, run } from './database.js';
-import { createSend, type SendInput } from './send.js';
+import {
+  createSend,
+  scrollWithSettledPointer,
+  type SendInput,
+} from './send.js';
 import { createMissingKeyServer } from './missing-key.js';
 import {
   classifyViberModal,
   chatHeaderMatchesRecipient,
   daySeparatorAt,
   chatColumnBounds,
+  chatgptPanelHeader,
   desktopPresenceState,
   groupOcrLines,
   groupOcrLinesWithinBounds,
@@ -23,7 +28,6 @@ import {
   verticalColorBoundaries,
   visibleInboundMessages,
   visibleMessageTimestamp,
-  visibleTimeText,
   visibleTimestampLine,
   messageBubbleRegions,
   inboundBubbleRegionsFromOcr,
@@ -32,7 +36,19 @@ import {
   copyMenuPoint,
   copyMenuSearchRegion,
   clipboardChanged,
-  exactOptionPoint,
+  myNotesMenuPoint,
+  hasMyNotesHeader,
+  chatBodyTop,
+  deriveMessageBodyTop,
+  outgoingBubbleText,
+  outgoingBubbleStatus,
+  bubbleContentSignature,
+  unfilledEmojiBody,
+  matchesOutgoingText,
+  normalizeOcr,
+  textSimilarity,
+  sameBubbleColumn,
+  type ChatSlice,
 } from './screen.js';
 import { canRestart, restartDelay } from './supervisor.js';
 
@@ -148,6 +164,10 @@ if (!key) {
     crop?: string,
     psm = '11',
     preprocess = false,
+    language = 'ukr+rus+eng',
+    scale = 2,
+    whitelist?: string,
+    negate = false,
   ) => {
     const source = join(data, 'ocr-source.jpg');
     const target = join(data, 'ocr-target.png');
@@ -157,17 +177,27 @@ if (!key) {
     if (preprocess)
       convertArgs.push(
         '-resize',
-        '200%',
+        `${scale * 100}%`,
         '-colorspace',
         'Gray',
         '-threshold',
         '55%',
       );
+    if (negate) convertArgs.push('-negate');
     convertArgs.push(target);
     await run('convert', convertArgs, { timeout: 5000 });
     const result = await run(
       'tesseract',
-      [target, 'stdout', '-l', 'ukr+rus+eng', '--psm', psm, 'tsv'],
+      [
+        target,
+        'stdout',
+        '-l',
+        language,
+        '--psm',
+        psm,
+        ...(whitelist ? ['-c', `tessedit_char_whitelist=${whitelist}`] : []),
+        'tsv',
+      ],
       { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
     );
     const stdout = result.stdout
@@ -178,7 +208,9 @@ if (!key) {
         for (const column of [6, 7, 8, 9]) {
           const value = Number(fields[column]);
           if (Number.isFinite(value))
-            fields[column] = String(Math.round(value / (preprocess ? 2 : 1)));
+            fields[column] = String(
+              Math.round(value / (preprocess ? scale : 1)),
+            );
         }
         return fields.join('\t');
       })
@@ -191,6 +223,15 @@ if (!key) {
     right: number;
     bottom: number;
   }) => {
+    const layout = await inspectChatLayout(await screen());
+    if (
+      classifyViberModal(layout.modalText) !== 'none' ||
+      bubble.top < chatBodyTop(layout.chatLines, layout.bannerBottom) ||
+      bubble.bottom > layout.height - 85 ||
+      bubble.left < layout.bounds.left + 8 ||
+      bubble.right > layout.bounds.right - 8
+    )
+      throw Error('unsafe_bubble_copy');
     const clipboard = ['-selection', 'clipboard'];
     await run('xclip', [...clipboard, '-i', '/dev/null'], { timeout: 3000 });
     const before = (await run('xclip', [...clipboard, '-o'], { timeout: 3000 }))
@@ -270,6 +311,9 @@ if (!key) {
       await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
         timeout: 3000,
       }).catch(() => {});
+      await run('xdotool', ['mousemove', '0', '0'], { timeout: 3000 }).catch(
+        () => {},
+      );
       const closedMenuImage = await screen().catch(() => null);
       if (closedMenuImage && attentionReason)
         await writeFile(join(data, 'attention.jpg'), closedMenuImage, {
@@ -352,15 +396,41 @@ if (!key) {
       );
       profileSidebarOpen = sidebarLabels.size >= 2;
     }
-    const chatgptSidebarOpen = words.some(
-      (word) =>
-        word.left > width * 0.74 &&
-        word.top > 26 &&
-        word.top < height * 0.25 &&
-        /^chatgpt$/i.test(word.text),
-    );
+    let chatgptHeader = chatgptPanelHeader(words, width, height, boundaries);
+    if (
+      !chatgptHeader &&
+      boundaries.some((x) => x > width * 0.45 && x < width * 0.9)
+    ) {
+      // The multilingual model can read this English brand as Cyrillic. Confirm
+      // the exact title in its header strip, constrained by the observed divider.
+      const left = Math.floor(width * 0.45),
+        top = 26;
+      const header = await ocr(
+        image,
+        `${width - left}x84+${left}+${top}`,
+        '11',
+        false,
+        'eng',
+      );
+      chatgptHeader = chatgptPanelHeader(
+        parseTsvWords(header.stdout).map((word) => ({
+          ...word,
+          left: word.left + left,
+          top: word.top + top,
+        })),
+        width,
+        height,
+        boundaries,
+      );
+    }
+    const chatgptSidebarOpen = !!chatgptHeader;
     const profileOpen = profileSidebarOpen || chatgptSidebarOpen;
-    const bounds = chatColumnBounds(width, boundaries, profileOpen);
+    const bounds = chatColumnBounds(
+      width,
+      boundaries,
+      profileOpen,
+      chatgptHeader?.left,
+    );
     const chatLines = groupOcrLinesWithinBounds(words, bounds);
     const blockedActions = new Set([
       'block',
@@ -397,6 +467,18 @@ if (!key) {
       lines,
       chatLines,
       allText,
+      modalText: lines
+        .filter(
+          (line) =>
+            (line.top < 105 &&
+              /no connectivity|no connection/iu.test(line.text)) ||
+            (line.top > height * 0.22 &&
+              line.top < height * 0.75 &&
+              line.left > width * 0.25 &&
+              line.right < width * 0.86),
+        )
+        .map((line) => line.text)
+        .join(' '),
       profileOpen,
       chatgptSidebarOpen,
       bounds,
@@ -410,6 +492,14 @@ if (!key) {
         return banner
           ? Math.max(
               banner.top,
+              ...blockedWords
+                .filter(
+                  (word) =>
+                    word.top < height * 0.3 &&
+                    word.left >= bounds.left &&
+                    word.right <= bounds.right,
+                )
+                .map((word) => word.bottom),
               ...words
                 .filter(
                   (word) =>
@@ -451,6 +541,7 @@ if (!key) {
   ) => {
     const matches = (candidate: string) =>
       chatHeaderMatchesRecipient(candidate, to);
+    if ((await database())?.number === to) return notesHeader(layout);
     const phoneInCrop = async (image: Buffer, crop: string) => {
       const result = await ocr(image, crop, '11', false);
       return phoneFromOcrLines(
@@ -506,6 +597,10 @@ if (!key) {
     to: string,
     allowRequestedInboundTarget = false,
   ) => {
+    if ((await database())?.number === to) {
+      await openOwnNotes();
+      return;
+    }
     const url = `viber://chat?${new URLSearchParams({ number: to.replace(/\D/g, '') })}`;
     await run('/opt/viber/Viber', [url], { timeout: 10000 });
     await delay(2000);
@@ -532,76 +627,133 @@ if (!key) {
       throw Error('recipient_not_verified');
     }
   };
+  const notesHeader = async (
+    layout: Awaited<ReturnType<typeof inspectChatLayout>>,
+  ) => {
+    if (hasMyNotesHeader(layout.words, layout.bounds)) return true;
+    // Dense messages can suppress even the title in whole-window OCR.
+    try {
+      const header = await ocr(
+        await screen(),
+        `${layout.bounds.right - layout.bounds.left}x70+${layout.bounds.left}+40`,
+        '11',
+        false,
+        'eng',
+      );
+      return hasMyNotesHeader(
+        parseTsvWords(header.stdout).map((word) => ({
+          ...word,
+          left: word.left + layout.bounds.left,
+          top: word.top + 40,
+        })),
+        layout.bounds,
+      );
+    } catch {
+      return false;
+    }
+  };
   const returnToMyNotes = async () => {
     const layout = await inspectChatLayout(await screen());
-    const notes = layout.lines.find((line) => /my\s+notes/i.test(line.text));
-    if (!notes || notes.left > layout.width * 0.3) return false;
-    const x = Math.max(20, Math.min(layout.width * 0.1, notes.right + 8));
-    const y = notes.top + 10;
-    await clickAt(x, y);
+    if (classifyViberModal(layout.modalText) !== 'none') return false;
+    const notes = groupOcrLinesWithinBounds(layout.words, {
+      left: 0,
+      right: layout.bounds.left,
+    }).find(
+      (line) =>
+        line.left < layout.width * 0.3 &&
+        /^(?:my\s+notes|мої\s+нотатки|мои\s+заметки)$/iu.test(line.text.trim()),
+    );
+    if (!notes) return false;
+    await clickAt(Math.round((notes.left + notes.right) / 2), notes.top + 10);
     await delay(500);
     return true;
   };
-  const checkModals = async () => {
-    let image = Buffer.alloc(0);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      image = await screen();
-      const result = await ocr(image);
-      const lines = groupOcrLines(parseTsvWords(result.stdout));
-      const text = lines.map((line) => line.text).join(' ');
-      const windows = await visibleViber();
-      const titles = await Promise.all(
-        windows.map((window) =>
-          run('xdotool', ['getwindowname', window], { timeout: 2000 }).then(
-            ({ stdout }) => stdout.trim(),
-            () => '',
-          ),
-        ),
+  const openOwnNotes = async () => {
+    let layout = await inspectChatLayout(await screen());
+    if (classifyViberModal(layout.modalText) !== 'none')
+      throw Error('viber_modal_visible');
+    if (await notesHeader(layout)) return;
+    if (!(await returnToMyNotes())) {
+      // Viber rejects chat URIs addressed to this account. Its own-profile menu
+      // provides the supported My Notes entry in the normalized desktop window.
+      await run('xdotool', ['key', 'Escape']);
+      await clickAt(25, 25);
+      await delay(600);
+      layout = await inspectChatLayout(await screen());
+      if (classifyViberModal(layout.modalText) !== 'none')
+        throw Error('viber_modal_visible');
+      let point = myNotesMenuPoint(
+        groupOcrLinesWithinBounds(layout.words, {
+          left: 0,
+          right: layout.bounds.left,
+        }),
+        layout.width,
+        layout.height,
       );
-      const modal = classifyViberModal(`${text} ${titles.join(' ')}`);
-      if (modal === 'sync_history') {
-        await run('xdotool', ['key', '--clearmodifiers', 'Escape'], {
-          timeout: 3000,
-        });
-        await delay(300);
-        continue;
-      }
-      if (modal === 'sync_canceled') {
-        const confirmButtons = lines.filter(
-          (line) =>
-            line.top >= 405 &&
-            line.top <= 585 &&
-            line.left >= 256 &&
-            line.right <= 1024,
+      if (!point) {
+        // The profile menu obscures chat boundaries. OCR its label separately
+        // from the icon, using the normalized desktop rather than chat bounds.
+        const top = Math.round((layout.height * 11) / 30);
+        const row = await ocr(
+          await screen(),
+          `235x${Math.round(layout.height / 15)}+65+${top}`,
+          '6',
+          true,
+          'eng+ukr+rus',
         );
-        const point = exactOptionPoint(confirmButtons, ['yes', 'так', 'да']);
-        if (!point) {
-          attentionReason = 'sync_cancel_confirmation_missing';
-          await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-          return 'unknown_modal';
-        }
-        await clickAt(point.x, point.y);
-        await delay(300);
-        continue;
+        point = myNotesMenuPoint(
+          groupOcrLines(
+            parseTsvWords(row.stdout).map((word) => ({
+              ...word,
+              left: word.left + 65,
+              top: word.top + top,
+            })),
+          ),
+          layout.width,
+          layout.height,
+        );
       }
-      if (modal === 'repair') {
-        await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-        return 'repair';
-      }
-      if (
-        modal === 'close_confirmation' ||
-        modal === 'unknown' ||
-        windows.length > 1
-      ) {
-        await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-        return 'unknown_modal';
-      }
-      attentionReason = '';
-      return undefined;
+      if (!point) throw Error('my_notes_entry_missing');
+      await clickAt(point.x, point.y);
+      await delay(500);
     }
-    attentionReason = 'sync_history_not_closed';
-    await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
-    return 'unknown_modal';
+    layout = await inspectChatLayout(await screen());
+    if (!(await notesHeader(layout))) throw Error('recipient_not_verified');
+  };
+  const checkModals = async () => {
+    const image = await screen();
+    const result = await ocr(image);
+    const text = groupOcrLines(parseTsvWords(result.stdout))
+      .map((line) => line.text)
+      .join(' ');
+    const windows = await visibleViber();
+    const titles = await Promise.all(
+      windows.map((window) =>
+        run('xdotool', ['getwindowname', window], { timeout: 2000 }).then(
+          ({ stdout }) => stdout.trim(),
+          () => '',
+        ),
+      ),
+    );
+    const modal = classifyViberModal(`${text} ${titles.join(' ')}`);
+    if (
+      modal === 'sync_history' ||
+      modal === 'sync_canceled' ||
+      modal === 'repair'
+    ) {
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      return modal;
+    }
+    if (
+      modal === 'close_confirmation' ||
+      modal === 'unknown' ||
+      windows.length > 1
+    ) {
+      await writeFile(join(data, 'attention.jpg'), image, { mode: 0o600 });
+      return 'unknown_modal';
+    }
+    attentionReason = '';
+    return undefined;
   };
   const closeExitConfirmation = async () => {
     const image = await screen();
@@ -835,6 +987,429 @@ if (!key) {
     }
     return found;
   };
+  const scrollChat = async (
+    layout: Awaited<ReturnType<typeof inspectChatLayout>>,
+    direction: 4 | 5,
+    count: number,
+  ) => {
+    await scrollWithSettledPointer({
+      move: async (inside) => {
+        await run(
+          'xdotool',
+          inside
+            ? [
+                'mousemove',
+                String(
+                  Math.round((layout.bounds.left + layout.bounds.right) / 2),
+                ),
+                String(Math.round(layout.height * 0.6)),
+              ]
+            : ['mousemove', '0', '0'],
+          { timeout: 3000 },
+        );
+      },
+      scroll: async () => {
+        await run(
+          'xdotool',
+          [
+            'click',
+            '--repeat',
+            String(count),
+            '--delay',
+            '15',
+            String(direction),
+          ],
+          { timeout: 4000 },
+        );
+      },
+      wait: async (ms) => {
+        await delay(ms);
+      },
+    });
+  };
+  const outgoingSlice = async (expected?: string): Promise<ChatSlice> => {
+    let image = await screen();
+    let layout = await inspectChatLayout(image);
+    if (classifyViberModal(layout.modalText) !== 'none')
+      throw Error('viber_modal_visible');
+    // Scroll inside the verified chat only; a draft can otherwise leave the new
+    // bubble beyond the viewport, especially after a very long message.
+    await scrollChat(layout, 5, 100);
+    image = await screen();
+    layout = await inspectChatLayout(image);
+    if (classifyViberModal(layout.modalText) !== 'none')
+      throw Error('viber_modal_visible');
+    const initialHeaderBottom = chatBodyTop(
+      layout.chatLines,
+      layout.bannerBottom,
+    );
+    const source = join(data, 'layout-source.jpg');
+    const [raw, metadata] = await Promise.all([
+      run('convert', [source, '-depth', '8', 'rgb:-'], {
+        encoding: 'buffer',
+        timeout: 10000,
+        maxBuffer: 5 * 1024 * 1024,
+      }),
+      ocr(
+        image,
+        `${layout.bounds.right - layout.bounds.left}x${layout.height}+${layout.bounds.left}+0`,
+        '11',
+        true,
+      ),
+    ]);
+    const headerBottom = deriveMessageBodyTop(
+      raw.stdout,
+      layout.width,
+      layout.height,
+      layout.bounds,
+      initialHeaderBottom,
+    );
+    const timeWords = parseTsvWords(metadata.stdout).map((word) => ({
+      ...word,
+      left: word.left + layout.bounds.left,
+    }));
+    const timeLines = groupOcrLines(timeWords).filter((line) =>
+      visibleTimestampLine(line.text),
+    );
+    const lines = [...layout.chatLines];
+    for (const line of timeLines)
+      if (
+        !lines.some(
+          (other) =>
+            visibleTimestampLine(other.text) &&
+            Math.abs(other.top - line.top) < 12,
+        )
+      )
+        lines.push(line);
+    const regions = messageBubbleRegions(
+      raw.stdout,
+      layout.width,
+      layout.height,
+      layout.bounds,
+      headerBottom,
+      layout.height - 50,
+    ).filter((bubble) => bubble.side === 'right' && bubble.outgoingColor);
+    const mappedBubbles: ChatSlice['bubbles'] = regions.map((region) => {
+      const extracted = outgoingBubbleText(lines, region);
+      const word = [...timeWords, ...layout.words]
+        .filter(
+          (word) =>
+            visibleTimestampLine(word.text) &&
+            word.top >= region.bottom - 34 &&
+            word.top < region.bottom + 20 &&
+            word.left >= region.left &&
+            word.left + word.width <= region.right + 4,
+        )
+        .sort((a, b) => b.top - a.top)[0];
+      const timestamp = word
+        ? { ...word, right: word.left + word.width }
+        : extracted.timestamp;
+      const bodyPixels: Buffer[] = [];
+      for (let y = region.top; y < region.bottom - 22; y++)
+        bodyPixels.push(
+          raw.stdout.subarray(
+            (y * layout.width + region.left) * 3,
+            (y * layout.width + region.right) * 3,
+          ),
+        );
+      return {
+        ...region,
+        text: extracted.text,
+        ocrText: extracted.text,
+        contentSignature: bubbleContentSignature(
+          raw.stdout,
+          layout.width,
+          layout.height,
+          region,
+        ),
+        contentHash: createHash('sha256')
+          .update(Buffer.concat(bodyPixels))
+          .digest('hex'),
+        messageTime: word
+          ? visibleTimestampLine(word.text)
+          : extracted.messageTime,
+        status: outgoingBubbleStatus(
+          raw.stdout,
+          layout.width,
+          layout.height,
+          region,
+          timestamp,
+        ),
+        clipped: region.top <= headerBottom + 4,
+        daySeparator: daySeparatorAt(
+          layout.chatLines,
+          region.bottom,
+          new Date(),
+        ),
+      };
+    });
+    const aligned = mappedBubbles.filter(
+      (bubble) =>
+        bubble.right >=
+        layout.bounds.right - (layout.bounds.right - layout.bounds.left) * 0.12,
+    );
+    for (const spatialLast of aligned
+      .filter(
+        (bubble) =>
+          !bubble.messageTime &&
+          Math.min(layout.bounds.right, bubble.right - 10) >
+            Math.max(layout.bounds.left, bubble.left - 4, bubble.right - 106),
+      )
+      .slice(-8)
+      .reverse()) {
+      const right = Math.min(layout.bounds.right, spatialLast.right - 10);
+      const left = Math.max(
+          layout.bounds.left,
+          spatialLast.left - 4,
+          right - 96,
+        ),
+        top = Math.max(headerBottom, spatialLast.bottom - 26);
+      if (right <= left || spatialLast.bottom <= top) continue;
+      const footer = await ocr(
+        image,
+        `${right - left}x${spatialLast.bottom - top}+${left}+${top}`,
+        '7',
+        true,
+        'eng',
+        3,
+        '0123456789:',
+        true,
+      ).catch(() => ({ stdout: '' }));
+      const word = parseTsvWords(footer.stdout).find((word) =>
+        visibleTimestampLine(word.text),
+      );
+      if (word) {
+        const timestamp = {
+          ...word,
+          left: word.left + left,
+          top: word.top + top,
+          right: word.left + left + word.width,
+        };
+        spatialLast.messageTime = visibleTimestampLine(word.text);
+        spatialLast.status = outgoingBubbleStatus(
+          raw.stdout,
+          layout.width,
+          layout.height,
+          spatialLast,
+          timestamp,
+        );
+        spatialLast.text = outgoingBubbleText(
+          [...lines, timestamp],
+          spatialLast,
+        ).text;
+      }
+    }
+    // Timestamp-only widgets carry an unfilled emoji above the badge. Keep every
+    // visible widget in both snapshots, including older adjacent emoji anchors.
+    for (const bubble of aligned) {
+      if (bubble.contentSignature) continue;
+      const previous = Math.max(
+        headerBottom,
+        ...mappedBubbles
+          .filter(
+            (other) =>
+              other !== bubble &&
+              other.messageTime &&
+              other.bottom <= bubble.top,
+          )
+          .map((other) => other.bottom),
+      );
+      const body = unfilledEmojiBody(
+        raw.stdout,
+        layout.width,
+        layout.height,
+        bubble,
+        previous,
+      );
+      if (!body) continue;
+      bubble.bodyRegion = body;
+      bubble.unfilled = true;
+      bubble.top = body.top;
+      bubble.left = Math.min(bubble.left, body.left);
+      bubble.right = Math.max(bubble.right, body.right);
+      bubble.text = outgoingBubbleText(lines, bubble).text;
+      bubble.ocrText = bubble.text;
+      bubble.contentHash = undefined;
+      bubble.contentSignature = bubbleContentSignature(
+        raw.stdout,
+        layout.width,
+        layout.height,
+        bubble,
+      );
+    }
+    const spatialLast = aligned
+      .filter((bubble) => bubble.contentSignature)
+      .at(-1);
+    // An unreadable latest footer is uncertainty, never permission to copy an older bubble.
+    const bubbles = mappedBubbles.filter(
+      (bubble) => bubble.messageTime || bubble === spatialLast,
+    );
+    // Whole-window OCR often omits a lone letter. Read only the body pixels
+    // before considering a context menu, on both sides of the send frontier.
+    for (const bubble of bubbles) {
+      if (bubble.text || !bubble.messageTime) continue;
+      const body = bubble.bodyRegion;
+      const crop = body
+        ? `${body.right - body.left}x${body.bottom - body.top}+${body.left}+${body.top}`
+        : `${Math.max(1, bubble.right - bubble.left - 14)}x${Math.max(1, bubble.bottom - bubble.top - 29)}+${bubble.left + 7}+${bubble.top + 5}`;
+      const result = await ocr(
+        image,
+        crop,
+        bubble.bottom - bubble.top < 80 ? '7' : '6',
+      );
+      bubble.text = groupOcrLines(parseTsvWords(result.stdout))
+        .map((line) => line.text)
+        .join('\n')
+        .trim();
+      bubble.ocrText = bubble.text;
+    }
+    const newest = bubbles.at(-1);
+    if (
+      expected &&
+      newest?.clipped &&
+      !matchesOutgoingText(expected, newest.text, true)
+    ) {
+      const regional = await ocr(
+        image,
+        `${newest.right - newest.left}x${Math.max(1, newest.bottom - newest.top - 24)}+${newest.left}+${newest.top}`,
+        '6',
+        true,
+        'ukr+rus+eng',
+        2,
+        undefined,
+        true,
+      ).catch(() => ({ stdout: '' }));
+      const text = groupOcrLines(parseTsvWords(regional.stdout))
+        .map((line) => line.text)
+        .join('\n')
+        .trim();
+      if (text) {
+        newest.text = text;
+        newest.ocrText = text;
+      }
+    }
+    if (
+      expected &&
+      newest?.clipped &&
+      matchesOutgoingText(expected, newest.text, true)
+    ) {
+      // Inspect bounded pages of the same wide bubble; the suffix alone cannot
+      // establish the complete long message. Never copy a giant message.
+      try {
+        for (let page = 0; page < 8 && !newest.prefixText; page++) {
+          await scrollChat(layout, 4, 6);
+          const pageImage = await screen();
+          const pageLayout = await inspectChatLayout(pageImage);
+          if (classifyViberModal(pageLayout.modalText) !== 'none')
+            throw Error('viber_modal_visible');
+          const pageRaw = await run(
+            'convert',
+            [source, '-depth', '8', 'rgb:-'],
+            { encoding: 'buffer', timeout: 10000, maxBuffer: 5 * 1024 * 1024 },
+          );
+          const pageTop = deriveMessageBodyTop(
+            pageRaw.stdout,
+            pageLayout.width,
+            pageLayout.height,
+            pageLayout.bounds,
+            chatBodyTop(pageLayout.chatLines, pageLayout.bannerBottom),
+          );
+          const region = messageBubbleRegions(
+            pageRaw.stdout,
+            pageLayout.width,
+            pageLayout.height,
+            pageLayout.bounds,
+            pageTop,
+            pageLayout.height - 50,
+          )
+            .filter(
+              (region) =>
+                region.side === 'right' &&
+                region.outgoingColor &&
+                region.bottom >= pageLayout.height - 54 &&
+                sameBubbleColumn(region, newest),
+            )
+            .sort((a, b) => b.bottom - b.top - (a.bottom - a.top))[0];
+          if (!region) break;
+          let text = outgoingBubbleText(pageLayout.chatLines, region).text;
+          if (
+            region.top > pageTop + 4 &&
+            !matchesOutgoingText(
+              normalizeOcr(expected).slice(0, 80),
+              normalizeOcr(text).slice(0, 80),
+            )
+          ) {
+            const body = await ocr(
+              pageImage,
+              `${region.right - region.left}x${region.bottom - region.top}+${region.left}+${region.top}`,
+              '6',
+              true,
+              'ukr+rus+eng',
+              2,
+              undefined,
+              true,
+            );
+            text = groupOcrLines(parseTsvWords(body.stdout))
+              .map((line) => line.text)
+              .join('\n');
+          }
+          if (
+            region.top > pageTop + 4 &&
+            matchesOutgoingText(
+              normalizeOcr(expected).slice(0, 80),
+              normalizeOcr(text).slice(0, 80),
+            )
+          )
+            newest.prefixText = text;
+        }
+      } finally {
+        if (
+          classifyViberModal(
+            (await inspectChatLayout(await screen())).modalText,
+          ) === 'none'
+        )
+          await scrollChat(layout, 5, 100);
+      }
+    }
+    if (
+      expected &&
+      newest?.messageTime &&
+      !newest.clipped &&
+      !!newest.contentSignature &&
+      !matchesOutgoingText(expected, newest.text)
+    ) {
+      // Only the latest spatially validated outgoing bubble can be copied. Never
+      // open a menu on a banner, date, heart, composer, profile card or modal.
+      try {
+        newest.text = await copyBubble(newest.bodyRegion ?? newest);
+        newest.clipped = false;
+      } catch {
+        /* OCR or database can still confirm. */
+      }
+    }
+    const composerResult = await ocr(
+      image,
+      `${Math.max(1, layout.bounds.right - layout.bounds.left - 180)}x45+${layout.bounds.left + 110}+${layout.height - 50}`,
+      '7',
+    ).catch(() => ({ stdout: '' }));
+    const composerText = groupOcrLines(parseTsvWords(composerResult.stdout))
+      .map((line) => line.text)
+      .join(' ');
+    const composer = [
+      'type a message',
+      'написати повідомлення',
+      'напишіть повідомлення',
+      'написать сообщение',
+    ].some((placeholder) => textSimilarity(placeholder, composerText) >= 0.7)
+      ? ''
+      : composerText;
+    return {
+      observedAt: new Date().toISOString(),
+      composer,
+      bubbles,
+      notes: await notesHeader(layout),
+    };
+  };
   const outgoingFromScreen = async (since: Date, recipients: string[] = []) => {
     const result: {
       from: string;
@@ -844,15 +1419,8 @@ if (!key) {
     }[] = [];
     const visited = new Set<string>();
     const scanCurrent = async (hint = '') => {
-      let layout = await inspectChatLayout(await screen());
-      if (
-        !hint &&
-        layout.chatLines.some(
-          (line) =>
-            line.top < layout.height * 0.55 && /my\s+notes/i.test(line.text),
-        )
-      )
-        return;
+      const layout = await inspectChatLayout(await screen());
+      if (!hint && (await notesHeader(layout))) return;
       let from =
         hint ||
         phoneFromOcrLines(
@@ -872,151 +1440,42 @@ if (!key) {
             line.top < layout.height * 0.55 &&
             line.left >= layout.bounds.right - 5,
         );
-      if (!from && !layout.profileOpen) {
-        const x = Math.min(layout.width - 35, layout.bounds.right - 28);
-        if (safeLayoutClick(x, 45, layout.blockedWords)) {
-          await clickAt(x, 45);
-          await delay(300);
-          layout = await inspectChatLayout(await screen());
-        }
-        from = phoneFromOcrLines(
-          groupOcrLinesWithinBounds(layout.words, {
-            left: layout.bounds.right,
-            right: layout.width,
-          }),
-          (line) =>
-            line.top < layout.height * 0.55 &&
-            line.left >= layout.bounds.right - 5,
-        );
-      }
       if (!from) return;
       const threadId = `screen:${screenMessageId(from, '', '')}`;
       if (visited.has(threadId)) return;
       visited.add(threadId);
-      const headerBottom = Math.max(
-        layout.bannerBottom,
-        140,
-        ...layout.chatLines
-          .filter((line) => line.top < layout.height * 0.16)
-          .map((line) => line.top + 28),
-      );
-      const lines = layout.chatLines.filter(
-        (line) =>
-          line.top > headerBottom &&
-          line.top < layout.height - 100 &&
-          line.left >= layout.bounds.left &&
-          line.right < layout.bounds.right,
-      );
-      const source = join(data, 'layout-source.jpg');
-      const image = await readFile(source);
-      const [rawPixelResult, thresholdTimeResult] = await Promise.all([
-        run('convert', [source, '-depth', '8', 'rgb:-'], {
-          encoding: 'buffer',
-          timeout: 10000,
-          maxBuffer: 5 * 1024 * 1024,
-        }),
-        ocr(
-          image,
-          `${layout.bounds.right - layout.bounds.left}x${layout.height}+${layout.bounds.left}+0`,
-          '11',
-          true,
-        ),
-      ]);
-      const rawPixels = rawPixelResult.stdout;
-      const bubbles = messageBubbleRegions(
-        rawPixels,
-        layout.width,
-        layout.height,
-        layout.bounds,
-        headerBottom,
-      );
-      const thresholdTimeLines = groupOcrLines(
-        parseTsvWords(thresholdTimeResult.stdout).map((word) => ({
-          ...word,
-          left: word.left + layout.bounds.left,
-        })),
-      ).filter(
-        (line) =>
-          line.top > headerBottom &&
-          line.top < layout.height - 100 &&
-          visibleTimestampLine(line.text),
-      );
-      const scanLines = [...lines];
-      for (const line of thresholdTimeLines) {
-        const time = visibleTimestampLine(line.text);
+      const slice = await outgoingSlice();
+      for (const bubble of slice.bubbles) {
         if (
-          time &&
-          !scanLines.some(
-            (candidate) =>
-              visibleTimestampLine(candidate.text) === time &&
-              Math.abs(candidate.top - line.top) <= 14,
+          !bubble.messageTime ||
+          !(
+            bubble.status === 'sent' ||
+            (slice.notes && bubble.status === 'unknown')
           )
         )
-          scanLines.push(line);
-      }
-      scanLines.sort((a, b) => a.top - b.top || a.left - b.left);
-      let timeLines = 0;
-      let recentTimeLines = 0;
-      let matchedBubbles = 0;
-      const copied = new Set<string>();
-      for (let index = scanLines.length - 1; index >= 0; index--) {
-        const visibleTime = visibleTimestampLine(scanLines[index]!.text);
-        if (!visibleTime) continue;
-        timeLines++;
-        const at = visibleMessageTimestamp(visibleTime, new Date());
-        if (!at || at < since) continue;
-        recentTimeLines++;
-        const candidate = bubbles
-          .filter(
-            (bubble) =>
-              bubble.side === 'right' &&
-              bubble.top < scanLines[index]!.top &&
-              scanLines[index]!.top - bubble.bottom >= -36 &&
-              scanLines[index]!.top - bubble.bottom <= 48 &&
-              scanLines[index]!.left >= bubble.left - 24 &&
-              scanLines[index]!.left <= bubble.right + 24 &&
-              !copied.has(`${bubble.left}:${bubble.top}`),
-          )
-          .sort((a, b) => b.top - a.top)[0];
-        if (!candidate) continue;
-        matchedBubbles++;
-        let copiedText: string;
-        try {
-          copiedText = await copyBubble(candidate);
-        } catch {
-          attentionReason = '';
-          copied.add(`${candidate.left}:${candidate.top}`);
-          console.log(
-            'viber_outgoing_bubble_skipped',
-            JSON.stringify({
-              threadId,
-              reason: 'copy_unavailable',
-              top: candidate.top,
-            }),
-          );
           continue;
+        if (!bubble.text || bubble.unfilled) {
+          try {
+            bubble.text = await copyBubble(bubble.bodyRegion ?? bubble);
+          } catch {
+            continue;
+          }
         }
-        copied.add(`${candidate.left}:${candidate.top}`);
+        const day = bubble.daySeparator;
+        if (!day) continue;
+        const at = visibleMessageTimestamp(bubble.messageTime, new Date(), day);
+        if (!at || at < since) continue;
         result.push({
           from,
-          text: copiedText,
+          text: bubble.text,
           at: at.toISOString(),
-          providerMessageId: screenMessageId(threadId, copiedText, visibleTime),
+          providerMessageId: screenMessageId(
+            threadId,
+            bubble.text,
+            bubble.messageTime,
+          ),
         });
       }
-      console.log(
-        'viber_outgoing_scan',
-        JSON.stringify({
-          bounds: layout.bounds,
-          lineCount: scanLines.length,
-          totalLineCount: layout.lines.length,
-          chatLineCount: scanLines.length,
-          bubbleCount: bubbles.length,
-          timeLines,
-          recentTimeLines,
-          matchedBubbles,
-        }),
-      );
     };
     try {
       await scanCurrent();
@@ -1037,67 +1496,26 @@ if (!key) {
   const send = createSend(join(data, 'receipts'), {
     messages,
     screen,
-    async confirm() {
-      const image = await screen();
-      const layout = await inspectChatLayout(image);
-      const headerBottom = Math.max(
-        layout.bannerBottom,
-        90,
-        ...layout.lines
-          .filter((line) => line.top < layout.height * 0.18)
-          .map((line) => line.top + 28),
-      );
-      const composer = await ocr(
-        image,
-        `${Math.max(1, layout.bounds.right - layout.bounds.left)}x${Math.min(100, Math.floor(layout.height * 0.14))}+${layout.bounds.left}+${Math.floor(layout.height * 0.86)}`,
-      );
-      const bodyLines = layout.lines.filter(
-        (line) =>
-          line.top > headerBottom &&
-          line.top < layout.height - 100 &&
-          line.left >
-            layout.bounds.left +
-              (layout.bounds.right - layout.bounds.left) * 0.42 &&
-          line.right < layout.bounds.right,
-      );
-      const messageTime = [...bodyLines]
-        .reverse()
-        .map((line) => visibleTimeText(line.text))
-        .find(Boolean);
-      const bodySource = join(data, 'layout-source.jpg');
-      const { stdout: rawPixels } = await run(
-        'convert',
-        [bodySource, '-depth', '8', 'rgb:-'],
-        {
-          encoding: 'buffer',
-          timeout: 10000,
-          maxBuffer: 5 * 1024 * 1024,
-        },
-      );
-      const bubbles = messageBubbleRegions(
-        rawPixels,
-        layout.width,
-        layout.height,
-        layout.bounds,
-        headerBottom,
-      )
-        .filter((bubble) => bubble.side === 'right')
-        .sort((a, b) => b.top - a.top);
-      const outgoingBubble = bubbles[0] ? await copyBubble(bubbles[0]) : '';
-      return {
-        composer: groupOcrLines(parseTsvWords(composer.stdout))
-          .map((line) => line.text)
-          .join(' '),
-        outgoingBubble,
-        messageTime,
-      };
-    },
+    confirm: outgoingSlice,
     wait: () => delay(1000),
     async open(url, to) {
+      if (
+        classifyViberModal(
+          (await inspectChatLayout(await screen())).modalText,
+        ) !== 'none'
+      )
+        throw Error('viber_modal_visible');
       // The official .desktop entry is Exec=/opt/viber/Viber %u. A second instance
       // forwards its URI to the running single-instance Qt application.
-      await run('/opt/viber/Viber', [url], { timeout: 10000 });
-      await delay(2000);
+      const ownAccount = (await database())?.number === to;
+      if (!ownAccount) {
+        const navigation = new URL(url);
+        navigation.searchParams.delete('draft');
+        await run('/opt/viber/Viber', [navigation.toString()], {
+          timeout: 10000,
+        });
+        await delay(2000);
+      }
       const { stdout } = await run(
         'xdotool',
         ['search', '--onlyvisible', '--class', 'Viber'],
@@ -1109,10 +1527,16 @@ if (!key) {
       await run('xdotool', ['windowmove', window, '0', '0']);
       await run('xdotool', ['windowraise', window]);
       await run('xdotool', ['windowfocus', '--sync', window]);
+      if (ownAccount) await openOwnNotes();
       let layout = await inspectChatLayout(await screen());
+      if (classifyViberModal(layout.modalText) !== 'none')
+        throw Error('viber_modal_visible');
       if (!(await profileRecipientMatch(layout, to)))
         throw Error('recipient_not_verified');
       layout = await normalizeChatLayout();
+      // Capture the normal chat viewport before a multiline draft expands the
+      // composer and reflows older bubbles against each other.
+      const baseline = await outgoingSlice();
       // Clipboard paste preserves multiline text without producing Enter events.
       // Verify the exact composer selection before dispatching the message.
       const text = new URL(url).searchParams.get('draft');
@@ -1121,7 +1545,7 @@ if (!key) {
       await writeFile(draftFile, text, { mode: 0o600 });
       await clickAt(
         Math.round((layout.bounds.left + layout.bounds.right) / 2),
-        layout.height - 65,
+        layout.height - 25,
       );
       await run('xdotool', ['key', '--clearmodifiers', 'ctrl+a']);
       await run('xclip', ['-selection', 'clipboard', '-i', draftFile], {
@@ -1144,8 +1568,12 @@ if (!key) {
       );
       if (copied !== text) throw Error('draft_not_verified');
       await run('xdotool', ['key', '--clearmodifiers', 'Right']);
+      return baseline;
     },
     async enter() {
+      const layout = await inspectChatLayout(await screen());
+      if (classifyViberModal(layout.modalText) !== 'none')
+        throw Error('viber_modal_visible');
       await run('xdotool', ['key', '--clearmodifiers', 'Return']);
     },
   });
@@ -1344,31 +1772,35 @@ if (!key) {
         if (requestedRecipients.length > 0 && recipients.length === 0)
           throw Error('invalid_recipient');
         const account = await database();
-        let outgoing;
-        try {
-          outgoing = account
-            ? (await readMessages(account.path, since, recipients))
-                .filter((message) => message.outgoing)
-                .map((message) => ({
-                  from: message.from,
-                  text: message.text,
-                  at: message.at,
-                  providerMessageId: message.providerMessageId,
-                }))
-            : await serializeDesktop(() =>
-                outgoingFromScreen(since, url.searchParams.getAll('to')),
+        // This undocumented database has no delivery state. Visible ticks are
+        // required even when decryption succeeds; database rows supply IDs only.
+        let outgoing = await serializeDesktop(() =>
+          outgoingFromScreen(since, recipients),
+        );
+        if (account) {
+          try {
+            const rows = (
+              await readMessages(account.path, since, recipients)
+            ).filter((message) => message.outgoing);
+            outgoing = outgoing.map((visible) => {
+              const row = rows.find(
+                (row) =>
+                  row.from === visible.from &&
+                  matchesOutgoingText(row.text, visible.text) &&
+                  Math.abs(Date.parse(row.at) - Date.parse(visible.at)) <
+                    60_000,
               );
-        } catch {
-          outgoing = await serializeDesktop(() =>
-            outgoingFromScreen(since, url.searchParams.getAll('to')),
-          );
+              return row
+                ? { ...visible, providerMessageId: row.providerMessageId }
+                : visible;
+            });
+          } catch {
+            /* Retain independently verified screen messages. */
+          }
         }
         return json(200, outgoing);
       }
       if (req.method === 'POST' && url.pathname === '/send') {
-        const modal = await checkModals();
-        if (modal)
-          return json(423, { error: 'needs_attention', reason: modal });
         let raw = '';
         for await (const chunk of req) {
           raw += chunk;
@@ -1378,10 +1810,19 @@ if (!key) {
             return;
           }
         }
-        return json(
-          200,
-          await serializeDesktop(() => send(JSON.parse(raw) as SendInput)),
-        );
+        const input = JSON.parse(raw) as SendInput;
+        const response = await serializeDesktop(async () => {
+          const modal = classifyViberModal(
+            (await inspectChatLayout(await screen())).modalText,
+          );
+          if (modal !== 'none')
+            return {
+              status: 423,
+              body: { error: 'needs_attention', reason: modal },
+            };
+          return { status: 200, body: await send(input) };
+        });
+        return json(response.status, response.body);
       }
       json(404, { error: 'not_found' });
     } catch (error) {
