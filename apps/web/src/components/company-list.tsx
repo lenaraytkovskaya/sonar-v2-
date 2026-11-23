@@ -7,6 +7,7 @@ import {
   type CompanyFilters,
 } from '@sonar/core';
 import { uk } from '@/i18n/uk';
+import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ChevronDown } from 'lucide-react';
@@ -62,7 +63,8 @@ export function CompanyList({
     [preview, setPreview] = useState<CompanyFilters | null>(null),
     [pending, setPending] = useState(false),
     [loading, setLoading] = useState(false),
-    [showAi, setShowAi] = useState(false);
+    [showAi, setShowAi] = useState(false),
+    [showMore, setShowMore] = useState(false);
   const page = pagination.key === filterKey ? pagination.page : 1;
   const setPage = (page: number) => setPagination({ key: filterKey, page });
   useEffect(() => {
@@ -199,6 +201,18 @@ export function CompanyList({
             className={showAi ? 'rotate-180' : ''}
           />
         </Button>
+        <Button
+          variant="outline"
+          className="sm:hidden"
+          aria-expanded={showMore}
+          onClick={() => setShowMore(!showMore)}
+        >
+          {showMore ? uk.company.hideFilters : uk.company.showFilters}
+          <ChevronDown
+            aria-hidden="true"
+            className={showMore ? 'rotate-180' : ''}
+          />
+        </Button>
         <a
           className="inline-flex min-h-9 items-center rounded-lg border border-border px-3 text-sm"
           href={'/api/companies/export?' + params(filters)}
@@ -286,7 +300,12 @@ export function CompanyList({
           )}
         </Card>
       )}
-      <div className="mb-3 grid items-end gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <div
+        className={cn(
+          'mb-3 grid-cols-2 items-end gap-3 text-sm sm:grid lg:grid-cols-4 xl:grid-cols-7',
+          showMore ? 'grid' : 'hidden',
+        )}
+      >
         <label>
           {uk.company.city}
           <Input
@@ -383,7 +402,7 @@ export function CompanyList({
       )}
       {campaigns.length > 0 && (
         <div
-          className="mb-2 flex flex-wrap items-center gap-1.5"
+          className="mb-2 flex items-center gap-1.5 overflow-x-auto sm:flex-wrap [&>*]:shrink-0"
           aria-label={uk.company.campaign}
         >
           <span className="mr-1 text-xs text-muted-foreground">
