@@ -5,6 +5,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { accountDatabase, readMessages, run } from './database.js';
+import { createDesktopQueue } from './desktop-queue.js';
 import {
   createSend,
   scrollWithSettledPointer,
@@ -1578,15 +1579,7 @@ if (!key) {
     },
   });
 
-  let desktopQueue = Promise.resolve();
-  const serializeDesktop = <T>(operation: () => Promise<T>): Promise<T> => {
-    const next = desktopQueue.then(operation, operation);
-    desktopQueue = next.then(
-      () => {},
-      () => {},
-    );
-    return next;
-  };
+  const serializeDesktop = createDesktopQueue();
 
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -1605,6 +1598,7 @@ if (!key) {
       return;
     }
     const url = new URL(req.url || '/', 'http://bridge');
+    const cancelled = () => res.destroyed && !res.writableFinished;
     const json = (code: number, value: unknown) => {
       res
         .writeHead(code, { 'Content-Type': 'application/json' })
@@ -1750,14 +1744,19 @@ if (!key) {
                     providerMessageId: message.providerMessageId,
                     threadId: message.threadId,
                   }))
-              : await serializeDesktop(() =>
-                  inboxFromScreen(since, recipients, afterByRecipient),
+              : await serializeDesktop(
+                  () => inboxFromScreen(since, recipients, afterByRecipient),
+                  { cancelled },
                 );
         } catch (error) {
-          if (error instanceof Error && error.message === 'needs_attention')
+          if (
+            error instanceof Error &&
+            ['needs_attention', 'request_cancelled'].includes(error.message)
+          )
             throw error;
-          incoming = await serializeDesktop(() =>
-            inboxFromScreen(since, recipients, afterByRecipient),
+          incoming = await serializeDesktop(
+            () => inboxFromScreen(since, recipients, afterByRecipient),
+            { cancelled },
           );
         }
         return json(200, incoming);
@@ -1774,8 +1773,9 @@ if (!key) {
         const account = await database();
         // This undocumented database has no delivery state. Visible ticks are
         // required even when decryption succeeds; database rows supply IDs only.
-        let outgoing = await serializeDesktop(() =>
-          outgoingFromScreen(since, recipients),
+        let outgoing = await serializeDesktop(
+          () => outgoingFromScreen(since, recipients),
+          { cancelled },
         );
         if (account) {
           try {
@@ -1811,21 +1811,26 @@ if (!key) {
           }
         }
         const input = JSON.parse(raw) as SendInput;
-        const response = await serializeDesktop(async () => {
-          const modal = classifyViberModal(
-            (await inspectChatLayout(await screen())).modalText,
-          );
-          if (modal !== 'none')
-            return {
-              status: 423,
-              body: { error: 'needs_attention', reason: modal },
-            };
-          return { status: 200, body: await send(input) };
-        });
+        const response = await serializeDesktop(
+          async () => {
+            const modal = classifyViberModal(
+              (await inspectChatLayout(await screen())).modalText,
+            );
+            if (modal !== 'none')
+              return {
+                status: 423,
+                body: { error: 'needs_attention', reason: modal },
+              };
+            return { status: 200, body: await send(input) };
+          },
+          { priority: true },
+        );
         return json(response.status, response.body);
       }
       json(404, { error: 'not_found' });
     } catch (error) {
+      if (error instanceof Error && error.message === 'request_cancelled')
+        return;
       console.error(
         'bridge_operation_failed',
         error instanceof Error ? error.message : 'unknown_error',

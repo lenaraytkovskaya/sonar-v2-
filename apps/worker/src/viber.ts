@@ -149,11 +149,14 @@ export async function pollViberInbound(now = new Date()): Promise<TaskOutcome> {
   const { rows: recentRecipients } = await sonarPool.query<{
     to_value: string;
   }>(
-    `select distinct to_value from messages
+    // Each recipient costs a chat open plus OCR on the single Viber screen, so scan only the
+    // most recently contacted ones; a long list made every sync outlast the 4-minute timeout.
+    `select to_value from messages
      where channel='viber' and account_id=$1
        and coalesce(sent_at,created_at)>=now()-interval '14 days'
        and to_value ~ '^\\+[1-9][0-9]{6,14}$'
-     order by to_value limit 500`,
+     group by to_value
+     order by max(coalesce(sent_at,created_at)) desc limit 6`,
     [account.id],
   );
   const { rows: frontiers } = await sonarPool.query<{
@@ -270,6 +273,14 @@ async function enqueueViberInboxIfDue(now = new Date()) {
     now.getTime() - last.created_at.getTime() < interval * 1000
   )
     return;
+  // Never stack syncs behind a slow one: the bridge has a single screen.
+  const {
+    rows: [busy],
+  } = await sonarPool.query(
+    "select 1 from tasks where type='viber.inbox.sync' and status in ('queued','running') and created_at>$1 limit 1",
+    [new Date(now.getTime() - 30 * 60_000)],
+  );
+  if (busy) return;
   const slot = Math.floor(now.getTime() / (interval * 1000));
   await enqueueTask('viber.inbox.sync', `viber.inbox:${slot}`, {});
 }
