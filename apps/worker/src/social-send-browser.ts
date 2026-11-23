@@ -4,6 +4,7 @@ import {
   type BrowserContext,
   type Locator,
   type Page,
+  type Response,
 } from 'playwright';
 import {
   SocialProfileBusyError,
@@ -90,6 +91,7 @@ export async function captureFailureShot(
     // Any doubt keeps the mask: only a confirmed zero count unmasks.
     const readableFailure =
       facebookScreenshot &&
+      !stage.startsWith('hot_') &&
       (stage === 'confirmation' ||
         stage === 'transmission' ||
         stage === 'status_probe' ||
@@ -158,6 +160,14 @@ export async function captureFailureShot(
           })
           .catch(() => []),
       });
+    const hotSidebar =
+      stage.startsWith('hot_') && facebookScreenshot
+        ? [
+            page.locator(
+              'main, [role="main"], nav, [role="navigation"], aside, [role="complementary"], header, [role="banner"], [role="row"], [role="listitem"], tr, a[href*="/messages/"]',
+            ),
+          ]
+        : [];
     const redactedConversation =
       facebookScreenshot &&
       !readableFailure &&
@@ -173,7 +183,11 @@ export async function captureFailureShot(
       facebookScreenshot && typeof page.locator === 'function'
         ? [page.locator('input, textarea')]
         : [];
-    const masks = [...(redactedConversation ?? []), ...maskedFields];
+    const masks = [
+      ...(redactedConversation ?? []),
+      ...hotSidebar,
+      ...maskedFields,
+    ];
     let jpeg: string | undefined;
     try {
       for (const quality of [55, 35, 20]) {
@@ -677,11 +691,15 @@ function instagramLoadingState() {
     login,
     challenge,
     ready:
-      !splash &&
-      (anyVisible(
-        'main, [role="main"], nav[role="navigation"], a[href^="/direct/"], input[name="username"], input[name="email"], input[type="password"], iframe[src*="captcha"], [data-testid="captcha"], form[action*="checkpoint"]',
-      ) ||
-        /login|signin|challenge|checkpoint|captcha/i.test(location.pathname)),
+      login ||
+      challenge ||
+      (!splash &&
+        (anyVisible(
+          'main, [role="main"], nav[role="navigation"], a[href^="/direct/"], input[name="username"], input[name="email"], input[type="password"], iframe[src*="captcha"], [data-testid="captcha"], form[action*="checkpoint"]',
+        ) ||
+          /login|signin|challenge|checkpoint|captcha/i.test(
+            location.pathname,
+          ))),
   };
 }
 function instagramSplashTimeout(elapsedMs: number) {
@@ -703,8 +721,130 @@ function isInstagramSplashTimeout(
     error.screen === 'splash'
   );
 }
+async function recoverInstagramStartup(
+  page: Page,
+  original: URL,
+  timeoutMs: number,
+  started: number,
+) {
+  // Initial startup only. Boot the normal home app, then enter Direct through
+  // its own unique link. Never guess a recipient or run this after a dispatch.
+  let directResponse: Response | undefined;
+  let restriction: SocialSessionCheckError | undefined;
+  const observeDirect = (response: Response) => {
+    const url = new URL(response.url());
+    if (url.origin !== original.origin) return;
+    try {
+      if (response.frame() !== page.mainFrame()) return;
+    } catch {
+      // Service-worker-owned requests have no frame and cannot authorize recovery.
+      return;
+    }
+    if (response.request().isNavigationRequest()) directResponse = response;
+    if (
+      url.pathname === '/api/graphql' &&
+      [401, 403, 429].includes(response.status())
+    )
+      restriction = new SocialSessionCheckError(
+        response.status() === 429 ? 'rate_limit' : 'unknown_auth',
+      );
+  };
+  const assertRecovery = async () => {
+    if (restriction) throw restriction;
+    await assertSocialSession(page, 'instagram', timeoutMs);
+    if (restriction) throw restriction;
+  };
+  page.on('response', observeDirect);
+  try {
+    const response = await navigateSocialPage(
+      page,
+      'https://www.instagram.com/',
+      timeoutMs,
+    );
+    if (response && response.status() >= 400) return response;
+    await page.waitForFunction(
+      `(${instagramLoadingState.toString()})().ready`,
+      undefined,
+      { timeout: timeoutMs },
+    );
+    await assertRecovery();
+    // The observed unlabelled rail groups these routes outside conversation UI.
+    const rail =
+      'div:not(main *, [role="main"] *):not(:has(main, [role="main"], [role="dialog"]))' +
+      ['/', '/reels/', '/explore/']
+        .map((path) => `:has(a[href="${path}"]:visible)`)
+        .join('');
+    const links = page
+      .locator(
+        `:is(nav, [role="navigation"], header, ${rail}) a:is([href="/direct/inbox/"], [href="/direct/inbox"], [href="https://www.instagram.com/direct/inbox/"], [href="https://www.instagram.com/direct/inbox"]):not(:is([role="dialog"], [aria-modal="true"], [role="log"], [contenteditable], article, [role="article"], [role="feed"]) *)`,
+      )
+      .filter({ visible: true });
+    await links.first().waitFor({ state: 'visible', timeout: timeoutMs });
+    if ((await links.count()) !== 1)
+      throw instagramSplashTimeout(Date.now() - started);
+    await assertRecovery();
+    const homeUrl = new URL(page.url());
+    const directUrl = new URL(
+      await links.evaluate((link) => (link as HTMLAnchorElement).href),
+    );
+    if (
+      directUrl.origin !== original.origin ||
+      !/^\/direct\/inbox\/?$/.test(directUrl.pathname) ||
+      directUrl.username ||
+      directUrl.password ||
+      directUrl.search ||
+      directUrl.hash ||
+      homeUrl.origin !== original.origin ||
+      homeUrl.pathname !== '/' ||
+      homeUrl.username ||
+      homeUrl.password
+    )
+      throw new SocialSessionCheckError('unknown_auth');
+    await Promise.all([
+      page.waitForURL(/^https:\/\/www\.instagram\.com\/direct\/inbox\/?$/, {
+        timeout: timeoutMs,
+        waitUntil: 'commit',
+      }),
+      links.click({ timeout: timeoutMs, noWaitAfter: true }),
+    ]);
+    if (directResponse && directResponse.status() >= 400) return directResponse;
+    await page.waitForFunction(
+      `(${instagramLoadingState.toString()})().ready`,
+      undefined,
+      { timeout: timeoutMs },
+    );
+    await assertRecovery();
+    if (!/^\/direct\/inbox\/?$/.test(original.pathname)) {
+      const resumed = await navigateSocialPage(page, original.href, timeoutMs);
+      if (resumed && resumed.status() >= 400) return resumed;
+      await page.waitForFunction(
+        `(${instagramLoadingState.toString()})().ready`,
+        undefined,
+        { timeout: timeoutMs },
+      );
+      await assertRecovery();
+    }
+    return;
+  } catch (recoveryError) {
+    if (recoveryError instanceof SocialSessionCheckError) throw recoveryError;
+    // A challenge can arrive while the Direct click/navigation is pending.
+    try {
+      await assertSessionNegatives(page, 'instagram');
+    } catch (sessionError) {
+      if (sessionError instanceof SocialSessionCheckError) throw sessionError;
+    }
+    if (restriction) throw restriction;
+    throw instagramSplashTimeout(Date.now() - started);
+  } finally {
+    page.off('response', observeDirect);
+  }
+}
 /** Initial navigation only: never call after filling or attempting a message. */
-export async function waitForInstagramReady(page: Page, timeoutMs: number) {
+export async function waitForInstagramReady(
+  page: Page,
+  timeoutMs: number,
+  options: { recoverViaDirect?: boolean; reload?: boolean } = {},
+) {
   // Partial adapter stubs do not have a browser execution context.
   if (typeof page.waitForFunction !== 'function') return;
   const started = Date.now();
@@ -720,12 +860,21 @@ export async function waitForInstagramReady(page: Page, timeoutMs: number) {
     } catch (error) {
       const current = await page.evaluate(instagramLoadingState);
       if (!current.splash) throw error;
-      if (attempt === 1) throw instagramSplashTimeout(Date.now() - started);
+      if (attempt === 1 || options.reload === false) {
+        const original = new URL(page.url());
+        if (
+          options.recoverViaDirect === false ||
+          original.origin !== 'https://www.instagram.com' ||
+          original.username ||
+          original.password ||
+          original.pathname === '/' ||
+          /login|signin|challenge|checkpoint|captcha/i.test(original.pathname)
+        )
+          throw instagramSplashTimeout(Date.now() - started);
+        return recoverInstagramStartup(page, original, timeoutMs, started);
+      }
       try {
-        const response = await page.reload({
-          waitUntil: 'domcontentloaded',
-          timeout: timeoutMs,
-        });
+        const response = await navigateSocialPage(page, page.url(), timeoutMs);
         if (response && response.status() >= 400) return response;
       } catch {
         throw instagramSplashTimeout(Date.now() - started);
@@ -2644,6 +2793,15 @@ export function createSocialSendBrowser(
             beforeSend,
             assertSession: (sessionTimeoutMs) =>
               assertSocialSession(hot.page, 'facebook', sessionTimeoutMs),
+            captureFailure: (phase, elapsedMs) =>
+              captureFailureShot(
+                hot.page,
+                session,
+                'send',
+                phase,
+                elapsedMs,
+                taskId,
+              ),
           });
           if (result) return result;
         }

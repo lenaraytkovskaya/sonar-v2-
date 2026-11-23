@@ -15,7 +15,7 @@ const captured = readFileSync(
 const thread = '/messages/e2ee/t/900000000000001/';
 // Enter appends a copy of the last outgoing bubble with the typed text, as
 // Messenger does once the server has accepted the message.
-const sender = `<script>
+const sender = (seen: boolean) => `<script>
 document.querySelector('[data-lexical-editor]').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
@@ -24,10 +24,15 @@ document.querySelector('[data-lexical-editor]').addEventListener('keydown', (e) 
     /You:/.test(a.querySelector('[aria-label]')?.getAttribute('aria-label') ?? ''));
   const last = outgoing[outgoing.length - 1];
   const copy = last.cloneNode(true);
+  const avatar = copy.querySelector('img[tabindex="-1"]');
+  if (avatar) avatar.setAttribute('alt', 'Seen by Synthetic Recipient');
+  if (!${seen}) avatar?.remove();
   const row = copy.querySelector('[data-message-id]');
   row.setAttribute('data-message-id', '100000000000001@msgr.99');
   row.setAttribute('aria-label', 'At 4 November 2026, 20:20, You: ' + text);
   copy.querySelector('div[dir=auto]').textContent = text;
+  // A message can contain an image even when it has no receipt.
+  copy.querySelector('div[dir=auto]').appendChild(document.createElement('img'));
   last.parentElement.appendChild(copy);
   e.target.innerHTML = '<p dir="auto"><br></p>';
 });
@@ -48,7 +53,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     afterAll(async () => {
       await browser?.close();
     });
-    async function fixture(accepts: boolean) {
+    async function fixture(accepts: boolean, seen = false) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', (route) => {
         const url = new URL(route.request().url());
@@ -58,7 +63,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           body:
             url.pathname === '/messages/'
               ? `<a aria-label="Your profile">Profile</a><table><tbody><tr><td><a href="${thread}">Synthetic Recipient</a></td></tr></tbody></table>`
-              : `<a aria-label="Your profile">Profile</a>${captured}${accepts ? sender : ''}`,
+              : `<a aria-label="Your profile">Profile</a>${captured}${accepts ? sender(seen) : ''}`,
         });
       });
       const page = await context.newPage();
@@ -79,6 +84,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           calls.push('send');
         }),
         assertSession: vi.fn(async () => {}),
+        captureFailure: vi.fn(async () => {}),
       };
       return { context, hot, input, calls };
     }
@@ -96,6 +102,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(calls).toEqual(['fill', 'send']);
         expect(hot.pendingSends).toBe(0);
         expect(hot.activeOps).toBe(0);
+        expect(result).not.toHaveProperty('readReceipt');
+        expect(hot.events.at(-1)).toContain(
+          'read_receipt_not_observed; delivery_receipt_unavailable; new_outgoing_observed',
+        );
+        expect(input.captureFailure).not.toHaveBeenCalled();
       } finally {
         await context.close();
       }
@@ -107,6 +118,41 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           code: 'delivery_uncertain',
         });
         expect(input.beforeSend).toHaveBeenCalledOnce();
+        expect(hot.events.at(-1)).toContain('new_outgoing_not_observed');
+        expect(input.captureFailure).toHaveBeenCalledWith(
+          'hot_confirmation',
+          expect.any(Number),
+        );
+      } finally {
+        await context.close();
+      }
+    });
+    it('carries only a seen marker on the exact new outgoing message', async () => {
+      const { context, hot, input } = await fixture(true, true);
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          readReceipt: {
+            threadId: input.threadId,
+            seenMessageId: '100000000000001@msgr.99',
+          },
+        });
+        expect(hot.events.at(-1)).toContain('read_receipt_observed');
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('keeps raw browser errors and message text out of listener diagnostics', async () => {
+      const { context, hot, input } = await fixture(true);
+      try {
+        input.beforeFill.mockRejectedValueOnce(
+          new Error('SECRET_MESSAGE https://facebook.com/private?token=SECRET'),
+        );
+        expect(await sendFacebookHot(hot, input)).toBeNull();
+        expect(hot.events.at(-1)).toContain('hot_thread_failed');
+        expect(hot.events.join('\n')).not.toMatch(/SECRET|token|https:/);
+        expect(input.beforeSend).not.toHaveBeenCalled();
+        expect(input.captureFailure).toHaveBeenCalledOnce();
       } finally {
         await context.close();
       }

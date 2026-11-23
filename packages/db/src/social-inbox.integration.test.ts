@@ -1359,6 +1359,7 @@ it.skipIf(!enabled)(
       ).toMatchObject({
         status: 'deferred',
         reasonCode: 'social_profile_busy',
+        result: { diagnostic: { scope: 'account', lock: 'account_operation' } },
       });
       expect(adapter.sync).not.toHaveBeenCalled();
     } finally {

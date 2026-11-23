@@ -32,6 +32,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         page = value;
       });
       const requests: string[] = [];
+      let directBooted = false;
       const events: string[] = [];
       const inputs: string[] = [];
       await context.exposeBinding('fixtureEvent', (_source, value: string) => {
@@ -57,6 +58,40 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             body: '{}',
           });
         if (options.navigationFailure) return route.abort('failed');
+        if (options.recoverViaHome && url.pathname === '/api/graphql')
+          return route.fulfill({
+            status: Number(
+              options.homeGraphqlStatus ??
+                (directBooted ? options.resumedGraphqlStatus : 200) ??
+                200,
+            ),
+            contentType: 'application/json',
+            body: '{}',
+          });
+        if (options.recoveredCheckpoint && url.pathname === '/challenge/')
+          return route.fulfill({
+            contentType: 'text/html',
+            body: '<main>Confirm identity</main>',
+          });
+        if (options.recoverViaHome && url.hostname === 'www.instagram.com') {
+          if (url.pathname === '/')
+            return route.fulfill({
+              contentType: 'text/html',
+              body:
+                (options.homeMarkup as string) ||
+                `<main>${options.homeLogin ? '<input type="password">' : ''}<nav ${options.homeGraphqlStatus ? 'hidden' : ''}>${options.homeDirectLinks ?? '<a href="/direct/inbox/">Messages</a>'}</nav></main>${options.homeGraphqlStatus ? '<script>fetch("/api/graphql", {method: "POST"}).then(() => document.querySelector("nav").hidden = false)</script>' : ''}${options.homeCheckpoint ? '<script>history.replaceState({}, "", "/challenge/")</script>' : ''}`,
+            });
+          if (/^\/direct\/inbox\/?$/.test(url.pathname)) {
+            directBooted = true;
+            return route.fulfill({
+              status: Number(options.recoveredDirectStatus ?? 200),
+              contentType: 'text/html',
+              body: options.recoveredCheckpoint
+                ? '<script>location.replace("/challenge/")</script>'
+                : '<main><a href="/direct/inbox/">Messages</a></main>',
+            });
+          }
+        }
         if (
           url.hostname === 'www.instagram.com' &&
           (url.pathname === '/' ||
@@ -68,6 +103,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             contentType: 'text/html',
             body:
               options.splash ||
+              (options.recoverViaHome && !directBooted) ||
               (options.splashOnFirstLoad &&
                 requests.filter(
                   (request) => request === `${url.hostname}${url.pathname}`,
@@ -77,7 +113,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 : options.capturedMenu
                   ? capturedMenu +
                     '<nav><a href="/direct/inbox/">Inbox</a></nav>'
-                  : html,
+                  : options.resumedGraphqlStatus && directBooted
+                    ? html.replace('<nav>', '<nav hidden>') +
+                      '<script>fetch("/api/graphql", {method:"POST"}).then(() => document.querySelector("nav").hidden = false)</script>'
+                    : html,
           });
         if (url.hostname !== 'ig.me') return route.abort('blockedbyclient');
         if (options.deepLinkSuccess)
@@ -360,6 +399,200 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+    it.each([undefined, 'fixture-thread'])(
+      'boots via the unique home Direct link and rechecks the original recipient (%s)',
+      async (knownThreadId) => {
+        const f = await fixture({
+          recoverViaHome: true,
+          knownThreadId,
+          directConversation: Boolean(knownThreadId),
+          timeoutMs: 250,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          const home = f.requests.indexOf('www.instagram.com/');
+          expect(home).toBeGreaterThan(0);
+          expect(f.requests.slice(home, home + 3)).toEqual([
+            'www.instagram.com/',
+            'www.instagram.com/direct/inbox/',
+            knownThreadId
+              ? 'www.instagram.com/direct/t/fixture-thread/'
+              : 'www.instagram.com/fixture_company/',
+          ]);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.events.filter((event) => event === 'send')).toHaveLength(1);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([
+      '<a href="/direct/inbox/">One</a><a href="/direct/inbox/">Two</a>',
+      '<a href="https://foreign.invalid/direct/inbox/">Messages</a>',
+      '<a href="https://www.instagram.com/direct/inbox/?token=private">Messages</a>',
+      '<article><a href="/direct/inbox/">Messages</a></article>',
+      '<div role="dialog"><nav><a href="/direct/inbox/">Messages</a></nav></div>',
+      '<div role="log"><a href="/direct/inbox/">Messages</a></div>',
+      '<div contenteditable="true"><a href="/direct/inbox/">Messages</a></div>',
+    ])(
+      'refuses an ambiguous or unverified home Direct link (%s)',
+      async (homeDirectLinks) => {
+        const f = await fixture({
+          recoverViaHome: true,
+          homeDirectLinks,
+          timeoutMs: 120,
+        });
+        try {
+          await expect(f.send()).rejects.toBeDefined();
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+          expect(f.requests).not.toContain('www.instagram.com/direct/inbox/');
+          expect(
+            f.requests.some((request) => request.includes('foreign.invalid')),
+          ).toBe(false);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('does not send to an unverified recipient after home startup recovery', async () => {
+      const f = await fixture({ recoverViaHome: true, wrongRecipient: true });
+      try {
+        await expect(f.send()).rejects.toBeDefined();
+        expect(f.requests).toContain('www.instagram.com/direct/inbox/');
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it('preserves a rate limit returned by the recovered Direct navigation', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        recoveredDirectStatus: 429,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ code: 'rate_limit' });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it('preserves a checkpoint reached during home recovery', async () => {
+      const f = await fixture({ recoverViaHome: true, homeCheckpoint: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ reason: 'checkpoint' });
+        expect(f.requests).not.toContain('www.instagram.com/direct/inbox/');
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
+    it('does not treat an unscoped Direct anchor as app navigation', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        homeMarkup:
+          '<main><nav><a href="/accounts/edit/">Account</a></nav><a href="/direct/inbox/">Decoy</a></main>',
+      });
+      try {
+        await expect(f.send()).rejects.toBeDefined();
+        expect(f.requests).not.toContain('www.instagram.com/direct/inbox/');
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([401, 403, 429])(
+      'stops before Direct on restricted home GraphQL HTTP %s',
+      async (homeGraphqlStatus) => {
+        const f = await fixture({ recoverViaHome: true, homeGraphqlStatus });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            reason: homeGraphqlStatus === 429 ? 'rate_limit' : 'unknown_auth',
+          });
+          expect(f.requests).not.toContain('www.instagram.com/direct/inbox/');
+          expect(f.mark).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('refuses a Direct link resolved through a foreign base URL', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        homeMarkup:
+          '<base href="https://foreign.invalid/"><main><nav><a href="/direct/inbox/">Messages</a></nav></main>',
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          reason: 'unknown_auth',
+        });
+        expect(
+          f.requests.some((request) => request.includes('foreign.invalid')),
+        ).toBe(false);
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
+      '<main><nav><a href="/direct/inbox">Messages</a></nav></main>',
+      '<div><a href="/">Home</a><a href="/reels/">Reels</a><a href="/direct/inbox/">Messages</a><a href="/explore/">Explore</a></div><main>Home feed</main>',
+    ])(
+      'accepts the verified Direct path and observed unlabelled app rail (%s)',
+      async (homeMarkup) => {
+        const f = await fixture({ recoverViaHome: true, homeMarkup });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('preserves a challenge reached by the home Direct click', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        recoveredCheckpoint: true,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ reason: 'checkpoint' });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it('stops on GraphQL rate limiting during resumed recipient navigation', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        resumedGraphqlStatus: 429,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ reason: 'rate_limit' });
+        expect(f.mark).not.toHaveBeenCalled();
+        expect(f.inputs).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it('stops at login during home startup recovery', async () => {
+      const f = await fixture({ recoverViaHome: true, homeLogin: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          reason: 'login_required',
+        });
+        expect(f.requests).not.toContain('www.instagram.com/direct/inbox/');
+        expect(f.mark).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    });
     it('reports a persistent splash as a navigation timeout without dispatch', async () => {
       const f = await fixture({
         splash: true,
@@ -381,11 +614,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             (request) => request === 'www.instagram.com/fixture_company/',
           ),
         ).toHaveLength(2);
+        expect(f.requests.at(-1)).toBe('www.instagram.com/');
       } finally {
         await f.close();
       }
     });
-    it('does not fall back from a persistent direct-thread splash or reload twice', async () => {
+    it('stops when home also stays on splash without dispatching or a second reload', async () => {
       const f = await fixture({
         splash: true,
         knownThreadId: 'fixture-thread',
@@ -400,6 +634,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(f.requests).toEqual([
           'www.instagram.com/direct/t/fixture-thread/',
           'www.instagram.com/direct/t/fixture-thread/',
+          'www.instagram.com/',
         ]);
         expect(f.mark).not.toHaveBeenCalled();
         expect(f.inputs).toEqual([]);
@@ -429,7 +664,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               stage: 'navigation',
               dom: expect.objectContaining({
                 phase: 'navigation',
-                urlPattern: knownThreadId ? '/direct/t/<id>/' : '/<id>/',
+                urlPattern: '/',
                 title: 'Instagram',
                 elapsedMs: expect.any(Number),
                 navigation: expect.objectContaining({

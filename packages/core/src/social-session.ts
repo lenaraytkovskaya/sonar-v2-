@@ -44,6 +44,8 @@ export type FacebookDispatchResult = {
   outcome: 'facebook_dispatched_unconfirmed' | 'facebook_reconciled';
   externalMessageId?: string;
   threadId?: string;
+  /** A peer seen marker tied to this exact newly observed outgoing message. */
+  readReceipt?: { threadId: string; seenMessageId: string };
   dialogUrl: string;
   observation: {
     inputExactMatch: boolean;
@@ -83,6 +85,11 @@ export class SocialSendError extends Error {
     super(reasonUk);
     this.name = 'SocialSendError';
   }
+}
+export function profileLockDiagnostic(
+  lock: 'account_operation' | 'browser_lease',
+) {
+  return { diagnostic: { stage: 'profile_lock', scope: 'account', lock } };
 }
 /** The profile lock is held by another worker operation or the owner's viewer. */
 export class SocialProfileBusyError extends Error {

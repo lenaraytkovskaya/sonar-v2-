@@ -29,6 +29,7 @@ export interface HotSendInput {
   beforeSend: () => Promise<void>;
   assertSession: (timeoutMs?: number) => Promise<void>;
   confirmMs?: number;
+  captureFailure?: (phase: string, elapsedMs: number) => Promise<unknown>;
 }
 
 /**
@@ -47,8 +48,15 @@ export async function sendFacebookHot(
     void hot.page.evaluate(() => window.stop()).catch(() => {});
   return runOnHotPage<FacebookDispatchResult | null>(hot, async (page) => {
     const { target, threadId, body, ownId, timeoutMs } = input;
-    const decline = (why: string) => {
+    const operationStarted = Date.now();
+    let phase = 'hot_navigation';
+    const capture = () =>
+      input
+        .captureFailure?.(phase, Date.now() - operationStarted)
+        .catch(() => {});
+    const decline = async (why: string) => {
       noteHot(hot, `send declined: ${why}`);
+      await capture();
       return null;
     };
     if (!/^\d+$/.test(threadId) || !body.trim()) return decline('input');
@@ -86,6 +94,7 @@ export async function sendFacebookHot(
         if (!opened) return decline('chat not in list');
       }
       hot.primary = `${trimSlash(new URL(page.url()).pathname)}/`;
+      phase = 'hot_thread';
       await page
         .locator(`${LOG} [data-message-id]`)
         .first()
@@ -112,6 +121,7 @@ export async function sendFacebookHot(
         (message) => message.direction === 'out',
       ).length;
       await input.beforeFill();
+      phase = 'hot_fill';
       await editor.click({ timeout: left() });
       filled = true;
       await editor.fill(body);
@@ -122,26 +132,59 @@ export async function sendFacebookHot(
       await input.assertSession(left());
       // From here a failure can no longer fall back to the normal flow.
       marked = true;
+      phase = 'hot_marker';
       await input.beforeSend();
       const startedAt = Date.now();
       // Exactly one dispatch; nothing below may press it again.
+      phase = 'hot_dispatch';
       await page.keyboard.press('Enter');
+      phase = 'hot_confirmation';
+      let unconfirmed = 'new_outgoing_not_observed';
       try {
         for (;;) {
           const after = await readFacebookThread(page, ownId, 200);
+          if (
+            after.threadId !== threadId ||
+            after.skipped.length ||
+            after.messages.some(
+              (message) =>
+                socialTarget(message.peerProfile)?.handle !== target.handle,
+            )
+          ) {
+            unconfirmed = 'conversation_unverified';
+            break;
+          }
           const added = after.messages.filter(
             (message) =>
               message.direction === 'out' &&
               !known.has(message.externalMessageId) &&
               normalize(message.body) === normalize(body),
           );
-          if (added.length > 1) break;
+          if (added.length > 1) {
+            unconfirmed = 'multiple_new_outgoing';
+            break;
+          }
           if (added.length === 1) {
+            const externalMessageId = added[0]!.externalMessageId;
+            const read = after.seenMessageId === externalMessageId;
+            // A new bubble proves a dispatch, not a delivery receipt. Only the
+            // peer's marker on that exact message supports the stronger state.
+            noteHot(
+              hot,
+              read
+                ? 'send confirmed: read_receipt_observed'
+                : 'send unconfirmed: read_receipt_not_observed; delivery_receipt_unavailable; new_outgoing_observed',
+            );
             return {
               outcome: 'facebook_dispatched_unconfirmed',
               dialogUrl: target.canonicalUrl,
               threadId,
-              externalMessageId: added[0]!.externalMessageId,
+              externalMessageId,
+              ...(read
+                ? {
+                    readReceipt: { threadId, seenMessageId: externalMessageId },
+                  }
+                : {}),
               observation: {
                 inputExactMatch: true,
                 dispatchPerformed: true,
@@ -163,17 +206,22 @@ export async function sendFacebookHot(
         }
       } catch {
         // Fall through: whatever happened, the message may have been sent.
+        unconfirmed = 'observation_failed';
       }
+      noteHot(hot, `send unconfirmed: ${unconfirmed}`);
       throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
     } catch (error) {
+      await capture();
+      if (phase !== 'hot_confirmation')
+        noteHot(
+          hot,
+          `send ${marked ? 'unconfirmed' : 'declined'}: ${phase}_failed`,
+        );
       if (error instanceof SocialSendError) throw error;
-      if (marked)
+      if (marked) {
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
+      }
       // Before the dispatch an unexpected page state only means "not here".
-      noteHot(
-        hot,
-        `send error: ${error instanceof Error ? error.name : '?'} ${error instanceof Error ? error.message.slice(0, 60) : ''}`,
-      );
       if (filled)
         await page
           .locator(EDITOR)

@@ -172,3 +172,29 @@ it.each(['confirmation', 'transmission'])(
     );
   },
 );
+
+it('keeps hot-send failures masked even when the composer disappeared', async () => {
+  const dom = { nodes: [] };
+  const page = {
+    ...pageWith([Buffer.from('jpeg')]),
+    evaluate: vi.fn(async () => dom),
+    locator: vi.fn((selector: string) => ({ selector })),
+  };
+  await captureFailureShot(
+    page as never,
+    { persistFailureShot: vi.fn(async () => {}) } as never,
+    'send',
+    'hot_confirmation',
+  );
+  expect(page.screenshot).toHaveBeenCalledWith(
+    expect.objectContaining({
+      mask: [
+        { selector: expect.stringContaining('[role="log"]') },
+        { selector: expect.stringContaining('a[href*="/messages/"]') },
+        { selector: 'input, textarea' },
+      ],
+    }),
+  );
+  expect(page.evaluate).toHaveBeenCalledOnce();
+  expect(dom).not.toHaveProperty('noComposerText');
+});

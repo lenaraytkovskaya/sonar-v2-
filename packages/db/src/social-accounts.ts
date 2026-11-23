@@ -31,6 +31,7 @@ import {
   type SocialSessionCheckDiagnostic,
   socialSessionCheckReasons,
   type SocialSessionCheckReason,
+  profileLockDiagnostic,
 } from '@sonar/core/social-session';
 import { isSocialQuietHours } from '@sonar/core/social-inbox-schedule';
 import type { SocialNetwork } from '@sonar/core';
@@ -1141,6 +1142,7 @@ export async function withSocialSessionCheck(
         runAt: new Date(now.getTime() + retrySeconds * 1000),
         reasonCode: 'social_profile_busy',
         reasonUk: 'Браузер акаунта зайнятий.',
+        result: profileLockDiagnostic('account_operation'),
       };
     }
     await c.query('begin');
@@ -1224,6 +1226,7 @@ export async function withSocialSessionCheck(
             runAt: new Date(now.getTime() + retrySeconds * 1000),
             reasonCode: 'social_profile_busy',
             reasonUk: 'Браузер акаунта зайнятий.',
+            result: profileLockDiagnostic('browser_lease'),
           };
         }
         if (!valid)

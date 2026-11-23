@@ -246,7 +246,22 @@ export async function readFacebookThread(
             occurredAt = date.toISOString();
         }
         const outgoing = labelOwn || sender === ownId;
-        if (outgoing && node.querySelector('img')) seenMessageId = id;
+        if (outgoing && peerName) {
+          // Messenger puts the read avatar in its own trailing row, outside the
+          // message body. Attachments, emoji and reaction images are not receipts.
+          const avatars = all(
+            node,
+            ':scope > div:last-child > div > span > img[tabindex="-1"]',
+          );
+          if (avatars.length === 1) {
+            const label = (avatars[0]!.getAttribute('alt') ?? '').trim();
+            const name =
+              /^(?:Seen by|Переглянуто користувачем|Просмотрено пользователем)\s+(.+)$/i.exec(
+                label,
+              )?.[1];
+            if (name === peerName) seenMessageId = id;
+          }
+        }
         messages.push({
           externalMessageId: id,
           providerOrder,
