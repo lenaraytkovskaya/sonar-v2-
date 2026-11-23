@@ -39,7 +39,8 @@ function mockInboxQueries() {
     .mockResolvedValueOnce({ rows: [{ to_value: recipient }] })
     .mockResolvedValueOnce({
       rows: [{ to_value: recipient, after: new Date('2026-11-19T09:00:00Z') }],
-    });
+    })
+    .mockResolvedValueOnce({ rows: [{ to_value: '+48500100999' }] });
 }
 
 afterEach(() => {
@@ -71,21 +72,48 @@ it('uses long bridge request timeouts for inbound and outgoing scans', async () 
   expect(new URL(fetchMock.mock.calls[1]![0] as URL).pathname).toBe(
     '/outgoing',
   );
+  const outgoingUrl = new URL(fetchMock.mock.calls[1]![0] as URL);
+  expect(outgoingUrl.searchParams.get('since')).toBe(
+    '2026-11-19T11:30:00.000Z',
+  );
+  expect(outgoingUrl.searchParams.getAll('to')).toEqual([
+    '+48500100999',
+    recipient,
+  ]);
+  expect(mocks.query.mock.calls[3]![1]).toEqual([
+    'account',
+    new Date('2026-11-19T12:00:00Z'),
+  ]);
+  expect(mocks.reconcile).toHaveBeenCalledWith(
+    [],
+    new Date('2026-11-19T12:00:00Z'),
+    'account',
+  );
   expect(viberBridgeTimeoutMs('/status')).toBe(30_000);
   expect(viberBridgeTimeoutMs('/send')).toBe(240_000);
 });
 
 it.each(['AbortError', 'TimeoutError'] as const)(
-  'turns a bridge %s into a Ukrainian task failure',
+  'preserves an inbound %s while still reconciling outgoing delivery',
   async (name) => {
     vi.stubEnv('VIBER_BRIDGE_URL', 'http://viber.test');
     vi.stubEnv('VIBER_BRIDGE_KEY', 'test-key');
     mockInboxQueries();
+    const outgoing = [
+      {
+        from: recipient,
+        text: 'Full outgoing body',
+        at: '2026-11-19T11:55:00Z',
+        providerMessageId: 'observed-delivery',
+      },
+    ];
+    mocks.reconcile.mockResolvedValue(1);
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockRejectedValue(
+      .mockRejectedValueOnce(
         Object.assign(new Error('request timed out'), { name }),
-      );
+      )
+      .mockResolvedValueOnce(Response.json(outgoing));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
@@ -96,5 +124,15 @@ it.each(['AbortError', 'TimeoutError'] as const)(
       reasonUk:
         'Міст Viber не відповів за 240 с. Перевірте з’єднання з Viber Desktop і повторіть завдання.',
     });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchMock.mock.calls[1]![0] as URL).pathname).toBe(
+      '/outgoing',
+    );
+    expect(mocks.reconcile).toHaveBeenCalledWith(
+      outgoing,
+      new Date('2026-11-19T12:00:00Z'),
+      'account',
+    );
+    expect(mocks.recordInbound).not.toHaveBeenCalled();
   },
 );

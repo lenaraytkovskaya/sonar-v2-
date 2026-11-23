@@ -10,132 +10,101 @@ export type ViberObservedMessage = {
 };
 
 function normalizeObservedText(value: string) {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase('uk')
-    .replace(/[^\p{L}\p{N}]/gu, '');
+  return value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
 }
 
-function observedTextSimilarity(left: string, right: string) {
-  const a = normalizeObservedText(Array.from(left).slice(0, 60).join(''));
-  const b = normalizeObservedText(right);
-  if (!a || !b) return a === b ? 1 : 0;
-  let best = 0;
-  for (
-    let size = Math.max(1, Math.floor(a.length * 0.8));
-    size <= Math.min(b.length, Math.ceil(a.length * 1.2));
-    size++
-  ) {
-    for (let start = 0; start + size <= b.length; start++) {
-      const candidate = b.slice(start, start + size);
-      const previous = Array.from(
-        { length: candidate.length + 1 },
-        (_, index) => index,
-      );
-      for (let i = 1; i <= a.length; i++) {
-        let diagonal = previous[0]!;
-        previous[0] = i;
-        for (let j = 1; j <= candidate.length; j++) {
-          const above = previous[j]!;
-          previous[j] = Math.min(
-            previous[j]! + 1,
-            previous[j - 1]! + 1,
-            diagonal + (a[i - 1] === candidate[j - 1] ? 0 : 1),
-          );
-          diagonal = above;
-        }
-      }
-      best = Math.max(
-        best,
-        1 - previous[candidate.length]! / Math.max(a.length, candidate.length),
-      );
-    }
-  }
-  return best;
-}
-
-/** Repairs only recently failed Viber sends that match an observed outbound message. */
+/** Repairs only the same uncertain attempt on the account scanned by the bridge. */
 export async function reconcileViberDeliveries(
   observed: ViberObservedMessage[],
-  now = new Date(),
+  now: Date,
+  accountId: string,
 ) {
-  const { rows } = await sonarPool.query<{
-    id: string;
-    company_id: string | null;
-    account_id: string | null;
-    conversation_id: string;
-    to_value: string;
-    body: string;
-    first_attempt_at: Date | null;
-    created_at: Date;
-  }>(
-    `select m.id,v.company_id,m.account_id,m.conversation_id,m.to_value,m.body,m.first_attempt_at,m.created_at from messages m
-      join conversations v on v.id=m.conversation_id
-      where m.channel='viber' and m.direction='out' and m.status='failed'
-        and m.created_at >= $1::timestamptz - interval '2 minutes'
-        and m.created_at <= $1::timestamptz`,
-    [now],
-  );
-  let reconciled = 0;
-  for (const message of rows) {
-    const match = observed.find((item) => {
-      const at = new Date(item.at);
-      const attemptedAt = message.first_attempt_at ?? message.created_at;
-      const minutePrecision = item.providerMessageId.startsWith('screen:');
-      const earliest = minutePrecision
-        ? Math.floor(attemptedAt.getTime() / 60_000) * 60_000
-        : attemptedAt.getTime();
-      return (
-        item.from === message.to_value &&
-        observedTextSimilarity(message.body, item.text) >= 0.8 &&
-        Number.isFinite(at.getTime()) &&
-        at.getTime() >= earliest &&
-        at.getTime() <= now.getTime() + 60_000
-      );
-    });
-    if (!match) continue;
-    const changed = await transaction(async (c) => {
-      const {
-        rows: [locked],
-      } = await c.query(
-        `select m.id,v.company_id,m.account_id,m.conversation_id,m.quota_day from messages m
-          join conversations v on v.id=m.conversation_id
-          where m.id=$1 and m.channel='viber' and m.direction='out' and m.status='failed'
-          for update of m`,
-        [message.id],
-      );
-      if (!locked) return false;
+  return transaction(async (c) => {
+    // Share the sender's account lock, including across concurrent inbox polls.
+    await c.query(
+      "select pg_advisory_xact_lock(hashtextextended('channel-account:'||$1::text,0))",
+      [accountId],
+    );
+    const { rows } = await c.query<{
+      id: string;
+      company_id: string | null;
+      account_id: string;
+      conversation_id: string;
+      to_value: string;
+      body: string;
+      first_attempt_at: Date;
+      quota_day: string | null;
+      task_id: string;
+    }>(
+      `select m.*,v.company_id,t.id as task_id from messages m
+        join conversations v on v.id=m.conversation_id
+        join lateral (select * from tasks where type='message.send'
+          and payload->>'messageId'=m.id::text order by created_at desc,id desc limit 1) t on true
+        where m.channel='viber' and m.direction='out' and m.status='failed' and m.account_id=$2
+          and m.first_attempt_at between $1::timestamptz - interval '30 minutes' and $1::timestamptz
+          and m.provider_id is null
+          and t.status in ('paused','failed') and t.reason_code='viber_delivery_uncertain'
+          and m.request_snapshot->>'idempotencyKey'=m.idempotency_key
+          and m.request_snapshot->>'to'=m.to_value and m.request_snapshot->>'body'=m.body
+        order by m.first_attempt_at,m.id for update of m`,
+      [now, accountId],
+    );
+    let reconciled = 0;
+    const { rows: used } = await c.query<{ provider_id: string }>(
+      "select provider_id from messages where channel='viber' and account_id=$1 and direction='out' and provider_id=any($2::text[])",
+      [accountId, observed.map((item) => item.providerMessageId)],
+    );
+    const consumed = new Set(used.map((item) => item.provider_id));
+    for (const message of rows) {
+      const body = normalizeObservedText(message.body);
+      const match = observed.find((item) => {
+        const at = new Date(item.at).getTime();
+        const earliest = item.providerMessageId.startsWith('screen:')
+          ? Math.floor(at / 60_000) * 60_000
+          : at;
+        return (
+          !!item.providerMessageId &&
+          !consumed.has(item.providerMessageId) &&
+          item.from === message.to_value &&
+          !!body &&
+          body === normalizeObservedText(item.text) &&
+          // A screen minute is its earliest possible time: never round the attempt down.
+          earliest >= message.first_attempt_at.getTime() &&
+          at <= now.getTime()
+        );
+      });
+      if (!match) continue;
+      consumed.add(match.providerMessageId);
       const day = new Date(match.at).toISOString().slice(0, 10);
       await c.query(
         "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=null,quota_day=$4 where id=$1",
         [message.id, match.providerMessageId, match.at, day],
       );
-      if (locked.quota_day !== day && locked.account_id)
+      if (message.quota_day !== day)
         await c.query(
           'update channel_accounts set sent_day=$2,attempt_count=case when sent_day=$2 then attempt_count+1 else 1 end where id=$1',
-          [locked.account_id, day],
+          [accountId, day],
         );
       await c.query(
-        "update tasks set status='done',finished_at=$2,reason_code=null,reason_uk=null,result=coalesce(result,'{}'::jsonb)||$3::jsonb where type='message.send' and payload->>'messageId'=$1 and status in ('paused','failed')",
+        "update tasks set status='done',finished_at=$2,reason_code=null,reason_uk=null,result=coalesce(result,'{}'::jsonb)||$3::jsonb where id=$1",
         [
-          message.id,
+          message.task_id,
           match.at,
           { messageId: message.id, deliveryReconciled: true },
         ],
       );
       await logActivity(
         'viber.delivery.reconciled',
-        locked.company_id ? 'company' : 'conversation',
-        locked.company_id ?? locked.conversation_id,
+        message.company_id ? 'company' : 'conversation',
+        message.company_id ?? message.conversation_id,
         null,
         { messageId: message.id, providerMessageId: match.providerMessageId },
         c,
       );
-      return true;
-    });
-    if (changed) reconciled++;
-  }
-  return reconciled;
+      reconciled++;
+    }
+    return reconciled;
+  });
 }
 
 export async function markViberSentManually(
