@@ -4,7 +4,7 @@ CRM для поиска компаний и контакта с ними: Google
 
 - План и решения: [docs/PLAN.md](docs/PLAN.md)
 - Правила для агента-разработчика: [AGENTS.md](AGENTS.md)
-- Задачи для Sol: [docs/prompts/](docs/prompts/)
+- Правила ревьюера и история версий: [docs/REVIEWER.md](docs/REVIEWER.md), [docs/CHANGELOG.md](docs/CHANGELOG.md)
 
 ## Структура
 
