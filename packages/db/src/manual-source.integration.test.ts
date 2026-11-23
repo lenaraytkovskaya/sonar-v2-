@@ -205,6 +205,31 @@ describe.skipIf(!enabled)('manual source transactions', () => {
       ).rowCount,
     ).toBe(2);
   });
+  it('restores a social contact the person removed earlier when they add it again', async () => {
+    const id = await company();
+    const data = {
+      ...request('social', '@sonar_synthetic_restored'),
+      network: 'instagram' as const,
+    };
+    await save(id, data, userId);
+    const {
+      rows: [contact],
+    } = await db.sonarPool.query(
+      "select id,normalized from contacts where company_id=$1 and kind='social'",
+      [id],
+    );
+    await db.sonarPool.query('delete from contacts where id=$1', [contact.id]);
+    await db.sonarPool.query(
+      "insert into contact_suppressions(company_id,kind,normalized) values($1,'social',$2)",
+      [id, contact.normalized],
+    );
+    await save(id, { ...data, requestId: randomUUID() }, userId);
+    const { rows } = await db.sonarPool.query(
+      "select normalized from contacts where company_id=$1 and kind='social'",
+      [id],
+    );
+    expect(rows).toEqual([{ normalized: contact.normalized }]);
+  });
   it('saves a manual code without marking it verified and queues the exact registry code', async () => {
     const id = await company(),
       data = request('registry', '00123456');
