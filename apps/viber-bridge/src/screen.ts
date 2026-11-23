@@ -44,6 +44,556 @@ export function outgoingScreenConfirmed(
   );
 }
 
+export const SEND_TEXT_SIMILARITY = 0.9;
+export type OutgoingBubble = BubbleRegion & {
+  text: string;
+  messageTime?: string;
+  status: 'sent' | 'pending' | 'failed' | 'unknown';
+  clipped?: boolean;
+  contentHash?: string;
+  contentSignature?: string;
+  ocrText?: string;
+  prefixText?: string;
+};
+export type ChatSlice = {
+  observedAt: string;
+  composer: string;
+  bubbles: OutgoingBubble[];
+  notes?: boolean;
+};
+
+export function sameBubbleColumn(
+  a: Pick<BubbleRegion, 'left' | 'right'>,
+  b: Pick<BubbleRegion, 'left' | 'right'>,
+) {
+  // The footer tail protrudes to the right; the body keeps its left edge.
+  return (
+    Math.abs(a.left - b.left) < 6 &&
+    Math.abs(a.right - a.left - (b.right - b.left)) < 12
+  );
+}
+
+export function matchesOutgoingText(
+  expected: string,
+  actual: string,
+  clipped = false,
+) {
+  const exact = normalizeMessageText(expected)
+    .normalize('NFKC')
+    .toLocaleLowerCase();
+  const observed = normalizeMessageText(actual)
+    .normalize('NFKC')
+    .toLocaleLowerCase();
+  if (!exact || !observed) return false;
+  if (exact === observed) return true;
+  // A link card adds its own title/description. Require the entire expected URL
+  // on its own body line, so another domain or preview substring cannot match.
+  if (/^https?:\/\/\S+$/iu.test(exact))
+    return actual
+      .split(/\r?\n/u)
+      .some(
+        (line) =>
+          normalizeMessageText(line).normalize('NFKC').toLocaleLowerCase() ===
+          exact,
+      );
+  const emoji = (value: string) =>
+    (
+      value.match(
+        /[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}]/gu,
+      ) ?? []
+    ).join('');
+  if (emoji(expected) !== emoji(actual)) return false;
+  const a = normalizeOcr(expected),
+    b = normalizeOcr(actual);
+  // OCR cannot reliably distinguish a different short word or an emoji.
+  if (a.length <= 4 || !b) return false;
+  if (clipped && a.length > 160 && b.length >= 80 && b.length < a.length)
+    return textSimilarity(a.slice(-b.length), b) >= SEND_TEXT_SIMILARITY;
+  return textSimilarity(a, b) >= SEND_TEXT_SIMILARITY;
+}
+
+export function outgoingSliceConfirmed(
+  expected: string,
+  before: ChatSlice,
+  after: ChatSlice,
+  startedAt: Date,
+) {
+  if (
+    !Number.isFinite(Date.parse(after.observedAt)) ||
+    Date.parse(after.observedAt) < startedAt.getTime()
+  )
+    return false;
+  const newest = after.bubbles.at(-1);
+  const observedAt = new Date(after.observedAt);
+  const messageAt =
+    newest?.messageTime &&
+    visibleMessageTimestamp(newest.messageTime, observedAt);
+  if (
+    !messageAt ||
+    messageAt.getTime() < Math.floor(startedAt.getTime() / 60_000) * 60_000
+  )
+    return false;
+  if (
+    !newest ||
+    !newest.messageTime ||
+    !messageTimeAtOrAfter(newest.messageTime, startedAt) ||
+    !(
+      newest.status === 'sent' ||
+      (after.notes && newest.status === 'unknown')
+    ) ||
+    !matchesOutgoingText(expected, newest.text, newest.clipped) ||
+    (newest.clipped &&
+      (!newest.prefixText ||
+        !matchesOutgoingText(
+          normalizeOcr(expected).slice(0, 80),
+          normalizeOcr(newest.prefixText).slice(0, 80),
+        )))
+  )
+    return false;
+  const sameContent = (a: OutgoingBubble, b: OutgoingBubble) =>
+    (!!a.contentHash && a.contentHash === b.contentHash) ||
+    (Math.abs(a.right - a.left - (b.right - b.left)) <= 4 &&
+      Math.abs(a.bottom - a.top - (b.bottom - b.top)) <= 4 &&
+      similarBubbleContent(a.contentSignature, b.contentSignature)) ||
+    matchesOutgoingText(
+      a.ocrText ?? a.text,
+      b.ocrText ?? b.text,
+      a.clipped && b.clipped,
+    );
+  const same = (a: OutgoingBubble, b: OutgoingBubble) =>
+    a.messageTime === b.messageTime && sameContent(a, b);
+  // Retain an overlapping ordered suffix as the chat scrolls. An unchanged old
+  // bubble, including an identical send in the same minute, is never new evidence.
+  for (
+    let overlap = Math.min(before.bubbles.length, after.bubbles.length);
+    overlap > 0;
+    overlap--
+  ) {
+    for (let start = 0; start <= after.bubbles.length - overlap; start++) {
+      if (
+        before.bubbles
+          .slice(-overlap)
+          .every((bubble, i) => same(bubble, after.bubbles[start + i]!))
+      )
+        return start + overlap < after.bubbles.length;
+    }
+  }
+  // Correcting only the OCR footer cannot turn an unchanged old body into a send.
+  if (
+    before.bubbles.some(
+      (bubble) =>
+        Math.abs(bubble.bottom - newest.bottom) <= 4 &&
+        Math.abs(bubble.right - newest.right) <= 4 &&
+        sameContent(bubble, newest),
+    )
+  )
+    return false;
+  return (
+    before.bubbles.length === 0 ||
+    (normalizeOcr(newest.ocrText ?? newest.text).length > 4 &&
+      before.bubbles.every((bubble) => !same(bubble, newest)))
+  );
+}
+
+export function chatBodyTop(
+  lines: readonly { text: string; top: number }[],
+  bannerBottom = 0,
+) {
+  return Math.max(
+    64,
+    bannerBottom + (bannerBottom ? 16 : 0),
+    ...lines.filter((line) => line.top < 58).map((line) => line.top + 28),
+  );
+}
+
+/** Full-width contact/reminder banners remain chrome even when OCR misses their rows. */
+export function deriveMessageBodyTop(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  bounds: { left: number; right: number },
+  headerBottom: number,
+) {
+  let bannerBottom = 0,
+    headerEnd = 0;
+  const step = Math.max(1, Math.floor((bounds.right - bounds.left) / 160));
+  const chromeColor = (r: number, g: number, b: number) =>
+    Math.max(r, g, b) - Math.min(r, g, b) >= 40;
+  const coloredEdge = (x: number, y: number) => {
+    const i = (y * width + x) * 3;
+    return chromeColor(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!);
+  };
+  for (let y = 0; y < Math.min(height - 90, Math.floor(height * 0.4)); y++) {
+    let colored = 0,
+      white = 0,
+      count = 0;
+    for (let x = bounds.left + 2; x < bounds.right - 2; x += step) {
+      const i = (y * width + x) * 3,
+        r = pixels[i]!,
+        g = pixels[i + 1]!,
+        b = pixels[i + 2]!;
+      count++;
+      if (chromeColor(r, g, b)) colored++;
+      if (Math.min(r, g, b) > 247 && Math.max(r, g, b) - Math.min(r, g, b) < 10)
+        white++;
+    }
+    if (
+      colored / count >= 0.7 &&
+      coloredEdge(bounds.left + 2, y) &&
+      coloredEdge(bounds.right - 3, y)
+    )
+      bannerBottom = y + 1;
+    else if (!bannerBottom && y < height * 0.16 && white / count >= 0.85)
+      headerEnd = y + 1;
+  }
+  return bannerBottom || Math.max(headerBottom, headerEnd);
+}
+
+export function outgoingBubbleText(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  region: BubbleRegion,
+) {
+  const inside = lines
+    .filter(
+      (line) =>
+        line.left >= region.left - 2 &&
+        line.right <= region.right + 3 &&
+        line.top >= region.top &&
+        line.top < region.bottom + 22,
+    )
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+  const timestamp = [...inside]
+    .reverse()
+    .find(
+      (line) => visibleTimeText(line.text) && line.top >= region.bottom - 36,
+    );
+  const body = inside.filter((line) =>
+    timestamp ? line.top < region.bottom - 36 : line.top < region.bottom - 8,
+  );
+  return {
+    text: body
+      .map((line) => line.text)
+      .join('\n')
+      .trim(),
+    messageTime: timestamp && visibleTimeText(timestamp.text),
+    timestamp,
+  };
+}
+
+function unfilledInk(red: number, green: number, blue: number) {
+  return (
+    Math.max(red, green, blue) < 95 ||
+    Math.max(red, green, blue) - Math.min(red, green, blue) > 75
+  );
+}
+/** Associates an isolated emoji glyph with its right-aligned timestamp badge. */
+export function unfilledEmojiBody(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  badge: BubbleRegion,
+  above: number,
+) {
+  const left = Math.max(0, badge.left),
+    right = Math.min(width, badge.right),
+    top = Math.max(0, above),
+    bottom = Math.min(height, badge.top);
+  const w = right - left,
+    h = bottom - top;
+  if (w <= 0 || h <= 0) return null;
+  const mask = new Uint8Array(w * h),
+    queue = new Int32Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = ((top + y) * width + left + x) * 3;
+      if (unfilledInk(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!))
+        mask[y * w + x] = 1;
+    }
+  let best:
+    | { left: number; top: number; right: number; bottom: number; area: number }
+    | undefined;
+  for (let point = 0; point < mask.length; point++) {
+    if (!mask[point]) continue;
+    let read = 0,
+      write = 0,
+      minX = w,
+      maxX = 0,
+      minY = h,
+      maxY = 0;
+    queue[write++] = point;
+    mask[point] = 0;
+    while (read < write) {
+      const p = queue[read++]!,
+        x = p % w,
+        y = Math.floor(p / w);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx,
+            ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const n = ny * w + nx;
+          if (mask[n]) {
+            mask[n] = 0;
+            queue[write++] = n;
+          }
+        }
+    }
+    // Wallpaper, prior bubbles and badge anti-aliasing touch the search edges.
+    if (
+      minX === 0 ||
+      maxX === w - 1 ||
+      minY === 0 ||
+      maxY === h - 1 ||
+      minX === maxX ||
+      minY === maxY ||
+      (minX + maxX + 1) / 2 < w / 2
+    )
+      continue;
+    if (!best || write > best.area)
+      best = {
+        left: left + minX,
+        top: top + minY,
+        right: left + maxX + 1,
+        bottom: top + maxY + 1,
+        area: write,
+      };
+  }
+  if (!best) return null;
+  return {
+    left: best.left,
+    top: best.top,
+    right: best.right,
+    bottom: best.bottom,
+  };
+}
+
+/** Normalized message ink survives JPEG noise and translation in the chat. */
+export function bubbleContentSignature(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  region: BubbleRegion,
+) {
+  let ink: { x: number; y: number }[] = [];
+  const body = region.unfilled && region.bodyRegion ? region.bodyRegion : null;
+  for (
+    let y = Math.max(0, body ? body.top : region.top + 8);
+    y < Math.min(height, body ? body.bottom : region.bottom - 24);
+    y++
+  )
+    for (
+      let x = Math.max(0, body ? body.left : region.left + 8);
+      x < Math.min(width, body ? body.right : region.right - 8);
+      x++
+    ) {
+      const i = (y * width + x) * 3,
+        r = pixels[i]!,
+        g = pixels[i + 1]!,
+        b = pixels[i + 2]!;
+      if (
+        body
+          ? unfilledInk(r, g, b)
+          : Math.min(r, g) > 165 ||
+            (!isOutgoingBubbleColor([r, g, b]) &&
+              Math.hypot(r - 117, g - 97, b - 255) > 100)
+      )
+        ink.push({ x, y });
+    }
+  if (ink.length < 3) return '';
+  const measure = () => {
+    let left = width,
+      right = 0,
+      top = height,
+      bottom = 0;
+    for (const point of ink) {
+      left = Math.min(left, point.x);
+      right = Math.max(right, point.x + 1);
+      top = Math.min(top, point.y);
+      bottom = Math.max(bottom, point.y + 1);
+    }
+    return { left, right, top, bottom };
+  };
+  let { left, right, top, bottom } = measure();
+  // Auto-linked phone numbers gain a long underline after rendering. Remove
+  // that decoration only when several separate glyph rows remain above it.
+  if (right - left >= 32) {
+    const rows = new Map<number, number>();
+    for (const point of ink) rows.set(point.y, (rows.get(point.y) ?? 0) + 1);
+    const decoration = new Set<number>();
+    for (let y = bottom - 1; y >= bottom - 2; y--) {
+      if (
+        (rows.get(y) ?? 0) < (right - left) * 0.8 ||
+        [...rows.keys()].filter((row) => row < y).length < 3
+      )
+        break;
+      decoration.add(y);
+    }
+    if (decoration.size) {
+      ink = ink.filter((point) => !decoration.has(point.y));
+      ({ left, right, top, bottom } = measure());
+    }
+  }
+  const cells = new Uint32Array(24 * 16);
+  for (const point of ink)
+    cells[
+      Math.min(15, Math.floor(((point.y - top) * 16) / (bottom - top))) * 24 +
+        Math.min(23, Math.floor(((point.x - left) * 24) / (right - left)))
+    ]!++;
+  const area = ((right - left) * (bottom - top)) / (24 * 16);
+  return [...cells]
+    .map((count) => (count / Math.max(1, area) >= 0.2 ? '1' : '0'))
+    .join('');
+}
+export function similarBubbleContent(left?: string, right?: string) {
+  if (!left || !right || left.length !== right.length) return false;
+  let changed = 0;
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) changed++;
+  return changed <= left.length * 0.12;
+}
+
+/** Status is read only beside the metadata time, never from message text. */
+function classifyOutgoingBubbleStatus(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  region: BubbleRegion,
+  timeLine: { left: number; top: number; right: number } | undefined,
+  antialias = false,
+): OutgoingBubble['status'] {
+  if (!timeLine) return 'unknown';
+  const left = Math.max(
+    0,
+    Math.ceil(Math.min(timeLine.right, timeLine.left + 36) + 2),
+  );
+  const right = Math.min(width, region.right - 4, left + 36);
+  const top = Math.max(0, timeLine.top - 2),
+    bottom = Math.min(height, top + 21);
+  if (right <= left) return 'unknown';
+  const offset = (x: number, y: number) => (y * width + x) * 3;
+  const base = offset(left, top);
+  const background = [pixels[base]!, pixels[base + 1]!, pixels[base + 2]!];
+  const points = new Set<number>();
+  const support = new Set<number>();
+  for (let y = top; y < bottom; y++)
+    for (let x = left; x < right; x++) {
+      const i = offset(x, y),
+        r = pixels[i]!,
+        g = pixels[i + 1]!,
+        b = pixels[i + 2]!;
+      if (r > 150 && r - g > 70 && r - b > 50) return 'failed';
+      const distance = Math.hypot(
+        r - background[0]!,
+        g - background[1]!,
+        b - background[2]!,
+      );
+      const foreground =
+        Math.max(r, g, b) - Math.min(r, g, b) < 55 ||
+        b > r + 35 ||
+        Math.min(r, g, b) > 195;
+      const dr = r - background[0]!,
+        dg = g - background[1]!;
+      if (
+        foreground &&
+        (distance > 65 ||
+          (antialias &&
+            distance > 65 / 2 &&
+            dr * dg > 0 &&
+            Math.min(Math.abs(dr), Math.abs(dg)) > 65 / 4))
+      )
+        support.add(y * width + x);
+      if (foreground && distance > 65) points.add(y * width + x);
+    }
+  let pending = false,
+    sent = false;
+  while (points.size) {
+    const seed = points.values().next().value!;
+    points.delete(seed);
+    support.delete(seed);
+    const component = [seed];
+    for (let i = 0; i < component.length; i++) {
+      const point = component[i]!,
+        x = point % width,
+        y = Math.floor(point / width);
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const next = (y + dy) * width + x + dx;
+          // Strong stroke seeds retain adjacent anti-aliasing support; JPEG
+          // must not disconnect the short arm from the long check stroke.
+          if (support.delete(next)) {
+            points.delete(next);
+            component.push(next);
+          }
+        }
+    }
+    const xs = component.map((p) => p % width),
+      ys = component.map((p) => Math.floor(p / width));
+    const minX = Math.min(...xs),
+      maxX = Math.max(...xs),
+      minY = Math.min(...ys),
+      maxY = Math.max(...ys);
+    const w = maxX - minX + 1,
+      h = maxY - minY + 1;
+    // The bubble's rounded lower corner can expose wallpaper in this crop.
+    // An icon is contained; a component cut by its outer edges is not an icon.
+    if (maxX === right - 1 || maxY === bottom - 1) continue;
+    if (component.length < 5 || w < 5 || h < 3 || w > 30 || h > 18) continue;
+    const lower = (x: number) =>
+      Math.max(
+        ...component
+          .filter((p) => p % width === x)
+          .map((p) => Math.floor(p / width)),
+      );
+    const valley = component
+      .filter((p) => Math.floor(p / width) >= maxY)
+      .map((p) => p % width);
+    const vx = Math.min(...valley);
+    // A check descends from the short left arm, then rises along its long arm.
+    if (
+      vx > minX &&
+      vx < maxX - 1 &&
+      lower(minX) <= maxY - 1 &&
+      lower(maxX) <= maxY - 3 &&
+      component.some(
+        (p) => p % width >= maxX - 1 && Math.floor(p / width) <= minY + 1,
+      )
+    )
+      sent = true;
+    else if (!(lower(minX) >= maxY - 1 && lower(maxX) <= minY + 1))
+      pending = true;
+  }
+  return pending ? 'pending' : sent ? 'sent' : 'unknown';
+}
+
+export function outgoingBubbleStatus(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  region: BubbleRegion,
+  timeLine?: { left: number; top: number; right: number },
+): OutgoingBubble['status'] {
+  const strong = classifyOutgoingBubbleStatus(
+    pixels,
+    width,
+    height,
+    region,
+    timeLine,
+  );
+  return strong === 'unknown'
+    ? classifyOutgoingBubbleStatus(
+        pixels,
+        width,
+        height,
+        region,
+        timeLine,
+        true,
+      )
+    : strong;
+}
+
 export function normalizeMessageText(value: string) {
   return value.replace(/\s+/gu, ' ').trim();
 }
@@ -111,6 +661,71 @@ export function exactOptionPoint(
         x: Math.round((line.left + line.right) / 2),
         y: Math.round(line.top + 10),
       }
+    : null;
+}
+
+export function isMyNotesTitle(value: string) {
+  return ['mynotes', 'моїнотатки', 'моизаметки'].includes(normalizeOcr(value));
+}
+
+export function hasMyNotesHeader(
+  words: readonly {
+    text: string;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }[],
+  bounds: { left: number; right: number },
+) {
+  const header = words.filter(
+    (word) =>
+      word.top >= 40 &&
+      word.top + word.height <= 110 &&
+      word.left >= bounds.left &&
+      word.left + word.width <= bounds.right,
+  );
+  const labels = [
+    ['my', 'notes'],
+    ['мої', 'нотатки'],
+    ['мои', 'заметки'],
+  ];
+  return header.some(
+    (word) =>
+      isMyNotesTitle(word.text) ||
+      labels.some(
+        ([first, second]) =>
+          normalizeOcr(word.text) === first &&
+          header.some(
+            (next) =>
+              normalizeOcr(next.text) === second &&
+              next.left >= word.left + word.width &&
+              next.left - word.left - word.width <=
+                Math.max(word.height, next.height) * 2 &&
+              Math.abs(
+                word.top + word.height / 2 - next.top - next.height / 2,
+              ) <=
+                Math.max(word.height, next.height) / 2,
+          ),
+      ),
+  );
+}
+
+export function myNotesMenuPoint(
+  lines: readonly { text: string; left: number; top: number; right: number }[],
+  width: number,
+  height: number,
+) {
+  const candidates = lines.filter(
+    (line) =>
+      line.left >= 45 &&
+      line.right < width * 0.3 &&
+      line.top > 50 &&
+      line.top < height * 0.8 &&
+      /^(?:my\s+notes|мої\s+нотатки|мои\s+заметки)$/iu.test(line.text.trim()),
+  );
+  return candidates.length === 1
+    ? exactOptionPoint(candidates, ['My Notes', 'Мої нотатки', 'Мои заметки'])
     : null;
 }
 
@@ -218,6 +833,9 @@ export type BubbleRegion = {
   right: number;
   bottom: number;
   side: 'left' | 'right' | 'center';
+  outgoingColor?: boolean;
+  unfilled?: boolean;
+  bodyRegion?: { left: number; top: number; right: number; bottom: number };
   daySeparator?: Date;
 };
 
@@ -233,32 +851,59 @@ export function messageBubbleRegions(
   height: number,
   bounds: { left: number; right: number },
   headerBottom: number,
+  bodyBottom = height - 90,
 ) {
   const colors = new Map<number, number>();
   const colorAt = (x: number, y: number) => {
     const offset = (y * width + x) * 3;
+    // JPEG changes neighboring fill pixels across quantization buckets. Treat
+    // the outgoing color family as one connected surface, preserving its holes.
+    if (
+      isOutgoingBubbleColor([
+        pixels[offset]!,
+        pixels[offset + 1]!,
+        pixels[offset + 2]!,
+      ])
+    )
+      return 4096;
     return (
       ((pixels[offset]! >> 4) << 8) |
       ((pixels[offset + 1]! >> 4) << 4) |
       (pixels[offset + 2]! >> 4)
     );
   };
-  for (let y = headerBottom; y < height - 90; y += 2)
+  for (let y = headerBottom; y < bodyBottom; y += 2)
     for (let x = bounds.left; x < bounds.right; x += 2) {
       const color = colorAt(x, y);
       colors.set(color, (colors.get(color) ?? 0) + 1);
     }
-  const background = [...colors].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const edgeColors = new Map<number, number>();
+  for (let y = headerBottom; y < bodyBottom; y += 2)
+    for (const x of [bounds.left + 2, bounds.right - 3]) {
+      const color = colorAt(x, y);
+      edgeColors.set(color, (edgeColors.get(color) ?? 0) + 1);
+    }
+  const background = [...edgeColors].sort((a, b) => b[1] - a[1])[0]?.[0];
   if (background === undefined) return [] as BubbleRegion[];
 
   const result: BubbleRegion[] = [];
   const visited = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
+  const outgoingColor = (color: number) =>
+    color === 4096 ||
+    isOutgoingBubbleColor([
+      ((color >> 8) & 15) * 17,
+      ((color >> 4) & 15) * 17,
+      (color & 15) * 17,
+    ]);
   const candidates = [...colors]
-    .filter(([color, count]) => color !== background && count >= 500)
+    .filter(
+      ([color, count]) =>
+        color !== background && (outgoingColor(color) || count >= 500),
+    )
     .map(([color]) => color);
   for (const color of candidates) {
-    for (let y = headerBottom; y < height - 90; y += 1) {
+    for (let y = headerBottom; y < bodyBottom; y += 1) {
       for (let x = bounds.left; x < bounds.right; x += 1) {
         const start = y * width + x;
         if (visited[start] || colorAt(x, y) !== color) continue;
@@ -289,7 +934,7 @@ export function messageBubbleRegions(
               nx < bounds.left ||
               nx >= bounds.right ||
               ny < headerBottom ||
-              ny >= height - 90
+              ny >= bodyBottom
             )
               continue;
             const next = ny * width + nx;
@@ -304,21 +949,21 @@ export function messageBubbleRegions(
         const chatWidth = bounds.right - bounds.left;
         // A banner (e.g. "not in your contact list") spans the whole chat and is not a message.
         if (
-          write < 1500 ||
-          // A three-letter message is only ~80px wide, so keep the minimum small.
-          boxWidth < 60 ||
-          boxHeight < 28 ||
+          (outgoingColor(color)
+            ? write / (boxWidth * boxHeight) < 0.5
+            : write < 1500 || boxWidth < 60 || boxHeight < 28) ||
           boxWidth >= chatWidth * 0.9 ||
           // Touching the top edge of the scanned area means a banner under the chat header.
-          minY <= headerBottom + 4
+          (minY <= headerBottom + 4 &&
+            !(
+              outgoingColor(color) &&
+              maxX >= bounds.right - chatWidth * 0.12 &&
+              boxHeight > 100 &&
+              boxWidth < chatWidth * 0.85
+            ))
         )
           continue;
-        const rgb = [
-          ((color >> 8) & 15) * 17,
-          ((color >> 4) & 15) * 17,
-          (color & 15) * 17,
-        ] as const;
-        const side = isOutgoingBubbleColor(rgb)
+        const side = outgoingColor(color)
           ? 'right'
           : minX <= bounds.left + chatWidth * 0.2
             ? 'left'
@@ -332,6 +977,7 @@ export function messageBubbleRegions(
           right: maxX + 1,
           bottom: maxY + 1,
           side,
+          outgoingColor: outgoingColor(color),
         });
       }
     }
@@ -704,18 +1350,46 @@ export function verticalColorBoundaries(samples: readonly Rgb[]) {
   return groups.map((point) => point.x);
 }
 
+export function chatgptPanelHeader(
+  words: readonly { text: string; left: number; top: number }[],
+  width: number,
+  height: number,
+  boundaries: readonly number[],
+) {
+  return words.find(
+    (word) =>
+      normalizeOcr(word.text).length >= 6 &&
+      normalizeOcr(word.text).length <= 8 &&
+      textSimilarity('chatgpt', word.text) >=
+        1 - 1 / Math.max(7, normalizeOcr(word.text).length) &&
+      word.top > 26 &&
+      word.top < Math.min(110, height * 0.15) &&
+      boundaries.some((x) => x > width * 0.45 && x < word.left - 20),
+  );
+}
+
 export function chatColumnBounds(
   width: number,
   boundaries: readonly number[],
   profileOpen = false,
+  panelHeaderLeft?: number,
 ) {
   const left = boundaries.find((x) => x > width * 0.08 && x < width * 0.4);
   const panelCandidates = profileOpen
-    ? boundaries.filter((x) => x > width * 0.45 && x < width * 0.98)
+    ? boundaries.filter(
+        (x) =>
+          x > width * 0.45 &&
+          x <
+            (panelHeaderLeft === undefined
+              ? width * 0.98
+              : panelHeaderLeft - 20),
+      )
     : [];
   const panelBoundary = profileOpen
-    ? [...panelCandidates].sort(
-        (a, b) => Math.abs(a / width - 0.77) - Math.abs(b / width - 0.77),
+    ? [...panelCandidates].sort((a, b) =>
+        panelHeaderLeft === undefined
+          ? Math.abs(a / width - 0.77) - Math.abs(b / width - 0.77)
+          : b - a,
       )[0]
     : undefined;
   const right = panelBoundary ?? width;
@@ -842,7 +1516,11 @@ export function classifyViberModal(text: string): ViberModal {
     )
   )
     return 'sync_history';
-  if (/dialog|modal|error|warning|помилка|попередження/.test(value))
+  if (
+    /noconnectivity|noconnection|немаєз’єднання|dialog|modal|error|warning|помилка|попередження/.test(
+      value,
+    )
+  )
     return 'unknown';
   return 'none';
 }
