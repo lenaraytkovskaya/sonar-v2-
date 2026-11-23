@@ -314,19 +314,40 @@ it.skipIf(!enabled)(
         ),
       ).toMatchObject({ companyId: ids.company });
 
-      const uncertain = await email.createCompanyMessage(
-        {
-          channel: 'viber',
-          companyId: ids.company,
-          campaignId: ids.campaign,
-          accountId: account.id,
-          toAddress: '+48500100200',
-          body: 'Observed outgoing Viber fixture',
-          submit: true,
-          idempotencyKey: randomUUID(),
-        },
-        ids.user,
-      );
+      const now = new Date();
+      async function failedAttempt(
+        body: string,
+        minutes = 10,
+        reason = 'viber_delivery_uncertain',
+        attemptedAt = new Date(now.getTime() - minutes * 60_000),
+      ) {
+        const message = await email.createCompanyMessage(
+          {
+            channel: 'viber',
+            companyId: ids.company,
+            campaignId: ids.campaign,
+            accountId: account.id,
+            toAddress: '+48500100200',
+            body,
+            submit: true,
+            idempotencyKey: randomUUID(),
+          },
+          ids.user,
+        );
+        await db.sonarPool.query(
+          `update messages set status='failed',created_at=$2::timestamptz-interval '1 day',
+            first_attempt_at=$3,
+            request_snapshot=jsonb_build_object('to',to_value,'body',body,'idempotencyKey',idempotency_key)
+            where id=$1`,
+          [message.id, now, attemptedAt],
+        );
+        await db.sonarPool.query(
+          "update tasks set status='paused',reason_code=$2 where type='message.send' and payload->>'messageId'=$1",
+          [message.id, reason],
+        );
+        return message;
+      }
+      const uncertain = await failedAttempt('Observed outgoing Viber fixture');
       const manual = await email.createCompanyMessage(
         {
           channel: 'viber',
@@ -343,22 +364,52 @@ it.skipIf(!enabled)(
       const attemptedAt = new Date(Date.now() - 2000);
       await db.sonarPool.query(
         "update messages set status='failed',first_attempt_at=$2,reason_uk='confirmation uncertain' where id=any($1::uuid[])",
-        [[uncertain.id, manual.id], attemptedAt],
+        [[manual.id], attemptedAt],
       );
       const { reconcileViberDeliveries, markViberSentManually } =
         await import('./viber.js');
-      const observedAt = new Date(Date.now() - 1000).toISOString();
+      const observedAt = new Date(now.getTime() - 1000).toISOString();
+      const observed = (
+        text: string,
+        providerMessageId = randomUUID(),
+        at = observedAt,
+      ) => ({
+        from: '+48500100200',
+        text,
+        at,
+        providerMessageId,
+      });
+      expect(
+        await reconcileViberDeliveries(
+          [observed('Observed outgoing Viber fixture')],
+          now,
+          randomUUID(),
+        ),
+      ).toBe(0);
+      expect(
+        await reconcileViberDeliveries(
+          [
+            {
+              ...observed('Observed outgoing Viber fixture'),
+              from: '+48500999999',
+            },
+          ],
+          now,
+          account.id,
+        ),
+      ).toBe(0);
       expect(
         await reconcileViberDeliveries(
           [
             {
               from: '+48500100200',
-              text: 'Observed outgoing Viber fixturc',
+              text: 'Observed outgoing Viber fixture',
               at: observedAt,
               providerMessageId: 'screen-outgoing-fixture',
             },
           ],
-          new Date(),
+          now,
+          account.id,
         ),
       ).toBe(1);
       const reconciled = await db.sonarPool.query(
@@ -369,6 +420,80 @@ it.skipIf(!enabled)(
         status: 'sent',
         provider_id: 'screen-outgoing-fixture',
       });
+      for (const [body, text, minutes, reason, at] of [
+        ['Too old', 'Too old', 31, 'viber_delivery_uncertain', observedAt],
+        ['Not uncertain', 'Not uncertain', 10, 'do_not_contact', observedAt],
+        [
+          'Before attempt',
+          'Before attempt',
+          10,
+          'viber_delivery_uncertain',
+          new Date(now.getTime() - 11 * 60_000).toISOString(),
+        ],
+        ['👍', '👎', 10, 'viber_delivery_uncertain', observedAt],
+        [
+          'Identical prefix '.repeat(8) + 'one',
+          'Identical prefix '.repeat(8) + 'two',
+          10,
+          'viber_delivery_uncertain',
+          observedAt,
+        ],
+      ] as const) {
+        await failedAttempt(body, minutes, reason);
+        expect(
+          await reconcileViberDeliveries(
+            [observed(text, randomUUID(), at)],
+            now,
+            account.id,
+          ),
+        ).toBe(0);
+      }
+      const screenAt = new Date(
+        Math.floor((now.getTime() - 10 * 60_000) / 60_000) * 60_000,
+      ).toISOString();
+      await failedAttempt(
+        'Same minute',
+        10,
+        'viber_delivery_uncertain',
+        new Date(new Date(screenAt).getTime() + 30_000),
+      );
+      expect(
+        await reconcileViberDeliveries(
+          [observed('Same minute', 'screen:old-minute', screenAt)],
+          now,
+          account.id,
+        ),
+      ).toBe(0);
+      const changed = await failedAttempt('Original attempt body');
+      await expect(
+        db.sonarPool.query(
+          "update messages set body='Edited body' where id=$1",
+          [changed.id],
+        ),
+      ).rejects.toThrow('Message request is immutable after first attempt');
+      expect(
+        await reconcileViberDeliveries(
+          [observed('Edited body')],
+          now,
+          account.id,
+        ),
+      ).toBe(0);
+      await failedAttempt('Repeated identical body');
+      await failedAttempt('Repeated identical body');
+      const repeated = observed('Repeated identical body');
+      expect(
+        await reconcileViberDeliveries([repeated, repeated], now, account.id),
+      ).toBe(1);
+      expect(await reconcileViberDeliveries([repeated], now, account.id)).toBe(
+        0,
+      );
+      expect(
+        await reconcileViberDeliveries(
+          [observed('Repeated identical body')],
+          now,
+          account.id,
+        ),
+      ).toBe(1);
       const {
         rows: [manualRow],
       } = await db.sonarPool.query<{ conversation_id: string }>(
