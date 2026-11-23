@@ -157,7 +157,7 @@ export async function captureInstagramInbox(
   const threads = new Map<string, InstagramInboxPage['threads'][number]>();
   const threadMessageCounts = new Map<string, number>();
   let scope: 'primary' | 'general' | 'requests' = 'primary';
-  const deadline = Date.now() + timeoutMs;
+  let deadline = Date.now() + timeoutMs;
   const onResponse = (response: Response) => {
     const url = new URL(response.url());
     if (
@@ -166,14 +166,32 @@ export async function captureInstagramInbox(
       response.request().method() !== 'POST'
     )
       return;
-    capture.received = Math.min(capture.received + 1, 2);
     const request = response.request();
-    const frame = request.frame();
+    let frame: ReturnType<typeof request.frame>;
+    let frameUrl: URL;
+    try {
+      frame = request.frame();
+      frameUrl = new URL(frame.url());
+    } catch {
+      // Persistent service-worker requests can have no frame. Never ingest them.
+      invalid = true;
+      skipped.add('untrusted_response_origin');
+      return;
+    }
+    // Home app startup can emit unrelated GraphQL while recovering a splash.
+    // It is never mailbox evidence; Direct responses retain their strict checks.
+    if (
+      frame === page.mainFrame() &&
+      frameUrl.origin === origin &&
+      frameUrl.pathname === '/'
+    )
+      return;
+    capture.received = Math.min(capture.received + 1, 2);
     if (
       frame !== page.mainFrame() ||
-      new URL(frame.url()).origin !== origin ||
-      !/^\/direct\/(?:inbox\/|requests\/|t\/\d+\/?)$/.test(
-        new URL(frame.url()).pathname,
+      frameUrl.origin !== origin ||
+      !/^\/direct\/(?:inbox\/?|requests\/?|t\/\d+\/?)$/.test(
+        frameUrl.pathname,
       ) ||
       new URL(request.url()).origin !== origin
     ) {
@@ -446,6 +464,9 @@ export async function captureInstagramInbox(
   page.on('response', onResponse);
   try {
     await navigate(`${origin}/direct/inbox/`);
+    // Startup recovery may use the initial navigation budget. Keep a full capture
+    // window once Direct is ready, including requests emitted during navigation.
+    deadline = Date.now() + timeoutMs;
     await waitForCapture(0);
     while (
       seenMailbox &&

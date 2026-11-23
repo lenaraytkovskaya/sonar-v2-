@@ -173,6 +173,11 @@ export async function saveManualSource(
         ));
       taskIds = [id];
     } else if ('target' in data && data.target) {
+      // The person adds it on purpose, so an earlier removal no longer applies.
+      await client.query(
+        "delete from contact_suppressions where company_id=$1 and kind='social' and normalized=$2",
+        [companyId, data.value],
+      );
       await client.query(
         `insert into contacts(company_id,kind,value,normalized,source,source_url,rank,meta) values($1,'social',$2,$2,'manual',$2,100,$3) on conflict(company_id,kind,normalized) do nothing`,
         [companyId, data.value, { created_by: userId }],

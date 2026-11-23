@@ -237,8 +237,8 @@ it('uses a date divider below a bubble to infer the preceding day', () => {
 
 it('imports visible bubbles in chronological order and skips unknown dates', () => {
   const input = {
-    threadId: 'screen:380637058571',
-    from: '+380637058571',
+    threadId: 'screen:380501234567',
+    from: '+380501234567',
     since: new Date('2026-11-18T00:00:00'),
     reference: new Date('2026-11-19T18:00:00'),
     left: 145,
@@ -269,8 +269,8 @@ it('applies the nearest visible date divider to an inbound message', () => {
       { text: '18:45', left: 180, top: 195, right: 220 },
     ],
     {
-      threadId: 'screen:380637058571',
-      from: '+380637058571',
+      threadId: 'screen:380501234567',
+      from: '+380501234567',
       since: new Date('2026-11-18T18:00:00'),
       reference: new Date('2026-11-19T18:00:00'),
       left: 145,
@@ -396,7 +396,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
     ],
     {
       threadId: 'screen:+380638215990',
-      from: '+380637058571',
+      from: '+380501234567',
       since: localTime(17, 11),
       reference: localTime(17, 20),
       region: bubbles[0]!,
@@ -424,7 +424,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   ).toBe('перше повідомлення\nз двох рядків');
   const fallback = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
-    from: '+380637058571',
+    from: '+380501234567',
     since: localTime(17, 11),
     reference: localTime(17, 20),
     region: bubbles[0]!,
@@ -433,7 +433,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   });
   const copiedLater = inboundBubbleMessage(ocrLines, {
     threadId: 'screen:+380638215990',
-    from: '+380637058571',
+    from: '+380501234567',
     since: localTime(17, 11),
     reference: localTime(17, 20),
     region: bubbles[0]!,
@@ -454,7 +454,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       ],
       {
         threadId: 'screen:+380638215990',
-        from: '+380637058571',
+        from: '+380501234567',
         since: localTime(17, 11),
         reference: localTime(17, 20),
         region: {
@@ -475,7 +475,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       ],
       {
         threadId: 'screen:+380638215990',
-        from: '+380637058571',
+        from: '+380501234567',
         since: localTime(17, 11),
         reference: localTime(17, 20),
         region: bubbles[1]!,
@@ -491,7 +491,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
       ],
       {
         threadId: 'screen:+380638215990',
-        from: '+380637058571',
+        from: '+380501234567',
         since: localTime(17, 11),
         reference: localTime(17, 20),
         region: bubbles[2]!,
@@ -506,7 +506,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   expect(
     inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
-      from: '+380637058571',
+      from: '+380501234567',
       since: localTime(17, 11),
       reference: localTime(17, 20),
       region: bubbles[1]!,
@@ -515,7 +515,7 @@ it('isolates bubble backgrounds, skips centered and outgoing bubbles, and keeps 
   expect(
     inboundBubbleMessage([{ text: '17:12', left: 0, top: 0, right: 30 }], {
       threadId: 'screen:+380638215990',
-      from: '+380637058571',
+      from: '+380501234567',
       since: localTime(17, 12, 35),
       reference: localTime(17, 20),
       region: bubbles[0]!,
@@ -712,8 +712,8 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
   expect(safeLayoutClick(1110, 450, forbiddenActions)).toBe(true);
   expect(
     chatHeaderMatchesRecipient(
-      'Olena Kovalenko\n+380 63 705 85 71',
-      '+380637058571',
+      'Olena Kovalenko\n+380 50 123 45 67',
+      '+380501234567',
     ),
   ).toBe(true);
   expect(
@@ -721,7 +721,7 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
       [
         { text: 'Olena Kovalenko Active', left: 180, top: 60, right: 360 },
         {
-          text: 'Olena +380 63 705 85 71 is not in your contact list',
+          text: 'Olena +380 50 123 45 67 is not in your contact list',
           left: 180,
           top: 90,
           right: 650,
@@ -729,17 +729,17 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
       ],
       (line) => line.top < 210 && line.left >= 145 && line.left < 1135,
     ),
-  ).toBe('+380637058571');
+  ).toBe('+380501234567');
   expect(
     phoneFromOcrLines(
-      [{ text: '+380 63 705 85 71', left: 1145, top: 185, right: 1270 }],
+      [{ text: '+380 50 123 45 67', left: 1145, top: 185, right: 1270 }],
       (line) => line.top < 495 && line.left >= 1130,
     ),
-  ).toBe('+380637058571');
+  ).toBe('+380501234567');
   expect(
     chatHeaderMatchesRecipient(
-      'Olena Kovalenko Active\nOlena +380 63 705 85 71 is not in your contact list',
-      '+380637058571',
+      'Olena Kovalenko Active\nOlena +380 50 123 45 67 is not in your contact list',
+      '+380501234567',
     ),
   ).toBe(true);
   const incoming = visibleInboundMessages(
@@ -752,8 +752,8 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
       { text: '15:03', left: 990, top: 215, right: 1025 },
     ],
     {
-      threadId: 'screen:380637058571',
-      from: '+380637058571',
+      threadId: 'screen:380501234567',
+      from: '+380501234567',
       since: new Date('2026-11-18T15:01:00'),
       reference: new Date('2026-11-18T15:04:00'),
       left: 145,
@@ -764,13 +764,13 @@ it('uses color separators and protects Block actions in a synthetic Viber layout
   );
   expect(incoming).toHaveLength(1);
   expect(incoming[0]).toMatchObject({
-    from: '+380637058571',
+    from: '+380501234567',
     text: 'відповідь у два рядки',
   });
   expect(new Date(incoming[0]!.at).getHours()).toBe(15);
   expect(new Date(incoming[0]!.at).getMinutes()).toBe(2);
   expect(incoming[0]?.providerMessageId).toBe(
-    screenMessageId('screen:380637058571', 'відповідь у два рядки', '15:02'),
+    screenMessageId('screen:380501234567', 'відповідь у два рядки', '15:02'),
   );
 });
 

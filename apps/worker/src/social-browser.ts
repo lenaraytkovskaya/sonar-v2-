@@ -6,12 +6,16 @@ import {
   type Page,
 } from 'playwright';
 import { detectSocialBlock, type SocialTarget } from '@sonar/core';
+import { navigateSocialPage } from './social-navigation.js';
 import {
   socialProxyList,
   generateSocialDevice,
   type resolveSocialSession,
 } from '@sonar/core/social-session';
-import { assertSocialSession } from './social-send-browser.js';
+import {
+  assertSocialSession,
+  waitForInstagramReady,
+} from './social-send-browser.js';
 export type SocialProxy = {
   server: string;
   username?: string;
@@ -236,10 +240,23 @@ export async function renderSocialDocuments(
   const read = async (url: string) => {
     proxyUnits++;
     try {
-      const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: timeoutMs,
-      });
+      let response =
+        target.network === 'instagram'
+          ? await navigateSocialPage(page, url, timeoutMs)
+          : await page.goto(url, {
+              waitUntil: 'domcontentloaded',
+              timeout: timeoutMs,
+            });
+      if (
+        target.network === 'instagram' &&
+        (!response || response.status() < 400)
+      ) {
+        const recovered = await waitForInstagramReady(page, timeoutMs, {
+          recoverViaDirect: false,
+          reload: false,
+        });
+        if (recovered) response = recovered;
+      }
       await page
         .locator(
           'main, [role="main"], h1, input[type="password"], form[action*="checkpoint"]',
