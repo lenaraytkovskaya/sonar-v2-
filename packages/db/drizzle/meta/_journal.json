@@ -589,6 +589,13 @@
       "when": 1795305608000,
       "tag": "0083_contact_suppressions",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1795449600000,
+      "tag": "0084_social_inbox_signal_cooldown",
+      "breakpoints": true
     }
   ]
 }

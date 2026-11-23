@@ -7,6 +7,7 @@ import { connectSocialProfile } from './social-profile-browser.js';
 import { probeNetwork } from './network-probe.js';
 import {
   focusThread,
+  MessengerSignalCooldown,
   readMessengerSnapshot,
   sweepThreads,
   THREAD_LINKS,
@@ -167,6 +168,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
     const page = await context.newPage();
+    const signalCooldown = new MessengerSignalCooldown();
     // Encrypted chats keep one active Messenger tab per profile. Tabs left by a
     // previous worker process (a deploy kills it mid-run) silence this one, so
     // they are closed - but only after our own tab exists: closing the last
@@ -206,6 +208,11 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           1000;
         const end = await watchMessenger(page, {
           minGapMs,
+          signalCooldown,
+          signalCooldownMs:
+            Number(
+              await setting('social.inbox.listen_signal_cooldown_seconds', 120),
+            ) * 1000,
           onEvent: (line) => note(listener, line),
           paused: () => (hot?.activeOps ?? 0) > 0,
           onScan: (snapshot) => {

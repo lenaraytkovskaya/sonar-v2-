@@ -80,7 +80,7 @@ it('classifies an inbox navigation splash before reading or persisting messages'
     stage: 'navigation',
     screen: 'splash',
   });
-  expect(page.reload).toHaveBeenCalledOnce();
+  expect(page.goto).toHaveBeenCalledTimes(3);
   expect(persist).not.toHaveBeenCalled();
   expect(page.goto).toHaveBeenCalledWith(
     'https://www.instagram.com/direct/inbox/',
@@ -1145,6 +1145,37 @@ it('distinguishes the messaging namespace matching the expected identity without
     },
   });
   expect(f.persist).not.toHaveBeenCalled();
+});
+it.each(['frame', 'url'] as const)(
+  'rejects frameless persistent-worker GraphQL safely (%s)',
+  async (failure) => {
+    const f = browser([fixture()]);
+    if (failure === 'frame')
+      f.requestFrame.mockImplementation(() => {
+        throw new Error('ServiceWorker has no frame');
+      });
+    else
+      f.requestFrame.mockReturnValue({
+        url: () => {
+          throw new Error('Frame unavailable');
+        },
+      });
+    await expect(f.run()).resolves.toMatchObject({
+      skipped: expect.arrayContaining(['untrusted_response_origin']),
+    });
+    expect(f.persist).not.toHaveBeenCalled();
+    expect(f.readJson).not.toHaveBeenCalled();
+  },
+);
+it('accepts verified payloads from the canonical Direct inbox without a trailing slash', async () => {
+  const f = browser([fixture()]);
+  const navigate = f.page.goto.getMockImplementation()!;
+  f.page.goto.mockImplementation((url) =>
+    navigate(url.replace('/direct/inbox/', '/direct/inbox')),
+  );
+  const result = await f.run();
+  expect(result.skipped).not.toContain('untrusted_response_origin');
+  expect(f.persist).toHaveBeenCalled();
 });
 it('rejects a foreign request frame before persisting its response', async () => {
   const f = browser([fixture()]);

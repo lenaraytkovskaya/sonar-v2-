@@ -14,6 +14,7 @@ import {
   type SocialStorageState,
   type SocialDevice,
   socialSessionCheckReason,
+  profileLockDiagnostic,
 } from '@sonar/core/social-session';
 import type { PoolClient } from 'pg';
 import {
@@ -954,6 +955,7 @@ export async function sendEmailMessage(
         runAt,
         'social_profile_busy',
         'Браузер акаунта зайнятий.',
+        profileLockDiagnostic('account_operation'),
       );
     }
     locked = true;
@@ -1477,8 +1479,24 @@ export async function sendEmailMessage(
       providerId: string,
       reasonUk: string | null = null,
       observation?: FacebookDispatchResult['observation'],
-      identity?: Pick<FacebookDispatchResult, 'externalMessageId' | 'threadId'>,
+      identity?: Pick<
+        FacebookDispatchResult,
+        'externalMessageId' | 'threadId' | 'readReceipt'
+      >,
     ): Promise<TaskOutcome> => {
+      const readReceipt = identity?.readReceipt;
+      if (
+        readReceipt &&
+        (channel !== 'social' ||
+          account.channel !== 'facebook' ||
+          !/^\d+$/.test(readReceipt.threadId) ||
+          !/^\d+@msgr\.\d+$/.test(readReceipt.seenMessageId) ||
+          readReceipt.threadId !== identity.threadId ||
+          readReceipt.threadId !== m.provider_thread_id ||
+          readReceipt.seenMessageId !== identity.externalMessageId)
+      )
+        throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
+      const delivery = readReceipt ? 'read' : 'unconfirmed';
       await transaction(async (tx) => {
         await tx.query(
           "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=$4 where id=$1",
@@ -1524,6 +1542,26 @@ export async function sendEmailMessage(
             [m.conversation_id, threadId, account.id],
           );
         }
+        if (readReceipt) {
+          const read = await tx.query(
+            `update messages m set status='read',reason_uk=null
+             where m.id=$1 and m.channel='social' and m.account_id=$2
+               and m.direction='out' and m.status='sent' and m.external_message_id=$3
+               and exists(select 1 from conversations v where v.id=m.conversation_id
+                 and v.account_id=$2 and v.provider_thread_id=$4)`,
+            [
+              messageId,
+              account.id,
+              readReceipt.seenMessageId,
+              readReceipt.threadId,
+            ],
+          );
+          if (read.rowCount !== 1)
+            throw new SocialSendError(
+              'delivery_uncertain',
+              'Перевірте чат вручну',
+            );
+        }
         await tx.query(
           "update companies set status='contacted',updated_at=now() where id=$1 and status in ('new','enriching','ready')",
           [m.company_id],
@@ -1537,7 +1575,7 @@ export async function sendEmailMessage(
             messageId,
             providerId,
             taskId,
-            ...(observation ? { delivery: 'unconfirmed', observation } : {}),
+            ...(observation ? { delivery, observation } : {}),
           },
           tx,
         );
@@ -1547,7 +1585,7 @@ export async function sendEmailMessage(
         result: {
           messageId,
           providerId,
-          ...(observation ? { delivery: 'unconfirmed', observation } : {}),
+          ...(observation ? { delivery, observation } : {}),
         },
       };
     };
@@ -1738,6 +1776,7 @@ export async function sendEmailMessage(
             new Date(now.getTime() + retrySeconds * 1000),
             'social_profile_busy',
             'Браузер акаунта зайнятий.',
+            profileLockDiagnostic('browser_lease'),
           ),
         );
       }

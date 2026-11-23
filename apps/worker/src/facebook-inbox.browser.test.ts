@@ -138,7 +138,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     it("reports the newest own message that carries the peer's seen avatar", async () => {
       const { page, context } = await fixture();
       try {
-        // The captured chat already shows the seen avatar under our last message.
+        // The capture redacts the avatar label. Its geometry alone cannot confirm a read.
+        expect(
+          (await readFacebookThread(page, '100000000000002')).seenMessageId,
+        ).toBeUndefined();
+        const avatar = page.locator(
+          '[data-message-id="100000000000001@msgr.6"] img',
+        );
+        await avatar.evaluate((img) =>
+          img.setAttribute('alt', 'Seen by Synthetic Recipient'),
+        );
         const read = await readFacebookThread(page, '100000000000002');
         expect(read.seenMessageId).toBe('100000000000001@msgr.6');
         expect(read.threadId).toBe('900000000000001');

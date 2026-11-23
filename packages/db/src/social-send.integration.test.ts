@@ -184,6 +184,9 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         expect(await send(first.id, sender)).toMatchObject({
           status: 'deferred',
           reasonCode: 'social_profile_busy',
+          result: {
+            diagnostic: { scope: 'account', lock: 'account_operation' },
+          },
         });
         expect(sender).not.toHaveBeenCalled();
       } finally {
@@ -239,6 +242,64 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           status: 'done',
         });
         expect(knownThreadSender).toHaveBeenCalledOnce();
+      }
+      if (network === 'facebook') {
+        await sonarPool.query(
+          "update conversations set account_id=$2,provider_thread_id='123' where id=$1",
+          [conversationId, account],
+        );
+        for (const variant of [
+          'exact',
+          'old_message',
+          'other_thread',
+        ] as const) {
+          await reset();
+          const reply = await create();
+          const readSender = vi.fn(async (request, a) => {
+            await a!.beforeSend!();
+            return {
+              ...dispatch(request.to),
+              externalMessageId: '100000000000002@msgr.99',
+              threadId: '123',
+              readReceipt: {
+                threadId: variant === 'other_thread' ? '456' : '123',
+                seenMessageId:
+                  variant === 'old_message'
+                    ? '100000000000002@msgr.98'
+                    : '100000000000002@msgr.99',
+              },
+            };
+          });
+          const outcome = await send(reply.id, readSender);
+          const stored = (
+            await sonarPool.query(
+              'select status,reason_uk from messages where id=$1',
+              [reply.id],
+            )
+          ).rows[0];
+          if (variant === 'exact') {
+            expect(outcome).toMatchObject({
+              status: 'done',
+              result: { delivery: 'read' },
+            });
+            expect(stored).toMatchObject({ status: 'read', reason_uk: null });
+            expect(await send(reply.id, readSender)).toMatchObject({
+              status: 'done',
+            });
+            expect(readSender).toHaveBeenCalledOnce();
+          } else {
+            expect(outcome).toMatchObject({
+              status: 'paused',
+              reasonCode: 'social_delivery_uncertain',
+            });
+            expect(stored.status).not.toBe('read');
+          }
+        }
+        // The remaining cases start with a manually created, unbound conversation.
+        await sonarPool.query(
+          'update conversations set account_id=null,provider_thread_id=null where id=$1',
+          [conversationId],
+        );
       }
       // Only earlier, undelivered outgoing text for this account/recipient may
       // replace a browser draft. Delivered collisions always remain protected.

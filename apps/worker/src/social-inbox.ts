@@ -14,6 +14,7 @@ import {
   SocialSessionCheckError,
   socialSessionCheckReason,
   socialSessionCheckReasons,
+  profileLockDiagnostic,
 } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import {
@@ -178,6 +179,7 @@ export async function runSocialInboxSync(
         runAt: new Date(now.getTime() + retrySeconds * 1000),
         reasonCode: 'social_profile_busy',
         reasonUk: 'Браузер акаунта зайнятий.',
+        result: profileLockDiagnostic('account_operation'),
       };
     }
     locked = true;
@@ -493,6 +495,7 @@ export async function runSocialInboxSync(
         runAt: new Date(now.getTime() + retrySeconds * 1000),
         reasonCode: 'social_profile_busy',
         reasonUk: 'Браузер акаунта зайнятий.',
+        result: profileLockDiagnostic('browser_lease'),
       };
     }
     if (error instanceof SocialSendError) {

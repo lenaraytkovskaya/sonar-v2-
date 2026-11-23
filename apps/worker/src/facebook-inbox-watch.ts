@@ -9,6 +9,7 @@ const RELOAD_MS = 30 * 60 * 1000;
 export interface MessengerThread {
   href: string;
   text: string;
+  unread?: boolean;
 }
 export interface MessengerSnapshot {
   unread: number;
@@ -26,17 +27,56 @@ export interface MessengerSnapshot {
   };
 }
 
-/** Language-independent view of the Messenger page: title counter, thread order and previews. */
+/** Messenger-only activity; Facebook title counters also include notifications. */
 export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
   return page.evaluate((links) => {
-    const counter = /^\((\d+)\)/.exec(document.title);
+    const visible = (node: Element) =>
+      !!node.getClientRects().length &&
+      getComputedStyle(node).visibility !== 'hidden';
+    const unreadLabel = /непрочитан|\bunread\b/i;
+    const overlay =
+      '[role="dialog"], [role="menu"], [role="log"], [role="article"]';
+    const messenger = Array.from(
+      document.querySelectorAll(
+        'button[aria-label], [role="button"][aria-label], a[aria-label]',
+      ),
+    ).filter(
+      (node) =>
+        !node.closest(overlay) &&
+        /^Messenger(?:\b|,)/i.test(node.getAttribute('aria-label') ?? '') &&
+        visible(node),
+    );
+    // Never inspect a shared toolbar parent: it also contains Notifications.
+    const badge =
+      messenger.length === 1
+        ? Math.max(
+            0,
+            ...[
+              messenger[0]!,
+              ...Array.from(
+                messenger[0]!.querySelectorAll('[aria-label], span'),
+              ),
+            ]
+              .filter(visible)
+              .map((node) => {
+                const label = node.getAttribute('aria-label') ?? '';
+                const value = unreadLabel.test(label)
+                  ? /\d+/.exec(label)?.[0]
+                  : /^\d+\+?$/.exec(node.textContent?.trim() ?? '')?.[0];
+                return Number.parseInt(value ?? '0', 10);
+              }),
+          )
+        : 0;
     const threads = Array.from(
       document.querySelectorAll<HTMLAnchorElement>(links),
     )
-      .filter((link) =>
-        /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(
-          link.getAttribute('href') ?? '',
-        ),
+      .filter(
+        (link) =>
+          visible(link) &&
+          !link.closest(overlay) &&
+          /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/.test(
+            link.getAttribute('href') ?? '',
+          ),
       )
       .slice(0, 15)
       .map((link) => ({
@@ -45,6 +85,21 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
           .slice(0, 2)
           .map((node) => node.textContent ?? '')
           .join('|'),
+        unread:
+          unreadLabel.test(
+            [
+              link.getAttribute('aria-label') ?? '',
+              ...Array.from(link.querySelectorAll('[aria-label]'))
+                .filter(visible)
+                .map((node) => node.getAttribute('aria-label') ?? ''),
+            ].join(' '),
+          ) ||
+          Array.from(link.querySelectorAll('span[dir="auto"]'))
+            .slice(1, 2)
+            .some(
+              (node) =>
+                Number.parseInt(getComputedStyle(node).fontWeight, 10) >= 700,
+            ),
       }));
     const rows = threads.map((thread) => `${thread.href}#${thread.text}`);
     const blocked =
@@ -92,7 +147,7 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
           .filter(Boolean)
           .slice(0, 4),
       },
-      unread: counter ? Number(counter[1]) : 0,
+      unread: Math.max(badge, threads.filter((thread) => thread.unread).length),
       signature: rows.join('\n'),
       blocked,
       threads,
@@ -101,7 +156,7 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
 }
 
 // A new message in the chat that stays open moves neither the list preview nor
-// the title counter, so the newest message id of the open chat is watched too.
+// the Messenger badge, so the newest message id of the open chat is watched too.
 function openChatMoved(previous: MessengerSnapshot, next: MessengerSnapshot) {
   return (
     !!previous.open &&
@@ -120,6 +175,12 @@ export function messengerChanged(
   return (
     openChatMoved(previous, next) ||
     next.unread > previous.unread ||
+    (next.threads ?? []).some(
+      (thread) =>
+        thread.unread &&
+        !(previous.threads ?? []).find((old) => old.href === thread.href)
+          ?.unread,
+    ) ||
     (next.signature !== '' && next.signature !== previous.signature)
   );
 }
@@ -132,16 +193,73 @@ export function changedThreads(
   fallback = 3,
 ) {
   const before = new Map(
-    (previous.threads ?? []).map((thread) => [thread.href, thread.text]),
+    (previous.threads ?? []).map((thread) => [thread.href, thread]),
   );
   const changed = (next.threads ?? [])
-    .filter((thread) => before.get(thread.href) !== thread.text)
+    .filter((thread) => {
+      const old = before.get(thread.href);
+      return !old || old.text !== thread.text || (!old.unread && thread.unread);
+    })
     .map((thread) => thread.href);
   if (openChatMoved(previous, next) && next.open) changed.push(next.open.href);
   if (changed.length) return changed;
   return next.unread > previous.unread
     ? (next.threads ?? []).slice(0, fallback).map((thread) => thread.href)
     : [];
+}
+
+/** Close only an explicitly expanded Notifications toggle, never a generic dialog. */
+export async function closeFacebookNotifications(page: Page) {
+  const toggle = page
+    .locator('header, [role="banner"], nav, [role="navigation"]')
+    .getByRole('button', {
+      name: /^(?:Сповіщення|Notifications|Уведомления)(?:$|[, :])/i,
+    })
+    .filter({ visible: true })
+    .and(
+      page.locator(
+        ':not(main *, [role="main"] *, [role="log"] *, [role="dialog"] *)',
+      ),
+    );
+  const expanded = toggle.and(page.locator('[aria-expanded="true"]'));
+  if ((await toggle.count()) !== 1 || (await expanded.count()) !== 1)
+    return false;
+  return expanded.click({ timeout: 1000 }).then(
+    () => true,
+    () => false,
+  );
+}
+
+function messengerSignal(
+  previous: MessengerSnapshot,
+  snapshot: MessengerSnapshot,
+) {
+  return JSON.stringify([
+    snapshot.unread,
+    [...(snapshot.threads ?? [])].sort((a, b) => a.href.localeCompare(b.href)),
+    openChatMoved(previous, snapshot) ? snapshot.open : null,
+  ]);
+}
+
+/** Retained across reloads: identical badge/read-mark oscillations are not fresh mail. */
+export class MessengerSignalCooldown {
+  private readonly wakes = new Map<string, number>();
+
+  accept(
+    previous: MessengerSnapshot,
+    snapshot: MessengerSnapshot,
+    now: number,
+    cooldownMs: number,
+  ) {
+    const key = messengerSignal(previous, snapshot);
+    const last = this.wakes.get(key);
+    if (last !== undefined && now - last < cooldownMs) return false;
+    this.wakes.delete(key);
+    this.wakes.set(key, now);
+    if (this.wakes.size > 100)
+      this.wakes.delete(this.wakes.keys().next().value!);
+    return true;
+  }
 }
 
 async function firstSnapshot(page: Page) {
@@ -171,6 +289,8 @@ export async function watchMessenger(
     onChange: (changed: string[]) => Promise<void>;
     stopped: () => boolean;
     minGapMs: number;
+    signalCooldownMs?: number;
+    signalCooldown?: MessengerSignalCooldown;
     scanMs?: number;
     reloadMs?: number;
     onScan?: (snapshot: MessengerSnapshot) => void;
@@ -183,10 +303,13 @@ export async function watchMessenger(
   },
 ): Promise<WatchEnd> {
   const started = Date.now();
+  const signals = options.signalCooldown ?? new MessengerSignalCooldown();
   let previous = await firstSnapshot(page);
   let lastWake = 0;
-  let dirty = false;
-  const pending = new Set<string>();
+  const pending = new Map<
+    string,
+    { previous: MessengerSnapshot; next: MessengerSnapshot }
+  >();
   let emptyScans = 0;
   while (!options.stopped()) {
     if (Date.now() - started >= (options.reloadMs ?? RELOAD_MS))
@@ -196,6 +319,7 @@ export async function watchMessenger(
     );
     let next: MessengerSnapshot;
     try {
+      if (!options.paused?.()) await closeFacebookNotifications(page);
       next = await readMessengerSnapshot(page);
     } catch (error) {
       // A navigation by the importer or a reload destroys the page context for
@@ -225,17 +349,32 @@ export async function watchMessenger(
       options.onEvent?.('empty page, reloading');
       return 'reload';
     }
-    if (messengerChanged(previous, next)) {
-      dirty = true;
-      for (const href of changedThreads(previous, next)) pending.add(href);
-    }
+    if (messengerChanged(previous, next))
+      pending.set(messengerSignal(previous, next), { previous, next });
     previous = next;
-    if (dirty && Date.now() - lastWake >= options.minGapMs) {
-      dirty = false;
-      lastWake = Date.now();
-      const changed = [...pending];
+    if (pending.size && Date.now() - lastWake >= options.minGapMs) {
+      const now = Date.now();
+      const changed = new Set<string>();
+      let wake = false;
+      for (const signal of pending.values()) {
+        if (
+          signals.accept(
+            signal.previous,
+            signal.next,
+            now,
+            options.signalCooldownMs ?? 0,
+          )
+        ) {
+          wake = true;
+          for (const href of changedThreads(signal.previous, signal.next))
+            changed.add(href);
+        } else options.onEvent?.('same signal, cooldown');
+      }
       pending.clear();
-      await options.onChange(changed);
+      if (wake) {
+        lastWake = now;
+        await options.onChange([...changed]);
+      }
     }
   }
   return 'stopped';
@@ -244,7 +383,7 @@ export async function watchMessenger(
 const THREAD_HREF = /^\/messages\/(?:e2ee\/)?t\/\d+\/?$/;
 
 /**
- * Encrypted chats do not refresh their list preview or the title counter live,
+ * Encrypted chats do not refresh their list preview or the Messenger badge live,
  * only the open chat updates. A sweep therefore opens the top chats of the list
  * one by one (inside the shared page) and compares the newest message id of each
  * with the previous sweep. Returns the chats that changed since then.
