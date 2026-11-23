@@ -206,7 +206,7 @@ export function ManualEntry({
                     {uk.manual.socialHint}
                   </p>
                 )}
-                {key !== 'value' && (
+                {!['value', 'name', 'website'].includes(key) && (
                   <AiAssist
                     text={values[key] ?? ''}
                     onApply={(text) => update(key, text)}

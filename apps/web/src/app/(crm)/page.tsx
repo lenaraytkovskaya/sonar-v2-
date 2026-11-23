@@ -4,6 +4,7 @@ import {
   TaskOverview,
 } from '@/components/task-overview';
 import Link from 'next/link';
+import { AutoFilterForm } from '@/components/auto-filter-form';
 import { PageHeader, StatusBadge } from '@/components/shared';
 import { Button } from '@/components/ui/button';
 import { InfoTip, Section } from '@/components/ui/layout';
@@ -83,7 +84,10 @@ export default async function Page({
       <PageHeader
         {...uk.pages.overview}
         actions={
-          <form className="flex flex-wrap items-center gap-2">
+          <AutoFilterForm
+            key={selected ?? ''}
+            className="flex flex-wrap items-center gap-2"
+          >
             <select
               name="campaign"
               aria-label={t.campaign}
@@ -97,10 +101,12 @@ export default async function Page({
                 </option>
               ))}
             </select>
-            <Button type="submit" variant="outline">
-              {uk.finance.apply}
-            </Button>
-          </form>
+            {selected && (
+              <Link href="/" className="text-sm underline underline-offset-4">
+                {uk.company.reset}
+              </Link>
+            )}
+          </AutoFilterForm>
         }
       />
       <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

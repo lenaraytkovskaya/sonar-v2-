@@ -298,6 +298,7 @@ export function TaskActivitySection({
   counts,
   failures = [],
   activeOnly = false,
+  collapseTasks = false,
   description,
   emptyText = uk.tasks.empty,
 }: {
@@ -305,6 +306,7 @@ export function TaskActivitySection({
   counts: Count[];
   failures?: Task[];
   activeOnly?: boolean;
+  collapseTasks?: boolean;
   description?: string;
   emptyText?: string;
 }) {
@@ -344,56 +346,66 @@ export function TaskActivitySection({
           })}
         </ul>
       )}
-      <ul className="mt-5 divide-y divide-border border-t border-border">
-        {tasks
-          // Registry health checks repeat every few minutes; one line is enough.
-          .filter(
-            (task, index, all) =>
-              task.type !== 'system.registry_ping' ||
-              all.findIndex((other) => other.type === task.type) === index,
-          )
-          .slice(0, 5)
-          .map((task) => (
-            <li
-              key={task.id}
-              className="flex min-w-0 flex-wrap items-start justify-between gap-2 py-2.5 text-sm break-words"
-            >
-              <span className="min-w-0">
-                {name(task.type)}
-                {task.company_name && (
-                  <span className="text-muted-foreground">
-                    {' '}
-                    · {task.company_name}
-                  </span>
-                )}
-                {task.reason_uk && (
-                  <span className="block text-xs text-muted-foreground">
-                    <FriendlyError reason={task.reason_uk} />
-                  </span>
-                )}
-                {task.type === 'site.scan' && (
-                  <ScanSummary result={task.result} />
-                )}
-                {task.type === 'system.registry_ping' &&
-                  task.result?.approximate && (
-                    <span className="block text-xs text-muted-foreground">
-                      {uk.tasks.approximate}:{' '}
-                      {Object.entries(task.result.counts ?? {})
-                        .map(
-                          ([table, count]) =>
-                            `${uk.tasks.registryTables[table as keyof typeof uk.tasks.registryTables] ?? table}: ${count ?? uk.tasks.estimateUnavailable}`,
-                        )
-                        .join(' / ')}
+      <details open={collapseTasks ? undefined : true} className="mt-3">
+        <summary
+          className={
+            collapseTasks ? 'cursor-pointer text-sm text-accent' : 'hidden'
+          }
+        >
+          {uk.tasks.showTasks} ({tasks.length})
+        </summary>
+        <ul className="mt-5 divide-y divide-border border-t border-border">
+          {tasks
+            // Registry health checks repeat every few minutes; one line is enough.
+            .filter(
+              (task, index, all) =>
+                task.type !== 'system.registry_ping' ||
+                all.findIndex((other) => other.type === task.type) === index,
+            )
+            .slice(0, 5)
+            .map((task) => (
+              <li
+                key={task.id}
+                className="flex min-w-0 flex-wrap items-start justify-between gap-2 py-2.5 text-sm break-words"
+              >
+                <span className="min-w-0">
+                  {name(task.type)}
+                  {task.company_name && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      · {task.company_name}
                     </span>
                   )}
-              </span>
-              <StatusBadge status={task.status}>
-                {uk.tasks.status[task.status as keyof typeof uk.tasks.status] ??
-                  task.status}
-              </StatusBadge>
-            </li>
-          ))}
-      </ul>
+                  {task.reason_uk && (
+                    <span className="block text-xs text-muted-foreground">
+                      <FriendlyError reason={task.reason_uk} />
+                    </span>
+                  )}
+                  {task.type === 'site.scan' && (
+                    <ScanSummary result={task.result} />
+                  )}
+                  {task.type === 'system.registry_ping' &&
+                    task.result?.approximate && (
+                      <span className="block text-xs text-muted-foreground">
+                        {uk.tasks.approximate}:{' '}
+                        {Object.entries(task.result.counts ?? {})
+                          .map(
+                            ([table, count]) =>
+                              `${uk.tasks.registryTables[table as keyof typeof uk.tasks.registryTables] ?? table}: ${count ?? uk.tasks.estimateUnavailable}`,
+                          )
+                          .join(' / ')}
+                      </span>
+                    )}
+                </span>
+                <StatusBadge status={task.status}>
+                  {uk.tasks.status[
+                    task.status as keyof typeof uk.tasks.status
+                  ] ?? task.status}
+                </StatusBadge>
+              </li>
+            ))}
+        </ul>
+      </details>
       {failures.length > 0 && (
         <details className="mt-4 border-t border-border pt-3">
           <summary className="cursor-pointer text-sm text-muted-foreground">

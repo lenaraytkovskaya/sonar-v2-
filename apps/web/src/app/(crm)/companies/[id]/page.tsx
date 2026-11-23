@@ -13,6 +13,7 @@ import { uk } from '@/i18n/uk';
 import {
   Card,
   CompanyStatus,
+  PageHeader,
   scoreTone,
   StatusBadge,
 } from '@/components/shared';
@@ -437,17 +438,17 @@ export default async function Page({
       >
         ← {uk.company.back}
       </Link>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">
-              {c.name}
-            </h1>
+      <PageHeader
+        title={
+          <>
+            {c.name}{' '}
             <CompanyStatus
               status={c.status as keyof typeof uk.company.statuses}
             />
-          </div>
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+          </>
+        }
+        description={
+          <span className="inline-flex items-center gap-3">
             {[
               c.city,
               google?.primaryTypeDisplayName?.text ??
@@ -473,14 +474,16 @@ export default async function Page({
                 {website.domain}
               </a>
             )}
-          </p>
-        </div>
-        <SiteScan
-          companyId={id}
-          hasWebsite={!!c.website}
-          enrich={c.place_id.startsWith('manual:')}
-        />
-      </header>
+          </span>
+        }
+        actions={
+          <SiteScan
+            companyId={id}
+            hasWebsite={!!c.website}
+            enrich={c.place_id.startsWith('manual:')}
+          />
+        }
+      />
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Section title={uk.company.score}>
           {mainScore ? (

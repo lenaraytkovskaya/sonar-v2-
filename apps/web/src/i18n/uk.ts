@@ -1095,6 +1095,7 @@ export const uk = {
     page: 'Сторінка',
     total: 'Знайдено',
     noResults: 'Компаній за цими умовами немає.',
+    aiFilters: 'ШІ-фільтр',
     natural: 'Опишіть, які компанії знайти',
     suggest: 'Підібрати фільтри',
     contacts: 'Контакти та джерела',
@@ -1538,6 +1539,7 @@ export const uk = {
     },
   },
   tasks: {
+    showTasks: 'Показати задачі',
     workerStopped:
       'Фонові задачі не виконуються з {time}. Зверніться до адміністратора.',
     workerMissing:

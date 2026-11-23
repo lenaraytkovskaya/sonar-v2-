@@ -1,17 +1,11 @@
 'use client';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ProzorroSearch } from './prozorro-search';
 import { uk } from '@/i18n/uk';
-import { CompanyCard, type CompanyCardRow } from './company-card';
-import { CompanyTable } from './company-table';
 
-const shown = 6;
-
-/** The best-scored companies a campaign has collected, with a way to see them all. */
+/** A compact link to the campaign company list. */
 export function CampaignCompanies({ campaignId }: { campaignId: string }) {
   const [data, setData] = useState<{
-    companies: CompanyCardRow[];
     total: number;
   } | null>(null);
   const [error, setError] = useState(false);
@@ -32,52 +26,31 @@ export function CampaignCompanies({ campaignId }: { campaignId: string }) {
       });
     return () => controller.abort();
   }, [campaignId]);
-  const all = '/companies?campaignId=' + campaignId;
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-heading text-base font-bold">
-          {uk.campaign.companies}
-          {data && (
-            <span className="ml-2 rounded-full bg-chip px-2 text-sm font-medium">
-              {data.total}
-            </span>
-          )}
-        </h2>
-        {!!data?.total && (
-          <Link className="text-sm text-accent" href={all}>
-            {uk.campaign.allCompanies} →
-          </Link>
-        )}
-      </div>
-      <ProzorroSearch campaignId={campaignId} />
+    <div className="text-sm">
+      <CampaignCompaniesLink campaignId={campaignId} total={data?.total} />
       {error && (
-        <p role="alert" className="text-sm text-err">
+        <p role="alert" className="mt-2 text-err">
           {uk.tasks.error}
         </p>
       )}
-      {data && !data.total && (
-        <p className="text-sm text-muted-foreground">
-          {uk.campaign.noCompanies}
-        </p>
-      )}
-      {!!data?.companies.length && (
-        <div className="hidden md:block">
-          <CompanyTable
-            companies={data.companies.slice(0, shown)}
-            link={(id) => `/companies/${id}?campaignId=${campaignId}`}
-          />
-        </div>
-      )}
-      <div className="grid gap-3 sm:grid-cols-2 md:hidden">
-        {data?.companies.slice(0, shown).map((company) => (
-          <CompanyCard
-            key={company.id}
-            company={company}
-            link={(id) => `/companies/${id}?campaignId=${campaignId}`}
-          />
-        ))}
-      </div>
-    </section>
+    </div>
+  );
+}
+
+export function CampaignCompaniesLink({
+  campaignId,
+  total,
+}: {
+  campaignId: string;
+  total?: number;
+}) {
+  return (
+    <Link
+      className="text-accent hover:underline"
+      href={'/companies?campaign=' + campaignId}
+    >
+      {uk.campaign.companies}: {total ?? '…'} →
+    </Link>
   );
 }

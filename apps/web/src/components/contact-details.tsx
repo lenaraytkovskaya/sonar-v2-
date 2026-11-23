@@ -2,7 +2,6 @@
 import { useState } from 'react';
 import type { ContactDetails as Details } from '@sonar/db/forms';
 import { uk } from '@/i18n/uk';
-import { AiAssist } from './ai-assist';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Section } from './ui/layout';
@@ -71,10 +70,6 @@ export function ContactDetails({
                 onChange={(event) =>
                   setDetails({ ...details, [key]: event.target.value })
                 }
-              />
-              <AiAssist
-                text={details[key]}
-                onApply={(value) => setDetails({ ...details, [key]: value })}
               />
             </div>
           ),

@@ -1,12 +1,12 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import type { listFormMessages } from '@sonar/db/forms';
 import { uk } from '@/i18n/uk';
 import { cn } from '@/lib/utils';
 import { messageStatus } from '@/lib/outreach-labels';
-import { Card, StatusBadge } from './shared';
+import { Card, PageHeader, StatusBadge } from './shared';
 import { Button } from './ui/button';
 import { Callout, DetailList } from './ui/layout';
 import { LocalTime } from './local-time';
@@ -31,7 +31,14 @@ export function FormInbox({
   const router = useRouter();
   const [data, setData] = useState(initial);
   useEffect(() => setData(initial), [initial]);
-  const [filter, setFilter] = useState('');
+  const query = useSearchParams();
+  const filter = query.get('formStatus') ?? '';
+  const setFilter = (value: string) => {
+    const url = new URL(window.location.href);
+    if (value) url.searchParams.set('formStatus', value);
+    else url.searchParams.delete('formStatus');
+    window.history.replaceState(null, '', url);
+  };
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const busy = useRef(false);
@@ -86,14 +93,7 @@ export function FormInbox({
   };
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <h1
-        className={cn(
-          'shrink-0 font-heading text-2xl font-bold tracking-tight',
-          explicitSelection && 'hidden lg:block',
-        )}
-      >
-        {uk.pages.inbox.title}
-      </h1>
+      <PageHeader {...uk.pages.inbox} />
       {refreshError && (
         <p role="status" className="text-sm text-err">
           {uk.inbound.refreshError}
@@ -132,6 +132,15 @@ export function FormInbox({
               ))}
               <option value="replied">{uk.forms.replied}</option>
             </select>
+            {filter && (
+              <Button
+                variant="ghost"
+                className="px-0 underline underline-offset-4"
+                onClick={() => setFilter('')}
+              >
+                {uk.company.reset}
+              </Button>
+            )}
           </div>
           {!rows.length && (
             <p className="p-5 text-sm text-muted-foreground">
@@ -141,7 +150,7 @@ export function FormInbox({
           {rows.map((row) => (
             <Link
               key={row.id}
-              href={`/inbox?tab=forms&form=${row.id}`}
+              href={`/inbox?tab=forms&form=${row.id}${filter ? '&formStatus=' + encodeURIComponent(filter) : ''}`}
               scroll={false}
               aria-current={selectedId === row.id ? 'true' : undefined}
               className={cn(
@@ -183,7 +192,7 @@ export function FormInbox({
           )}
         >
           <Link
-            href="/inbox?tab=forms"
+            href={`/inbox?tab=forms${filter ? '&formStatus=' + encodeURIComponent(filter) : ''}`}
             className="mb-3 inline-flex min-h-9 items-center text-sm text-accent lg:hidden"
             scroll={false}
           >
