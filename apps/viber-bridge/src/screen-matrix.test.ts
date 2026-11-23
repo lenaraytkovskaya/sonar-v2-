@@ -264,6 +264,44 @@ describe('generated Viber screenshot matrix', () => {
     }
   });
 
+  it('confirms a linkified message whose underlined text OCR cannot read', () => {
+    const [bubble] = readFrame(frame(['1111 2222 3333']));
+    const unreadable = {
+      ...bubble!,
+      text: '',
+      ocrText: '',
+      contentHash: 'new',
+    };
+    const old = {
+      ...bubble!,
+      text: 'older',
+      ocrText: 'older',
+      contentHash: 'old',
+      messageTime: '12:00',
+      top: 100,
+      bottom: 150,
+    };
+    const send = (text: string, before: OutgoingBubble[]) =>
+      outgoingSliceConfirmed(
+        text,
+        slice(before),
+        slice([...before, unreadable]),
+        start,
+      );
+    expect(send('1111 2222 3333', [])).toBe(true);
+    expect(send('1111 2222 3333', [old])).toBe(true);
+    // Plain words must still be read, and an unchanged bubble is no evidence.
+    expect(send('hello there', [old])).toBe(false);
+    expect(
+      outgoingSliceConfirmed(
+        '1111 2222 3333',
+        slice([unreadable]),
+        slice([unreadable]),
+        start,
+      ),
+    ).toBe(false);
+  });
+
   it('requires a new occurrence for identical ok messages in the same minute', () => {
     const image = frame(['ok']);
     const before = readFrame(image);
