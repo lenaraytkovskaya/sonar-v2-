@@ -19,6 +19,7 @@ import { Card, PageHeader, StatusBadge } from './shared';
 import { useTasks } from './task-overview';
 import { BatchList } from './batch-list';
 import { CampaignCompanies } from './campaign-companies';
+import { ProzorroSearch } from './prozorro-search';
 import { runAiJob } from '@/lib/ai-job';
 import { CrudButton, CrudDialog } from './crud-dialog';
 import { CampaignFormFields } from './campaign-form-fields';
@@ -237,7 +238,7 @@ export function CampaignPanel({
   return (
     <>
       <PageHeader {...uk.pages.campaigns} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
         <Card className="min-w-0 space-y-3 p-4">
           <CrudButton
             disabled={pending}
@@ -286,48 +287,7 @@ export function CampaignPanel({
               <h2 className="font-heading text-lg font-bold">
                 {rows.find((row) => row.id === selectedId)?.name}
               </h2>
-              <CrudButton
-                action="edit"
-                disabled={pending}
-                onClick={() => {
-                  setMessage('');
-                  setOpen(true);
-                }}
-              >
-                {uk.crud.editCampaign}
-              </CrudButton>
-              <CampaignRunCard
-                campaignId={selectedId}
-                status={
-                  rows.find((row) => row.id === selectedId)?.status ?? 'draft'
-                }
-                pending={pending}
-                startDisabled={
-                  exhausted ||
-                  !form.cities.length ||
-                  !form.queries.length ||
-                  !campaignSchema.safeParse(form).success
-                }
-                startLabel={exhausted ? uk.google.exhausted : uk.campaign.start}
-                onStart={() => void act('start')}
-                onScore={() => void act('score')}
-                onChanged={async () => {
-                  setProgressVersion((value) => value + 1);
-                  await load();
-                }}
-              />
-              {!open && message && (
-                <div role="status">
-                  <Callout tone={messageTone}>{message}</Callout>
-                </div>
-              )}
-              <CampaignRunning
-                key={`running:${selectedId}`}
-                campaignId={selectedId}
-                pollMs={pollMs}
-                refreshToken={progressVersion}
-              />
-              <div className="space-y-2 text-sm text-muted-foreground">
+              <section className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   <span className="font-medium text-foreground">
                     {uk.campaign.cities}:
@@ -366,8 +326,66 @@ export function CampaignPanel({
                         )}
                   </Button>
                 )}
-              </div>
+                <p>
+                  <span className="font-medium text-foreground">
+                    {uk.campaign.product}:
+                  </span>{' '}
+                  {products.find(
+                    (product) =>
+                      product.id ===
+                      rows.find((row) => row.id === selectedId)?.product_id,
+                  )?.name ?? '—'}
+                </p>
+                <CrudButton
+                  action="edit"
+                  disabled={pending}
+                  onClick={() => {
+                    setMessage('');
+                    setOpen(true);
+                  }}
+                >
+                  {uk.crud.editCampaign}
+                </CrudButton>
+              </section>
+              <CampaignRunCard
+                campaignId={selectedId}
+                status={
+                  rows.find((row) => row.id === selectedId)?.status ?? 'draft'
+                }
+                pending={pending}
+                startDisabled={
+                  exhausted ||
+                  !form.cities.length ||
+                  !form.queries.length ||
+                  !campaignSchema.safeParse(form).success
+                }
+                startLabel={exhausted ? uk.google.exhausted : uk.campaign.start}
+                onStart={() => void act('start')}
+                onScore={() => void act('score')}
+                onChanged={async () => {
+                  setProgressVersion((value) => value + 1);
+                  await load();
+                }}
+              />
+              {!open && message && (
+                <div role="status">
+                  <Callout tone={messageTone}>{message}</Callout>
+                </div>
+              )}
+              <CampaignRunning
+                key={`running:${selectedId}`}
+                campaignId={selectedId}
+                pollMs={pollMs}
+                refreshToken={progressVersion}
+              />
               <BatchList key={selectedId} campaignId={selectedId} />
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+                <CampaignCompanies
+                  key={`companies:${selectedId}`}
+                  campaignId={selectedId}
+                />
+                <ProzorroSearch campaignId={selectedId} />
+              </div>
             </>
           ) : (
             <p>{uk.crud.selectCampaign}</p>
@@ -461,11 +479,6 @@ export function CampaignPanel({
           )}
         </form>
       </CrudDialog>
-      {selectedId && (
-        <Card className="mt-4 p-4">
-          <CampaignCompanies key={selectedId} campaignId={selectedId} />
-        </Card>
-      )}
     </>
   );
 }

@@ -90,6 +90,7 @@ export function CampaignRunning({
       )}
       {data ? (
         <TaskActivitySection
+          collapseTasks
           tasks={data.tasks}
           counts={data.counts}
           failures={[...data.failures, ...data.olderFailures]}

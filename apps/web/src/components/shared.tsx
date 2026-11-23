@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { statusTone } from '@/lib/status-tone';
 export { Card } from '@/components/ui/card';
+export { PageHeader } from './page-header';
 /** Score bands: 70+ strong lead, 40–70 worth a look, below 40 weak. */
 export function scoreTone(value: number | null) {
   if (value === null) return { text: 'text-muted-foreground', bar: 'bg-chip' };
@@ -55,32 +56,6 @@ export function CompanyStatus({
 }
 export function StatusPill({ status }: { status: keyof typeof uk.status }) {
   return <StatusBadge status={status}>{uk.status[status]}</StatusBadge>;
-}
-/** Page title, one line of description and the page's main action on the right (DESIGN.md §1). */
-export function PageHeader({
-  title,
-  description,
-  actions,
-}: {
-  title: string;
-  description: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div className="min-w-0">
-        <h1 className="font-heading text-2xl font-bold tracking-tight">
-          {title}
-        </h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          {description}
-        </p>
-      </div>
-      {actions && (
-        <div className="flex flex-wrap items-center gap-2">{actions}</div>
-      )}
-    </header>
-  );
 }
 export function EmptyState({
   icon,

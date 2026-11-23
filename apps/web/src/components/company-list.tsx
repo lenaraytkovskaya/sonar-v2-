@@ -1,7 +1,11 @@
 'use client';
-import { startTransition, useEffect, useMemo, useState } from 'react';
-import { useUrlTab } from './use-url-tab';
-import { companyFiltersSchema, type CompanyFilters } from '@sonar/core';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import {
+  companyFiltersSchema,
+  filtersFromParams,
+  type CompanyFilters,
+} from '@sonar/core';
 import { uk } from '@/i18n/uk';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -29,20 +33,22 @@ export function CompanyList({
 }: {
   initialFilters?: CompanyFilters;
 }) {
-  const { active: status, select: selectStatus } = useUrlTab(
-    ['', ...Object.keys(uk.company.statuses)],
-    '',
-    'status',
-  );
-  const [draft, setDraft] = useState<CompanyFilters>({
-      ...initialFilters,
-      status: (status as CompanyFilters['status']) || undefined,
-    }),
-    [appliedFilters, setFilters] = useState<CompanyFilters>({
-      q: initialFilters.q,
-      campaignId: initialFilters.campaignId,
-    }),
-    [pagination, setPagination] = useState({ status, page: 1 }),
+  const query = useSearchParams();
+  const filters = useMemo(() => {
+    const values = new URLSearchParams(query.toString());
+    if (values.has('campaign'))
+      values.set('campaignId', values.get('campaign')!);
+    try {
+      return filtersFromParams(values);
+    } catch {
+      return {};
+    }
+  }, [query]);
+  const filterKey = params(filters).toString();
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const [draft, setDraft] = useState<CompanyFilters>(initialFilters),
+    [pagination, setPagination] = useState({ key: filterKey, page: 1 }),
     [data, setData] = useState<{
       companies: Row[];
       total: number;
@@ -56,22 +62,13 @@ export function CompanyList({
     [preview, setPreview] = useState<CompanyFilters | null>(null),
     [pending, setPending] = useState(false),
     [loading, setLoading] = useState(false),
-    [showFilters, setShowFilters] = useState(false);
-  const page = pagination.status === status ? pagination.page : 1;
-  const setPage = (page: number) => setPagination({ status, page });
-  const filters = useMemo(
-    () => ({
-      ...appliedFilters,
-      status: (status as CompanyFilters['status']) || undefined,
-    }),
-    [appliedFilters, status],
-  );
+    [showAi, setShowAi] = useState(false);
+  const page = pagination.key === filterKey ? pagination.page : 1;
+  const setPage = (page: number) => setPagination({ key: filterKey, page });
   useEffect(() => {
-    setDraft((previous) => ({
-      ...previous,
-      status: (status as CompanyFilters['status']) || undefined,
-    }));
-  }, [status]);
+    clearTimeout(timer.current);
+    setDraft(filters);
+  }, [filters]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -118,8 +115,13 @@ export function CompanyList({
     key: keyof CompanyFilters,
     value: CompanyFilters[keyof CompanyFilters],
   ) => {
-    setDraft({ ...draft, [key]: value });
+    const next = { ...draft, [key]: value };
+    setDraft(next);
     setPreview(null);
+    clearTimeout(timer.current);
+    if (['q', 'city', 'minRating', 'minScore'].includes(key))
+      timer.current = setTimeout(() => apply(next), 400);
+    else apply(next);
   };
   const suggest = async () => {
     setPending(true);
@@ -140,27 +142,24 @@ export function CompanyList({
     }
   };
   const apply = (f: CompanyFilters) => {
-    const next = companyFiltersSchema.parse(f);
-    const url = new URL(window.location.href);
-    for (const key of ['q', 'campaignId', 'status'] as const) {
-      const value = next[key];
-      if (value) url.searchParams.set(key, String(value));
-      else url.searchParams.delete(key);
+    clearTimeout(timer.current);
+    const parsed = companyFiltersSchema.safeParse(f);
+    if (!parsed.success) {
+      setError(uk.ai.invalid);
+      return;
     }
+    setError('');
+    const next = parsed.data;
+    const url = new URL(window.location.href);
+    for (const key of Object.keys(companyFiltersSchema.shape))
+      url.searchParams.delete(key);
+    url.searchParams.delete('campaign');
+    url.searchParams.delete('page');
+    for (const [key, value] of params(next))
+      url.searchParams.set(key === 'campaignId' ? 'campaign' : key, value);
     window.history.replaceState(null, '', url);
-    startTransition(() => {
-      selectStatus(next.status ?? '');
-      setFilters((previous) => {
-        // Status belongs to the URL; keep unchanged filters stable for the fetch effect.
-        const applied = { ...next, status: undefined };
-        return (
-          Object.keys({ ...previous, ...applied }) as (keyof CompanyFilters)[]
-        ).every((key) => previous[key] === applied[key])
-          ? previous
-          : applied;
-      });
-      setPagination({ status: next.status ?? '', page: 1 });
-    });
+    setDraft(next);
+    setPagination({ key: params(next).toString(), page: 1 });
   };
   const link = (id: string) =>
     '/companies/' +
@@ -191,13 +190,13 @@ export function CompanyList({
         />
         <Button
           variant="outline"
-          aria-expanded={showFilters}
-          onClick={() => setShowFilters(!showFilters)}
+          aria-expanded={showAi}
+          onClick={() => setShowAi(!showAi)}
         >
-          {showFilters ? uk.company.hideFilters : uk.company.showFilters}
+          {uk.company.aiFilters}
           <ChevronDown
             aria-hidden="true"
-            className={showFilters ? 'rotate-180' : ''}
+            className={showAi ? 'rotate-180' : ''}
           />
         </Button>
         <a
@@ -213,7 +212,7 @@ export function CompanyList({
           {uk.company.total}: {loading ? '…' : data.total}
         </span>
       </div>
-      {showFilters && (
+      {showAi && (
         <Card className="mb-3 space-y-3 p-4">
           <label className="block">
             {uk.company.natural}
@@ -285,153 +284,102 @@ export function CompanyList({
               </Button>
             </div>
           )}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
-            <label>
-              {uk.company.city}
-              <Input
-                value={draft.city ?? ''}
-                maxLength={200}
-                onChange={(e) => update('city', e.target.value)}
-              />
-            </label>
-            <label>
-              {uk.company.minRating}
-              <Input
-                type="number"
-                min="0"
-                max="5"
-                step="0.1"
-                value={draft.minRating ?? ''}
-                onChange={(e) =>
-                  update(
-                    'minRating',
-                    e.target.value === '' ? undefined : e.target.valueAsNumber,
-                  )
-                }
-              />
-            </label>
-            <label>
-              {uk.company.minScore}
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-                value={draft.minScore ?? ''}
-                onChange={(e) =>
-                  update(
-                    'minScore',
-                    e.target.value === '' ? undefined : e.target.valueAsNumber,
-                  )
-                }
-              />
-            </label>
-            <label>
-              {uk.company.sort}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={draft.sort ?? 'quality'}
-                onChange={(e) =>
-                  update('sort', e.target.value as CompanyFilters['sort'])
-                }
-              >
-                <option value="quality">{uk.company.qualityDescending}</option>
-                <option value="score">{uk.company.scoreDescending}</option>
-                <option value="newest">{uk.company.newest}</option>
-              </select>
-            </label>
-            <label>
-              {uk.company.campaign}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={draft.campaignId ?? ''}
-                onChange={(e) =>
-                  update('campaignId', e.target.value || undefined)
-                }
-              >
-                <option value="">{uk.company.all}</option>
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {uk.company.status}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={draft.status ?? ''}
-                onChange={(e) =>
-                  update(
-                    'status',
-                    (e.target.value || undefined) as CompanyFilters['status'],
-                  )
-                }
-              >
-                <option value="">{uk.company.all}</option>
-                {Object.entries(uk.company.statuses).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {uk.company.platforms}
-              <select
-                className="min-h-9 w-full rounded-lg border border-border bg-surface p-2"
-                value={draft.platforms ?? 'all'}
-                onChange={(e) =>
-                  update(
-                    'platforms',
-                    e.target.value as CompanyFilters['platforms'],
-                  )
-                }
-              >
-                {Object.entries(uk.company.platformOptions).map(
-                  ([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ),
-                )}
-              </select>
-            </label>
-            <div className="flex items-center gap-5">
-              {(['hasWebsite', 'hasPhone'] as const).map((key) => (
-                <label className="flex min-h-9 items-center gap-2" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={draft[key] === true}
-                    onChange={(e) =>
-                      update(key, e.target.checked ? true : undefined)
-                    }
-                  />
-                  {uk.company[key]}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              disabled={!companyFiltersSchema.safeParse(draft).success}
-              onClick={() => apply(draft)}
-            >
-              {uk.company.apply}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDraft({});
-                apply({});
-                setPreview(null);
-              }}
-            >
-              {uk.company.reset}
-            </Button>
-          </div>
         </Card>
+      )}
+      <div className="mb-3 grid items-end gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <label>
+          {uk.company.city}
+          <Input
+            value={draft.city ?? ''}
+            maxLength={200}
+            onChange={(e) => update('city', e.target.value)}
+          />
+        </label>
+        <label>
+          {uk.company.minRating}
+          <Input
+            type="number"
+            min="0"
+            max="5"
+            step="0.1"
+            value={draft.minRating ?? ''}
+            onChange={(e) =>
+              update(
+                'minRating',
+                e.target.value === '' ? undefined : e.target.valueAsNumber,
+              )
+            }
+          />
+        </label>
+        <label>
+          {uk.company.minScore}
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="0.1"
+            value={draft.minScore ?? ''}
+            onChange={(e) =>
+              update(
+                'minScore',
+                e.target.value === '' ? undefined : e.target.valueAsNumber,
+              )
+            }
+          />
+        </label>
+        <label>
+          {uk.company.sort}
+          <select
+            className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+            value={draft.sort ?? 'quality'}
+            onChange={(e) =>
+              update('sort', e.target.value as CompanyFilters['sort'])
+            }
+          >
+            <option value="quality">{uk.company.qualityDescending}</option>
+            <option value="score">{uk.company.scoreDescending}</option>
+            <option value="newest">{uk.company.newest}</option>
+          </select>
+        </label>
+        <label>
+          {uk.company.platforms}
+          <select
+            className="min-h-11 w-full rounded-lg border border-border bg-surface p-2"
+            value={draft.platforms ?? 'all'}
+            onChange={(e) =>
+              update('platforms', e.target.value as CompanyFilters['platforms'])
+            }
+          >
+            {Object.entries(uk.company.platformOptions).map(
+              ([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        {(['hasWebsite', 'hasPhone'] as const).map((key) => (
+          <label className="flex min-h-11 items-center gap-2" key={key}>
+            <input
+              type="checkbox"
+              checked={draft[key] === true}
+              onChange={(e) => update(key, e.target.checked ? true : undefined)}
+            />
+            {uk.company[key]}
+          </label>
+        ))}
+      </div>
+      {Object.values(filters).some(
+        (value) => value !== undefined && value !== '',
+      ) && (
+        <Button
+          variant="ghost"
+          className="mb-3 px-0 underline underline-offset-4"
+          onClick={() => apply({})}
+        >
+          {uk.company.reset}
+        </Button>
       )}
       {campaigns.length > 0 && (
         <div
@@ -453,7 +401,7 @@ export function CompanyList({
                 }
                 onClick={() => {
                   const f = {
-                    ...filters,
+                    ...draft,
                     campaignId: campaign.id || undefined,
                   };
                   setDraft(f);
@@ -484,7 +432,7 @@ export function CompanyList({
             }
             onClick={() => {
               const f = {
-                ...filters,
+                ...draft,
                 status: (status as CompanyFilters['status']) || undefined,
               };
               setDraft((previous) => ({ ...previous, status: f.status }));

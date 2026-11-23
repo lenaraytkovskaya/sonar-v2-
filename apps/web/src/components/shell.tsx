@@ -32,6 +32,7 @@ import { Button } from '@/components/ui/button';
 import { MessageNotifier } from './message-notifier';
 import { SocialSessionNotices } from './social-session-notices';
 import { BuildVersion } from './build-version';
+import { PageHeaderContext } from './page-header';
 const links = [
   ['/', 'overview', LayoutDashboard],
   ['/campaigns', 'campaigns', Megaphone],
@@ -93,6 +94,10 @@ export function Shell({
     return () => viewport.removeEventListener('resize', update);
   }, [inbox]);
   const [open, setOpen] = useState(false);
+  const [titleTarget, setTitleTarget] = useState<HTMLDivElement | null>(null);
+  const [actionsTarget, setActionsTarget] = useState<HTMLDivElement | null>(
+    null,
+  );
   const current = links.find(([href]) =>
     href === '/' ? path === '/' : path === href || path.startsWith(href + '/'),
   )?.[1];
@@ -173,11 +178,8 @@ export function Shell({
               inbox && 'min-h-0 flex-1 overflow-hidden md:min-h-0',
             )}
           >
-            <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
-              <p className="hidden text-sm font-medium md:block">
-                {current ? uk.pages[current].title : ''}
-              </p>
-              <div className="flex items-center gap-3 md:hidden">
+            <header className="grid min-h-16 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-border px-4 py-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:px-6">
+              <div className="flex items-center md:hidden">
                 <Dialog.Root open={open} onOpenChange={setOpen}>
                   <Dialog.Trigger asChild>
                     <Button
@@ -214,42 +216,53 @@ export function Shell({
                     </Dialog.Content>
                   </Dialog.Portal>
                 </Dialog.Root>
-                <Logo />
               </div>
-              <Dropdown.Root>
-                <Dropdown.Trigger asChild>
-                  <Button
-                    variant="ghost"
-                    aria-label={uk.userMenu}
-                    className="max-w-40 md:max-w-64"
-                  >
-                    <span className="truncate">{name}</span>
-                    <ChevronDown />
-                  </Button>
-                </Dropdown.Trigger>
-                <Dropdown.Portal>
-                  <Dropdown.Content
-                    align="end"
-                    sideOffset={8}
-                    className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-                  >
-                    <form action={logout}>
-                      <Dropdown.Item
-                        asChild
-                        onSelect={(event) => event.preventDefault()}
-                      >
-                        <button
-                          type="submit"
-                          className="flex min-h-9 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+              <div className="group min-w-0 md:col-start-1 md:row-start-1">
+                <div ref={setTitleTarget} />
+                <p className="truncate text-sm font-medium group-has-[h1]:hidden">
+                  {current ? uk.pages[current].title : ''}
+                </p>
+              </div>
+              <div
+                ref={setActionsTarget}
+                className="col-span-3 row-start-2 flex min-w-0 max-w-full flex-wrap items-center gap-2 pt-2 empty:hidden md:col-span-1 md:col-start-2 md:row-start-1 md:pt-0 [&_button]:max-w-full [&_form]:max-w-full [&_form]:min-w-0 [&_select]:max-w-full"
+              />
+              <div className="col-start-3 row-start-1 min-w-0">
+                <Dropdown.Root>
+                  <Dropdown.Trigger asChild>
+                    <Button
+                      variant="ghost"
+                      aria-label={uk.userMenu}
+                      className="max-w-24 md:max-w-40"
+                    >
+                      <span className="truncate">{name}</span>
+                      <ChevronDown />
+                    </Button>
+                  </Dropdown.Trigger>
+                  <Dropdown.Portal>
+                    <Dropdown.Content
+                      align="end"
+                      sideOffset={8}
+                      className="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
+                    >
+                      <form action={logout}>
+                        <Dropdown.Item
+                          asChild
+                          onSelect={(event) => event.preventDefault()}
                         >
-                          <LogOut aria-hidden="true" className="size-4" />
-                          {uk.logout}
-                        </button>
-                      </Dropdown.Item>
-                    </form>
-                  </Dropdown.Content>
-                </Dropdown.Portal>
-              </Dropdown.Root>
+                          <button
+                            type="submit"
+                            className="flex min-h-9 w-full items-center gap-3 rounded-lg px-3 text-sm hover:bg-chip"
+                          >
+                            <LogOut aria-hidden="true" className="size-4" />
+                            {uk.logout}
+                          </button>
+                        </Dropdown.Item>
+                      </form>
+                    </Dropdown.Content>
+                  </Dropdown.Portal>
+                </Dropdown.Root>
+              </div>
             </header>
             <WorkerStatus />
             <main
@@ -261,7 +274,11 @@ export function Shell({
               )}
             >
               <SocialSessionNotices />
-              {children}
+              <PageHeaderContext.Provider
+                value={{ title: titleTarget, actions: actionsTarget }}
+              >
+                {children}
+              </PageHeaderContext.Provider>
             </main>
           </div>
         </div>

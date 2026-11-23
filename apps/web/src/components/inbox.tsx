@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { getInbox } from '@sonar/db/outreach';
 import type { getConversationChat } from '@sonar/db/inbound';
-import { StatusBadge } from '@/components/shared';
+import { AutoFilterForm } from './auto-filter-form';
+import { PageHeader, StatusBadge } from '@/components/shared';
 import { uk } from '@/i18n/uk';
 import {
   inboxChannels as channels,
@@ -21,7 +22,6 @@ import { splitEmailHistory } from '@/lib/email-display';
 import { Card } from '@/components/shared';
 import { ConversationChat } from '@/components/conversation-chat';
 import { LocalTime } from '@/components/local-time';
-import { Button } from '@/components/ui/button';
 import { InboxModeTabs } from './inbox-mode-tabs';
 import { ChannelIcon } from './channel-icon';
 export function Inbox({
@@ -74,15 +74,16 @@ export function Inbox({
     'min-h-11 rounded-lg border border-border bg-surface px-3 text-sm';
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
+      <PageHeader {...uk.pages.inbox} />
       <div className={cn('shrink-0', explicitSelection && 'hidden lg:block')}>
-        <h1 className="font-heading text-2xl font-bold tracking-tight">
-          {uk.pages.inbox.title}
-        </h1>
         <details className="mt-2 max-h-[calc(var(--inbox-height,100dvh)*0.35)] overflow-y-auto">
           <summary className="cursor-pointer text-sm text-muted-foreground">
             {uk.inbound.filters}
           </summary>
-          <form className="mt-2 grid grid-cols-2 gap-2 lg:flex lg:flex-wrap [&>select]:min-w-0 [&>select]:max-w-full">
+          <AutoFilterForm
+            key={params.toString()}
+            className="mt-2 grid grid-cols-2 gap-2 lg:flex lg:flex-wrap [&>select]:min-w-0 [&>select]:max-w-full"
+          >
             <select
               aria-label={uk.company.campaign}
               name="campaignId"
@@ -146,8 +147,15 @@ export function Inbox({
               />
               {uk.inbound.unread}
             </label>
-            <Button type="submit">{uk.company.apply}</Button>
-          </form>
+            {params.size > 0 && (
+              <Link
+                href="/inbox"
+                className="self-center text-sm underline underline-offset-4"
+              >
+                {uk.company.reset}
+              </Link>
+            )}
+          </AutoFilterForm>
         </details>
       </div>
       {error && (

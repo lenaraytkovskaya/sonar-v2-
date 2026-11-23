@@ -16,7 +16,7 @@ export function CrudButton({
   return (
     <Button
       type="button"
-      variant="outline"
+      variant={action === 'add' ? 'default' : 'outline'}
       aria-haspopup="dialog"
       className={cn('min-h-11', className)}
       {...props}

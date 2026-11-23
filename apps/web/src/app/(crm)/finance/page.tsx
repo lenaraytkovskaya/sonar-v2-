@@ -1,6 +1,7 @@
 import { Card, PageHeader } from '@/components/shared';
 import { InfoTip } from '@/components/ui/layout';
-import { Button } from '@/components/ui/button';
+import Link from 'next/link';
+import { AutoFilterForm } from '@/components/auto-filter-form';
 import { uk } from '@/i18n/uk';
 import { ManualExpenses } from '@/components/manual-expenses';
 const money = (value: number | null) =>
@@ -42,7 +43,10 @@ export default async function Page({
       <PageHeader
         {...uk.pages.finance}
         actions={
-          <form className="flex flex-wrap items-center gap-2">
+          <AutoFilterForm
+            key={selected}
+            className="flex flex-wrap items-center gap-2"
+          >
             <input
               aria-label={t.month}
               className="min-h-9 rounded-lg border border-border bg-surface px-3 text-sm shadow-xs"
@@ -51,11 +55,16 @@ export default async function Page({
               defaultValue={data.month}
               required
             />
-            <Button type="submit" variant="outline">
-              {t.apply}
-            </Button>
+            {month && (
+              <Link
+                href="/finance"
+                className="text-sm underline underline-offset-4"
+              >
+                {uk.company.reset}
+              </Link>
+            )}
             <InfoTip>{t.periodHint}</InfoTip>
-          </form>
+          </AutoFilterForm>
         }
       />
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
