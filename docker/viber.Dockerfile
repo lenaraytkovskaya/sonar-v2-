@@ -5,6 +5,7 @@ COPY apps/viber-bridge/tsconfig.json ./apps/viber-bridge/tsconfig.json
 COPY apps/viber-bridge/package.json ./apps/viber-bridge/package.json
 COPY apps/viber-bridge/src/index.ts ./apps/viber-bridge/src/index.ts
 COPY apps/viber-bridge/src/database.ts ./apps/viber-bridge/src/database.ts
+COPY apps/viber-bridge/src/desktop-queue.ts ./apps/viber-bridge/src/desktop-queue.ts
 COPY apps/viber-bridge/src/missing-key.ts ./apps/viber-bridge/src/missing-key.ts
 COPY apps/viber-bridge/src/screen.ts ./apps/viber-bridge/src/screen.ts
 COPY apps/viber-bridge/src/send.ts ./apps/viber-bridge/src/send.ts
