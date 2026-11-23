@@ -305,7 +305,8 @@ export function messageBubbleRegions(
         // A banner (e.g. "not in your contact list") spans the whole chat and is not a message.
         if (
           write < 1500 ||
-          boxWidth < 100 ||
+          // A three-letter message is only ~80px wide, so keep the minimum small.
+          boxWidth < 60 ||
           boxHeight < 28 ||
           boxWidth >= chatWidth * 0.9 ||
           // Touching the top edge of the scanned area means a banner under the chat header.
