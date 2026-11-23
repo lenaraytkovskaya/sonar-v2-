@@ -112,6 +112,15 @@ export function matchesOutgoingText(
   return textSimilarity(a, b) >= SEND_TEXT_SIMILARITY;
 }
 
+/** Viber underlines phone numbers, URLs and e-mails; OCR often reads nothing from that text. */
+export function unreadableLink(expected: string, seen: string) {
+  return (
+    /\d[\d\s().-]{5,}\d|https?:\/\/|www\.|\S+@\S+\.[a-z]{2,}|\b[a-z0-9-]+\.[a-z]{2,}\b/iu.test(
+      expected,
+    ) && normalizeOcr(seen).length < normalizeOcr(expected).length * 0.4
+  );
+}
+
 export function outgoingSliceConfirmed(
   expected: string,
   before: ChatSlice,
@@ -141,7 +150,10 @@ export function outgoingSliceConfirmed(
       newest.status === 'sent' ||
       (after.notes && newest.status === 'unknown')
     ) ||
-    !matchesOutgoingText(expected, newest.text, newest.clipped) ||
+    !(
+      matchesOutgoingText(expected, newest.text, newest.clipped) ||
+      unreadableLink(expected, newest.text)
+    ) ||
     (newest.clipped &&
       (!newest.prefixText ||
         !matchesOutgoingText(
@@ -190,7 +202,8 @@ export function outgoingSliceConfirmed(
     return false;
   return (
     before.bubbles.length === 0 ||
-    (normalizeOcr(newest.ocrText ?? newest.text).length > 4 &&
+    ((normalizeOcr(newest.ocrText ?? newest.text).length > 4 ||
+      unreadableLink(expected, newest.ocrText ?? newest.text)) &&
       before.bubbles.every((bubble) => !same(bubble, newest)))
   );
 }
