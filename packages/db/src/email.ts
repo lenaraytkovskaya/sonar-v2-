@@ -1937,7 +1937,10 @@ export async function sendEmailMessage(
             [
               messageId,
               reason,
-              code === 'session_invalid' || code === 'rate_limit',
+              code === 'session_invalid' ||
+                code === 'rate_limit' ||
+                (code === 'delivery_uncertain' &&
+                  account.channel === 'facebook'),
             ],
           );
         });

@@ -58,6 +58,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             body: '{}',
           });
         if (options.navigationFailure) return route.abort('failed');
+        if (url.pathname === '/failed-script')
+          return route.abort('connectionrefused');
         if (options.recoverViaHome && url.pathname === '/api/graphql')
           return route.fulfill({
             status: Number(
@@ -109,7 +111,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                   (request) => request === `${url.hostname}${url.pathname}`,
                 ).length === 1) ||
               (options.delayedSplash && !url.searchParams.has('loaded'))
-                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.stalledNavigation ? '<script defer src="/stalled-script"></script>' : ''}${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
+                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.failedScript ? '<script src="/failed-script"></script>' : ''}${options.stalledNavigation ? '<script defer src="/stalled-script"></script>' : ''}${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
                 : options.capturedMenu
                   ? capturedMenu +
                     '<nav><a href="/direct/inbox/">Inbox</a></nav>'
@@ -615,6 +617,36 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           ),
         ).toHaveLength(2);
         expect(f.requests.at(-1)).toBe('www.instagram.com/');
+      } finally {
+        await f.close();
+      }
+    });
+    it('captures splash network failures without retaining URLs or arbitrary errors', async () => {
+      const f = await fixture({
+        splash: true,
+        failedScript: true,
+        timeoutMs: 120,
+      });
+      try {
+        await expect(f.send()).rejects.toMatchObject({ screen: 'splash' });
+        expect(f.persistFailureShot).toHaveBeenCalledWith(
+          'send',
+          expect.objectContaining({
+            dom: expect.objectContaining({
+              navigation: expect.objectContaining({
+                mode: 'worker_context',
+                viewport: { width: 1280, height: 720 },
+                network: expect.arrayContaining([
+                  { resource: 'script', error: 'ERR_CONNECTION_REFUSED' },
+                ]),
+              }),
+            }),
+          }),
+        );
+        expect(JSON.stringify(f.persistFailureShot.mock.calls)).not.toContain(
+          '/failed-script',
+        );
+        expect(f.mark).not.toHaveBeenCalled();
       } finally {
         await f.close();
       }

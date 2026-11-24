@@ -57,6 +57,14 @@ export type SocialBrowserSession = {
     proxyPublicIpCheckedAt?: string;
     persistProxyPublicIp?: (ip: string, checkedAt: string) => Promise<void>;
   };
+const pageDiagnostics = new WeakMap<
+  Page,
+  {
+    mode: string;
+    configuredViewport: { width: number; height: number } | null;
+    network: { resource: string; status?: number; error?: string }[];
+  }
+>();
 export type FailureShotKind = 'check' | 'keepalive' | 'inbox' | 'send';
 export async function captureFailureShot(
   page: Page,
@@ -80,6 +88,7 @@ export async function captureFailureShot(
         navigation: {
           ...(await page.evaluate(instagramLoadingState).catch(() => ({}))),
           waitedSeconds: elapsedMs / 1000,
+          ...pageDiagnostics.get(page),
         },
       });
     const path = new URL(page.url()).pathname.slice(0, 500);
@@ -685,6 +694,9 @@ function instagramLoadingState() {
             visible(node),
         )));
   return {
+    viewport: { width: innerWidth, height: innerHeight },
+    hidden: document.hidden,
+    readyState: document.readyState,
     splash,
     splashElement,
     logo,
@@ -2417,6 +2429,32 @@ export function createSocialSendBrowser(
         throw error;
       }
       page.setDefaultTimeout(timeoutMs);
+      // Attach before the first request; never retain request URLs or raw errors.
+      const diagnostic = {
+        mode: profileMode ? 'persistent_profile_cdp' : 'worker_context',
+        configuredViewport: page.viewportSize?.() ?? null,
+        network: [] as { resource: string; status?: number; error?: string }[],
+      };
+      pageDiagnostics.set(page, diagnostic);
+      const record = (entry: (typeof diagnostic.network)[number]) => {
+        diagnostic.network.push(entry);
+        if (diagnostic.network.length > 12) diagnostic.network.shift();
+      };
+      page.on('requestfailed', (request) =>
+        record({
+          resource: request.resourceType(),
+          error:
+            /\bERR_[A-Z_]+\b/.exec(request.failure()?.errorText ?? '')?.[0] ??
+            'request_failed',
+        }),
+      );
+      page.on('response', (response) => {
+        if (response.status() >= 400)
+          record({
+            resource: response.request().resourceType(),
+            status: response.status(),
+          });
+      });
       const started = Date.now();
       try {
         if (session.persistProxyPublicIp) {
@@ -2467,6 +2505,32 @@ export function createSocialSendBrowser(
               failureShotCaptured?: boolean;
             }
           | undefined;
+        if (
+          account.channel === 'instagram' &&
+          detail?.reasonUk &&
+          'screen' in (error as object)
+        ) {
+          const at = new URL(page.url());
+          const urlPattern =
+            at.pathname === '/' ||
+            /^\/direct\/(?:inbox|requests)\/?$/.test(at.pathname)
+              ? at.pathname
+              : '/<id>/';
+          const observedTitle = await page.title().catch(() => '');
+          const title = /^Instagram$/i.test(observedTitle)
+            ? 'Instagram'
+            : /Instagram/i.test(observedTitle)
+              ? 'contains_instagram'
+              : observedTitle
+                ? 'other_redacted'
+                : 'empty';
+          const last = diagnostic.network.at(-1);
+          const network = last
+            ? `${last.resource}:${last.error ?? last.status}`
+            : 'none_observed';
+          detail.reasonUk += ` [url=${urlPattern}; title=${title}; mode=${diagnostic.mode}; network=${network}]`;
+          if (error instanceof Error) error.message = detail.reasonUk;
+        }
         const phase =
           detail?.stage ??
           detail?.diagnostic?.stage ??

@@ -174,6 +174,97 @@ it.skipIf(!enabled)(
     ).toBe(3);
   },
 );
+it
+  .skipIf(!enabled)
+  .each([
+    'failed',
+    'queued',
+    'ambiguous-local',
+    'ambiguous-provider',
+    'outside-window',
+    'unknown-date',
+    'other-thread',
+    'other-body',
+    'other-account',
+    'unmarked',
+  ])('reconciles a marked outgoing observation safely: %s', async (mode) => {
+  const id = await account();
+  const v = (
+    await db.sonarPool.query(
+      "insert into conversations(channel,account_id,provider_thread_id,peer_value) values('social',$1,'900000000000001',$2) returning id",
+      [id, peer],
+    )
+  ).rows[0];
+  const localAccount = mode === 'other-account' ? await account() : id;
+  const localConversation = ['other-thread', 'other-account'].includes(mode)
+    ? (
+        await db.sonarPool.query(
+          "insert into conversations(channel,account_id,provider_thread_id,peer_value) values('social',$1,'900000000000002',$2) returning id",
+          [localAccount, peer],
+        )
+      ).rows[0].id
+    : v.id;
+  const attempted =
+    mode === 'outside-window' ? '2026-11-15T01:00:00Z' : '2026-11-15T02:42:00Z';
+  const localIds: string[] = [];
+  for (let i = 0; i < (mode === 'ambiguous-local' ? 2 : 1); i++) {
+    const row = (
+      await db.sonarPool.query(
+        `insert into messages(conversation_id,account_id,channel,direction,source,to_value,subject,body,status,idempotency_key,first_attempt_at)
+         values($1,$2,'social','out','manual',$3,'',$7,$4,$5,$6) returning id`,
+        [
+          localConversation,
+          localAccount,
+          peer,
+          mode === 'queued' ? 'queued' : 'failed',
+          randomUUID(),
+          mode === 'unmarked' ? null : attempted,
+          mode === 'other-body' ? 'Different body' : 'Same body',
+        ],
+      )
+    ).rows[0];
+    localIds.push(row.id);
+  }
+  const observed: SocialInboxMessage = {
+    ...m('observed-out', 0),
+    direction: 'out',
+    senderProfile: 'https://www.facebook.com/100000000000002/',
+    body: 'Same body',
+    occurredAt: mode === 'unknown-date' ? null : '2026-11-15T02:42:45Z',
+  };
+  const batch = [
+    observed,
+    ...(mode === 'ambiguous-provider'
+      ? [{ ...observed, externalMessageId: 'observed-out-2', providerOrder: 1 }]
+      : []),
+  ];
+  await save(id, batch);
+  await save(id, batch);
+  const { rows } = await db.sonarPool.query(
+    'select id,status,external_message_id,first_attempt_at,needs_human from messages where account_id=$1 or id=any($2::uuid[])',
+    [id, localIds],
+  );
+  if (mode === 'failed' || mode === 'queued') {
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: localIds[0],
+      status: 'sent',
+      external_message_id: 'observed-out',
+    });
+    expect(rows[0].first_attempt_at.toISOString()).toBe(
+      '2026-11-15T02:42:00.000Z',
+    );
+  } else {
+    expect(rows).toHaveLength(localIds.length + batch.length);
+    if (mode === 'unknown-date')
+      expect(rows.every((row) => row.needs_human)).toBe(true);
+    expect(
+      rows
+        .filter((row) => localIds.includes(row.id))
+        .every((row) => row.external_message_id === null),
+    ).toBe(true);
+  }
+});
 afterAll(async () => {
   if (!enabled) return;
   await db.sonarPool.query(

@@ -7,6 +7,11 @@ import {
   readFacebookRequestPreviews,
   readFacebookThread,
 } from './facebook-inbox-browser.js';
+import {
+  readMessengerSnapshot,
+  messengerChanged,
+  facebookMessagePriority,
+} from './facebook-inbox-watch.js';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
 import {
   SocialSessionCheckError,
@@ -127,10 +132,72 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         expect(batches).toHaveLength(1);
         expect(batches[0]!.resumeAnchor).toEqual({ keep: true });
         expect(batches[0]!.messages.map((m) => m.externalMessageId)).toEqual([
+          '100000000000001@msgr.5',
+          '100000000000001@msgr.6',
           '100000000000001@msgr.7',
           '100000000000001@msgr.8',
         ]);
         expect(result.skipped).toContain('history_unavailable');
+      } finally {
+        await context.close();
+      }
+    });
+    it('observes and imports a prepended incoming row ahead of the previous cursor', async () => {
+      const { page, context } = await fixture();
+      try {
+        const before = await readMessengerSnapshot(page);
+        await page.locator('[role="log"]').evaluate((log) => {
+          const last = log.querySelector('[data-message-id]')!;
+          log.append(last.closest('[role="article"]') ?? last);
+          log.insertAdjacentHTML(
+            'afterbegin',
+            '<div hidden data-message-id="100000000000001@msgr.123">hidden</div>',
+          );
+        });
+        expect(
+          messengerChanged(before, await readMessengerSnapshot(page)),
+        ).toBe(false);
+        await page
+          .locator('[data-message-id="100000000000001@msgr.8"]')
+          .evaluate((row) => {
+            const copy = row.cloneNode(true) as Element;
+            copy.setAttribute('data-message-id', '100000000000001@msgr.99');
+            row.closest('[role="log"]')!.prepend(copy);
+          });
+        const next = await readMessengerSnapshot(page);
+        expect(messengerChanged(before, next)).toBe(true);
+        const persist = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('storage failure'));
+        const capture = () =>
+          captureFacebookHot(
+            page,
+            '100000000000002',
+            [path],
+            1000,
+            persist,
+            null,
+            2,
+            { '900000000000001': { lastMessageId: '100000000000001@msgr.8' } },
+          );
+        await expect(capture()).rejects.toThrow('storage failure');
+        await readMessengerSnapshot(page);
+        expect(facebookMessagePriority(page, path)).toContain(
+          '100000000000001@msgr.99',
+        );
+        await capture();
+        expect(facebookMessagePriority(page, path)).not.toContain(
+          '100000000000001@msgr.99',
+        );
+        expect(persist.mock.calls[0]![0].messages).toHaveLength(2);
+        expect(persist.mock.calls[0]![0].messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              externalMessageId: '100000000000001@msgr.99',
+              direction: 'in',
+            }),
+          ]),
+        );
       } finally {
         await context.close();
       }
@@ -554,14 +621,16 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             : captured,
       );
       navigations.length = 0;
-      page.setDefaultTimeout(300);
+      // Leave room for concurrent fixture workers; production still reserves
+      // half of this total budget for each failing chat.
+      page.setDefaultTimeout(1000);
       try {
         const batches: SocialInboxBatch[] = [];
         for (let n = 0; n < 2; n++)
           await captureFacebookInbox(
             page,
             '100000000000002',
-            350,
+            1000,
             async (b) => {
               batches.push(b);
             },
@@ -585,7 +654,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             : '<div aria-label="Messages in conversation with Empty">No available messages</div>',
       );
       navigations.length = 0;
-      page.setDefaultTimeout(300);
+      // Leave room for concurrent fixture workers; production still reserves
+      // half of this total budget for each failing chat.
+      page.setDefaultTimeout(1000);
       try {
         let anchor: Record<string, unknown> | null = null;
         const messages: SocialInboxBatch['messages'] = [];
@@ -593,7 +664,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await captureFacebookInbox(
             page,
             '100000000000002',
-            350,
+            1000,
             async (batch) => {
               anchor = batch.resumeAnchor;
               messages.push(...batch.messages);

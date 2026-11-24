@@ -27,12 +27,41 @@ export interface MessengerSnapshot {
   };
 }
 
+// Raw provider IDs never leave this page-local memory or enter diagnostics.
+const priorities = new WeakMap<
+  Page,
+  Map<string, { observed: Set<string>; pending: Set<string> }>
+>();
+const priorityPath = (path: string) => path.replace(/\/$/, '');
+export function facebookMessagePriority(page: Page, path: string) {
+  return [...(priorities.get(page)?.get(priorityPath(path))?.pending ?? [])];
+}
+export function pendingFacebookThreads(page: Page) {
+  return [...(priorities.get(page) ?? [])]
+    .filter(([, state]) => state.pending.size > 0)
+    .map(([path]) => path);
+}
+export function consumeFacebookMessagePriority(
+  page: Page,
+  messages: { externalMessageId: string; threadUrl?: string }[],
+) {
+  for (const message of messages)
+    if (message.threadUrl)
+      priorities
+        .get(page)
+        ?.get(priorityPath(new URL(message.threadUrl).pathname))
+        ?.pending.delete(message.externalMessageId);
+}
+
 /** Messenger-only activity; Facebook title counters also include notifications. */
-export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
-  return page.evaluate((links) => {
+export async function readMessengerSnapshot(
+  page: Page,
+): Promise<MessengerSnapshot> {
+  const { messageIds, ...snapshot } = await page.evaluate((links) => {
     const visible = (node: Element) =>
       !!node.getClientRects().length &&
-      getComputedStyle(node).visibility !== 'hidden';
+      getComputedStyle(node).visibility !== 'hidden' &&
+      !node.closest('[hidden],[aria-hidden="true"],[inert]');
     const unreadLabel = /непрочитан|\bunread\b/i;
     const overlay =
       '[role="dialog"], [role="menu"], [role="log"], [role="article"]';
@@ -107,9 +136,23 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
       !!document.querySelector(
         'input[autocomplete="one-time-code"], input[aria-label="PIN"]',
       );
-    const log = document.querySelector('[role="log"]');
+    const logs = Array.from(document.querySelectorAll('[role="log"]')).filter(
+      (node) =>
+        node.getClientRects().length > 0 &&
+        getComputedStyle(node).visibility !== 'hidden' &&
+        !node.closest('[hidden],[aria-hidden="true"],[inert],[role="dialog"]'),
+    );
+    const log = logs.length === 1 ? logs[0]! : null;
     const ids = log
-      ? Array.from(log.querySelectorAll('[data-message-id]'))
+      ? Array.from(log.querySelectorAll('[data-message-id]')).filter((node) => {
+          const id = node.getAttribute('data-message-id') ?? '';
+          return (
+            visible(node) &&
+            id.length > 0 &&
+            id.length <= 1000 &&
+            !/[\p{Cc}]/u.test(id)
+          );
+        })
       : [];
     // The peer's "seen" avatar sits at the right edge under our own message.
     let seenId = '';
@@ -122,16 +165,20 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
             seenId = row.getAttribute('data-message-id') ?? '';
         }
     }
+    const fingerprint = (value: string) => {
+      if (!value) return '';
+      let hash = 2166136261;
+      for (const char of value)
+        hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+      return (hash >>> 0).toString(16);
+    };
     const open = {
       href: location.pathname,
-      last: `${
-        ids.length
-          ? (ids[ids.length - 1]!.getAttribute('data-message-id') ?? '')
-          : ''
-      }|${seenId}`,
+      last: `${fingerprint([...new Set(ids.map((node) => node.getAttribute('data-message-id') ?? ''))].sort().join(','))}|${fingerprint(seenId)}`,
     };
     const dialog = document.querySelector('[role="dialog"]');
     return {
+      messageIds: ids.map((node) => node.getAttribute('data-message-id')!),
       open,
       page: {
         path: location.pathname,
@@ -153,6 +200,23 @@ export function readMessengerSnapshot(page: Page): Promise<MessengerSnapshot> {
       threads,
     };
   }, THREAD_LINKS);
+  const path = priorityPath(snapshot.open.href);
+  if (/^\/messages\/(?:e2ee\/)?t\/\d+$/.test(path)) {
+    const states = priorities.get(page) ?? new Map();
+    priorities.set(page, states);
+    const state = states.get(path);
+    const observed = new Set(messageIds);
+    const pending: Set<string> = state?.pending ?? new Set();
+    if (state) {
+      if (observed.size)
+        for (const id of pending) if (!observed.has(id)) pending.delete(id);
+      for (const id of observed)
+        if (/^\d+@msgr\.\d+$/.test(id) && !state.observed.has(id))
+          pending.add(id);
+    }
+    states.set(path, { observed, pending });
+  }
+  return snapshot;
 }
 
 // A new message in the chat that stays open moves neither the list preview nor
@@ -403,23 +467,7 @@ export async function sweepThreads(
     if (!THREAD_HREF.test(href) || Date.now() >= deadline) continue;
     const path = href.replace(/\/$/, '');
     const left = () => Math.max(1, deadline - Date.now());
-    const lastId = () =>
-      page.evaluate(() => {
-        const log = document.querySelector('[role="log"]');
-        const ids = log
-          ? Array.from(log.querySelectorAll('[data-message-id]'))
-          : [];
-        if (!ids.length || !log) return '';
-        const box = log.getBoundingClientRect();
-        let seenId = '';
-        for (const row of ids)
-          for (const img of Array.from(row.querySelectorAll('img'))) {
-            const at = img.getBoundingClientRect();
-            if (at.width && at.left + at.width / 2 > box.left + box.width * 0.6)
-              seenId = row.getAttribute('data-message-id') ?? '';
-          }
-        return `${ids[ids.length - 1]!.getAttribute('data-message-id') ?? ''}|${seenId}`;
-      });
+    const lastId = async () => (await readMessengerSnapshot(page)).open;
     const startedAt = Date.now();
     try {
       // An encrypted chat only shows what arrived since it was last loaded when
@@ -440,18 +488,33 @@ export async function sweepThreads(
         );
       }
       await page.waitForFunction(
-        () => !!document.querySelector('[role="log"] [data-message-id]'),
+        () =>
+          Array.from(
+            document.querySelectorAll('[role="log"] [data-message-id]'),
+          ).some(
+            (node) =>
+              node.getClientRects().length > 0 &&
+              !node.closest(
+                '[hidden],[aria-hidden="true"],[inert],[role="dialog"]',
+              ),
+          ),
         undefined,
         { timeout: left() },
       );
-      const id = await lastId();
-      if (!id) continue;
+      const snapshot = await lastId();
+      if (
+        !snapshot ||
+        snapshot.href.replace(/\/$/, '') !== path ||
+        !snapshot.last.split('|')[0]
+      )
+        continue;
+      const id = snapshot.last;
       const previous = seen.get(path);
       seen.set(path, id);
       log(
         `sweep ${path.slice(-6)} last=${id.slice(-6)} prev=${(previous ?? '-').slice(-6)} ${Date.now() - startedAt}ms`,
       );
-      if (previous !== undefined && previous !== id) changed.push(href);
+      if (previous !== id) changed.push(href);
     } catch (error) {
       // A chat that does not open in time is simply tried again next sweep.
       log(

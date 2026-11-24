@@ -108,7 +108,12 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         if (changed.length) {
           for (const href of changed) hot.dirty.add(href);
           listener.wakes++;
-          const wake = await queueSocialInboxWake(accountId);
+          let wake = await queueSocialInboxWake(accountId);
+          for (let tries = 0; wake === 'running' && tries < 12; tries++) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            if (stopped || listener.stop || closed) break;
+            wake = await queueSocialInboxWake(accountId);
+          }
           await report(accountId, {
             wakes: listener.wakes,
             lastWakeAt: new Date().toISOString(),
