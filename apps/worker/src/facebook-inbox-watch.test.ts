@@ -479,7 +479,9 @@ render();
       await page.goto('https://www.facebook.com/messages/');
       const seen = new Map<string, string>();
       const hrefs = ['/messages/t/1/', '/messages/e2ee/t/2/', '/messages/t/'];
-      expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
+      expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual(
+        hrefs.slice(0, 2),
+      );
       expect([...seen.keys()]).toEqual(['/messages/t/1', '/messages/e2ee/t/2']);
       expect(await sweepThreads(page, hrefs, seen, 5000)).toEqual([]);
       server['/messages/e2ee/t/2'] = '2@msgr.2';
@@ -495,11 +497,14 @@ render();
         `${html('hello')}<div role="log" style="width:400px"><div data-message-id="1@msgr.1">a</div><div data-message-id="1@msgr.2">b<img alt="seen" width="14" height="14" style="margin-left:360px"></div></div>`,
       );
       const snapshot = await readMessengerSnapshot(page);
-      expect(snapshot.open?.last).toBe('1@msgr.2|1@msgr.2');
+      expect(snapshot.open?.last).toMatch(/^[a-f0-9]+\|[a-f0-9]+$/);
+      expect(snapshot.open?.last).not.toContain('@msgr');
       await page.evaluate(() => {
         document.querySelector('img')!.remove();
       });
-      expect((await readMessengerSnapshot(page)).open?.last).toBe('1@msgr.2|');
+      expect((await readMessengerSnapshot(page)).open?.last).toBe(
+        snapshot.open?.last.split('|')[0] + '|',
+      );
       await page.close();
     });
 

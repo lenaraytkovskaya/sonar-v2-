@@ -1,3 +1,4 @@
+import { pendingFacebookThreads } from './facebook-inbox-watch.js';
 import type { Page, Response } from 'playwright';
 import { navigateSocialPage } from './social-navigation.js';
 import {
@@ -657,6 +658,20 @@ export function createSocialInboxAdapter(
                   >,
                 ),
               );
+              if (
+                imported.skipped?.some((reason) =>
+                  [
+                    'time_limit',
+                    'history_unavailable',
+                    'thread_boundary_unverified',
+                    'peer_boundary_unverified',
+                    'peer_identity_unverified',
+                    'no_message_nodes',
+                    'message_limit_reached',
+                  ].includes(reason),
+                )
+              )
+                hrefs.forEach((href) => hot.dirty.add(href));
               noteHot(hot, `import done ${Date.now() - startedAt}ms`);
               return imported;
             } catch (error) {
@@ -692,6 +707,8 @@ export function createSocialInboxAdapter(
                 >,
               );
             } finally {
+              for (const href of pendingFacebookThreads(page))
+                hot.dirty.add(href);
               // Leave the page on the chat list so the watcher keeps its baseline.
               await page
                 .goto('https://www.facebook.com/messages/', {

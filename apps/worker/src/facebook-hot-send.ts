@@ -100,23 +100,16 @@ export async function sendFacebookHot(
         .first()
         .waitFor({ state: 'visible', timeout: left() });
       const before = await readFacebookThread(page, ownId, 200);
-      const first = before.messages[0];
-      if (before.skipped.length)
-        return decline(`read skipped ${before.skipped.slice(0, 2).join(',')}`);
-      if (!first || first.threadId !== threadId)
-        return decline('thread mismatch');
-      if (
-        before.messages.some(
-          (message) =>
-            socialTarget(message.peerProfile)?.handle !== target.handle,
-        )
-      )
-        return decline('peer mismatch');
-      const editor = page.locator(EDITOR);
+      if (before.threadId !== threadId) return decline('thread mismatch');
+      if (socialTarget(before.peerProfile ?? '')?.handle !== target.handle)
+        return decline('peer boundary unverified');
+      if (!before.composerVerified)
+        return decline('composer boundary unverified');
+      const editor = page.locator(EDITOR).filter({ visible: true });
       if ((await editor.count()) !== 1) return decline('composer count');
       if (normalize(await editor.innerText()) !== '')
         return decline('composer not empty');
-      const known = new Set(before.messages.map((m) => m.externalMessageId));
+      const known = new Set(before.messageIds);
       const outgoingBefore = before.messages.filter(
         (message) => message.direction === 'out',
       ).length;
@@ -137,7 +130,18 @@ export async function sendFacebookHot(
       const startedAt = Date.now();
       // Exactly one dispatch; nothing below may press it again.
       phase = 'hot_dispatch';
-      await page.keyboard.press('Enter');
+      const dispatch = await readFacebookThread(page, ownId, 200);
+      if (
+        !dispatch.composerVerified ||
+        dispatch.threadId !== threadId ||
+        socialTarget(dispatch.peerProfile ?? '')?.handle !== target.handle ||
+        (await editor.count()) !== 1
+      )
+        throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
+      for (const id of dispatch.messageIds) known.add(id);
+      if (normalize(await editor.innerText()) !== normalize(body))
+        throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
+      await editor.press('Enter');
       phase = 'hot_confirmation';
       let unconfirmed = 'new_outgoing_not_observed';
       try {
@@ -145,11 +149,7 @@ export async function sendFacebookHot(
           const after = await readFacebookThread(page, ownId, 200);
           if (
             after.threadId !== threadId ||
-            after.skipped.length ||
-            after.messages.some(
-              (message) =>
-                socialTarget(message.peerProfile)?.handle !== target.handle,
-            )
+            socialTarget(after.peerProfile ?? '')?.handle !== target.handle
           ) {
             unconfirmed = 'conversation_unverified';
             break;
@@ -157,6 +157,8 @@ export async function sendFacebookHot(
           const added = after.messages.filter(
             (message) =>
               message.direction === 'out' &&
+              message.threadId === threadId &&
+              socialTarget(message.peerProfile)?.handle === target.handle &&
               !known.has(message.externalMessageId) &&
               normalize(message.body) === normalize(body),
           );

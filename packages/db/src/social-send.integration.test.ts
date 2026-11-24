@@ -542,7 +542,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
                 message.id,
               ])
             ).rows[0].status,
-          ).toBe('failed');
+          ).toBe('queued');
         }
         await reset();
         await sonarPool.query(
@@ -638,7 +638,7 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
             )
           ).rows[0],
         ).toEqual({
-          status: attempted ? 'failed' : 'queued',
+          status: attempted && network !== 'facebook' ? 'failed' : 'queued',
           first_attempt_at: attempted ? now : null,
         });
         if (attempted) {

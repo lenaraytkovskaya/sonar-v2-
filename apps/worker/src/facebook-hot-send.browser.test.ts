@@ -53,7 +53,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     afterAll(async () => {
       await browser?.close();
     });
-    async function fixture(accepts: boolean, seen = false) {
+    async function fixture(accepts: boolean, seen = false, extra = '') {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', (route) => {
         const url = new URL(route.request().url());
@@ -63,7 +63,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           body:
             url.pathname === '/messages/'
               ? `<a aria-label="Your profile">Profile</a><table><tbody><tr><td><a href="${thread}">Synthetic Recipient</a></td></tr></tbody></table>`
-              : `<a aria-label="Your profile">Profile</a>${captured}${accepts ? sender(seen) : ''}`,
+              : `<a aria-label="Your profile">Profile</a>${captured}${extra}${accepts ? sender(seen) : ''}`,
         });
       });
       const page = await context.newPage();
@@ -107,6 +107,94 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'read_receipt_not_observed; delivery_receipt_unavailable; new_outgoing_observed',
         );
         expect(input.captureFailure).not.toHaveBeenCalled();
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms a new outbound despite an unparseable historical row', async () => {
+      const { context, hot, input } = await fixture(true);
+      try {
+        await hot.page.goto(`https://www.facebook.com${thread}`);
+        await hot.page.locator('[role="log"]').evaluate((log) => {
+          log.insertAdjacentHTML(
+            'afterbegin',
+            '<div data-message-id="unsupported">old</div>',
+          );
+        });
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          externalMessageId: '100000000000001@msgr.99',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('does not confirm a historical raw ID that becomes parseable after Enter', async () => {
+      const { context, hot, input } = await fixture(false);
+      try {
+        await hot.page.goto(`https://www.facebook.com${thread}`);
+        await hot.page
+          .locator('[data-message-id]')
+          .first()
+          .evaluate((row) => {
+            const body = row.querySelector('div[dir="auto"]')!;
+            body.textContent = '';
+            document
+              .querySelector('[data-lexical-editor]')!
+              .addEventListener('keydown', () => {
+                body.textContent = 'Hot message';
+                row.setAttribute(
+                  'aria-label',
+                  'At 4 November 2026, 20:20, You: Hot message',
+                );
+              });
+          });
+        await expect(sendFacebookHot(hot, input)).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('does not count a matching row that appeared during the durable marker as a dispatch', async () => {
+      const { context, hot, input } = await fixture(false);
+      try {
+        input.beforeSend.mockImplementationOnce(async () => {
+          await hot.page
+            .locator('[data-message-id]')
+            .first()
+            .evaluate((row) => {
+              const copy = row.cloneNode(true) as Element;
+              copy.setAttribute('data-message-id', '100000000000001@msgr.99');
+              copy.setAttribute(
+                'aria-label',
+                'At 4 November 2026, 20:20, You: Hot message',
+              );
+              copy.querySelector('div[dir="auto"]')!.textContent =
+                'Hot message';
+              row.closest('[role="log"]')!.append(copy);
+            });
+        });
+        await expect(sendFacebookHot(hot, input)).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('declines an editor outside the verified conversation boundary', async () => {
+      const { context, hot, input } = await fixture(true);
+      try {
+        await hot.page.goto(`https://www.facebook.com${thread}`);
+        await hot.page.locator('[data-lexical-editor]').evaluate((editor) => {
+          const overlay = document.createElement('aside');
+          document.body.append(overlay);
+          overlay.append(editor);
+        });
+        expect(await sendFacebookHot(hot, input)).toBeNull();
+        expect(input.beforeSend).not.toHaveBeenCalled();
       } finally {
         await context.close();
       }

@@ -1,4 +1,8 @@
 import type { Page } from 'playwright';
+import {
+  facebookMessagePriority,
+  consumeFacebookMessagePriority,
+} from './facebook-inbox-watch.js';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
@@ -59,9 +63,10 @@ export async function readFacebookThread(
   page: Page,
   ownId: string,
   maxMessages = 100,
+  priorityIds: string[] = [],
 ) {
   return page.evaluate(
-    ({ ownId, logSelector, maxMessages, months }) => {
+    ({ ownId, logSelector, maxMessages, months, priorityIds }) => {
       const visible = (node: Element) =>
         node.getClientRects().length > 0 &&
         getComputedStyle(node).visibility === 'visible' &&
@@ -74,10 +79,21 @@ export async function readFacebookThread(
           location.pathname,
         )?.[1];
       const skipped: string[] = [];
+      const messageIds: string[] = [];
       const messages: SocialInboxMessage[] = [];
       // Newest own message carrying the peer's small "seen" avatar.
       let seenMessageId: string | undefined;
-      const result = () => ({ messages, skipped, seenMessageId, threadId });
+      let peerProfile: string | undefined = undefined;
+      let composerVerified = false;
+      const result = () => ({
+        messages,
+        skipped,
+        seenMessageId,
+        threadId,
+        peerProfile,
+        messageIds,
+        composerVerified,
+      });
       if (!threadId || logs.length !== 1) {
         skipped.push('thread_boundary_unverified');
         return result();
@@ -146,13 +162,17 @@ export async function readFacebookThread(
         peerLink?.textContent ||
         ''
       ).trim();
-      const composer = all(main, composerSelector)[0];
+      const composers = all(main, composerSelector);
+      composerVerified =
+        composers.length === 1 &&
+        composers[0]!.matches('[data-lexical-editor="true"]');
+      const composer = composers[0];
       const composerName = composer?.getAttribute('aria-label')?.trim();
       if (peerName && composerName && !composerName.includes(peerName)) {
         skipped.push('peer_boundary_unverified');
         return result();
       }
-      const peerProfile = `https://www.facebook.com/${peerId}/`;
+      peerProfile = `https://www.facebook.com/${peerId}/`;
       const observedAt = new Date().toISOString();
       const seen = new Set<string>();
       const nodes = all(log, '[data-message-id]').filter((node) => {
@@ -161,8 +181,11 @@ export async function readFacebookThread(
         seen.add(id);
         return true;
       });
+      messageIds.push(
+        ...nodes.map((node) => node.getAttribute('data-message-id')!),
+      );
       if (!nodes.length) skipped.push('no_message_nodes');
-      for (const [providerOrder, node] of nodes.slice(-maxMessages).entries()) {
+      for (const [providerOrder, node] of nodes.entries()) {
         const id = node.getAttribute('data-message-id')!;
         const parsed = /^(\d+)@msgr\.\d+$/.exec(id);
         if (!parsed) {
@@ -278,9 +301,29 @@ export async function readFacebookThread(
           threadUrl: `https://www.facebook.com${location.pathname}`,
         });
       }
+      const priority = new Set(priorityIds);
+      const fresh = messages.filter((message) =>
+        priority.has(message.externalMessageId),
+      );
+      if (fresh.length > maxMessages) skipped.push('message_limit_reached');
+      const keep = new Set(
+        [
+          ...fresh,
+          ...messages
+            .filter((message) => !priority.has(message.externalMessageId))
+            .reverse(),
+        ]
+          .slice(0, maxMessages)
+          .map((message) => message.externalMessageId),
+      );
+      messages.splice(
+        0,
+        messages.length,
+        ...messages.filter((message) => keep.has(message.externalMessageId)),
+      );
       return result();
     },
-    { ownId, logSelector, maxMessages, months },
+    { ownId, logSelector, maxMessages, months, priorityIds },
   );
 }
 
@@ -519,8 +562,9 @@ export async function captureFacebookInbox(
   resumeAnchor: Record<string, unknown> | null = null,
   maxThreads = 50,
   maxMessages = 100,
-  threadCursors: Record<string, { lastMessageId?: string }> = {},
+  _threadCursors: Record<string, { lastMessageId?: string }> = {},
 ) {
+  void _threadCursors; // Persist bounded overlap; provider IDs make cursor replays idempotent.
   const skipped = new Set([
     'pagination_unverified',
     'archived_folder_unverified',
@@ -625,6 +669,9 @@ export async function captureFacebookInbox(
       skipped: [],
       seenMessageId: undefined,
       threadId: undefined,
+      peerProfile: undefined,
+      messageIds: [],
+      composerVerified: false,
     };
     try {
       await navigate(url, end);
@@ -632,18 +679,14 @@ export async function captureFacebookInbox(
         .locator(`${logSelector} [data-message-id]`)
         .first()
         .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
-      read = await readFacebookThread(page, ownId, maxMessages);
-      const threadId = read.messages[0]?.threadId;
-      const previousId = threadId
-        ? threadCursors[threadId]?.lastMessageId
-        : undefined;
-      const previousIndex = previousId
-        ? read.messages.findIndex(
-            (message) => message.externalMessageId === previousId,
-          )
-        : -1;
-      if (previousIndex >= 0)
-        read.messages = read.messages.slice(previousIndex + 1);
+      read = await readFacebookThread(
+        page,
+        ownId,
+        maxMessages,
+        facebookMessagePriority(page, new URL(page.url()).pathname),
+      );
+      // Persist the observed overlap too: virtualization can prepend a fresh
+      // incoming row before the old cursor. Provider IDs make replays idempotent.
       stage = 'capture_auth';
       await observed(() => assertSession(Math.max(1, end - Date.now())));
     } catch (error) {
@@ -673,6 +716,7 @@ export async function captureFacebookInbox(
         folders: { ...folderCursors },
       },
     });
+    consumeFacebookMessagePriority(page, read.messages);
   }
   if (Date.now() < deadline) {
     await navigate(`${origin}/messages/requests/`, deadline);
@@ -709,8 +753,9 @@ export async function captureFacebookHot(
   persist: (batch: SocialInboxBatch) => Promise<void>,
   resumeAnchor: Record<string, unknown> | null,
   maxMessages = 100,
-  threadCursors: Record<string, { lastMessageId?: string }> = {},
+  _threadCursors: Record<string, { lastMessageId?: string }> = {},
 ) {
+  void _threadCursors; // Persist bounded overlap; provider IDs make cursor replays idempotent.
   const skipped = new Set([
     'pagination_unverified',
     'archived_folder_unverified',
@@ -764,18 +809,14 @@ export async function captureFacebookHot(
         .locator(`${logSelector} [data-message-id]`)
         .first()
         .waitFor({ state: 'visible', timeout: left() });
-      const read = await readFacebookThread(page, ownId, maxMessages);
-      const threadId = read.messages[0]?.threadId;
-      const previousId = threadId
-        ? threadCursors[threadId]?.lastMessageId
-        : undefined;
-      const previousIndex = previousId
-        ? read.messages.findIndex(
-            (message) => message.externalMessageId === previousId,
-          )
-        : -1;
-      if (previousIndex >= 0)
-        read.messages = read.messages.slice(previousIndex + 1);
+      const read = await readFacebookThread(
+        page,
+        ownId,
+        maxMessages,
+        facebookMessagePriority(page, new URL(page.url()).pathname),
+      );
+      // Persist the observed overlap too: virtualization can prepend a fresh
+      // incoming row before the old cursor. Provider IDs make replays idempotent.
       await assertSessionNegatives(page, 'facebook');
       read.skipped.forEach((reason) => skipped.add(reason));
       await persist({
@@ -792,6 +833,7 @@ export async function captureFacebookHot(
           : {}),
         resumeAnchor,
       });
+      consumeFacebookMessagePriority(page, read.messages);
     } catch (error) {
       if (!(error instanceof Error) || error.name !== 'TimeoutError')
         throw error;

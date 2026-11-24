@@ -240,7 +240,7 @@ async function orderFacebookConversation(
   );
 }
 
-/** One committed page per callback. Never infer identity from body/time. */
+/** One committed page per callback; provider identity always binds account and thread. */
 export async function persistSocialInboxBatch(
   accountId: string,
   network: SocialNetwork,
@@ -480,15 +480,78 @@ export async function persistSocialInboxBatch(
         }
       }
       await guardBinding(conversation.id, message);
+      // Reconcile only a single marked local attempt in the same bound thread.
+      // Only a provider date proves the bounded window; observation time does not.
+      if (
+        network === 'facebook' &&
+        message.direction === 'out' &&
+        message.occurredAt !== null &&
+        messages.filter(
+          (other) =>
+            other.direction === 'out' &&
+            other.threadId === message.threadId &&
+            other.peerProfile === message.peerProfile &&
+            other.body.replace(/\s+/g, ' ').trim() ===
+              message.body.replace(/\s+/g, ' ').trim(),
+        ).length === 1
+      ) {
+        const { rows: matches } = await c.query(
+          `select id from messages where conversation_id=$1 and account_id=$2
+           and channel='social' and direction='out' and external_message_id is null
+           and status in ('queued','failed') and first_attempt_at is not null
+           and btrim(regexp_replace(body,'[[:space:]]+',' ','g'))=$3 and first_attempt_at between $4::timestamptz -
+             (select value::text::int from settings where key='social.inbox.reconcile_window_seconds') * interval '1 second'
+             and $4::timestamptz + interval '1 minute' for update`,
+          [
+            conversation.id,
+            accountId,
+            message.body.replace(/\s+/g, ' ').trim(),
+            message.occurredAt,
+          ],
+        );
+        if (matches.length === 1) {
+          const id = matches[0]!.id;
+          await c.query(
+            `update messages set external_message_id=$2,status='sent',sent_at=coalesce($3::timestamptz,first_attempt_at),
+             reason_uk=null,needs_human=false,social_meta=coalesce(social_meta,'{}'::jsonb)||$4::jsonb where id=$1`,
+            [
+              id,
+              message.externalMessageId,
+              message.occurredAt,
+              JSON.stringify({ ...message, network }),
+            ],
+          );
+          observe(conversation.id, id, message);
+          continue;
+        }
+      }
       // Old locally sent rows lack external IDs. Preserve both observations and
       // flag the collision for a person; body/time are never deduplication keys.
       const { rows: legacy } =
         message.direction === 'out'
           ? await c.query(
-              "select m.id from messages m left join conversations v on v.id=m.conversation_id where m.channel='social' and m.account_id=$1 and m.direction='out' and m.external_message_id is null and m.body=$2 and (m.to_value=$3 or v.peer_value=$3) and m.status in ('sent','delivered','read')",
-              [accountId, message.body, message.peerProfile],
+              `select m.id from messages m left join conversations v on v.id=m.conversation_id
+               where m.channel='social' and m.account_id=$1 and m.direction='out'
+               and m.external_message_id is null and m.body=$2 and (
+                 (m.status in ('sent','delivered','read') and (m.to_value=$3 or v.peer_value=$3))
+                 or ($5::boolean and m.conversation_id=$4 and m.first_attempt_at is not null
+                     and m.status in ('queued','failed')))`,
+              [
+                accountId,
+                message.body,
+                message.peerProfile,
+                conversation.id,
+                network === 'facebook',
+              ],
             )
           : { rows: [] };
+      if (network === 'facebook' && legacy.length)
+        await c.query(
+          `update messages set needs_human=true,reason_uk=coalesce(reason_uk,'Можливий збіг зі старим повідомленням без ID. Перевірте чат вручну.')
+           where id=any($1::uuid[]) and account_id=$2 and conversation_id=$3
+             and first_attempt_at is not null and status in ('queued','failed')`,
+          [legacy.map((row) => row.id), accountId, conversation.id],
+        );
       const meta = {
         ...message,
         network,
