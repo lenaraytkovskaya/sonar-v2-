@@ -22,7 +22,10 @@ import {
   persistSocialInboxBatch,
   reconcileSocialInbox,
 } from '@sonar/db/social-inbox';
-import { reserveSocialAction } from '@sonar/db/social-action';
+import {
+  reserveSocialAction,
+  socialSendPriority,
+} from '@sonar/db/social-action';
 import {
   releaseSocialFetchSession,
   prepareSocialSession,
@@ -39,7 +42,13 @@ export class SocialInboxAdapterError extends Error {
     super(reasonUk);
   }
 }
+class SendPriorityYield extends SocialProfileBusyError {
+  constructor(readonly outcome: TaskOutcome) {
+    super();
+  }
+}
 export type SocialInboxAccount = SocialSessionAccount & {
+  beforeRead?: () => Promise<void>;
   session: ReturnType<typeof resolveSocialSession>;
 };
 const inboxStages = [
@@ -156,6 +165,7 @@ export async function runSocialInboxSync(
   const c = await sonarPool.connect();
   let locked = false;
   let manual = false;
+  let retainReservation = false;
   const pending: { writing: Promise<unknown> | null } = { writing: null };
   let accepting = true;
   try {
@@ -183,6 +193,11 @@ export async function runSocialInboxSync(
       };
     }
     locked = true;
+    const beforeRead = async () => {
+      const priority = await socialSendPriority(c, input.accountId);
+      if (priority) throw new SendPriorityYield(priority);
+    };
+    await beforeRead();
     const {
       rows: [account],
     } = await c.query<
@@ -300,7 +315,20 @@ export async function runSocialInboxSync(
       };
     }
     await c.query('begin');
-    const runAt = await reserveSocialAction(c, account.id, 'sync', now, limit);
+    const resumed = taskId
+      ? await c.query(
+          "select 1 from tasks where id=$1 and payload->>'inboxActionReserved'='true'",
+          [taskId],
+        )
+      : null;
+    const runAt = resumed?.rows.length
+      ? null
+      : await reserveSocialAction(c, account.id, 'sync', now, limit);
+    if (!runAt && taskId && !resumed?.rows.length)
+      await c.query(
+        'update tasks set payload=payload||\'{"inboxActionReserved":true}\'::jsonb where id=$1',
+        [taskId],
+      );
     await c.query('commit');
     if (runAt) {
       if (!manual)
@@ -338,6 +366,7 @@ export async function runSocialInboxSync(
     const result = await adapter.sync(
       {
         ...account,
+        beforeRead,
         session,
         settings: {
           ...account.settings,
@@ -390,6 +419,7 @@ export async function runSocialInboxSync(
         } finally {
           pending.writing = null;
         }
+        await beforeRead();
       },
     );
     accepting = false;
@@ -481,7 +511,12 @@ export async function runSocialInboxSync(
     accepting = false;
     await pending.writing?.catch(() => {});
     await c.query('rollback');
+    if (error instanceof SendPriorityYield) {
+      retainReservation = true;
+      return error.outcome;
+    }
     if (error instanceof SocialProfileBusyError) {
+      retainReservation = true;
       const {
         rows: [busySetting],
       } = await c.query(
@@ -599,8 +634,19 @@ export async function runSocialInboxSync(
       result: { stage: details.stage, kind: details.kind },
     };
   } finally {
-    if (locked) await releaseSocialFetchSession(c, input.accountId);
-    c.release();
+    try {
+      if (taskId && locked && !retainReservation)
+        await c.query(
+          "update tasks set payload=payload-'inboxActionReserved' where id=$1",
+          [taskId],
+        );
+    } finally {
+      try {
+        if (locked) await releaseSocialFetchSession(c, input.accountId);
+      } finally {
+        c.release();
+      }
+    }
   }
 }
 

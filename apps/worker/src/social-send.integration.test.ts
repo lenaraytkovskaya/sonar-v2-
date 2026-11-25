@@ -12,9 +12,10 @@ vi.mock('./social-send-browser.js', () => ({
 }));
 
 const enabled = process.env.RUN_DB_TESTS === '1';
-it.skipIf(!enabled)(
-  'dispatches a human Instagram reply through pg-boss with UI-supported campaign channels',
-  async () => {
+it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
+  'dispatches a human %s reply through pg-boss and yields Facebook import before sending',
+  async (network) => {
+    send.mockReset();
     vi.stubEnv(
       'AUTH_SECRET',
       'worker-social-send-isolated-test-secret-over-32',
@@ -22,6 +23,7 @@ it.skipIf(!enabled)(
     vi.stubEnv('SOCIAL_PROXY_URLS', 'http://worker-social-send.invalid:8000');
     const sessionSettings = {
       sessionStatus: 'valid',
+      inboxPollingEnabled: true,
       proxyIndex: 0,
       proxyFingerprint: socialProxyFingerprint({
         server: 'http://worker-social-send.invalid:8000',
@@ -30,20 +32,20 @@ it.skipIf(!enabled)(
         JSON.stringify({
           cookies: [
             {
-              name: 'sessionid',
-              value: 'stub',
-              domain: '.instagram.com',
+              name: network === 'facebook' ? 'c_user' : 'sessionid',
+              value: network === 'facebook' ? '100000000000002' : 'stub',
+              domain: `.${network}.com`,
               session: true,
             },
           ],
           origins: [
             {
-              origin: 'https://www.instagram.com',
+              origin: `https://www.${network}.com`,
               localStorage: [{ name: 'synthetic', value: 'stub' }],
             },
           ],
         }),
-        'instagram',
+        network,
         process.env.AUTH_SECRET!,
       ),
     };
@@ -56,7 +58,13 @@ it.skipIf(!enabled)(
       company = randomUUID(),
       campaign = randomUUID(),
       account = randomUUID();
-    const keys = ['send.hours', 'send.time_zones'];
+    const keys = [
+      'send.hours',
+      'send.time_zones',
+      'social.inbox.enabled',
+      'social.inbox.facebook.enabled',
+      'social.inbox.daily_limit',
+    ];
     const original = (
       await sonarPool.query(
         'select key,value from settings where key=any($1::text[])',
@@ -64,6 +72,18 @@ it.skipIf(!enabled)(
       )
     ).rows;
     let messageId: string | undefined;
+    let syncTaskId: string | undefined;
+    const events: string[] = [];
+    let queued!: () => void;
+    const queuedReply = new Promise<void>((resolve) => {
+      queued = resolve;
+    });
+    let entered!: () => void;
+    const importEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let sendStarted = 0;
+    let sentAt = 0;
     try {
       await sonarPool.query(
         "update settings set value=$1 where key='send.hours'",
@@ -73,6 +93,17 @@ it.skipIf(!enabled)(
         "update settings set value=$1 where key='send.time_zones'",
         [JSON.stringify({ PL: 'UTC' })],
       );
+      if (network === 'facebook')
+        await sonarPool.query(
+          "update settings set value=case when key='social.inbox.daily_limit' then '1'::jsonb else 'true'::jsonb end where key=any($1::text[])",
+          [
+            [
+              'social.inbox.enabled',
+              'social.inbox.facebook.enabled',
+              'social.inbox.daily_limit',
+            ],
+          ],
+        );
       await sonarPool.query(
         "insert into users(id,email,name,password_hash) values($1,$2,'Synthetic worker test','stub')",
         [user, `${user}@invalid.test`],
@@ -102,18 +133,37 @@ it.skipIf(!enabled)(
         rows: [contact],
       } = await sonarPool.query(
         "insert into contacts(company_id,kind,value,normalized,source) values($1,'social',$2,$2,'manual') returning id",
-        [company, 'https://www.instagram.com/synthetic_test/'],
+        [
+          company,
+          `https://www.${network}.com/${network === 'facebook' ? '100000000000003' : 'synthetic_test'}/`,
+        ],
       );
       await sonarPool.query(
         `insert into channel_accounts(id,channel,name,address,daily_limit,settings)
-         values($1,'instagram','Synthetic worker test','synthetic',20,$2)`,
-        [account, sessionSettings],
+         values($1,$3,'Synthetic worker test','synthetic',20,$2)`,
+        [account, sessionSettings, network],
       );
       // Only this fake transport is reachable; no browser or social credentials.
       send.mockImplementation(async (...args: unknown[]) => {
         const beforeSend = args[5] as () => Promise<void>;
         await beforeSend();
-        return 'synthetic-provider-id';
+        events.push('send');
+        sentAt = Date.now();
+        return network === 'instagram'
+          ? 'synthetic-provider-id'
+          : {
+              outcome: 'facebook_dispatched_unconfirmed',
+              dialogUrl: 'https://www.facebook.com/100000000000003/',
+              observation: {
+                inputExactMatch: true,
+                dispatchPerformed: true,
+                outgoingBefore: 0,
+                outgoingAfter: 1,
+                newOutgoing: true,
+                observationMs: 1,
+                lateError: 'none',
+              },
+            };
       });
       await boss.start();
       await boss.createQueue('message.send');
@@ -121,6 +171,55 @@ it.skipIf(!enabled)(
       await sonarPool.query(
         "delete from pgboss.job j where j.name='message.send' and not exists(select 1 from tasks t where t.id::text=j.data->>'taskId')",
       );
+      if (network === 'facebook') {
+        const { runTask, enqueueTask } = await import('@sonar/db/tasks');
+        const { runSocialInboxSync } = await import('./social-inbox.js');
+        await boss.createQueue('social.inbox.sync');
+        let pass = 0;
+        await runTask('social.inbox.sync', (payload, taskId) =>
+          runSocialInboxSync(
+            payload as { accountId: string },
+            {
+              sync: async (_account, checkpoint, persist) => {
+                if (pass++ === 0) {
+                  events.push('import:first');
+                  entered();
+                  await queuedReply;
+                  await vi.waitFor(
+                    async () => {
+                      expect(
+                        (
+                          await sonarPool.query(
+                            "select reason_code from tasks where type='message.send' and payload->>'messageId'=$1",
+                            [messageId],
+                          )
+                        ).rows[0]?.reason_code,
+                      ).toBe('social_profile_busy');
+                    },
+                    { timeout: 10_000 },
+                  );
+                  await persist({
+                    messages: [],
+                    resumeAnchor: { nextThreadUrl: '/messages/t/200/' },
+                  });
+                  throw Error('Priority should yield after persistence');
+                }
+                expect(checkpoint.resumeAnchor).toEqual({
+                  nextThreadUrl: '/messages/t/200/',
+                });
+                events.push('import:remaining');
+                return { complete: true };
+              },
+            },
+            new Date(),
+            taskId,
+          ),
+        );
+        syncTaskId = (await enqueueTask('social.inbox.sync', randomUUID(), {
+          accountId: account,
+        }))!;
+        await importEntered;
+      }
       const conversationId = await ensureContactConversation(contact.id);
       const input = {
         conversationId,
@@ -128,8 +227,10 @@ it.skipIf(!enabled)(
         requestId: randomUUID(),
         socialDelivery: 'browser' as const,
       };
+      sendStarted = Date.now();
       const message = await queueConversationReply(input, user);
       messageId = message.id;
+      queued();
       expect(await queueConversationReply(input, user)).toEqual(message);
       expect(message.status).toBe('queued');
       const {
@@ -154,7 +255,7 @@ it.skipIf(!enabled)(
       expect(send).toHaveBeenCalledTimes(1);
       expect(send.mock.calls[0]?.[0]).toMatchObject({
         id: account,
-        channel: 'instagram',
+        channel: network,
       });
       expect(
         (
@@ -165,11 +266,45 @@ it.skipIf(!enabled)(
         ).rows[0],
       ).toEqual({
         status: 'sent',
-        provider_id: 'synthetic-provider-id',
+        provider_id:
+          network === 'instagram'
+            ? 'synthetic-provider-id'
+            : 'https://www.facebook.com/100000000000003/',
         first_attempt_at: expect.any(Date),
       });
+      if (network === 'facebook') {
+        await vi.waitFor(
+          async () =>
+            expect(
+              (
+                await sonarPool.query('select status from tasks where id=$1', [
+                  syncTaskId,
+                ])
+              ).rows[0]?.status,
+            ).toBe('done'),
+          { timeout: 10_000 },
+        );
+        expect(events).toEqual(['import:first', 'send', 'import:remaining']);
+        expect(sentAt - sendStarted).toBeLessThan(20_000);
+        expect(
+          (
+            await sonarPool.query(
+              "select settings->'socialAction'->'counts'->>'sync' as n from channel_accounts where id=$1",
+              [account],
+            )
+          ).rows[0]?.n,
+        ).toBe('1');
+      }
     } finally {
+      queued();
       await boss.stop({ graceful: true, timeout: 10000 });
+      if (syncTaskId) {
+        await sonarPool.query(
+          "delete from pgboss.job where name='social.inbox.sync' and data->>'taskId'=$1",
+          [syncTaskId],
+        );
+        await sonarPool.query('delete from tasks where id=$1', [syncTaskId]);
+      }
       await sonarPool.query(
         "delete from pgboss.job where name='message.send' and data->>'taskId' in (select id::text from tasks where payload->>'messageId'=$1)",
         [messageId ?? null],

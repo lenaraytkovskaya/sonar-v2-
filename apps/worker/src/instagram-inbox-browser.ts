@@ -14,6 +14,7 @@ import { isNewSocialInboxMessage } from '@sonar/core/social-inbox';
 import {
   SocialSendError,
   SocialSessionCheckError,
+  SocialProfileBusyError,
   type SocialSessionCheckDiagnostic,
 } from '@sonar/core/social-session';
 import {
@@ -656,6 +657,7 @@ export function createSocialInboxAdapter(
                     string,
                     { lastMessageId?: string }
                   >,
+                  account.beforeRead,
                 ),
               );
               if (
@@ -678,6 +680,7 @@ export function createSocialInboxAdapter(
               noteHot(hot, `import failed ${Date.now() - startedAt}ms`);
               hrefs.forEach((href) => hot.dirty.add(href));
               if (
+                error instanceof SocialProfileBusyError ||
                 error instanceof SocialSendError ||
                 error instanceof SocialSessionCheckError
               )
@@ -690,9 +693,8 @@ export function createSocialInboxAdapter(
           // Encrypted chats keep one active Messenger tab per browser profile, so
           // the full pass runs in the same long-lived page instead of a second tab.
           return runOnHotPage(hot, async (page) => {
-            hot.lastFullAt = Date.now();
             try {
-              return await captureFacebookInbox(
+              const result = await captureFacebookInbox(
                 page,
                 actors[0]!.value,
                 timeoutMs,
@@ -705,10 +707,10 @@ export function createSocialInboxAdapter(
                   string,
                   { lastMessageId?: string }
                 >,
+                account.beforeRead,
               );
-            } finally {
-              for (const href of pendingFacebookThreads(page))
-                hot.dirty.add(href);
+              await account.beforeRead?.();
+              hot.lastFullAt = Date.now();
               // Leave the page on the chat list so the watcher keeps its baseline.
               await page
                 .goto('https://www.facebook.com/messages/', {
@@ -716,6 +718,10 @@ export function createSocialInboxAdapter(
                   timeout: timeoutMs,
                 })
                 .catch(() => {});
+              return result;
+            } finally {
+              for (const href of pendingFacebookThreads(page))
+                hot.dirty.add(href);
             }
           });
         }
@@ -737,6 +743,7 @@ export function createSocialInboxAdapter(
                 string,
                 { lastMessageId?: string }
               >,
+              account.beforeRead,
             );
             if (!result.complete || result.reason)
               await captureFailureShot(page, account.session, 'inbox', 'sync');

@@ -26,6 +26,7 @@ import {
   socialSessionProxies,
   normalizeSocialProxy,
   SocialSendError,
+  SocialProfileBusyError,
   socialSessionCheckReason,
   safeSocialSessionDiagnostic,
   type SocialSessionCheckDiagnostic,
@@ -37,7 +38,7 @@ import { isSocialQuietHours } from '@sonar/core/social-inbox-schedule';
 import type { SocialNetwork } from '@sonar/core';
 import { decryptTelegramSession } from '@sonar/core/telegram';
 import { sonarPool } from './index.js';
-import { reserveSocialAction } from './social-action.js';
+import { reserveSocialAction, socialSendPriority } from './social-action.js';
 import { EmailValidationError, transaction } from './email.js';
 import { enqueueTask, logActivity, type TaskOutcome } from './tasks.js';
 
@@ -86,6 +87,7 @@ export interface SocialAccount {
   failureShotKinds: string[];
 }
 export interface SocialSessionAccount {
+  beforeRead?: () => Promise<void>;
   id: string;
   channel: SocialNetwork;
   settings: Record<string, unknown>;
@@ -251,6 +253,11 @@ export async function acquireSocialFetchSession(
     throw new Error('Invalid social.action.daily_limit');
   let nextAt = Infinity;
   for (const candidate of rows) {
+    const priority = await socialSendPriority(c, candidate.id);
+    if (priority?.status === 'deferred') {
+      nextAt = Math.min(nextAt, priority.runAt.getTime());
+      continue;
+    }
     const {
       rows: [lock],
     } = await c.query(
@@ -1145,9 +1152,14 @@ export async function withSocialSessionCheck(
         result: profileLockDiagnostic('account_operation'),
       };
     }
+    const priority = await socialSendPriority(c, id);
+    if (priority) return priority;
     await c.query('begin');
     inTransaction = true;
     const account = await lock(c, id);
+    account.beforeRead = async () => {
+      if (await socialSendPriority(c, id)) throw new SocialProfileBusyError();
+    };
     if (mode === 'keepalive') {
       const {
         rows: [enabled],

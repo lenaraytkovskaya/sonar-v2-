@@ -18,6 +18,7 @@ vi.mock('@sonar/db/social-inbox', () => ({
 }));
 vi.mock('@sonar/db/social-action', () => ({
   reserveSocialAction: vi.fn(async () => null),
+  socialSendPriority: vi.fn(async () => null),
 }));
 vi.mock('@sonar/db/social-accounts', () => ({
   releaseSocialFetchSession: vi.fn(),

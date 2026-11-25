@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import type { TaskOutcome } from './tasks.js';
 
 /** Caller holds channel-account:<id>. Shared spacing and total daily quota, with per-action counters. */
 export async function reserveSocialAction(
@@ -64,4 +65,43 @@ export async function reserveSocialAction(
     ],
   );
   return null;
+}
+
+/** Only runnable sends, including a send briefly deferred by this profile's lock. */
+export async function socialSendPriority(
+  c: PoolClient,
+  accountId: string,
+): Promise<TaskOutcome | null> {
+  const {
+    rows: [pending],
+  } = await c.query(
+    `select exists(
+    select 1 from messages m join channel_accounts a on a.id=m.account_id
+    join tasks t on t.type='message.send' and t.payload->>'messageId'=m.id::text
+    where a.id=$1 and a.channel='facebook' and a.status='active'
+      and a.settings->>'sessionStatus'='valid' and coalesce(a.settings->>'enabled','true')<>'false'
+      and m.status='queued'
+      and t.status in ('queued','running')
+      and exists(select 1 from pgboss.job j where j.name='message.send'
+        and j.data->>'taskId'=t.id::text and j.state in ('created','retry','active')
+        and j.start_after<=now()+make_interval(secs => (select value::int from settings where key='social.profile.busy_retry_seconds')))
+      and (coalesce(m.scheduled_at,now())<=now() or (t.reason_code='social_profile_busy' and m.scheduled_at<=now()+make_interval(secs => (select value::int from settings where key='social.profile.busy_retry_seconds'))))
+  ) as pending`,
+    [accountId],
+  );
+  if (pending?.pending !== true) return null;
+  const {
+    rows: [setting],
+  } = await c.query(
+    "select value from settings where key='social.profile.busy_retry_seconds'",
+  );
+  const seconds = Number(setting?.value);
+  if (!Number.isSafeInteger(seconds) || seconds < 1)
+    throw new Error('Invalid social.profile.busy_retry_seconds');
+  return {
+    status: 'deferred',
+    runAt: new Date(Date.now() + seconds * 1000),
+    reasonCode: 'social_send_priority',
+    reasonUk: 'Імпорт або перевірку продовжимо після надсилання повідомлення.',
+  };
 }
