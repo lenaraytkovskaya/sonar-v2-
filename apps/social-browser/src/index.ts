@@ -251,6 +251,13 @@ async function startProfile(input: Record<string, unknown>) {
     locale: language.locale,
   };
   profiles.set(id, profile);
+  // Chromium can exit on its own (crash, OOM); forget it so the next request relaunches it.
+  context.on('close', () => {
+    if (profiles.get(id) !== profile) return;
+    profile.forwarder.close();
+    profiles.delete(id);
+    console.warn('social-browser profile closed', id);
+  });
   return profile;
 }
 function ensureProfile(input: Record<string, unknown>) {
@@ -315,15 +322,15 @@ const server = createServer(async (request, response) => {
     if (action === 'screen' && request.method === 'GET') {
       if (!profile.viewerLock)
         return json(response, 409, { error: 'profile_busy' });
+      // Open the page before the stream starts, so a dead profile still gets a JSON error.
+      let page = profile.context.pages().at(-1);
+      if (!page) page = await profile.context.newPage();
       const boundary = 'sonar-frame';
       response.writeHead(200, {
         'Content-Type': `multipart/x-mixed-replace; boundary=${boundary}`,
         'Cache-Control': 'no-store',
         Connection: 'keep-alive',
       });
-      const pages = profile.context.pages();
-      let page = pages.at(-1);
-      if (!page) page = await profile.context.newPage();
       let session:
         Awaited<ReturnType<typeof profile.context.newCDPSession>> | undefined;
       let closed = false;
@@ -336,7 +343,7 @@ const server = createServer(async (request, response) => {
         await previous.send('Page.stopScreencast').catch(() => {});
         await previous.detach().catch(() => {});
       };
-      const startPage = async (next: (typeof pages)[number]) => {
+      const startPage = async (next: Page) => {
         if (closed || next.isClosed() || (next === page && session)) return;
         await stopPage();
         page = next;
@@ -385,7 +392,7 @@ const server = createServer(async (request, response) => {
           everyNthFrame: 1,
         });
       };
-      const onPage = (next: (typeof pages)[number]) => {
+      const onPage = (next: Page) => {
         switching = switching.then(() => startPage(next)).catch(() => {});
       };
       profile.context.on('page', onPage);
@@ -471,6 +478,8 @@ const server = createServer(async (request, response) => {
         .replace(/\/\/[^@/\s]+@/g, '//***@')
         .slice(0, 300),
     );
+    // A started stream cannot carry a JSON error; writing one would crash the service.
+    if (response.headersSent) return void response.destroy();
     const status =
       code === 'profile_limit'
         ? 429
