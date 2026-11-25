@@ -80,7 +80,7 @@ it('classifies an inbox navigation splash before reading or persisting messages'
     stage: 'navigation',
     screen: 'splash',
   });
-  expect(page.goto).toHaveBeenCalledTimes(3);
+  expect(page.goto).toHaveBeenCalledTimes(2);
   expect(persist).not.toHaveBeenCalled();
   expect(page.goto).toHaveBeenCalledWith(
     'https://www.instagram.com/direct/inbox/',

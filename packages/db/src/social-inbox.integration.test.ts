@@ -48,11 +48,21 @@ const checkpoint = async () =>
       [account],
     )
   ).rows[0].settings.inboxSync;
-const resetGate = () =>
-  db.sonarPool.query(
+const clearSendJobs = async () => {
+  // Previous scenarios intentionally leave unsent replies. They must not keep
+  // runnable browser jobs that would now correctly preempt this scenario's sync.
+  await db.sonarPool.query(
+    "delete from pgboss.job where name='message.send' and data->>'taskId' in (select t.id::text from tasks t join messages m on t.payload->>'messageId'=m.id::text where t.type='message.send' and m.account_id=$1)",
+    [account],
+  );
+};
+const resetGate = async () => {
+  await clearSendJobs();
+  await db.sonarPool.query(
     "update channel_accounts set settings=(settings-'socialAction'-'healthPauseUntil')||'{\"healthAutoPaused\":false,\"reasonUk\":null,\"inboxPollingEnabled\":true}'::jsonb,status='active' where id=$1",
     [account],
   );
+};
 beforeAll(async () => {
   if (!enabled) return;
   process.env.AUTH_SECRET = 'isolated-social-inbox-test-secret-at-least-32';
@@ -1824,6 +1834,9 @@ it.skipIf(!enabled)(
     expect(state.socialAction.nextAt).toBe(
       new Date(now.getTime() + 240000).toISOString(),
     );
+    // A valid check resumes session-paused sends from earlier scenarios. Keep
+    // this assertion focused on sync bypassing the shared gap, with no send job.
+    await clearSendJobs();
     const adapter = { sync: vi.fn(async () => ({ complete: true })) };
     expect(
       await worker.runSocialInboxSync(
@@ -1918,6 +1931,11 @@ it.skipIf(!enabled)(
   async () => {
     const { withSocialSessionCheck } = await import('./social-accounts.js');
     await resetGate();
+    const {
+      rows: [retry],
+    } = await db.sonarPool.query(
+      "select value from settings where key='social.profile.busy_retry_seconds'",
+    );
     const holder = await db.sonarPool.connect();
     const check = vi.fn(async () => ({ valid: true }));
     const adapter = { sync: vi.fn(async () => ({ complete: true })) };
@@ -1932,7 +1950,7 @@ it.skipIf(!enabled)(
         status: 'deferred',
         reasonCode: 'social_profile_busy',
         reasonUk: 'Браузер акаунта зайнятий.',
-        runAt: new Date(now.getTime() + 5000),
+        runAt: new Date(now.getTime() + Number(retry.value) * 1000),
       });
       expect(
         await withSocialSessionCheck(account, check, now, 'keepalive'),

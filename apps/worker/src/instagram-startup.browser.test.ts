@@ -114,7 +114,6 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           expect(requests).toContain('/api/graphql');
           expect(requests.filter((path) => path !== '/api/graphql')).toEqual([
             '/direct/inbox/',
-            '/direct/inbox/',
             '/',
             ...(graphqlStatus === 200 ? ['/direct/inbox/'] : []),
           ]);

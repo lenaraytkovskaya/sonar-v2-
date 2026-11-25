@@ -563,6 +563,7 @@ export async function captureFacebookInbox(
   maxThreads = 50,
   maxMessages = 100,
   _threadCursors: Record<string, { lastMessageId?: string }> = {},
+  beforeRead: () => Promise<void> = async () => {},
 ) {
   void _threadCursors; // Persist bounded overlap; provider IDs make cursor replays idempotent.
   const skipped = new Set([
@@ -586,6 +587,7 @@ export async function captureFacebookInbox(
     }
   };
   const navigate = async (url: string, end: number) => {
+    await beforeRead();
     stage = 'navigation';
     navigationHttpStatus = null;
     return observed(async () => {
@@ -601,6 +603,7 @@ export async function captureFacebookInbox(
         throw new SocialSessionCheckError('unknown_auth');
       stage = 'auth';
       await assertSessionNegatives(page, 'facebook');
+      await beforeRead();
       stage = 'restore';
       await dismissRestore(page, end);
       stage = 'auth';
@@ -754,6 +757,7 @@ export async function captureFacebookHot(
   resumeAnchor: Record<string, unknown> | null,
   maxMessages = 100,
   _threadCursors: Record<string, { lastMessageId?: string }> = {},
+  beforeRead: () => Promise<void> = async () => {},
 ) {
   void _threadCursors; // Persist bounded overlap; provider IDs make cursor replays idempotent.
   const skipped = new Set([
@@ -764,6 +768,7 @@ export async function captureFacebookHot(
   let chatDeadline = deadline;
   const left = () => Math.max(1, chatDeadline - Date.now());
   for (const href of hrefs.slice(0, 5)) {
+    await beforeRead();
     // One slow chat must not use up the budget of the others.
     chatDeadline = Math.min(deadline, Date.now() + 30000);
     const path = href.split(/[?#]/)[0]!;
@@ -805,6 +810,8 @@ export async function captureFacebookHot(
           });
         }
       }
+      await assertSessionNegatives(page, 'facebook');
+      await beforeRead();
       await page
         .locator(`${logSelector} [data-message-id]`)
         .first()

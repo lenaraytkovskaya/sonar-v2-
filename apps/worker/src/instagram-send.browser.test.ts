@@ -367,40 +367,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
-    it('waits for the app shell to replace a delayed profile splash', async () => {
-      const f = await fixture({ delayedSplash: true, timeoutMs: 1000 });
-      try {
-        await expect(f.send()).resolves.toBe(
-          'https://www.instagram.com/direct/t/fixture-thread/',
-        );
-        expect(f.events).toEqual(['open', 'mark', 'send']);
-        expect(f.mark).toHaveBeenCalledOnce();
-        expect(
-          f.requests.filter(
-            (request) => request === 'www.instagram.com/fixture_company/',
-          ),
-        ).toHaveLength(2);
-      } finally {
-        await f.close();
-      }
-    });
-    it('reloads a stalled splash exactly once before one send', async () => {
-      const f = await fixture({ splashOnFirstLoad: true, timeoutMs: 250 });
-      try {
-        await expect(f.send()).resolves.toBe(
-          'https://www.instagram.com/direct/t/fixture-thread/',
-        );
-        expect(
-          f.requests.filter(
-            (request) => request === 'www.instagram.com/fixture_company/',
-          ),
-        ).toHaveLength(2);
-        expect(f.events).toEqual(['open', 'mark', 'send']);
-        expect(f.mark).toHaveBeenCalledOnce();
-      } finally {
-        await f.close();
-      }
-    });
+    it.each([false, true])(
+      'waits for the app shell after delayed navigation without repeating goto (stalled document: %s)',
+      async (stalledNavigation) => {
+        const f = await fixture({
+          delayedSplash: true,
+          stalledNavigation,
+          timeoutMs: 1000,
+        });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.events).toEqual(['open', 'mark', 'send']);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(
+            f.requests.filter(
+              (request) => request === 'www.instagram.com/fixture_company/',
+            ),
+          ).toHaveLength(2);
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it.each([undefined, 'fixture-thread'])(
       'boots via the unique home Direct link and rechecks the original recipient (%s)',
       async (knownThreadId) => {
@@ -615,7 +605,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           f.requests.filter(
             (request) => request === 'www.instagram.com/fixture_company/',
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
         expect(f.requests.at(-1)).toBe('www.instagram.com/');
       } finally {
         await f.close();
@@ -637,7 +627,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 mode: 'worker_context',
                 viewport: { width: 1280, height: 720 },
                 network: expect.arrayContaining([
-                  { resource: 'script', error: 'ERR_CONNECTION_REFUSED' },
+                  {
+                    resource: 'script',
+                    mainDocument: false,
+                    error: 'ERR_CONNECTION_REFUSED',
+                  },
                 ]),
               }),
             }),
@@ -651,7 +645,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
-    it('stops when home also stays on splash without dispatching or a second reload', async () => {
+    it('stops when home also stays on splash without dispatching or repeating the failed navigation', async () => {
       const f = await fixture({
         splash: true,
         knownThreadId: 'fixture-thread',
@@ -664,7 +658,6 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           screen: 'splash',
         });
         expect(f.requests).toEqual([
-          'www.instagram.com/direct/t/fixture-thread/',
           'www.instagram.com/direct/t/fixture-thread/',
           'www.instagram.com/',
         ]);
@@ -732,10 +725,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 }
               : {}),
           });
-          expect(f.requests).toEqual([
-            'www.instagram.com/',
-            'www.instagram.com/',
-          ]);
+          expect(f.requests).toEqual(['www.instagram.com/']);
         } finally {
           await f.close();
         }

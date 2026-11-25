@@ -35,9 +35,13 @@ import {
 import { getHotPage } from './facebook-hot-page.js';
 import { sendFacebookHot } from './facebook-hot-send.js';
 import { captureFailureDom } from './social-failure-dom.js';
-import { navigateSocialPage } from './social-navigation.js';
+import {
+  navigateSocialPage,
+  socialNavigationDiagnostics,
+} from './social-navigation.js';
 
 export type SocialSessionAccount = {
+  beforeRead?: () => Promise<void>;
   id: string;
   channel: SocialNetwork;
   settings: Record<string, unknown>;
@@ -62,7 +66,14 @@ const pageDiagnostics = new WeakMap<
   {
     mode: string;
     configuredViewport: { width: number; height: number } | null;
-    network: { resource: string; status?: number; error?: string }[];
+    network: {
+      resource: string;
+      mainDocument: boolean | null;
+      status?: number;
+      error?: string;
+    }[];
+    timeoutMs: number;
+    reusedTab: boolean;
   }
 >();
 export type FailureShotKind = 'check' | 'keepalive' | 'inbox' | 'send';
@@ -88,6 +99,8 @@ export async function captureFailureShot(
         navigation: {
           ...(await page.evaluate(instagramLoadingState).catch(() => ({}))),
           waitedSeconds: elapsedMs / 1000,
+          totalElapsedMs: elapsedMs,
+          navigationAttempt: socialNavigationDiagnostics.get(page),
           ...pageDiagnostics.get(page),
         },
       });
@@ -642,7 +655,7 @@ async function tryInstagramDirectChat(
     );
     return (await composer.isEditable()) && (await composer.isEnabled());
   } catch (error) {
-    if (isInstagramSplashTimeout(error)) throw error;
+    if (error instanceof SocialSessionCheckError) throw error;
     return false;
   }
 }
@@ -860,38 +873,28 @@ export async function waitForInstagramReady(
   // Partial adapter stubs do not have a browser execution context.
   if (typeof page.waitForFunction !== 'function') return;
   const started = Date.now();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      // Browser code has no module closures; a static predicate survives redirects.
-      await page.waitForFunction(
-        `(${instagramLoadingState.toString()})().ready`,
-        undefined,
-        { timeout: timeoutMs },
-      );
-      return;
-    } catch (error) {
-      const current = await page.evaluate(instagramLoadingState);
-      if (!current.splash) throw error;
-      if (attempt === 1 || options.reload === false) {
-        const original = new URL(page.url());
-        if (
-          options.recoverViaDirect === false ||
-          original.origin !== 'https://www.instagram.com' ||
-          original.username ||
-          original.password ||
-          original.pathname === '/' ||
-          /login|signin|challenge|checkpoint|captcha/i.test(original.pathname)
-        )
-          throw instagramSplashTimeout(Date.now() - started);
-        return recoverInstagramStartup(page, original, timeoutMs, started);
-      }
-      try {
-        const response = await navigateSocialPage(page, page.url(), timeoutMs);
-        if (response && response.status() >= 400) return response;
-      } catch {
-        throw instagramSplashTimeout(Date.now() - started);
-      }
-    }
+  try {
+    // This browser predicate survives document replacement; no polling sleeps or
+    // reload may interrupt a delayed SPA startup.
+    await page.waitForFunction(
+      `(${instagramLoadingState.toString()})().ready`,
+      undefined,
+      { timeout: timeoutMs },
+    );
+  } catch (error) {
+    const current = await page.evaluate(instagramLoadingState);
+    if (!current.splash) throw error;
+    const original = new URL(page.url());
+    if (
+      options.recoverViaDirect === false ||
+      original.origin !== 'https://www.instagram.com' ||
+      original.username ||
+      original.password ||
+      original.pathname === '/' ||
+      /login|signin|challenge|checkpoint|captcha/i.test(original.pathname)
+    )
+      throw instagramSplashTimeout(Date.now() - started);
+    return recoverInstagramStartup(page, original, timeoutMs, started);
   }
 }
 async function instagramArticleConfirmation(dialog: Locator, body: string) {
@@ -1075,7 +1078,7 @@ async function sendInstagram(
   let attempted = false;
   let composerDiagnostic: ComposerDiagnostic | undefined;
   let restriction: 'session_invalid' | 'rate_limit' | undefined;
-  page.on('response', (response) => {
+  const observeRestriction = (response: Response) => {
     if (![401, 403, 429].includes(response.status())) return;
     const request = response.request();
     const url = new URL(response.url());
@@ -1088,7 +1091,8 @@ async function sendInstagram(
       return;
     if (response.status() !== 429) restriction = 'session_invalid';
     else restriction ??= 'rate_limit';
-  });
+  };
+  page.on('response', observeRestriction);
   const assertSession = async () => {
     const previous = stage;
     stage = 'session';
@@ -1733,6 +1737,8 @@ async function sendInstagram(
     )
       throw error;
     throw stagedFailure(stage, kind);
+  } finally {
+    page.off?.('response', observeRestriction);
   }
 }
 // LinkedIn 2026 has obfuscated classes and no visible messaging link; notifications and My Network links only render signed in.
@@ -2317,6 +2323,7 @@ export function createSocialSendBrowser(
       taskId?: string;
     },
   ) {
+    const started = Date.now();
     return serialized(account.id, async () => {
       const profileMode = account.settings.browserProfile === true;
       const key = profileMode
@@ -2422,8 +2429,24 @@ export function createSocialSendBrowser(
         ? await lockSocialProfile(account.id)
         : undefined;
       let page: Page;
+      const retainTab = profileMode && account.channel === 'instagram';
+      const existing = retainTab
+        ? cached.context.pages().find(
+            (candidate) =>
+              !candidate.isClosed() &&
+              /^(?:(www\.)?instagram\.com|ig\.me)$/.test(
+                (() => {
+                  try {
+                    return new URL(candidate.url()).hostname;
+                  } catch {
+                    return '';
+                  }
+                })(),
+              ),
+          )
+        : undefined;
       try {
-        page = await cached.context.newPage();
+        page = existing ?? (await cached.context.newPage());
       } catch (error) {
         await releaseProfile?.();
         throw error;
@@ -2433,29 +2456,49 @@ export function createSocialSendBrowser(
       const diagnostic = {
         mode: profileMode ? 'persistent_profile_cdp' : 'worker_context',
         configuredViewport: page.viewportSize?.() ?? null,
-        network: [] as { resource: string; status?: number; error?: string }[],
+        network: [] as {
+          resource: string;
+          mainDocument: boolean | null;
+          status?: number;
+          error?: string;
+        }[],
+        timeoutMs,
+        reusedTab: Boolean(existing),
       };
       pageDiagnostics.set(page, diagnostic);
+      socialNavigationDiagnostics.delete(page);
+      const mainDocument = (request: import('playwright').Request) => {
+        try {
+          return (
+            request.isNavigationRequest() &&
+            request.frame() === page.mainFrame()
+          );
+        } catch {
+          return null;
+        }
+      };
       const record = (entry: (typeof diagnostic.network)[number]) => {
         diagnostic.network.push(entry);
         if (diagnostic.network.length > 12) diagnostic.network.shift();
       };
-      page.on('requestfailed', (request) =>
+      const onFailed = (request: import('playwright').Request) =>
         record({
           resource: request.resourceType(),
+          mainDocument: mainDocument(request),
           error:
             /\bERR_[A-Z_]+\b/.exec(request.failure()?.errorText ?? '')?.[0] ??
             'request_failed',
-        }),
-      );
-      page.on('response', (response) => {
+        });
+      const onResponse = (response: Response) => {
         if (response.status() >= 400)
           record({
             resource: response.request().resourceType(),
+            mainDocument: mainDocument(response.request()),
             status: response.status(),
           });
-      });
-      const started = Date.now();
+      };
+      page.on('requestfailed', onFailed);
+      page.on('response', onResponse);
       try {
         if (session.persistProxyPublicIp) {
           const checkedAt = Date.parse(session.proxyPublicIpCheckedAt ?? '');
@@ -2484,6 +2527,15 @@ export function createSocialSendBrowser(
             session.proxyPublicIp = ip;
             session.proxyPublicIpCheckedAt = verifiedAt;
           }
+        }
+        if (existing) {
+          // CDP's home DOMContentLoaded does not mean Instagram has booted.
+          // Do not cancel that startup or navigate away from a login/challenge.
+          await assertSessionNegatives(page, 'instagram');
+          await waitForInstagramReady(page, timeoutMs, {
+            recoverViaDirect: false,
+          });
+          await assertSessionNegatives(page, 'instagram');
         }
         const result = await fn(page);
         if (session.persistStorageState && !profileMode) {
@@ -2528,7 +2580,7 @@ export function createSocialSendBrowser(
           const network = last
             ? `${last.resource}:${last.error ?? last.status}`
             : 'none_observed';
-          detail.reasonUk += ` [url=${urlPattern}; title=${title}; mode=${diagnostic.mode}; network=${network}]`;
+          detail.reasonUk += ` [totalElapsedMs=${Date.now() - started}; timeoutMs=${timeoutMs}] [url=${urlPattern}; title=${title}; mode=${diagnostic.mode}; network=${network}]`;
           if (error instanceof Error) error.message = detail.reasonUk;
         }
         const phase =
@@ -2548,7 +2600,9 @@ export function createSocialSendBrowser(
           );
         throw error;
       } finally {
-        await page.close().catch(() => {});
+        page.off?.('requestfailed', onFailed);
+        page.off?.('response', onResponse);
+        if (!retainTab) await page.close().catch(() => {});
         await releaseProfile?.();
       }
     });
@@ -2588,6 +2642,8 @@ export function createSocialSendBrowser(
           if (response && response.status() >= 500)
             throw new SocialSessionCheckError('network');
           stage = 'auth';
+          await assertSessionNegatives(page, 'facebook');
+          await account.beforeRead?.();
           try {
             await assertSocialSession(page, 'facebook');
           } catch (error) {
@@ -2701,10 +2757,13 @@ export function createSocialSendBrowser(
                 }
               }
               stage = 'auth';
+              await assertSessionNegatives(page, account.channel);
+              await account.beforeRead?.();
               await assertSocialSession(page, account.channel);
               if (!status || status < 200 || status >= 300)
                 throw new SocialSessionCheckError('unknown_auth');
             } catch (caught) {
+              if (caught instanceof SocialProfileBusyError) throw caught;
               const error =
                 caught instanceof SocialSessionCheckError
                   ? caught
@@ -2792,6 +2851,8 @@ export function createSocialSendBrowser(
                 reloaded.status() === 429 ? 'rate_limit' : 'network',
               );
           }
+          await assertSessionNegatives(page, account.channel);
+          await account.beforeRead?.();
           await assertSocialSession(page, account.channel);
           stage = 'wait';
           if (!response || response.status() < 200 || response.status() >= 300)
