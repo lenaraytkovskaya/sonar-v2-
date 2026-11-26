@@ -60,11 +60,19 @@ export function failureDomSkeleton(limit = 200 * 1024) {
     }
     return false;
   };
+  const instagram = /^(?:(www\.)?instagram\.com|ig\.me)$/.test(
+    location.hostname,
+  );
+  const publicModalHeading =
+    /^(Turn on Notifications|Увімкнути сповіщення|Включить уведомления)$/i;
   const headings = Array.from(
     document.querySelectorAll('main h1, [role="main"] h1'),
   ).filter(
     (node) =>
       !node.closest(`${sensitive}, [role=dialog], [role=region]`) &&
+      !(
+        instagram && node.closest('[role="alertdialog"], [aria-modal="true"]')
+      ) &&
       !hidden(node) &&
       node.getClientRects().length > 0,
   );
@@ -83,6 +91,10 @@ export function failureDomSkeleton(limit = 200 * 1024) {
   ).filter(
     (node) =>
       !node.closest(sensitive) &&
+      (!instagram ||
+        publicModalHeading.test(
+          node.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        )) &&
       !hidden(node) &&
       node.getClientRects().length > 0,
   );

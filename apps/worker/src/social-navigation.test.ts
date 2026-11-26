@@ -39,3 +39,29 @@ it.each([true, false])(
     expect(emitter.listenerCount('framenavigated')).toBe(0);
   },
 );
+
+it('rejects an Instagram navigation timeout after a foreign redirect despite ready-looking content', async () => {
+  const timeout = Object.assign(new Error('navigation timed out'), {
+    name: 'TimeoutError',
+  });
+  const frame = {};
+  const response = {
+    request: () => ({ isNavigationRequest: () => true }),
+    frame: () => frame,
+  };
+  const emitter = new EventEmitter();
+  const evaluate = vi.fn(async () => false);
+  const page = Object.assign(emitter, {
+    url: () => 'https://foreign.invalid/',
+    mainFrame: () => frame,
+    evaluate,
+    goto: vi.fn(async () => {
+      emitter.emit('response', response);
+      throw timeout;
+    }),
+  }) as unknown as Page;
+  await expect(
+    navigateSocialPage(page, 'https://www.instagram.com/', 100),
+  ).rejects.toBe(timeout);
+  expect(evaluate).not.toHaveBeenCalled();
+});

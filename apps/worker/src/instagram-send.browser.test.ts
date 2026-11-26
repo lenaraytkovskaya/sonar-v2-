@@ -15,6 +15,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       new URL('./instagram-menu.sanitized.fixture.html', import.meta.url),
       'utf8',
     );
+    const startup = readFileSync(
+      new URL('./instagram-startup.sanitized.fixture.html', import.meta.url),
+      'utf8',
+    );
     beforeAll(async () => {
       browser = await chromium.launch({
         headless: true,
@@ -31,6 +35,33 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       context.on('page', (value) => {
         page = value;
       });
+      const labels = {
+        en: ['Turn on Notifications', 'Turn On', 'Not Now'],
+        uk: ['Увімкнути сповіщення', 'Увімкнути', 'Не зараз'],
+        ru: ['Включить уведомления', 'Включить', 'Не сейчас'],
+      };
+      const language = options.notificationLanguage as keyof typeof labels;
+      let startupMarkup = language
+        ? startup
+            .replace('{{heading}}', labels[language][0]!)
+            .replace('{{enable}}', labels[language][1]!)
+            .replace('{{dismiss}}', labels[language][2]!)
+        : '';
+      if (options.unknownNotifications)
+        startupMarkup = startupMarkup.replace(
+          labels[language][0]!,
+          'Unknown fixture heading',
+        );
+      if (options.extraNotificationAction)
+        startupMarkup = startupMarkup.replace(
+          /<\/div>\s*$/,
+          '<button>Other action</button></div>',
+        );
+      if (options.duplicateNotifications) startupMarkup += startupMarkup;
+      if (options.replaceNotifications)
+        startupMarkup += `<script>document.querySelector('[role="dialog"] button:last-child').addEventListener('pointerover', () => { const old = document.querySelector('[role="dialog"]'); const next = old.cloneNode(true); next.querySelector('h2').textContent = 'Unknown fixture heading'; old.replaceWith(next); }, { once: true });</script>`;
+      if (options.mutateNotifications)
+        startupMarkup += `<script>document.querySelector('[role="dialog"] button:last-child').addEventListener('pointerover', () => { document.querySelector('[role="dialog"] h2').textContent = 'Unknown fixture heading'; }, { once: true });</script>`;
       const requests: string[] = [];
       let directBooted = false;
       const events: string[] = [];
@@ -80,8 +111,9 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             return route.fulfill({
               contentType: 'text/html',
               body:
-                (options.homeMarkup as string) ||
-                `<main>${options.homeLogin ? '<input type="password">' : ''}<nav ${options.homeGraphqlStatus ? 'hidden' : ''}>${options.homeDirectLinks ?? '<a href="/direct/inbox/">Messages</a>'}</nav></main>${options.homeGraphqlStatus ? '<script>fetch("/api/graphql", {method: "POST"}).then(() => document.querySelector("nav").hidden = false)</script>' : ''}${options.homeCheckpoint ? '<script>history.replaceState({}, "", "/challenge/")</script>' : ''}`,
+                startupMarkup +
+                ((options.homeMarkup as string) ||
+                  `<main>${options.homeLogin ? '<input type="password">' : ''}<nav ${options.homeGraphqlStatus ? 'hidden' : ''}>${options.homeDirectLinks ?? '<a href="/direct/inbox/">Messages</a>'}</nav></main>${options.homeGraphqlStatus ? '<script>fetch("/api/graphql", {method: "POST"}).then(() => document.querySelector("nav").hidden = false)</script>' : ''}${options.homeCheckpoint ? '<script>history.replaceState({}, "", "/challenge/")</script>' : ''}`),
             });
           if (/^\/direct\/inbox\/?$/.test(url.pathname)) {
             directBooted = true;
@@ -90,7 +122,8 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               contentType: 'text/html',
               body: options.recoveredCheckpoint
                 ? '<script>location.replace("/challenge/")</script>'
-                : '<main><a href="/direct/inbox/">Messages</a></main>',
+                : startupMarkup +
+                  '<main><a href="/direct/inbox/">Messages</a></main>',
             });
           }
         }
@@ -118,7 +151,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                   : options.resumedGraphqlStatus && directBooted
                     ? html.replace('<nav>', '<nav hidden>') +
                       '<script>fetch("/api/graphql", {method:"POST"}).then(() => document.querySelector("nav").hidden = false)</script>'
-                    : html,
+                    : startupMarkup + html,
           });
         if (url.hostname !== 'ig.me') return route.abort('blockedbyclient');
         if (options.deepLinkSuccess)
@@ -289,6 +322,119 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
             'textarea' in options ? 'textarea' : 'textbox',
           ]);
           expect(f.mark).toHaveBeenCalledOnce();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each(['en', 'uk', 'ru'])(
+      'dismisses only known %s notifications over loaded logo/footer and sends once',
+      async (notificationLanguage) => {
+        const f = await fixture({ notificationLanguage, timeoutMs: 180 });
+        try {
+          await expect(f.send()).resolves.toBe(
+            'https://www.instagram.com/direct/t/fixture-thread/',
+          );
+          expect(f.events).toEqual([
+            'notifications-dismissed',
+            'open',
+            'mark',
+            'send',
+          ]);
+          expect(f.mark).toHaveBeenCalledOnce();
+          expect(f.requests).not.toContain('www.instagram.com/');
+          expect(f.persistFailureShot).not.toHaveBeenCalled();
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it('dismisses notifications before Direct recovery, inbox and resumed profile', async () => {
+      const f = await fixture({
+        recoverViaHome: true,
+        notificationLanguage: 'en',
+        timeoutMs: 180,
+      });
+      try {
+        await expect(f.send()).resolves.toBe(
+          'https://www.instagram.com/direct/t/fixture-thread/',
+        );
+        expect(f.requests).toContain('www.instagram.com/direct/inbox/');
+        expect(f.events).toEqual([
+          'notifications-dismissed',
+          'notifications-dismissed',
+          'notifications-dismissed',
+          'open',
+          'mark',
+          'send',
+        ]);
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
+    it.each([
+      'unknownNotifications',
+      'extraNotificationAction',
+      'duplicateNotifications',
+      'replaceNotifications',
+      'mutateNotifications',
+    ])(
+      'preserves unconfirmed notifications (%s), captures diagnostics and stops before the marker',
+      async (variant) => {
+        const f = await fixture({
+          notificationLanguage: 'en',
+          [variant]: true,
+          timeoutMs: 180,
+        });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            stage: ['replaceNotifications', 'mutateNotifications'].includes(
+              variant,
+            )
+              ? 'navigation'
+              : 'messagebutton',
+            errorKind: 'timeout',
+          });
+          expect(f.events).toEqual([]);
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.inputs).toEqual([]);
+          expect(f.persistFailureShot).toHaveBeenCalledWith(
+            'send',
+            expect.objectContaining({
+              stage: ['replaceNotifications', 'mutateNotifications'].includes(
+                variant,
+              )
+                ? 'navigation'
+                : 'messagebutton',
+              dom: expect.objectContaining({
+                phase: ['replaceNotifications', 'mutateNotifications'].includes(
+                  variant,
+                )
+                  ? 'navigation'
+                  : 'messagebutton',
+                navigation: expect.objectContaining({
+                  splash: false,
+                  logo: true,
+                  fromMeta: true,
+                  nav: true,
+                  main: true,
+                  dialog: true,
+                  hidden: false,
+                  dialogHeading: [
+                    'unknownNotifications',
+                    'replaceNotifications',
+                    'mutateNotifications',
+                  ].includes(variant)
+                    ? ['other_redacted']
+                    : expect.any(Array),
+                }),
+              }),
+            }),
+          );
+          expect(JSON.stringify(f.persistFailureShot.mock.calls)).not.toContain(
+            'Unknown fixture heading',
+          );
         } finally {
           await f.close();
         }
@@ -695,6 +841,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 navigation: expect.objectContaining({
                   splashElement: true,
                   logo: true,
+                  fromMeta: true,
+                  nav: false,
+                  main: false,
+                  dialog: false,
+                  hidden: false,
                   login: false,
                   challenge: false,
                   waitedSeconds: expect.any(Number),
