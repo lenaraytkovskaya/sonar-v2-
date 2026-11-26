@@ -1,4 +1,5 @@
-import type { JSHandle } from 'playwright';
+import type { JSHandle, Page } from 'playwright';
+import { facebookSendNetwork } from './facebook-send-network.js';
 import { socialTarget, type SocialTarget } from '@sonar/core';
 import {
   SocialSendError,
@@ -44,12 +45,12 @@ export async function sendFacebookHot(
 ): Promise<FacebookDispatchResult | null> {
   // A waiting send makes the background sweep step aside.
   hot.pendingSends++;
-  // Cut a sweep's page load short instead of waiting for it to time out.
-  if (hot.activeOps > 0)
-    void hot.page.evaluate(() => window.stop()).catch(() => {});
-  return runOnHotPage<FacebookDispatchResult | null>(hot, async (page) => {
+  // Background operations yield at their cooperative waits; the queue owns
+  // navigation cancellation so a second send cannot interrupt the first.
+  const send = async (page: Page): Promise<FacebookDispatchResult | null> => {
     const { target, threadId, body, ownId, timeoutMs } = input;
     const operationStarted = Date.now();
+    const network = facebookSendNetwork(page);
     let phase = 'hot_navigation';
     const capture = () =>
       input
@@ -105,7 +106,7 @@ export async function sendFacebookHot(
       await page
         .locator(`${LOG} [data-message-id]`)
         .first()
-        .waitFor({ state: 'visible', timeout: left() });
+        .waitFor({ state: 'visible', timeout: Math.min(left(), 3000) });
       const before = await readFacebookThread(page, ownId, 200);
       if (before.threadId !== threadId) return decline('thread mismatch');
       if (socialTarget(before.peerProfile ?? '')?.handle !== target.handle)
@@ -150,9 +151,9 @@ export async function sendFacebookHot(
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
       // Snapshot the DOM immediately before the only dispatch. Provider IDs can
       // arrive later, including on old ID-less rows, so raw IDs alone are not a
-      // sufficient baseline. Keep references in the page rather than serializing.
+      // sufficient baseline. Retain ID/signature counts across React remounts.
       baseline = await page.evaluateHandle(
-        ({ body }) => {
+        ({ body, ownId }) => {
           const normalize = (text: string | null) =>
             (text ?? '').replace(/\s+/g, ' ').trim();
           const visible = (node: Element) =>
@@ -162,10 +163,7 @@ export async function sendFacebookHot(
           const logs = Array.from(
             document.querySelectorAll('[role="log"]'),
           ).filter(visible);
-          const log = logs.length === 1 ? logs[0]! : null;
-          const elements = new Set(
-            Array.from(log?.querySelectorAll('*') ?? []),
-          );
+          let log = logs.length === 1 ? logs[0]! : null;
           const exactTail = (label: string | null) =>
             normalize(label).endsWith(': ' + normalize(body)) ||
             normalize(label).endsWith(': «' + normalize(body) + '»');
@@ -211,26 +209,40 @@ export async function sendFacebookHot(
           const signatures = new Set(
             rows.filter((row) => row.hasAttribute('aria-label')).map(signature),
           );
-          const boundary = () =>
-            Boolean(log?.isConnected) &&
-            !rows.some((row) => !log!.contains(row)) &&
-            Array.from(document.querySelectorAll('[role="log"]')).filter(
-              visible,
-            )[0] === log &&
-            Array.from(document.querySelectorAll('[role="log"]')).filter(
-              visible,
-            ).length === 1;
+          const exactRows = () =>
+            Array.from(log?.querySelectorAll(selector) ?? []).filter((row) => {
+              const label = row.getAttribute('aria-label') ?? '';
+              const id = row.getAttribute('data-message-id') ?? '';
+              return (
+                visible(row) &&
+                (/(?:^|, )(?:You|Ви|Вы): /.test(label) ||
+                  id.startsWith(ownId + '@msgr.')) &&
+                Array.from(row.querySelectorAll('div[dir="auto"]')).some(
+                  (node) => normalize(node.textContent) === normalize(body),
+                )
+              );
+            });
+          const beforeCount = exactRows().length;
+          const boundary = () => {
+            const current = Array.from(
+              document.querySelectorAll('[role="log"]'),
+            ).filter(visible);
+            log = current.length === 1 ? current[0]! : null;
+            return Boolean(log);
+          };
           const fresh = (row: Element) =>
             boundary() &&
-            !elements.has(row) &&
-            !elements.has(row.closest('[role="article"]') ?? row) &&
+            exactRows().length === beforeCount + 1 &&
+            !ids.has(row.getAttribute('data-message-id')) &&
             !signatures.has(signature(row)) &&
-            rows.every((old) =>
-              Boolean(
-                old.compareDocumentPosition(row) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-              ),
-            );
+            Array.from(log!.querySelectorAll('[data-message-id]'))
+              .filter((old) => ids.has(old.getAttribute('data-message-id')))
+              .every((old) =>
+                Boolean(
+                  old.compareDocumentPosition(row) &
+                  Node.DOCUMENT_POSITION_FOLLOWING,
+                ),
+              );
           const settled = (
             row: Element,
             wrapper: Element,
@@ -259,7 +271,7 @@ export async function sendFacebookHot(
                     ))),
             );
           };
-          let stable: Element | undefined;
+          let stable = false;
           let stableSince = performance.now();
           return {
             isNew: (id: string) => {
@@ -339,8 +351,8 @@ export async function sendFacebookHot(
                   settled(row, wrapper, buttons)
                 );
               });
-              if (matches.length !== 1 || stable !== matches[0]) {
-                stable = matches.length === 1 ? matches[0] : undefined;
+              if (matches.length !== 1 || !stable) {
+                stable = matches.length === 1;
                 stableSince = performance.now();
               }
               return {
@@ -352,21 +364,43 @@ export async function sendFacebookHot(
             },
           };
         },
-        { body },
+        { body, ownId },
       );
+      network.arm({ body, ownId, threadId, knownIds: [...known] });
       await editor.press('Enter');
       phase = 'hot_confirmation';
       let unconfirmed = 'new_outgoing_not_observed';
       try {
         for (;;) {
+          const acknowledgement = network.result();
+          if (acknowledgement)
+            return {
+              outcome: 'facebook_network_confirmed',
+              dialogUrl: target.canonicalUrl,
+              threadId,
+              externalMessageId: acknowledgement.externalMessageId,
+              observation: {
+                inputExactMatch: true,
+                dispatchPerformed: true,
+                outgoingBefore: Math.min(99, outgoingBefore),
+                outgoingAfter: Math.min(99, outgoingBefore + 1),
+                newOutgoing: true,
+                observationMs: Date.now() - startedAt,
+                lateError: 'none',
+              },
+            };
           const after = await readFacebookThread(page, ownId, 200);
           if (
-            after.threadId !== threadId ||
-            socialTarget(after.peerProfile ?? '')?.handle !== target.handle ||
-            !after.composerVerified
+            !network.result() &&
+            (after.threadId !== threadId ||
+              socialTarget(after.peerProfile ?? '')?.handle !== target.handle ||
+              !after.composerVerified)
           ) {
             unconfirmed = 'conversation_unverified';
-            break;
+            if (Date.now() - startedAt >= (input.confirmMs ?? CONFIRM_MS))
+              break;
+            await page.waitForTimeout(POLL_MS);
+            continue;
           }
           const candidates = after.messages.filter(
             (message) =>
@@ -396,7 +430,12 @@ export async function sendFacebookHot(
           }
           // Prefer the provider ID while it hydrates. A stable explicit sent
           // control can prove dispatch even if Facebook never exposes an ID.
-          if (added.length === 1 || (expired && withoutId.stable)) {
+          if (
+            (added.length === 1 &&
+              Date.now() - startedAt >=
+                Math.min(input.confirmMs ?? CONFIRM_MS, 1000)) ||
+            (expired && withoutId.stable)
+          ) {
             const externalMessageId = added[0]?.externalMessageId;
             const read = Boolean(
               externalMessageId && after.seenMessageId === externalMessageId,
@@ -448,18 +487,43 @@ export async function sendFacebookHot(
         // Fall through: whatever happened, the message may have been sent.
         unconfirmed = 'observation_failed';
       }
-      noteHot(hot, `send unconfirmed: ${unconfirmed}`);
+      noteHot(
+        hot,
+        `send unconfirmed: ${unconfirmed}; network=${JSON.stringify(network.diagnostic())}`,
+      );
       throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
     } catch (error) {
+      if (phase === 'hot_thread') {
+        const shape = await page
+          .evaluate(() => ({
+            logs: document.querySelectorAll('[role="log"]').length,
+            messageIds: document.querySelectorAll(
+              '[role="log"] [data-message-id]',
+            ).length,
+            editors: document.querySelectorAll('[data-lexical-editor]').length,
+          }))
+          .catch(() => ({ logs: 0, messageIds: 0, editors: 0 }));
+        noteHot(
+          hot,
+          `hot_thread_failed ${JSON.stringify({ reason: shape.messageIds === 0 ? 'message_id_not_observed' : 'thread_unverified', ...shape, threadPathMatch: paths.includes(trimSlash(new URL(page.url()).pathname)) })}`,
+        );
+      }
       await capture();
       if (phase !== 'hot_confirmation')
         noteHot(
           hot,
           `send ${marked ? 'unconfirmed' : 'declined'}: ${phase}_failed`,
         );
-      if (error instanceof SocialSendError) throw error;
+      if (error instanceof SocialSendError) {
+        error.reasonUk += ` ${JSON.stringify({ phase, network: network.diagnostic() })}`;
+        throw error;
+      }
       if (marked) {
-        throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
+        const failure = new SocialSendError(
+          'delivery_uncertain',
+          `Перевірте чат вручну. ${JSON.stringify({ phase, network: network.diagnostic() })}`,
+        );
+        throw failure;
       }
       // Before the dispatch an unexpected page state only means "not here".
       if (filled)
@@ -469,9 +533,11 @@ export async function sendFacebookHot(
           .catch(() => {});
       return null;
     } finally {
+      network.stop();
       await baseline?.dispose().catch(() => {});
     }
-  }).finally(() => {
+  };
+  return runOnHotPage(hot, send, 'send').finally(() => {
     hot.pendingSends--;
   });
 }

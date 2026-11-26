@@ -1126,6 +1126,189 @@ it.skipIf(!enabled)(
     }
   },
 );
+it
+  .skipIf(!enabled)
+  .each([
+    'fresh',
+    'known_import',
+    'snapshot_id',
+    'snapshot_ids',
+    'ambiguous',
+    'ambiguous_outside',
+    'outside_window',
+    'before_attempt',
+    'unrelated_pause',
+    'known_send_id',
+    'known_send_conflict',
+  ])(
+  'reconciles date-less outgoing only with fresh singleton evidence: %s',
+  async (scenario) => {
+    const { sendEmailMessage } = await import('@sonar/db/email');
+    const profile = `https://www.facebook.com/unknown_${randomUUID().replaceAll('-', '')}/`;
+    const observed = {
+      ...message(randomUUID(), 'out', profile),
+      occurredAt: null,
+      providerTimestamp: '09:05',
+      observedAt:
+        scenario === 'outside_window' || scenario === 'known_send_id'
+          ? now.toISOString()
+          : scenario === 'before_attempt'
+            ? '2026-11-14T08:59:59Z'
+            : '2026-11-14T09:05:00Z',
+    };
+    const {
+      rows: [conversation],
+    } = await db.sonarPool.query(
+      "insert into conversations(channel,account_id,provider_thread_id,peer_value) values('social',$1,$2,$3) returning id",
+      [account, observed.threadId, profile],
+    );
+    if (scenario === 'known_import')
+      await inbox.persistSocialInboxBatch(account, 'facebook', {
+        messages: [observed],
+        resumeAnchor: null,
+      });
+    const originalSync = (
+      await db.sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [account],
+      )
+    ).rows[0].settings.inboxSync;
+    if (scenario.startsWith('snapshot_'))
+      await db.sonarPool.query(
+        "update channel_accounts set settings=jsonb_set(settings,'{inboxSync}',$2::jsonb) where id=$1",
+        [
+          account,
+          {
+            threadCursors: {
+              [observed.threadId]:
+                scenario === 'snapshot_id'
+                  ? { lastMessageId: observed.externalMessageId }
+                  : { lastMessageIds: [observed.externalMessageId] },
+            },
+          },
+        ],
+      );
+    const ids: string[] = [],
+      taskIds: string[] = [];
+    try {
+      for (let i = 0; i < (scenario.startsWith('ambiguous') ? 2 : 1); i++) {
+        const id = randomUUID(),
+          taskId = randomUUID();
+        ids.push(id);
+        taskIds.push(taskId);
+        await db.sonarPool.query(
+          `insert into messages(id,conversation_id,account_id,channel,direction,source,to_value,subject,body,status,idempotency_key,first_attempt_at,external_message_id,social_meta,needs_human,reason_uk)
+         values($1,$2,$3,'social','out','manual',$4,'','Hello','queued',$1::uuid::text,$7::timestamptz,$5,$6,true,'Перевірте чат вручну')`,
+          [
+            id,
+            conversation.id,
+            account,
+            profile,
+            scenario.startsWith('known_send')
+              ? observed.externalMessageId
+              : null,
+            {
+              network: 'facebook',
+              threadId: observed.threadId,
+              peerProfile: profile,
+              ...(scenario === 'known_send_conflict'
+                ? { legacyConflictIds: [id] }
+                : {}),
+            },
+            scenario === 'ambiguous_outside' && i === 1
+              ? '2026-11-14T08:00:00Z'
+              : '2026-11-14T09:00:00Z',
+          ],
+        );
+        await db.sonarPool.query(
+          `insert into tasks(id,type,idempotency_key,payload,status,reason_code,reason_uk)
+         values($1,'message.send',$1::uuid::text,$2,'paused',$3,'Перевірте чат вручну')`,
+          [
+            taskId,
+            { messageId: id },
+            scenario === 'unrelated_pause'
+              ? 'account_health_paused'
+              : 'social_delivery_uncertain',
+          ],
+        );
+      }
+      const proven = scenario === 'fresh' || scenario.startsWith('known_send');
+      const persist = () =>
+        inbox.persistSocialInboxBatch(account, 'facebook', {
+          messages: [observed],
+          resumeAnchor: null,
+        });
+      expect(await persist()).toMatchObject({
+        created: proven || scenario === 'known_import' ? 0 : 1,
+      });
+      const rows = (
+        await db.sonarPool.query(
+          'select id,status,external_message_id,needs_human,reason_uk,sent_at from messages where conversation_id=$1',
+          [conversation.id],
+        )
+      ).rows;
+      expect(rows).toHaveLength(proven ? 1 : ids.length + 1);
+      for (const id of ids)
+        expect(rows.find((row) => row.id === id)).toMatchObject(
+          proven
+            ? {
+                status: 'sent',
+                external_message_id: observed.externalMessageId,
+                needs_human: scenario === 'known_send_conflict',
+                reason_uk:
+                  scenario === 'known_send_conflict'
+                    ? 'Перевірте чат вручну'
+                    : null,
+                sent_at: new Date('2026-11-14T09:00:00Z'),
+              }
+            : {
+                status: 'queued',
+                external_message_id: null,
+                needs_human: true,
+              },
+        );
+      const sendTasks = (
+        await db.sonarPool.query(
+          'select status,reason_code,result from tasks where id=any($1::uuid[])',
+          [taskIds],
+        )
+      ).rows;
+      expect(
+        sendTasks.every((row) => row.status === (proven ? 'done' : 'paused')),
+      ).toBe(true);
+      if (proven) {
+        expect(sendTasks[0]).toMatchObject({
+          reason_code: null,
+          result: {
+            messageId: ids[0],
+            externalMessageId: observed.externalMessageId,
+          },
+        });
+        expect(await tasks.retryTask(taskIds[0]!, user)).toBe(false);
+        const sender = vi.fn(async () => 'must-not-send');
+        for (let retry = 0; retry < 2; retry++)
+          expect(
+            await sendEmailMessage(
+              ids[0]!,
+              taskIds[0]!,
+              sender,
+              now,
+              Math.random,
+              'social',
+            ),
+          ).toMatchObject({ status: 'done' });
+        expect(sender).not.toHaveBeenCalled();
+      }
+      expect(await persist()).toEqual({ created: 0, conflicts: [] });
+    } finally {
+      if (scenario.startsWith('snapshot_'))
+        await db.sonarPool.query(
+          "update channel_accounts set settings=(settings-'inboxSync')||$2::jsonb where id=$1",
+          [account, originalSync ? { inboxSync: originalSync } : {}],
+        );
+    }
+  },
+);
 it.skipIf(!enabled)(
   'marks our sent messages read up to the one the peer has seen',
   async () => {
@@ -1966,7 +2149,7 @@ it
       ).rows[0],
     ).toEqual({
       external_message_id: proven ? externalId : null,
-      reason_uk: scenario === 'idless' ? null : facebookDispatchReason,
+      reason_uk: proven ? null : facebookDispatchReason,
     });
     const sender = vi.fn(async () => 'must-not-send');
     expect(

@@ -143,6 +143,9 @@ beforeAll(async () => {
         HOME: process.env.HOME,
         NODE_ENV: 'development',
         NEXT_TELEMETRY_DISABLED: '1',
+        ...(process.env.WATCHPACK_POLLING !== undefined
+          ? { WATCHPACK_POLLING: process.env.WATCHPACK_POLLING }
+          : {}),
         DATABASE_URL: process.env.DATABASE_URL,
         REGISTRY_DATABASE_URL: process.env.REGISTRY_DATABASE_URL,
         AUTH_SECRET: secret,

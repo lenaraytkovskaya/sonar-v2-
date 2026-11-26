@@ -5,7 +5,12 @@ import {
   captureFacebookHot,
   captureFacebookInbox,
 } from './facebook-inbox-browser.js';
-import { getHotPage, noteHot, runOnHotPage } from './facebook-hot-page.js';
+import {
+  getHotPage,
+  noteHot,
+  runOnHotPage,
+  waitForFacebookRead,
+} from './facebook-hot-page.js';
 import type {
   SocialInboxBatch,
   SocialInboxMessage,
@@ -657,7 +662,10 @@ export function createSocialInboxAdapter(
                     string,
                     { lastMessageId?: string }
                   >,
-                  account.beforeRead,
+                  async () => {
+                    await waitForFacebookRead(page, async () => {});
+                    await account.beforeRead?.();
+                  },
                 ),
               );
               if (
@@ -685,6 +693,11 @@ export function createSocialInboxAdapter(
                 error instanceof SocialSessionCheckError
               )
                 throw error;
+              if (
+                error instanceof Error &&
+                error.message === 'facebook_read_preempted'
+              )
+                return { complete: false, skipped: ['time_limit'] };
               // Anything else: fall back to a full pass on a fresh page.
             }
           }
@@ -707,17 +720,24 @@ export function createSocialInboxAdapter(
                   string,
                   { lastMessageId?: string }
                 >,
-                account.beforeRead,
+                async () => {
+                  await waitForFacebookRead(page, async () => {});
+                  await account.beforeRead?.();
+                },
               );
+              await waitForFacebookRead(page, async () => {});
               await account.beforeRead?.();
               hot.lastFullAt = Date.now();
               // Leave the page on the chat list so the watcher keeps its baseline.
-              await page
-                .goto('https://www.facebook.com/messages/', {
-                  waitUntil: 'domcontentloaded',
-                  timeout: timeoutMs,
-                })
-                .catch(() => {});
+              await waitForFacebookRead(
+                page,
+                () =>
+                  page.goto('https://www.facebook.com/messages/', {
+                    waitUntil: 'domcontentloaded',
+                    timeout: timeoutMs,
+                  }),
+                true,
+              );
               return result;
             } finally {
               for (const href of pendingFacebookThreads(page))

@@ -223,6 +223,11 @@ function wire(scope) {
   button.addEventListener('click', () => {
     window.fixtureEvent('send:' + scope.id);
     if (o.afterSendCheckpoint) { document.body.insertAdjacentHTML('beforeend', '<form action="/checkpoint/"><button>Continue</button></form>'); return; }
+    if (o.networkAck || o.delayedNetworkAck) {
+      const raw = JSON.stringify({ body: editor.innerText, sender_id: '100000000000009', thread_id: 'synthetic-thread', offline_threading_id: 'synthetic-client' });
+      if (o.delayedNetworkAck) { setTimeout(() => fetch('/api/graphql/', { method: 'POST', body: raw }), 120); setTimeout(() => scope.remove(), 80); }
+      else { fetch('/api/graphql/', { method: 'POST', body: raw }); scope.remove(); return; }
+    }
     if (o.eraseOnly) { editor.textContent = ''; return; }
     if (o.rerenderAfterSend) { region(scope).innerHTML = region(scope).innerHTML; return; }
     if (o.prependHistory) { region(scope).prepend(row()); return; }
@@ -241,7 +246,7 @@ function wire(scope) {
     if (o.bodyStatusLabel) next.querySelector('span').insertAdjacentHTML('beforeend', '<i aria-label="Sending"></i>');
     if (o.bodyWrapper) next.querySelector('span').innerHTML = '<span>' + body + '</span>';
     if (o.pendingSettles) { next.insertAdjacentHTML('beforeend', '<span class="status">Sending</span>'); setTimeout(() => next.querySelector('.status').remove(), 40); }
-    destination.append(next); if (o.doubleOutgoing) destination.append(next.cloneNode(true)); editor.textContent = '';
+    destination.append(next); if (o.remountAfterAppend) { const replacement = scope.cloneNode(true); scope.replaceWith(replacement); wire(replacement); } if (o.doubleOutgoing) destination.append(next.cloneNode(true)); editor.textContent = '';
     if (o.lateFailure) setTimeout(() => next.insertAdjacentHTML('beforeend', '<span>Not sent. Retry</span>'), 120);
     if (o.lateNoAuth) setTimeout(() => document.querySelector('nav').remove(), 120);
     if (o.lateNetwork || o.lateHttp) setTimeout(() => fetch('/synthetic-transmission').catch(() => {}), 120);
@@ -477,6 +482,21 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       let marked = false;
       await context.route('**/*', (route) => {
         requests.push(route.request().url());
+        if (
+          (options.networkAck || options.delayedNetworkAck) &&
+          new URL(route.request().url()).pathname === '/api/graphql/'
+        )
+          return route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              data: {
+                message: {
+                  mid: 'normal-provider',
+                  offline_threading_id: 'synthetic-client',
+                },
+              },
+            }),
+          });
         if (options.background && route.request().url().endsWith('/background'))
           return;
         if (
@@ -728,6 +748,43 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         close: () => context.close(),
       };
     }
+    it('confirms a correlated GraphQL ACK without a known thread or mounted chat', async () => {
+      const f = await fixture({ networkAck: true });
+      try {
+        expect(await f.send()).toMatchObject({
+          outcome: 'facebook_network_confirmed',
+          externalMessageId: 'normal-provider',
+          threadId: 'synthetic-thread',
+        });
+        expect(
+          f.events.filter((event) => event === 'send:target'),
+        ).toHaveLength(1);
+        expect(f.mark).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    });
+    it('prefers a delayed GraphQL ACK over an optimistic bubble removed during the hold', async () => {
+      const f = await fixture({ delayedNetworkAck: true });
+      try {
+        expect(await f.send()).toMatchObject({
+          outcome: 'facebook_network_confirmed',
+          externalMessageId: 'normal-provider',
+        });
+      } finally {
+        await f.close();
+      }
+    });
+    it('confirms a new outgoing after the entire bound chat remounts', async () => {
+      const f = await fixture({ remountAfterAppend: true });
+      try {
+        expect(await f.send()).toMatchObject({
+          observation: { newOutgoing: true },
+        });
+      } finally {
+        await f.close();
+      }
+    });
     it('confirms delivery from message structure alone, in an unknown language', async () => {
       const f = await fixture({ structuralOnly: true });
       try {
@@ -1170,7 +1227,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       [
         { rerenderAfterSend: true },
         'confirmation',
-        'baseline_invalidated',
+        'unconfirmed',
         'timeout',
         {},
       ],

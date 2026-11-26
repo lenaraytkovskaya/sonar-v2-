@@ -248,6 +248,113 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           "update conversations set account_id=$2,provider_thread_id='123' where id=$1",
           [conversationId, account],
         );
+        for (const [i, variant] of [
+          'confirmed',
+          'known_thread',
+          'missing_id',
+          'other_thread',
+          'numeric_thread',
+          'read',
+          'invalid_receipt',
+        ].entries()) {
+          const valid = ['confirmed', 'known_thread', 'read'].includes(variant);
+          const externalId = `100000000000003@msgr.${14 + i}`;
+          await reset();
+          const reply = await create();
+          const confirmedSender = vi.fn(async (request, a) => {
+            await a!.beforeSend!();
+            return {
+              ...dispatch(request.to),
+              outcome: 'facebook_network_confirmed' as const,
+              ...(variant !== 'missing_id'
+                ? { externalMessageId: externalId }
+                : {}),
+              ...(variant === 'known_thread' ? { threadId: '123' } : {}),
+              ...(variant === 'other_thread' ? { threadId: '456' } : {}),
+              ...(variant === 'numeric_thread'
+                ? { threadId: 123 as unknown as string }
+                : {}),
+              ...(variant === 'read' || variant === 'invalid_receipt'
+                ? {
+                    threadId: '123',
+                    readReceipt: {
+                      threadId: '123',
+                      seenMessageId:
+                        variant === 'read'
+                          ? externalId
+                          : '100000000000003@msgr.1',
+                    },
+                  }
+                : {}),
+            };
+          });
+          expect(await send(reply.id, confirmedSender)).toMatchObject(
+            valid
+              ? {
+                  status: 'done',
+                  result: { delivery: variant === 'read' ? 'read' : 'sent' },
+                }
+              : { status: 'paused', reasonCode: 'social_delivery_uncertain' },
+          );
+          expect(
+            (
+              await sonarPool.query(
+                'select status,external_message_id,reason_uk,first_attempt_at from messages where id=$1',
+                [reply.id],
+              )
+            ).rows[0],
+          ).toMatchObject(
+            valid
+              ? {
+                  status: variant === 'read' ? 'read' : 'sent',
+                  external_message_id: externalId,
+                  reason_uk: null,
+                  first_attempt_at: now,
+                }
+              : {
+                  status: 'queued',
+                  external_message_id: null,
+                  first_attempt_at: now,
+                },
+          );
+          if (valid) {
+            expect(await send(reply.id, confirmedSender)).toMatchObject({
+              status: 'done',
+            });
+            expect(confirmedSender).toHaveBeenCalledOnce();
+          }
+        }
+        await reset();
+        const networkFailure = await create();
+        const networkDiagnostic = {
+          parse: 'unknown',
+          shape: ['data', 'payload'],
+        };
+        const networkReason = `Перевірте чат вручну ${JSON.stringify({ network: networkDiagnostic })}`;
+        expect(
+          await send(networkFailure.id, async (_request, a) => {
+            await a!.beforeSend!();
+            throw Object.assign(
+              new SocialSendError('delivery_uncertain', networkReason),
+              {
+                taskResult: { network: networkDiagnostic },
+              },
+            );
+          }),
+        ).toMatchObject({
+          status: 'paused',
+          reasonCode: 'social_delivery_uncertain',
+          reasonUk: networkReason,
+          result: { network: networkDiagnostic },
+        });
+        expect(
+          (
+            await sonarPool.query(
+              'select reason_uk from messages where id=$1',
+              [networkFailure.id],
+            )
+          ).rows[0].reason_uk,
+        ).toBe(networkReason);
         for (const variant of [
           'exact',
           'old_message',

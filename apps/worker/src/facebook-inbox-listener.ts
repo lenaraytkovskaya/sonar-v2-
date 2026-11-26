@@ -1,4 +1,5 @@
 import type { BrowserContext } from 'playwright';
+import { facebookSendNetwork } from './facebook-send-network.js';
 import { resolveSocialSession } from '@sonar/core/social-session';
 import { sonarPool } from '@sonar/db';
 import { queueSocialInboxWake } from '@sonar/db/social-inbox';
@@ -17,6 +18,7 @@ import {
   registerHotPage,
   runOnHotPage,
   unregisterHotPage,
+  waitForFacebookRead,
   type HotPage,
 } from './facebook-hot-page.js';
 
@@ -36,6 +38,25 @@ interface Listener {
 const note = (listener: Listener, line: string) => {
   listener.events.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
   if (listener.events.length > 40) listener.events.shift();
+};
+
+const safeFailure = (error: unknown) =>
+  error instanceof Error && error.name === 'TimeoutError'
+    ? 'timeout'
+    : error instanceof Error && error.message === 'facebook_read_preempted'
+      ? 'send_priority'
+      : 'browser_operation_failed';
+const safePagePath = (url: string) => {
+  try {
+    const path = new URL(url).pathname;
+    return /^\/messages(?:\/e2ee)?\/t\/[^/]+\/?$/.test(path)
+      ? '/messages/t/<redacted>'
+      : /^\/messages\/?$/.test(path)
+        ? '/messages/'
+        : '/<redacted>';
+  } catch {
+    return '/<redacted>';
+  }
 };
 
 // Operators read this from the accounts API to see what the listener is doing.
@@ -122,8 +143,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
         }
       } catch (error) {
         await report(accountId, {
-          lastWakeError:
-            error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+          lastWakeError: safeFailure(error),
         });
       } finally {
         running = false;
@@ -173,6 +193,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
     const session = resolveSocialSession(account as never);
     const { context } = await connectSocialProfile(account, session as never);
     const page = await context.newPage();
+    facebookSendNetwork(page);
     const signalCooldown = new MessengerSignalCooldown();
     // Encrypted chats keep one active Messenger tab per profile. Tabs left by a
     // previous worker process (a deploy kills it mid-run) silence this one, so
@@ -193,14 +214,33 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
       const timeoutMs = await timeout();
       page.setDefaultTimeout(timeoutMs);
       for (;;) {
-        await page.goto('https://www.facebook.com/messages/', {
-          waitUntil: 'domcontentloaded',
-          timeout: timeoutMs,
-        });
-        await page
-          .locator(THREAD_LINKS)
-          .first()
-          .waitFor({ timeout: timeoutMs });
+        const reload = async () => {
+          await waitForFacebookRead(
+            page,
+            () =>
+              page.goto('https://www.facebook.com/messages/', {
+                waitUntil: 'domcontentloaded',
+                timeout: timeoutMs,
+              }),
+            true,
+          );
+          await waitForFacebookRead(page, () =>
+            page.locator(THREAD_LINKS).first().waitFor({ timeout: timeoutMs }),
+          );
+        };
+        if (hot) {
+          try {
+            await runOnHotPage(hot, reload);
+          } catch (error) {
+            if (
+              !(error instanceof Error) ||
+              error.message !== 'facebook_read_preempted'
+            )
+              throw error;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            continue;
+          }
+        } else await reload();
         failures.delete(account.id);
         if (!hot) {
           hot = registerHotPage(account.id, page);
@@ -219,26 +259,28 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
               await setting('social.inbox.listen_signal_cooldown_seconds', 120),
             ) * 1000,
           onEvent: (line) => note(listener, line),
-          paused: () => (hot?.activeOps ?? 0) > 0,
+          paused: () =>
+            (hot?.activeOps ?? 0) > 0 || (hot?.pendingSends ?? 0) > 0,
           onScan: (snapshot) => {
             listener.seen = {
               unread: snapshot.unread,
               threads: snapshot.threads?.length ?? 0,
-              openLast: snapshot.open?.last ?? '',
+              openLast: snapshot.open?.last ? 'observed' : '',
               log: [...listener.events, ...(hot?.events ?? [])]
                 .sort()
                 .slice(-16),
-              page: snapshot.page,
+              page: snapshot.page
+                ? {
+                    path: safePagePath(page.url()),
+                    hidden: snapshot.page.hidden,
+                    dialogPresent: Boolean(snapshot.page.dialog),
+                    noteCount: snapshot.page.notes.length,
+                  }
+                : undefined,
               tabs: page
                 .context()
                 .pages()
-                .map((tab) => {
-                  try {
-                    return new URL(tab.url()).pathname.slice(0, 40);
-                  } catch {
-                    return '?';
-                  }
-                }),
+                .map((tab) => safePagePath(tab.url())),
             };
           },
           stopped: () => listener.stop || closed,
@@ -262,10 +304,7 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
               });
             } catch (error) {
               await report(account.id, {
-                lastWakeError:
-                  error instanceof Error
-                    ? error.message.slice(0, 200)
-                    : 'unknown',
+                lastWakeError: safeFailure(error),
               });
             }
           },
@@ -332,12 +371,11 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
           );
           void report(account.id, {
             state: 'error',
-            error:
-              error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+            error: safeFailure(error),
           });
           console.warn('facebook inbox listener failed', {
             accountId: account.id,
-            message: error instanceof Error ? error.message : String(error),
+            reason: safeFailure(error),
           });
         })
         .finally(() => {
@@ -349,7 +387,9 @@ export function startFacebookInboxListener(timeout: () => Promise<number>) {
 
   const timer = setInterval(() => {
     void tick().catch((error) =>
-      console.warn('facebook inbox listener tick failed', error),
+      console.warn('facebook inbox listener tick failed', {
+        reason: safeFailure(error),
+      }),
     );
   }, TICK_MS);
   void tick().catch(() => {});

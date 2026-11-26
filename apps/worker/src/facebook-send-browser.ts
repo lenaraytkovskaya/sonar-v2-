@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Page } from 'playwright';
+import { facebookSendNetwork } from './facebook-send-network.js';
 import { navigateSocialPage } from './social-navigation.js';
 import type { SocialTarget } from '@sonar/core';
 import { socialTarget } from '@sonar/core';
@@ -929,11 +930,57 @@ async function conversation(
         let stableRows: Element[] = [];
         let stableSignatures: (string | null)[] = [];
         let stableSince = performance.now();
-        let baseline: Element[] = [];
-        let baselineAnchors: Element[] = [];
-        let baselineNodes = new Set<Element>();
-        let baselineIds = new Set<string | null>();
-        let signatures: (string | null)[] = [];
+        let baselineCount = 0;
+        let baselineIds: string[] = [];
+        let baselineWithoutId = 0;
+        let baselineAnchors: string[] = [];
+        const anchor = (row: Element) =>
+          messageId(row) ?? row.getAttribute('aria-label') ?? '';
+        let baselineUnproven: string[] = [];
+        const historyRows = () =>
+          all(
+            region,
+            '[data-message-id], [aria-roledescription], [aria-label]',
+          ).filter(
+            (row) =>
+              row.hasAttribute('data-message-id') ||
+              row.hasAttribute('aria-roledescription') ||
+              all(row, 'h2, [role="heading"]').length > 0,
+          );
+        const atTail = (row: Element) =>
+          historyRows()
+            .filter(
+              (old) => old !== row && baselineAnchors.includes(anchor(old)),
+            )
+            .every((old) =>
+              Boolean(
+                old.compareDocumentPosition(row) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+              ),
+            );
+        const snapshot = () => ({
+          count: rows().filter((row) => sentRow(row) !== null).length,
+          ids: all(region, '[data-message-id]')
+            .map((row) => row.getAttribute('data-message-id')!)
+            .filter(Boolean),
+          anchors: historyRows().map(anchor),
+          unproven: historyRows()
+            .filter((row) => !rows().includes(row))
+            .map((row) => row.getAttribute('aria-label') ?? ''),
+          withoutId: rows().filter(
+            (row) => sentRow(row) !== null && !messageId(row),
+          ).length,
+        });
+        const added = () =>
+          rows().filter(
+            (row) =>
+              sentRow(row) !== null &&
+              !baselineIds.includes(messageId(row) ?? '') &&
+              !baselineUnproven.includes(
+                row.getAttribute('aria-label') ?? '',
+              ) &&
+              atTail(row),
+          );
         let blocked = false;
         let cleanup = () => {};
         const guardDispatch = (button: Element) => {
@@ -1020,44 +1067,33 @@ async function conversation(
             return empty;
           },
           button: () => sendButtons()[0]!,
+          rebind: () => find(),
+          snapshot,
+          setBaseline: (value: {
+            count: number;
+            ids: string[];
+            withoutId: number;
+            anchors: string[];
+            unproven: string[];
+          }) => {
+            baselineCount = value.count;
+            baselineIds = value.ids;
+            baselineWithoutId = value.withoutId;
+            baselineAnchors = value.anchors;
+            baselineUnproven = value.unproven;
+          },
           arm: () => {
-            baseline = rows();
-            baselineAnchors = [
-              ...new Set([
-                ...baseline,
-                ...all(
-                  region,
-                  '[role="article"], [data-message-id], [aria-roledescription="message"]',
-                ),
-                ...all(region, '[aria-label]').filter(
-                  (row) => all(row, 'h2, [role="heading"]').length > 0,
-                ),
-              ]),
-            ];
-            baselineNodes = new Set(Array.from(region.querySelectorAll('*')));
-            baselineIds = new Set(
-              Array.from(region.querySelectorAll('[data-message-id]')).map(
-                (row) => row.getAttribute('data-message-id'),
-              ),
-            );
-            signatures = baseline.map((row) => sentRow(row));
+            const value = snapshot();
+            baselineCount = value.count;
+            baselineIds = value.ids;
+            baselineWithoutId = value.withoutId;
+            baselineAnchors = value.anchors;
+            baselineUnproven = value.unproven;
           },
-          externalMessageId: () => {
-            const added = rows().filter(
-              (row) =>
-                baselineAnchors.every((old) =>
-                  Boolean(
-                    old.compareDocumentPosition(row) &
-                    Node.DOCUMENT_POSITION_FOLLOWING,
-                  ),
-                ) &&
-                !baselineNodes.has(row) &&
-                !baselineNodes.has(row.closest('[role="article"]') ?? row) &&
-                !baselineIds.has(messageId(row) ?? null) &&
-                sentRow(row) !== null,
-            );
-            return added.length === 1 ? messageId(added[0]!) : undefined;
-          },
+          externalMessageId: () =>
+            baselineWithoutId === 0 && added().length === 1
+              ? messageId(added()[0]!)
+              : undefined,
           recovered: (firstAttemptAt: string) => {
             if (!verify(false)) return null;
             const first = Date.parse(firstAttemptAt);
@@ -1130,38 +1166,14 @@ async function conversation(
           },
           confirmed: () => {
             if (!verify(false)) return false;
-            if (
-              baselineAnchors.some(
-                (row) => !row.isConnected || !region.contains(row),
-              )
-            ) {
-              observation.branch = 'baseline_invalidated';
-              return false;
-            }
             observation.branch = 'unconfirmed';
-            const current = rows();
-            if (
-              current.filter((row) => sentRow(row) !== null).length !==
-              signatures.filter((signature) => signature !== null).length + 1
-            )
-              return false;
-            return current.some((row) => {
-              const signature = sentRow(row);
-              return (
-                baselineAnchors.every((old) =>
-                  Boolean(
-                    old.compareDocumentPosition(row) &
-                    Node.DOCUMENT_POSITION_FOLLOWING,
-                  ),
-                ) &&
-                !baselineNodes.has(row) &&
-                !baselineNodes.has(row.closest('[role="article"]') ?? row) &&
-                !baselineIds.has(messageId(row) ?? null) &&
-                signature !== null &&
-                current.filter((other) => sentRow(other) === signature).length >
-                  signatures.filter((old) => old === signature).length
-              );
-            });
+            const current = snapshot();
+            return (
+              current.count === baselineCount + 1 &&
+              (added().length === 1 ||
+                (current.withoutId === baselineWithoutId + 1 &&
+                  added().some((row) => !messageId(row))))
+            );
           },
         };
       };
@@ -1389,8 +1401,10 @@ export async function sendFacebook(
     phase: string,
     elapsedMs: number,
   ) => Promise<boolean | void>,
+  providerThreadId?: string,
 ): Promise<FacebookDispatchResult> {
   const startedAt = Date.now();
+  const network = facebookSendNetwork(page);
   let failureCaptured = false;
   const markCaptured = (error: unknown) => {
     if (failureCaptured && error && typeof error === 'object')
@@ -1418,6 +1432,7 @@ export async function sendFacebook(
       version: 'fb-profile-chat-v2',
       phase,
       transmission: facts,
+      network: network.diagnostic(),
       ...observation,
       branch:
         branch === 'not_observed' ? (observation?.branch ?? branch) : branch,
@@ -1784,6 +1799,7 @@ export async function sendFacebook(
       openedProfile,
       ownId,
     );
+    let binding: typeof state | undefined;
     try {
       if (!(await state.evaluate((state) => Boolean(state))))
         throw unavailable();
@@ -1928,34 +1944,73 @@ export async function sendFacebook(
       facts.outgoingBefore = Math.min(99, outgoingBefore);
       phase = 'dispatch';
       dispatchStarted = true;
+      const baseline = await state.evaluate((state) => state!.snapshot());
+      if (ownId)
+        network.arm({
+          body,
+          ownId,
+          threadId: providerThreadId,
+          knownIds: baseline.ids,
+        });
       await button.click(); // Exactly one dispatch, never retry after the marker.
       if (await state.evaluate((state) => state!.blocked()))
         throw unavailable();
       facts.dispatchPerformed = true;
       observationStarted = Date.now();
       phase = 'confirmation';
-      await page.waitForFunction((state) => state?.confirmed(), state, {
-        timeout: timeoutMs,
-      });
+      await state.evaluate((state) => state?.cleanup()).catch(() => {});
+      binding = state;
+      const rebind = async () => {
+        const next = await binding!.evaluateHandle(
+          (state) => state?.rebind() ?? null,
+        );
+        if (state !== binding) await state.dispose();
+        state = next;
+        await state.evaluate(
+          (state, baseline) => state?.setBaseline(baseline),
+          baseline,
+        );
+        return state.evaluate((state) => state?.confirmed() ?? false);
+      };
+      const confirmUntil = Date.now() + Math.min(timeoutMs, 15000);
+      let domConfirmed = false;
+      while (
+        !network.result() &&
+        !(domConfirmed = await rebind()) &&
+        Date.now() < confirmUntil
+      )
+        await page.waitForTimeout(200);
       await check();
-      if (page.url() !== dialogUrl) throw unavailable('url_changed');
-      if (!(await state.evaluate((state) => state?.confirmed())))
-        throw unavailable();
-      const outgoingAfter = await state.evaluate((state) =>
-        state!.outgoingCount(),
+      let networkEvidence = network.result();
+      if (!networkEvidence && page.url() !== dialogUrl)
+        throw unavailable('url_changed');
+      if (!networkEvidence && !domConfirmed)
+        throw Object.assign(new Error('facebook_confirmation_timeout'), {
+          name: 'TimeoutError',
+        });
+      facts.outgoingAfter = Math.min(
+        99,
+        Math.max(
+          outgoingBefore + 1,
+          networkEvidence
+            ? outgoingBefore + 1
+            : await state.evaluate((state) => state?.outgoingCount() ?? 0),
+        ),
       );
-      facts.outgoingAfter = Math.min(99, outgoingAfter);
-      // Keep semantic detection separate from saturated telemetry counts.
-      facts.newOutgoing = await state.evaluate((state) => state!.confirmed());
+      facts.newOutgoing = true;
       // Keep the original page alive briefly after the bubble is confirmed. The
       // hold used to equal the whole page timeout, which made the CRM show
       // "queued" for that long after the message had already been sent.
       // Elapsed time is still not proof of server delivery.
-      const until = Date.now() + Math.min(timeoutMs, TRANSMISSION_HOLD_MS);
+      const until =
+        Date.now() +
+        (networkEvidence ? 0 : Math.min(timeoutMs, TRANSMISSION_HOLD_MS));
       phase = 'transmission';
+      let outgoingStillObserved = true;
       while (Date.now() < until) {
         await page.waitForTimeout(Math.min(200, until - Date.now()));
         facts.observationMs = Date.now() - observationStarted;
+        networkEvidence = network.result();
         try {
           // A tiny remaining timer budget can falsely fail a visible auth check.
           // Bound each check independently; the hold can overrun by at most 200 ms.
@@ -1965,13 +2020,13 @@ export async function sendFacebook(
             transportFailure ?? (restricted ? 'rate_limit' : 'session');
           throw error;
         }
-        if (
-          page.url() !== dialogUrl ||
-          !(await state.evaluate((state) => state?.confirmed()))
-        ) {
-          facts.lateError = 'outgoing_changed';
-          throw unavailable();
-        }
+        if (networkEvidence) break;
+        outgoingStillObserved = page.url() === dialogUrl && (await rebind());
+      }
+      networkEvidence = network.result();
+      if (!networkEvidence && !outgoingStillObserved) {
+        facts.lateError = 'outgoing_changed';
+        throw unavailable();
       }
       facts.observationMs = Date.now() - observationStarted;
       // Temporary probe: record the structure of the status marker under the
@@ -1981,12 +2036,15 @@ export async function sendFacebook(
       );
       // Floating chat has no thread URL: preserve its verified profile link.
       return {
-        outcome: 'facebook_dispatched_unconfirmed',
+        outcome: networkEvidence
+          ? 'facebook_network_confirmed'
+          : 'facebook_dispatched_unconfirmed',
         dialogUrl: target.canonicalUrl,
         observation: facts,
-        externalMessageId: await state.evaluate((state) =>
-          state?.externalMessageId(),
-        ),
+        threadId: networkEvidence?.threadId ?? providerThreadId,
+        externalMessageId:
+          networkEvidence?.externalMessageId ??
+          (await state.evaluate((state) => state?.externalMessageId())),
       };
     } catch (error) {
       // Only retrieve memory captured by the failing check/dispatch/last poll.
@@ -1998,6 +2056,7 @@ export async function sendFacebook(
     } finally {
       await state.evaluate((state) => state?.cleanup()).catch(() => {});
       await state.dispose();
+      if (binding && binding !== state) await binding.dispose();
     }
   } catch (error) {
     // Capture the failing DOM before a second session check can navigate or
@@ -2052,5 +2111,7 @@ export async function sendFacebook(
     failure.reasonUk += ` ${detail}`;
     markCaptured(failure);
     throw failure;
+  } finally {
+    network.stop();
   }
 }

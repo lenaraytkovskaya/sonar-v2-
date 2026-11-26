@@ -1483,6 +1483,7 @@ export async function sendEmailMessage(
         FacebookDispatchResult,
         'externalMessageId' | 'threadId' | 'readReceipt'
       >,
+      networkConfirmed = false,
     ): Promise<TaskOutcome> => {
       const readReceipt = identity?.readReceipt;
       if (
@@ -1496,7 +1497,11 @@ export async function sendEmailMessage(
           readReceipt.seenMessageId !== identity.externalMessageId)
       )
         throw new SocialSendError('delivery_uncertain', 'Перевірте чат вручну');
-      const delivery = readReceipt ? 'read' : 'unconfirmed';
+      const delivery = readReceipt
+        ? 'read'
+        : networkConfirmed
+          ? 'sent'
+          : 'unconfirmed';
       await transaction(async (tx) => {
         await tx.query(
           "update messages set status='sent',provider_id=$2,sent_at=$3,reason_uk=$4 where id=$1",
@@ -1728,6 +1733,8 @@ export async function sendEmailMessage(
             providerId,
           );
         }
+        const networkConfirmed =
+          providerId.outcome === 'facebook_network_confirmed';
         const marker = await c.query(
           'select first_attempt_at from messages where id=$1',
           [messageId],
@@ -1736,7 +1743,13 @@ export async function sendEmailMessage(
           channel !== 'social' ||
           account.channel !== 'facebook' ||
           facebookRecovery ||
-          providerId.outcome !== 'facebook_dispatched_unconfirmed' ||
+          (providerId.outcome !== 'facebook_dispatched_unconfirmed' &&
+            !networkConfirmed) ||
+          (networkConfirmed &&
+            (!providerId.externalMessageId?.trim() ||
+              (m.provider_thread_id !== null &&
+                providerId.threadId !== undefined &&
+                providerId.threadId !== m.provider_thread_id))) ||
           !marker.rows[0]?.first_attempt_at ||
           !facts.inputExactMatch ||
           !facts.dispatchPerformed ||
@@ -1752,9 +1765,10 @@ export async function sendEmailMessage(
           );
         return await recordDelivery(
           providerId.dialogUrl,
-          facebookDispatchReason,
+          networkConfirmed ? null : facebookDispatchReason,
           facts,
           providerId,
+          networkConfirmed,
         );
       }
       // FB browser text alone is never a verified delivery receipt.

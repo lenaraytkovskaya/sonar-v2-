@@ -41,7 +41,10 @@ import type { SocialNetwork } from './social.js';
 // This records an observed browser dispatch, never a server delivery receipt.
 export const facebookDispatchReason = 'Відправлено, перевірте в чаті';
 export type FacebookDispatchResult = {
-  outcome: 'facebook_dispatched_unconfirmed' | 'facebook_reconciled';
+  outcome:
+    | 'facebook_dispatched_unconfirmed'
+    | 'facebook_reconciled'
+    | 'facebook_network_confirmed';
   externalMessageId?: string;
   threadId?: string;
   /** A peer seen marker tied to this exact newly observed outgoing message. */
