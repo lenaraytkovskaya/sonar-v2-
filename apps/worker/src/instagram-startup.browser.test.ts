@@ -6,6 +6,8 @@ vi.mock('./social-inbox.js', () => ({
 
 import { captureInstagramInbox } from './instagram-inbox-browser.js';
 import { renderSocialDocuments } from './social-browser.js';
+import { instagramLoadingState } from './social-navigation.js';
+import { waitForInstagramReady } from './social-send-browser.js';
 
 // Startup regression models the reported logo-only screen. No live IG DOM/API data.
 describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
@@ -20,6 +22,76 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       });
     });
     afterAll(async () => browser?.close());
+
+    it.each([
+      [
+        'explicit splash',
+        '<main></main><div id="splash-screen">Instagram</div>',
+        true,
+        false,
+      ],
+      [
+        'nested splash',
+        '<main><div id="splash-screen"><h2>Instagram</h2></div></main>',
+        true,
+        false,
+      ],
+      [
+        'central logo only',
+        '<div aria-label="Instagram logo" style="position:fixed;left:50%;top:50%;width:50px;height:50px;transform:translate(-50%,-50%)">Instagram</div>',
+        true,
+        false,
+      ],
+      ['direct main text', '<main>Loaded feed</main>', false, true],
+      [
+        'generic main content',
+        '<main><div>Loaded feed</div></main>',
+        false,
+        true,
+      ],
+      ['main text content', '<main><p>Ready feed</p></main>', false, true],
+      ['standalone feed', '<div role="feed">Ready feed</div>', false, true],
+      [
+        'hidden splash with content',
+        '<div id="splash-screen" hidden>Instagram</div><main><h1>Ready</h1></main>',
+        false,
+        true,
+      ],
+      [
+        'loaded app and stale splash',
+        '<div id="splash-screen">Instagram</div><nav><a href="/direct/inbox/">Messages</a></nav><main><h1>Ready</h1></main>',
+        false,
+        true,
+      ],
+      [
+        'footer logo without app',
+        '<div aria-label="Instagram logo">Instagram</div><footer>from Meta</footer>',
+        false,
+        false,
+      ],
+    ])(
+      'distinguishes %s using visible app evidence',
+      async (_name, html, splash, ready) => {
+        const context = await browser.newContext({ serviceWorkers: 'block' });
+        const page = await context.newPage();
+        await context.route('**/*', (route) =>
+          route.fulfill({ contentType: 'text/html', body: String(html) }),
+        );
+        try {
+          await page.goto('https://www.instagram.com/');
+          expect(await page.evaluate(instagramLoadingState)).toMatchObject({
+            splash,
+            ready,
+          });
+          if (ready)
+            await expect(
+              waitForInstagramReady(page, 150),
+            ).resolves.toBeUndefined();
+        } finally {
+          await context.close();
+        }
+      },
+    );
 
     it.each(['inbox', 'profile'] as const)(
       'waits for a delayed %s splash before reading authenticated content',

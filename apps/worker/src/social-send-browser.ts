@@ -37,6 +37,7 @@ import { sendFacebookHot } from './facebook-hot-send.js';
 import { captureFailureDom } from './social-failure-dom.js';
 import {
   navigateSocialPage,
+  instagramLoadingState,
   socialNavigationDiagnostics,
 } from './social-navigation.js';
 
@@ -660,80 +661,16 @@ async function tryInstagramDirectChat(
   }
 }
 
-function instagramLoadingState() {
-  const visible = (node: Element) =>
-    node.getClientRects().length > 0 &&
-    getComputedStyle(node).visibility !== 'hidden';
-  const anyVisible = (selector: string) =>
-    Array.from(document.querySelectorAll(selector)).some(visible);
-  const splashElement = anyVisible(
-    '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
-  );
-  const logo = anyVisible(
-    '[aria-label="Instagram logo"], img[alt="Instagram"], svg[aria-label="Instagram"]',
-  );
-  const privateArea =
-    '[contenteditable], input, textarea, [role="log"], [role="article"], [role="row"], [role="listitem"], [data-pagelet="IGDMessagesList"], [data-pagelet="IGDInboxThreadListScrollableAreaPagelet"]';
-  const marker = (pattern: RegExp) =>
-    Array.from(
-      document.querySelectorAll('h1, h2, button, a, label, p, span'),
-    ).some(
-      (node) =>
-        !node.closest(privateArea) &&
-        node.children.length === 0 &&
-        visible(node) &&
-        pattern.test(node.textContent?.trim() ?? ''),
-    );
-  const login =
-    anyVisible('input[name="username"], input[type="password"]') ||
-    marker(
-      /^(Log in|\u0423\u0432\u0456\u0439\u0442\u0438|\u0412\u043e\u0439\u0442\u0438)$/i,
-    );
-  const challenge =
-    /challenge|checkpoint/i.test(location.pathname) ||
-    marker(/^(Suspicious.*|Confirm it.s you)$/i);
-  const splash =
-    anyVisible(
-      '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
-    ) ||
-    (anyVisible(
-      '[aria-label="Instagram logo"], img[alt="Instagram"], svg[aria-label="Instagram"]',
-    ) &&
-      (anyVisible('[aria-label="from Meta" i], img[alt="from Meta" i]') ||
-        Array.from(document.querySelectorAll('p, span, div')).some(
-          (node) =>
-            node.children.length === 0 &&
-            /^from\s+meta$/i.test(node.textContent?.trim() ?? '') &&
-            visible(node),
-        )));
-  return {
-    viewport: { width: innerWidth, height: innerHeight },
-    hidden: document.hidden,
-    readyState: document.readyState,
-    splash,
-    splashElement,
-    logo,
-    login,
-    challenge,
-    ready:
-      login ||
-      challenge ||
-      (!splash &&
-        (anyVisible(
-          'main, [role="main"], nav[role="navigation"], a[href^="/direct/"], input[name="username"], input[name="email"], input[type="password"], iframe[src*="captcha"], [data-testid="captcha"], form[action*="checkpoint"]',
-        ) ||
-          /login|signin|challenge|checkpoint|captcha/i.test(
-            location.pathname,
-          ))),
-  };
-}
-function instagramSplashTimeout(elapsedMs: number) {
+function instagramSplashTimeout(
+  elapsedMs: number,
+  state: ReturnType<typeof instagramLoadingState>,
+) {
   const error = Object.assign(new SocialSessionCheckError('timeout'), {
     stage: 'navigation' as const,
     errorKind: 'timeout' as const,
     screen: 'splash' as const,
   });
-  error.reasonUk += ` [screen=splash] [waitedSeconds=${elapsedMs / 1000}]`;
+  error.reasonUk += ` [screen=splash] [waitedSeconds=${elapsedMs / 1000}] [splashElement=${state.splashElement}; logo=${state.logo}; fromMeta=${state.fromMeta}; nav=${state.nav}; main=${state.main}; dialog=${state.dialog}; hidden=${state.hidden}]`;
   error.message = error.reasonUk;
   return error;
 }
@@ -787,11 +724,7 @@ async function recoverInstagramStartup(
       timeoutMs,
     );
     if (response && response.status() >= 400) return response;
-    await page.waitForFunction(
-      `(${instagramLoadingState.toString()})().ready`,
-      undefined,
-      { timeout: timeoutMs },
-    );
+    await waitForInstagramApp(page, timeoutMs);
     await assertRecovery();
     // The observed unlabelled rail groups these routes outside conversation UI.
     const rail =
@@ -806,7 +739,7 @@ async function recoverInstagramStartup(
       .filter({ visible: true });
     await links.first().waitFor({ state: 'visible', timeout: timeoutMs });
     if ((await links.count()) !== 1)
-      throw instagramSplashTimeout(Date.now() - started);
+      throw new SocialSessionCheckError('unknown_auth');
     await assertRecovery();
     const homeUrl = new URL(page.url());
     const directUrl = new URL(
@@ -833,20 +766,12 @@ async function recoverInstagramStartup(
       links.click({ timeout: timeoutMs, noWaitAfter: true }),
     ]);
     if (directResponse && directResponse.status() >= 400) return directResponse;
-    await page.waitForFunction(
-      `(${instagramLoadingState.toString()})().ready`,
-      undefined,
-      { timeout: timeoutMs },
-    );
+    await waitForInstagramApp(page, timeoutMs);
     await assertRecovery();
     if (!/^\/direct\/inbox\/?$/.test(original.pathname)) {
       const resumed = await navigateSocialPage(page, original.href, timeoutMs);
       if (resumed && resumed.status() >= 400) return resumed;
-      await page.waitForFunction(
-        `(${instagramLoadingState.toString()})().ready`,
-        undefined,
-        { timeout: timeoutMs },
-      );
+      await waitForInstagramApp(page, timeoutMs);
       await assertRecovery();
     }
     return;
@@ -859,9 +784,120 @@ async function recoverInstagramStartup(
       if (sessionError instanceof SocialSessionCheckError) throw sessionError;
     }
     if (restriction) throw restriction;
-    throw instagramSplashTimeout(Date.now() - started);
+    const state = await page.evaluate(instagramLoadingState);
+    if (state.splash) throw instagramSplashTimeout(Date.now() - started, state);
+    throw recoveryError;
   } finally {
     page.off('response', observeDirect);
+  }
+}
+async function waitForInstagramApp(page: Page, timeoutMs: number) {
+  await page.waitForFunction(
+    `(${instagramLoadingState.toString()})().ready`,
+    undefined,
+    { timeout: timeoutMs },
+  );
+  const origin = new URL(page.url()).origin;
+  if (!['https://www.instagram.com', 'https://instagram.com'].includes(origin))
+    return;
+  // Startup only: never opt in to browser notifications or act on unknown popups.
+  const dialogs = page
+    .locator('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')
+    .filter({ visible: true });
+  if ((await dialogs.count()) !== 1) return;
+  const dialog = dialogs.first();
+  const original = await dialog.elementHandle();
+  if (!original) return;
+  try {
+    const heading = dialog
+      .getByRole('heading', {
+        name: /^(Turn on Notifications|Увімкнути сповіщення|Включить уведомления)$/i,
+      })
+      .filter({ visible: true });
+    const enable = dialog
+      .getByRole('button', { name: /^(Turn On|Увімкнути|Включить)$/i })
+      .filter({ visible: true });
+    const dismiss = dialog
+      .getByRole('button', { name: /^(Not Now|Не зараз|Не сейчас)$/i })
+      .filter({ visible: true });
+    if (
+      (await heading.count()) !== 1 ||
+      (await dialog.getByRole('heading').filter({ visible: true }).count()) !==
+        1 ||
+      (await dialog.getByRole('button').filter({ visible: true }).count()) !==
+        2 ||
+      (await enable.count()) !== 1 ||
+      (await dismiss.count()) !== 1
+    )
+      return;
+    const button = await dismiss.elementHandle();
+    if (!button) return;
+    try {
+      await button.hover({ timeout: timeoutMs });
+      await button.click({ trial: true, timeout: timeoutMs });
+      // Revalidate and activate in one synchronous page task: neither a replaced
+      // modal nor in-place heading/button mutations can inherit this approval.
+      const activated = await original.evaluate((node, button) => {
+        const visible = (element: Element) =>
+          element.getClientRects().length > 0 &&
+          getComputedStyle(element).visibility === 'visible' &&
+          getComputedStyle(element).opacity !== '0';
+        const label = (element: Element) =>
+          (element.getAttribute('aria-label') ?? element.textContent ?? '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const dialogs = Array.from(
+          document.querySelectorAll(
+            '[role="dialog"], [role="alertdialog"], [aria-modal="true"]',
+          ),
+        ).filter(visible);
+        const headings = Array.from(
+          node.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]'),
+        ).filter(visible);
+        const buttons = Array.from(
+          node.querySelectorAll('button,[role="button"]'),
+        ).filter(visible);
+        const rect = button.getBoundingClientRect();
+        if (
+          !['https://www.instagram.com', 'https://instagram.com'].includes(
+            location.origin,
+          ) ||
+          !node.isConnected ||
+          !button.isConnected ||
+          dialogs.length !== 1 ||
+          dialogs[0] !== node ||
+          headings.length !== 1 ||
+          !/^(Turn on Notifications|Увімкнути сповіщення|Включить уведомления)$/i.test(
+            label(headings[0]!),
+          ) ||
+          buttons.length !== 2 ||
+          buttons.filter((element) =>
+            /^(Turn On|Увімкнути|Включить)$/i.test(label(element)),
+          ).length !== 1 ||
+          buttons.filter((element) =>
+            /^(Not Now|Не зараз|Не сейчас)$/i.test(label(element)),
+          ).length !== 1 ||
+          !buttons.includes(button) ||
+          !/^(Not Now|Не зараз|Не сейчас)$/i.test(label(button)) ||
+          button.closest(':disabled,[aria-disabled="true"],[inert]') ||
+          !button.contains(
+            document.elementFromPoint(
+              rect.x + rect.width / 2,
+              rect.y + rect.height / 2,
+            ),
+          )
+        )
+          return false;
+        (button as HTMLElement).click();
+        return true;
+      }, button);
+      if (!activated) throw new Error('Instagram notifications dialog changed');
+      await original.waitForElementState('hidden', { timeout: timeoutMs });
+    } finally {
+      await button.dispose();
+    }
+  } finally {
+    await original.dispose();
   }
 }
 /** Initial navigation only: never call after filling or attempting a message. */
@@ -876,11 +912,7 @@ export async function waitForInstagramReady(
   try {
     // This browser predicate survives document replacement; no polling sleeps or
     // reload may interrupt a delayed SPA startup.
-    await page.waitForFunction(
-      `(${instagramLoadingState.toString()})().ready`,
-      undefined,
-      { timeout: timeoutMs },
-    );
+    await waitForInstagramApp(page, timeoutMs);
   } catch (error) {
     const current = await page.evaluate(instagramLoadingState);
     if (!current.splash) throw error;
@@ -893,7 +925,7 @@ export async function waitForInstagramReady(
       original.pathname === '/' ||
       /login|signin|challenge|checkpoint|captcha/i.test(original.pathname)
     )
-      throw instagramSplashTimeout(Date.now() - started);
+      throw instagramSplashTimeout(Date.now() - started, current);
     return recoverInstagramStartup(page, original, timeoutMs, started);
   }
 }

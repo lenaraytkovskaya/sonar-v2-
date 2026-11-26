@@ -1,0 +1,21 @@
+<!-- Reconstructed from the reported loaded-feed screen, not captured live DOM. No account or message data. -->
+<div aria-label="Instagram logo">Instagram</div>
+<footer><span>from Meta</span></footer>
+<div
+  role="dialog"
+  aria-modal="true"
+  style="position: fixed; inset: 0; background: white; z-index: 10"
+>
+  <header><h2>{{heading}}</h2></header>
+  <button onclick="window.fixtureEvent('notifications-enabled')">
+    {{enable}}
+  </button>
+  <button
+    onclick="
+      window.fixtureEvent('notifications-dismissed');
+      this.parentElement.remove();
+    "
+  >
+    {{dismiss}}
+  </button>
+</div>
