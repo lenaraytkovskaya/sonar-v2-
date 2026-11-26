@@ -725,7 +725,17 @@ function instagramStartupError(error: unknown, stage: InstagramStartupStage) {
     errorKind: kind === 'TimeoutError' ? 'timeout' : 'unconfirmed',
     startupErrorKind: kind,
   });
-  safe.reasonUk += ` [startupStage=${stage}; startupError=${kind}]`;
+  // Unclassified errors keep a short excerpt without URLs, quoted values or long numbers.
+  const excerpt =
+    kind === 'Error' && error instanceof Error
+      ? error.message
+          .split('\n')[0]!
+          .replace(/https?:\/\/\S+/g, '<url>')
+          .replace(/(["'`]).*?\1/g, '<value>')
+          .replace(/\d{4,}/g, '<n>')
+          .slice(0, 160)
+      : '';
+  safe.reasonUk += ` [startupStage=${stage}; startupError=${kind}${excerpt ? `; startupMessage=${excerpt}` : ''}]`;
   safe.message = safe.reasonUk;
   return safe;
 }
