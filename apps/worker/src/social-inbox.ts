@@ -441,6 +441,9 @@ export async function runSocialInboxSync(
       'archived_folder_unverified',
       'requests_empty_or_unverified',
       'requests_preview_only',
+      // Instagram always emits ancillary GraphQL (unread counts etc.) that the
+      // capture ignores on purpose; it says nothing about mailbox coverage.
+      'unsupported_query_ignored',
     ]);
     // "unsupported_dom" is the standing marker of a pass that cannot prove the
     // whole history; with only coverage notes it is not a failure either.
