@@ -24,15 +24,22 @@ const observedChat = ${JSON.stringify(observedChat)};
 const body = o.whitespaceBody ? 'Synthetic  message' : o.multilineBody ? 'Synthetic\\nmessage' : o.bodySending ? 'Sending' : o.bodyPending ? 'Pending review' : 'Synthetic message';
 const recipient = o.company ? 'synthetic_company' : '100000000000001';
 const label = 'Synthetic Recipient';
+let fixtureMessageId = 100;
 function row(own = true, text = body, time = '4 November 2026, 20:15') {
   if (o.observed) {
     const template = document.createElement('template'); template.innerHTML = observedChat;
     const wrapper = template.content.querySelector('[aria-label^="At "]').closest('[role="article"]');
     if (o.noMessageId) for (const node of [wrapper,...wrapper.querySelectorAll('[data-message-id]')]) node.removeAttribute('data-message-id');
     const content = wrapper.querySelector('[aria-label^="At "]');
+    if (!o.noMessageId) content.setAttribute('data-message-id', 'synthetic-outgoing-' + ++fixtureMessageId);
     const sent = wrapper.querySelector('[aria-label^="Enter, Message sent "]');
     content.setAttribute('aria-label', 'At ' + time + ', ' + (own ? 'You' : 'Synthetic Recipient') + ': ' + text);
     sent.setAttribute('aria-label', 'Enter, Message sent ' + time + ' by ' + (own ? 'You' : 'Synthetic Recipient') + ': ' + text);
+    if (o.quotedUk) {
+      content.setAttribute('aria-label', 'О ' + time + ', Ви: «' + text + '»');
+      content.querySelector('h2').textContent = 'Ви надіслали';
+      sent.setAttribute('aria-label', 'Enter, Повідомлення від користувача Ви о ' + time + ': «' + text + '»');
+    }
     for (const node of content.querySelectorAll('*')) {
       if (!node.children.length && node.textContent === 'Synthetic message 1') node.textContent = text;
     }
@@ -64,6 +71,14 @@ function chat(id, target, name) {
     scope.innerHTML = observedChat;
     const captured = scope.firstElementChild;
     captured.id = id;
+    if (o.quotedUk) for (const article of captured.querySelectorAll('[role=article]')) {
+      const row = article.querySelector('[aria-label^="At "]');
+      if (!row || !row.getAttribute('aria-label').includes(', You: ')) continue;
+      const text = row.querySelector('div[dir=auto]').textContent;
+      row.setAttribute('aria-label', 'О 4 November 2026, 20:15, Ви: «' + text + '»');
+      row.querySelector('h2').textContent = 'Ви надіслали';
+      article.querySelector('[aria-label^="Enter, Message sent"]').setAttribute('aria-label', 'Enter, Повідомлення від користувача Ви о 4 November 2026, 20:15: «' + text + '»');
+    }
     captured.querySelector('a').href = 'https://www.facebook.com/' + target + '/';
     captured.querySelector('a').setAttribute('aria-label', name);
     captured.querySelector('[contenteditable]').setAttribute('aria-label', 'Write to ' + name);
@@ -210,6 +225,11 @@ function wire(scope) {
     if (o.afterSendCheckpoint) { document.body.insertAdjacentHTML('beforeend', '<form action="/checkpoint/"><button>Continue</button></form>'); return; }
     if (o.eraseOnly) { editor.textContent = ''; return; }
     if (o.rerenderAfterSend) { region(scope).innerHTML = region(scope).innerHTML; return; }
+    if (o.prependHistory) { region(scope).prepend(row()); return; }
+    if (o.identifyHistory) {
+      region(scope).querySelector('[aria-roledescription="zz"]').setAttribute('data-message-id', '100000000000009@msgr.99');
+      return;
+    }
     if (o.oldOnly) return;
     const destination = o.sendInNeighbour ? region(document.querySelector('#neighbour')) : region(scope);
     const next = row(!o.incoming, body, o.sameTimestamp ? '4 November 2026, 20:15' : '4 November 2026, 20:16');
@@ -256,6 +276,8 @@ document.querySelector('#open').onclick = () => {
         if (scope.fixtureRecovery) { const previous = scope.fixtureRecovery; delete scope.fixtureRecovery; setTimeout(() => log.append(previous), 90); }
       } });
     }
+    if (o.prependHistory) region(scope).append(row(!o.inboundHistoryOnly, 'Earlier unrelated history'));
+    if (o.identifyHistory) { const historical = row(); historical.firstElementChild.removeAttribute('data-message-id'); region(scope).append(historical); }
     if (o.oldOnly || o.sameTimestamp || o.rerenderAfterSend) region(scope).append(row());
     if (o.saturatedCounts) for (let i = 0; i < 100; i++) region(scope).append(row());
 
@@ -674,7 +696,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           adapter.send(
             { id: 'synthetic', channel: 'facebook', settings: {} },
             { cookies: [], proxy: { server: 'http://127.0.0.1:9' } },
-            400,
+            options.saturatedCounts ? 2000 : 400,
             target,
             options.whitespaceBody
               ? 'Synthetic  message'
@@ -725,6 +747,55 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         await f.close();
       }
     });
+
+    it.each([false, true])(
+      'does not confirm old matching history prepended after dispatch (inbound-only: %s)',
+      async (inboundHistoryOnly) => {
+        const f = await fixture({ prependHistory: true, inboundHistoryOnly });
+        try {
+          await expect(f.send()).rejects.toMatchObject({
+            code: 'delivery_uncertain',
+          });
+        } finally {
+          await f.close();
+        }
+      },
+    );
+
+    it('does not confirm an existing ID-less structural row when its ID hydrates after dispatch', async () => {
+      const f = await fixture({ structuralOnly: true, identifyHistory: true });
+      try {
+        await expect(f.send()).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(
+          f.events.filter((event) => event === 'send:target'),
+        ).toHaveLength(1);
+      } finally {
+        await f.close();
+      }
+    });
+
+    it.each([false, true])(
+      'counts existing outgoing messages with bodies different from the new draft (quoted uk: %s)',
+      async (quotedUk) => {
+        const f = await fixture({ observed: true, quotedUk });
+        try {
+          expect(await f.send()).toMatchObject({
+            observation: {
+              outgoingBefore: 2,
+              outgoingAfter: 3,
+              newOutgoing: true,
+            },
+          });
+          expect(
+            f.events.filter((event) => event === 'send:target'),
+          ).toHaveLength(1);
+        } finally {
+          await f.close();
+        }
+      },
+    );
 
     it('sends from a profile without h1 when the add-friend action and a profile link carry the same name', async () => {
       const f = await fixture({ noH1: true });
@@ -1299,6 +1370,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           await f.close();
         }
       },
+      15000,
     );
     it.each(['first_lookup', 'after_fill'] as const)(
       'waits for mini-chat history before filling/marking (%s)',
@@ -1367,7 +1439,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           );
           expect(
             (result as { externalMessageId?: string }).externalMessageId,
-          ).toBe(stableMessageId ? 'synthetic-id-5' : undefined);
+          ).toBe(stableMessageId ? 'synthetic-outgoing-101' : undefined);
         } finally {
           await f.close();
         }

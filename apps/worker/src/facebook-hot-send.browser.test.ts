@@ -15,7 +15,7 @@ const captured = readFileSync(
 const thread = '/messages/e2ee/t/900000000000001/';
 // Enter appends a copy of the last outgoing bubble with the typed text, as
 // Messenger does once the server has accepted the message.
-const sender = (seen: boolean) => `<script>
+const sender = (seen: boolean, delayedId: boolean | 'absent') => `<script>
 document.querySelector('[data-lexical-editor]').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
@@ -28,12 +28,16 @@ document.querySelector('[data-lexical-editor]').addEventListener('keydown', (e) 
   if (avatar) avatar.setAttribute('alt', 'Seen by Synthetic Recipient');
   if (!${seen}) avatar?.remove();
   const row = copy.querySelector('[data-message-id]');
-  row.setAttribute('data-message-id', '100000000000001@msgr.99');
+  row.removeAttribute('data-message-id');
+  const identify = () => row.setAttribute('data-message-id', '100000000000001@msgr.99');
+  if (${JSON.stringify(delayedId)} === true) setTimeout(identify, 500);
+  else if (${JSON.stringify(delayedId)} !== 'absent') identify();
   row.setAttribute('aria-label', 'At 4 November 2026, 20:20, You: ' + text);
+  copy.querySelector('[aria-label^="Enter, Message sent"]').setAttribute('aria-label', 'Enter, Message sent 4 November 2026, 20:20 by You: ' + text);
   copy.querySelector('div[dir=auto]').textContent = text;
   // A message can contain an image even when it has no receipt.
   copy.querySelector('div[dir=auto]').appendChild(document.createElement('img'));
-  last.parentElement.appendChild(copy);
+  document.querySelector('[role=log]').appendChild(copy);
   e.target.innerHTML = '<p dir="auto"><br></p>';
 });
 </script>`;
@@ -53,7 +57,12 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     afterAll(async () => {
       await browser?.close();
     });
-    async function fixture(accepts: boolean, seen = false, extra = '') {
+    async function fixture(
+      accepts: boolean,
+      seen = false,
+      extra = '',
+      delayedId: boolean | 'absent' = false,
+    ) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       await context.route('**/*', (route) => {
         const url = new URL(route.request().url());
@@ -63,7 +72,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           body:
             url.pathname === '/messages/'
               ? `<a aria-label="Your profile">Profile</a><table><tbody><tr><td><a href="${thread}">Synthetic Recipient</a></td></tr></tbody></table>`
-              : `<a aria-label="Your profile">Profile</a>${captured}${extra}${accepts ? sender(seen) : ''}`,
+              : `<a aria-label="Your profile">Profile</a>${captured}${extra}${accepts ? sender(seen, delayedId) : ''}`,
         });
       });
       const page = await context.newPage();
@@ -107,6 +116,193 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'read_receipt_not_observed; delivery_receipt_unavailable; new_outgoing_observed',
         );
         expect(input.captureFailure).not.toHaveBeenCalled();
+      } finally {
+        await context.close();
+      }
+    });
+    it('does not interpret the outgoing body Sending as a pending status', async () => {
+      const { context, hot, input } = await fixture(true);
+      try {
+        input.body = 'Sending';
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          externalMessageId: '100000000000001@msgr.99',
+        });
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms a stable new ID-less row with an explicit sent control', async () => {
+      const { context, hot, input } = await fixture(true, false, '', 'absent');
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          outcome: 'facebook_dispatched_unconfirmed',
+          observation: {
+            newOutgoing: true,
+            outgoingBefore: 2,
+            outgoingAfter: 3,
+          },
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+        expect(input.captureFailure).not.toHaveBeenCalled();
+      } finally {
+        await context.close();
+      }
+    });
+    it.each([
+      'missing-control',
+      'pending',
+      'incoming',
+      'duplicate',
+      'foreign-log',
+      'mixed-ids',
+      'borrowed-control',
+    ])('rejects an ID-less row with %s evidence', async (mode) => {
+      const { context, hot, input } = await fixture(true, false, '', 'absent');
+      try {
+        await hot.page.goto(`https://www.facebook.com${thread}`);
+        await hot.page.evaluate((mode) => {
+          document
+            .querySelector('[data-lexical-editor]')!
+            .addEventListener('keydown', () => {
+              const row = document.querySelector(
+                '[role="log"] > [role="article"]',
+              )!;
+              if (mode === 'missing-control')
+                row
+                  .querySelector('[aria-label^="Enter, Message sent"]')!
+                  .remove();
+              if (mode === 'pending') row.setAttribute('aria-busy', 'true');
+              if (mode === 'incoming')
+                row.querySelector('h2')!.textContent = 'Synthetic Recipient';
+              if (mode === 'mixed-ids') {
+                const second = row.cloneNode(true) as Element;
+                second
+                  .querySelector('[aria-roledescription="message"]')!
+                  .setAttribute('data-message-id', '100000000000001@msgr.98');
+                row.after(second);
+              }
+              if (mode === 'borrowed-control') {
+                row
+                  .querySelector('[aria-label^="Enter, Message sent"]')!
+                  .remove();
+                row.removeAttribute('role');
+                const container = document.createElement('div');
+                row.replaceWith(container);
+                container.append(row);
+                const old = document
+                  .querySelector('[data-message-id]')!
+                  .closest('[role="article"]')!
+                  .cloneNode(true) as Element;
+                old
+                  .querySelector('[aria-label^="Enter, Message sent"]')!
+                  .setAttribute(
+                    'aria-label',
+                    'Enter, Message sent 4 November 2026, 20:20 by You: Hot message',
+                  );
+                container.append(old);
+              }
+              if (mode === 'duplicate') row.after(row.cloneNode(true));
+              if (mode === 'foreign-log') {
+                const other = document.createElement('div');
+                other.setAttribute('role', 'log');
+                document.body.append(other);
+                other.append(row);
+              }
+            });
+        }, mode);
+        await expect(sendFacebookHot(hot, input)).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+        expect(input.captureFailure).toHaveBeenCalledWith(
+          'hot_confirmation',
+          expect.any(Number),
+        );
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms an appended ID-less outgoing only after its provider ID arrives', async () => {
+      const { context, hot, input } = await fixture(true, false, '', true);
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          externalMessageId: '100000000000001@msgr.99',
+          observation: { newOutgoing: true },
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+        expect(input.captureFailure).not.toHaveBeenCalled();
+      } finally {
+        await context.close();
+      }
+    });
+    it.each([
+      'identify-old',
+      'duplicate-old',
+      'prepend-history',
+      'foreign-row',
+      'pending-row',
+      'rerender-history',
+    ])('does not confirm %s after Enter', async (mode) => {
+      const { context, hot, input } = await fixture(false);
+      try {
+        await hot.page.goto(`https://www.facebook.com${thread}`);
+        await hot.page.evaluate((mode) => {
+          const log = document.querySelector('[role="log"]')!;
+          const old = log.querySelector('[data-message-id]')!;
+          old.setAttribute(
+            'aria-label',
+            'At 4 November 2026, 20:20, You: Hot message',
+          );
+          old.querySelector('div[dir="auto"]')!.textContent = 'Hot message';
+          if (mode === 'identify-old') old.removeAttribute('data-message-id');
+          document
+            .querySelector('[data-lexical-editor]')!
+            .addEventListener('keydown', () => {
+              if (mode === 'identify-old') {
+                old.setAttribute('data-message-id', '100000000000001@msgr.99');
+                return;
+              }
+              if (mode === 'rerender-history') {
+                const html = log.innerHTML;
+                log.innerHTML = html;
+                return;
+              }
+              const copy = old
+                .closest('[role="article"]')!
+                .cloneNode(true) as Element;
+              const row = copy.querySelector(
+                '[aria-roledescription="message"]',
+              )!;
+              row.setAttribute(
+                'data-message-id',
+                (mode === 'foreign-row'
+                  ? '100000000000007'
+                  : '100000000000001') + '@msgr.99',
+              );
+              if (mode !== 'duplicate-old')
+                row.setAttribute(
+                  'aria-label',
+                  'At 4 November 2026, 20:21, ' +
+                    (mode === 'foreign-row' ? 'Foreign' : 'You') +
+                    ': Hot message',
+                );
+              if (mode === 'pending-row')
+                row.insertAdjacentHTML(
+                  'beforeend',
+                  '<span role="status">Надсилається</span>',
+                );
+              if (mode === 'prepend-history') log.prepend(copy);
+              else log.append(copy);
+            });
+        }, mode);
+        await expect(sendFacebookHot(hot, input)).rejects.toMatchObject({
+          code: 'delivery_uncertain',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+        expect(input.captureFailure).toHaveBeenCalledWith(
+          'hot_confirmation',
+          expect.any(Number),
+        );
       } finally {
         await context.close();
       }

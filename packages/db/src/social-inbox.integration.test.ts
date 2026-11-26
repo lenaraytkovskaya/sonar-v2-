@@ -983,6 +983,150 @@ it.skipIf(!enabled)(
   },
 );
 it.skipIf(!enabled)(
+  'reconciles only proven singleton attempts, resolves their paused send task and never resends',
+  async () => {
+    const { sendEmailMessage } = await import('@sonar/db/email');
+    for (const scenario of [
+      { status: 'queued', candidates: 1, proven: true },
+      { status: 'failed', candidates: 1, proven: true },
+      { status: 'paused', candidates: 1, proven: true },
+      { status: 'paused', candidates: 2 },
+      { status: 'paused', candidates: 2, unrelatedPause: true },
+      { status: 'paused', candidates: 1, unknownTime: true },
+      { status: 'paused', candidates: 1, unrelatedPause: true, proven: true },
+      { status: 'paused', candidates: 1, unmarked: true },
+    ]) {
+      const profile = `https://www.facebook.com/reconcile_${randomUUID().replaceAll('-', '')}/`;
+      const observed = {
+        ...message(randomUUID(), 'out', profile),
+        occurredAt: scenario.unknownTime ? null : '2026-11-14T09:00:00Z',
+        providerTimestamp: scenario.unknownTime ? '09:00' : undefined,
+      };
+      const {
+        rows: [conversation],
+      } = await db.sonarPool.query(
+        "insert into conversations(channel,account_id,provider_thread_id,peer_value) values('social',$1,$2,$3) returning id",
+        [account, observed.threadId, profile],
+      );
+      const localIds: string[] = [],
+        taskIds: string[] = [];
+      for (let n = 0; n < scenario.candidates; n++) {
+        const id = randomUUID(),
+          taskId = randomUUID();
+        localIds.push(id);
+        taskIds.push(taskId);
+        await db.sonarPool.query(
+          `insert into messages(id,conversation_id,account_id,channel,direction,source,to_value,subject,body,status,idempotency_key,first_attempt_at,needs_human,reason_uk)
+           values($1::uuid,$2,$3,'social','out','manual',$4,'','Hello','queued',$1::uuid::text,$5,true,'Перевірте чат вручну')`,
+          [
+            id,
+            conversation.id,
+            account,
+            profile,
+            scenario.unmarked ? null : '2026-11-14T09:00:00Z',
+          ],
+        );
+        await db.sonarPool.query(
+          `insert into tasks(id,type,idempotency_key,payload,status,reason_code,reason_uk)
+           values($1::uuid,'message.send',$1::uuid::text,$2,$3::task_status,$4,'Перевірте чат вручну')`,
+          [
+            taskId,
+            { messageId: id },
+            scenario.status,
+            scenario.unrelatedPause && n === 0
+              ? 'account_health_paused'
+              : 'social_delivery_uncertain',
+          ],
+        );
+      }
+      const persist = () =>
+        inbox.persistSocialInboxBatch(account, 'facebook', {
+          messages: [observed],
+          resumeAnchor: null,
+        });
+      const result = await persist();
+      const rows = (
+        await db.sonarPool.query(
+          'select id,status,external_message_id,needs_human,reason_uk,social_meta from messages where conversation_id=$1',
+          [conversation.id],
+        )
+      ).rows;
+      expect(rows).toHaveLength(scenario.proven ? 1 : scenario.candidates + 1);
+      if (scenario.proven) {
+        expect(result).toEqual({ created: 0, conflicts: [] });
+        expect(rows[0]).toMatchObject({
+          id: localIds[0],
+          status: 'sent',
+          external_message_id: observed.externalMessageId,
+          needs_human: false,
+          reason_uk: null,
+        });
+        expect(
+          (
+            await db.sonarPool.query(
+              'select status,reason_code,reason_uk,finished_at,result from tasks where id=$1',
+              [taskIds[0]],
+            )
+          ).rows[0],
+        ).toMatchObject(
+          scenario.unrelatedPause
+            ? {
+                status: 'paused',
+                reason_code: 'account_health_paused',
+              }
+            : {
+                status: 'done',
+                reason_code: null,
+                reason_uk: null,
+                finished_at: expect.any(Date),
+                result: {
+                  messageId: localIds[0],
+                  externalMessageId: observed.externalMessageId,
+                },
+              },
+        );
+        if (!scenario.unrelatedPause)
+          expect(await tasks.retryTask(taskIds[0]!, user)).toBe(false);
+        expect(
+          await tasks.enqueueTask('message.send', taskIds[0]!, {
+            messageId: localIds[0],
+          }),
+        ).toBeNull();
+        const sender = vi.fn(async () => 'must-not-send');
+        for (let retry = 0; retry < 2; retry++)
+          expect(
+            await sendEmailMessage(
+              localIds[0]!,
+              taskIds[0]!,
+              sender,
+              now,
+              Math.random,
+              'social',
+            ),
+          ).toMatchObject({ status: 'done' });
+        expect(sender).not.toHaveBeenCalled();
+      } else {
+        expect(result.created).toBe(1);
+        expect(result.conflicts).toHaveLength(scenario.unmarked ? 0 : 1);
+        for (const id of localIds)
+          expect(rows.find((row) => row.id === id)).toMatchObject({
+            status: 'queued',
+            external_message_id: null,
+          });
+        expect(
+          (
+            await db.sonarPool.query(
+              'select status from tasks where id=any($1::uuid[])',
+              [taskIds],
+            )
+          ).rows.every((row) => row.status === scenario.status),
+        ).toBe(true);
+      }
+      expect(await persist()).toEqual({ created: 0, conflicts: [] });
+    }
+  },
+);
+it.skipIf(!enabled)(
   'marks our sent messages read up to the one the peer has seen',
   async () => {
     const profile = 'https://www.facebook.com/receipt_peer/';
@@ -1722,14 +1866,17 @@ it.skipIf(!enabled).each(['instagram', 'linkedin'] as const)(
     }
   },
 );
-it.skipIf(!enabled)(
-  'preserves observed outgoing ID on existing honest FB dispatch row and sync deduplicates it',
-  async () => {
+it
+  .skipIf(!enabled)
+  .each(['id', 'idless', 'invalid_receipt', 'missing_receipt', 'ambiguous'])(
+  'binds provider ID only to a proven singleton FB dispatch: %s',
+  async (scenario) => {
     const { sendEmailMessage } = await import('@sonar/db/email');
     await resetGate();
-    const freshPeer = 'https://www.facebook.com/fresh_peer/';
+    const freshPeer = `https://www.facebook.com/fresh_peer_${scenario}/`;
+    const externalId = `real-dom-${scenario}`;
     await inbox.persistSocialInboxBatch(account, 'facebook', {
-      messages: [message('fresh-in', 'in', freshPeer)],
+      messages: [message(`fresh-in-${scenario}`, 'in', freshPeer)],
       resumeAnchor: null,
     });
     const conversation = (
@@ -1747,15 +1894,21 @@ it.skipIf(!enabled)(
       },
       user,
     );
+    const taskId = (
+      await db.sonarPool.query(
+        "select id from tasks where type='message.send' and payload->>'messageId'=$1",
+        [reply.id],
+      )
+    ).rows[0].id;
     const result = await sendEmailMessage(
       reply.id,
-      randomUUID(),
+      taskId,
       async (req, a) => {
         await a!.beforeSend!();
         return {
           outcome: 'facebook_dispatched_unconfirmed',
           dialogUrl: req.to,
-          externalMessageId: 'real-dom-id',
+          ...(scenario === 'id' ? { externalMessageId: externalId } : {}),
           observation: {
             inputExactMatch: true,
             dispatchPerformed: true,
@@ -1775,13 +1928,35 @@ it.skipIf(!enabled)(
       status: 'done',
       result: { delivery: 'unconfirmed' },
     });
+    if (scenario === 'invalid_receipt')
+      await db.sonarPool.query(
+        `update activity_log set details=jsonb_set(details,'{observation,newOutgoing}','false') where action='message.dispatched' and details->>'messageId'=$1`,
+        [reply.id],
+      );
+    if (scenario === 'missing_receipt')
+      await db.sonarPool.query(
+        "delete from activity_log where action='message.dispatched' and details->>'messageId'=$1",
+        [reply.id],
+      );
+    if (scenario === 'ambiguous')
+      await db.sonarPool.query(
+        `insert into messages(conversation_id,account_id,channel,source,to_value,subject,body,status,idempotency_key,first_attempt_at)
+         select conversation_id,account_id,channel,source,to_value,subject,body,'queued',$2,first_attempt_at from messages where id=$1`,
+        [reply.id, randomUUID()],
+      );
+    const proven = scenario === 'id' || scenario === 'idless';
     const saved = await inbox.persistSocialInboxBatch(account, 'facebook', {
       messages: [
-        { ...message('real-dom-id', 'out', freshPeer), body: 'Observed send' },
+        {
+          ...message(externalId, 'out', freshPeer),
+          body: 'Observed send',
+          occurredAt: now.toISOString(),
+        },
       ],
       resumeAnchor: null,
     });
-    expect(saved).toEqual({ created: 0, conflicts: [] });
+    expect(saved.created).toBe(proven ? 0 : 1);
+    expect(saved.conflicts).toHaveLength(proven ? 0 : 1);
     expect(
       (
         await db.sonarPool.query(
@@ -1790,9 +1965,21 @@ it.skipIf(!enabled)(
         )
       ).rows[0],
     ).toEqual({
-      external_message_id: 'real-dom-id',
-      reason_uk: facebookDispatchReason,
+      external_message_id: proven ? externalId : null,
+      reason_uk: scenario === 'idless' ? null : facebookDispatchReason,
     });
+    const sender = vi.fn(async () => 'must-not-send');
+    expect(
+      await sendEmailMessage(
+        reply.id,
+        taskId,
+        sender,
+        now,
+        Math.random,
+        'social',
+      ),
+    ).toMatchObject({ status: 'done' });
+    expect(sender).not.toHaveBeenCalled();
   },
 );
 it.skipIf(!enabled)(

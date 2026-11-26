@@ -797,10 +797,10 @@ async function conversation(
         };
         const failedState =
           /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b|надсилається|не надіслано|повторити|помилка|отправляется|не отправлено|повторить|ошибка/i;
-        const sentRow = (row: Element) => {
+        const sentRow = (row: Element, expectedBody = body) => {
           if (structuralRow(row)) {
             const bodies = all(row, 'div[dir="auto"]').filter(
-              (node) => normalize(node.textContent) === normalize(body),
+              (node) => normalize(node.textContent) === normalize(expectedBody),
             );
             const wrapper = row.closest('[role="article"]') ?? row;
             if (
@@ -824,7 +824,7 @@ async function conversation(
               return null;
             return JSON.stringify([
               row.getAttribute('data-message-id'),
-              normalize(body),
+              normalize(expectedBody),
             ]);
           }
           // The observed sent button is a sibling of the labelled content container.
@@ -853,7 +853,7 @@ async function conversation(
           // The label tail is the exact body, optionally in guillemets (uk/ru).
           const endsWithBody = (label: string | null) => {
             const text = normalize(label);
-            const exact = normalize(body);
+            const exact = normalize(expectedBody);
             return text.endsWith(`: ${exact}`) || text.endsWith(`: «${exact}»`);
           };
           if (
@@ -861,7 +861,7 @@ async function conversation(
             !endsWithBody(row.getAttribute('aria-label')) ||
             !endsWithBody(buttons[0]!.getAttribute('aria-label')) ||
             !all(row, '*').some(
-              (node) => normalize(node.textContent) === normalize(body),
+              (node) => normalize(node.textContent) === normalize(expectedBody),
             )
           )
             return null;
@@ -870,9 +870,9 @@ async function conversation(
           // without interpreting a message such as "Sending" as delivery status.
           const bodies = all(row, '*').filter(
             (node) =>
-              normalize(node.textContent) === normalize(body) &&
+              normalize(node.textContent) === normalize(expectedBody) &&
               normalize(node.parentElement?.textContent ?? '') !==
-                normalize(body) &&
+                normalize(expectedBody) &&
               !node.closest('h2, [role="heading"]'),
           );
           if (bodies.length !== 1) return null;
@@ -890,7 +890,7 @@ async function conversation(
                 node === row ||
                 (node === messageBody &&
                   normalize(node.getAttribute('aria-label')) ===
-                    normalize(body))
+                    normalize(expectedBody))
                   ? ''
                   : node.getAttribute('aria-label');
               return /\b(?:sending|pending|failed|not sent|retry|couldn.t send)\b|надсилається|не надіслано|повторити|помилка/i.test(
@@ -930,6 +930,9 @@ async function conversation(
         let stableSignatures: (string | null)[] = [];
         let stableSince = performance.now();
         let baseline: Element[] = [];
+        let baselineAnchors: Element[] = [];
+        let baselineNodes = new Set<Element>();
+        let baselineIds = new Set<string | null>();
         let signatures: (string | null)[] = [];
         let blocked = false;
         let cleanup = () => {};
@@ -993,7 +996,24 @@ async function conversation(
             return text !== null && normalize(text) === normalize(draft);
           },
           outgoingCount: () =>
-            rows().filter((row) => sentRow(row) !== null).length,
+            rows().filter((row) => {
+              // Telemetry counts every proven outgoing, independent of this draft.
+              // Confirmation/recovery below still match the exact requested body.
+              const label = row.getAttribute('aria-label') ?? '';
+              const text = /(?:, (?:You|Ви|Вы): |^(?:Ви|Вы): )([\s\S]*)$/.exec(
+                label,
+              )?.[1];
+              const bodies = all(row, 'div[dir="auto"]');
+              const existingBody =
+                bodies.length === 1
+                  ? bodies[0]!.textContent
+                  : text?.replace(/^«(.*)»$/s, '$1');
+              return (
+                existingBody !== null &&
+                existingBody !== undefined &&
+                sentRow(row, existingBody) !== null
+              );
+            }).length,
           empty: () => {
             const empty = inputText() === '';
             if (!empty) observation.branch = 'draft';
@@ -1002,11 +1022,39 @@ async function conversation(
           button: () => sendButtons()[0]!,
           arm: () => {
             baseline = rows();
-            signatures = baseline.map(sentRow);
+            baselineAnchors = [
+              ...new Set([
+                ...baseline,
+                ...all(
+                  region,
+                  '[role="article"], [data-message-id], [aria-roledescription="message"]',
+                ),
+                ...all(region, '[aria-label]').filter(
+                  (row) => all(row, 'h2, [role="heading"]').length > 0,
+                ),
+              ]),
+            ];
+            baselineNodes = new Set(Array.from(region.querySelectorAll('*')));
+            baselineIds = new Set(
+              Array.from(region.querySelectorAll('[data-message-id]')).map(
+                (row) => row.getAttribute('data-message-id'),
+              ),
+            );
+            signatures = baseline.map((row) => sentRow(row));
           },
           externalMessageId: () => {
             const added = rows().filter(
-              (row) => !baseline.includes(row) && sentRow(row) !== null,
+              (row) =>
+                baselineAnchors.every((old) =>
+                  Boolean(
+                    old.compareDocumentPosition(row) &
+                    Node.DOCUMENT_POSITION_FOLLOWING,
+                  ),
+                ) &&
+                !baselineNodes.has(row) &&
+                !baselineNodes.has(row.closest('[role="article"]') ?? row) &&
+                !baselineIds.has(messageId(row) ?? null) &&
+                sentRow(row) !== null,
             );
             return added.length === 1 ? messageId(added[0]!) : undefined;
           },
@@ -1063,7 +1111,7 @@ async function conversation(
           },
           tailReady: (quietMs: number) => {
             const current = rows();
-            const signatures = current.map(sentRow);
+            const signatures = current.map((row) => sentRow(row));
             if (
               !verify(false) ||
               current.length !== stableRows.length ||
@@ -1083,7 +1131,9 @@ async function conversation(
           confirmed: () => {
             if (!verify(false)) return false;
             if (
-              baseline.some((row) => !row.isConnected || !region.contains(row))
+              baselineAnchors.some(
+                (row) => !row.isConnected || !region.contains(row),
+              )
             ) {
               observation.branch = 'baseline_invalidated';
               return false;
@@ -1098,7 +1148,15 @@ async function conversation(
             return current.some((row) => {
               const signature = sentRow(row);
               return (
-                !baseline.includes(row) &&
+                baselineAnchors.every((old) =>
+                  Boolean(
+                    old.compareDocumentPosition(row) &
+                    Node.DOCUMENT_POSITION_FOLLOWING,
+                  ),
+                ) &&
+                !baselineNodes.has(row) &&
+                !baselineNodes.has(row.closest('[role="article"]') ?? row) &&
+                !baselineIds.has(messageId(row) ?? null) &&
                 signature !== null &&
                 current.filter((other) => sentRow(other) === signature).length >
                   signatures.filter((old) => old === signature).length

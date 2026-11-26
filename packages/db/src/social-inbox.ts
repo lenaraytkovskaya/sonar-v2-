@@ -2,6 +2,7 @@ import { enqueueFormReplyMatch } from './form-replies.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { SocialNetwork } from '@sonar/core';
+import { facebookDispatchReason } from '@sonar/core/social-session';
 import {
   canonicalSocialPeer,
   socialPeerHandle,
@@ -480,7 +481,7 @@ export async function persistSocialInboxBatch(
         }
       }
       await guardBinding(conversation.id, message);
-      // Reconcile only a single marked local attempt in the same bound thread.
+      // Reconcile one marked attempt, including a locally proven ID-less dispatch.
       // Only a provider date proves the bounded window; observation time does not.
       if (
         network === 'facebook' &&
@@ -496,9 +497,15 @@ export async function persistSocialInboxBatch(
         ).length === 1
       ) {
         const { rows: matches } = await c.query(
-          `select id from messages where conversation_id=$1 and account_id=$2
+          `select m.id from messages m where conversation_id=$1 and account_id=$2
            and channel='social' and direction='out' and external_message_id is null
-           and status in ('queued','failed') and first_attempt_at is not null
+           and (status in ('queued','failed') or (status='sent' and source='reply' and reason_uk=$5
+             and exists(select 1 from activity_log l join tasks t on t.id::text=l.details->>'taskId'
+               and t.type='message.send' and t.payload->>'messageId'=m.id::text
+               where l.action='message.dispatched' and l.entity_type='company'
+               and l.details->>'messageId'=m.id::text and l.details->>'providerId'=m.provider_id
+               and l.details @> '{"delivery":"unconfirmed","observation":{"inputExactMatch":true,"dispatchPerformed":true,"newOutgoing":true,"lateError":"none"}}'::jsonb)))
+           and first_attempt_at is not null
            and btrim(regexp_replace(body,'[[:space:]]+',' ','g'))=$3 and first_attempt_at between $4::timestamptz -
              (select value::text::int from settings where key='social.inbox.reconcile_window_seconds') * interval '1 second'
              and $4::timestamptz + interval '1 minute' for update`,
@@ -507,6 +514,7 @@ export async function persistSocialInboxBatch(
             accountId,
             message.body.replace(/\s+/g, ' ').trim(),
             message.occurredAt,
+            facebookDispatchReason,
           ],
         );
         if (matches.length === 1) {
@@ -520,6 +528,17 @@ export async function persistSocialInboxBatch(
               message.occurredAt,
               JSON.stringify({ ...message, network }),
             ],
+          );
+          // Delivery proof resolves the CRM task too. Its stale pg-boss job is
+          // harmless: runTask claims only queued/running tasks, and sent messages
+          // also return before the sender is called.
+          await c.query(
+            `update tasks set status='done',reason_code=null,reason_uk=null,finished_at=now(),
+             result=coalesce(result,'{}'::jsonb)||jsonb_build_object('messageId',$1::text,'externalMessageId',$2::text)
+             where type='message.send' and payload->>'messageId'=$1::text
+             and (status in ('queued','running','failed') or
+               (status='paused' and reason_code='social_delivery_uncertain'))`,
+            [id, message.externalMessageId],
           );
           observe(conversation.id, id, message);
           continue;
