@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { facebookSendNetwork } from './facebook-send-network.js';
 
 /** A long-lived Messenger page kept open by the listener and shared with the readers. */
 export interface HotPage {
@@ -27,6 +28,7 @@ export function noteHot(hot: HotPage, line: string) {
 const pages = new Map<string, HotPage>();
 
 export function registerHotPage(accountId: string, page: Page): HotPage {
+  facebookSendNetwork(page);
   const hot: HotPage = {
     accountId,
     page,
@@ -54,14 +56,74 @@ export function getHotPage(accountId: string): HotPage | undefined {
 export function runOnHotPage<T>(
   hot: HotPage,
   operation: (page: Page) => Promise<T>,
+  kind: 'read' | 'send' = 'read',
 ): Promise<T> {
   hot.activeOps++;
   const result = hot.queue
     .catch(() => {})
-    .then(() => operation(hot.page))
+    .then(() => {
+      if (kind === 'read' && hot.pendingSends > 0)
+        throw new Error('facebook_read_preempted');
+      return operation(hot.page);
+    })
     .finally(() => {
       hot.activeOps--;
     });
   hot.queue = result;
   return result;
+}
+
+/** Background waits yield without letting their continuation mutate the page. */
+export async function waitForFacebookRead<T>(
+  page: Page,
+  wait: () => Promise<T>,
+  navigation = false,
+): Promise<T> {
+  const hot = [...pages.values()].find((candidate) => candidate.page === page);
+  if (!hot) return wait();
+  const check = () => {
+    if (hot.pendingSends > 0) {
+      noteHot(hot, 'read yielded: pending_send');
+      throw new Error('facebook_read_preempted');
+    }
+  };
+  check();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let cancellation: Promise<unknown> | undefined;
+  let preempted = false;
+  let result: T | undefined;
+  let failure: unknown;
+  let failed = false;
+  try {
+    result = await Promise.race([
+      wait(),
+      new Promise<never>((_, reject) => {
+        timer = setInterval(() => {
+          try {
+            check();
+          } catch (error) {
+            if (timer) clearInterval(timer);
+            if (navigation) {
+              // Abort a navigation already in flight BEFORE the shared queue is
+              // released; a late document must not replace the send's chat.
+              preempted = true;
+              cancellation = page
+                .goto('about:blank', { waitUntil: 'commit', timeout: 1000 })
+                .catch(() => {});
+              void cancellation.finally(() => reject(error));
+            } else reject(error);
+          }
+        }, 100);
+      }),
+    ]);
+  } catch (error) {
+    failed = true;
+    failure = error;
+  } finally {
+    if (timer) clearInterval(timer);
+    await cancellation;
+  }
+  if (preempted) throw new Error('facebook_read_preempted');
+  if (failed) throw failure;
+  return result as T;
 }

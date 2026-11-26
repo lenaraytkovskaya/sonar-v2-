@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { waitForFacebookRead } from './facebook-hot-page.js';
 
 export const THREAD_LINKS =
   'a[href^="/messages/t/"], a[href^="/messages/e2ee/t/"]';
@@ -376,7 +377,10 @@ export async function watchMessenger(
   >();
   let emptyScans = 0;
   while (!options.stopped()) {
-    if (Date.now() - started >= (options.reloadMs ?? RELOAD_MS))
+    if (
+      !options.paused?.() &&
+      Date.now() - started >= (options.reloadMs ?? RELOAD_MS)
+    )
       return 'reload';
     await new Promise((resolve) =>
       setTimeout(resolve, options.scanMs ?? SCAN_MS),
@@ -401,9 +405,7 @@ export async function watchMessenger(
     }
     options.onScan?.(next);
     if (next.open && previous.open && next.open.last !== previous.open.last)
-      options.onEvent?.(
-        `open ${next.open.href.slice(-6)} ${previous.open.last.slice(-6)}>${next.open.last.slice(-6)}`,
-      );
+      options.onEvent?.('open_message_changed');
     if (next.unread !== previous.unread)
       options.onEvent?.(`unread ${previous.unread}>${next.unread}`);
     if (next.blocked) return 'blocked';
@@ -474,32 +476,40 @@ export async function sweepThreads(
       // the page is loaded afresh; opening it by a click inside the page keeps
       // the old content. Other chats update in place, so a click is enough.
       if (/\/e2ee\//.test(path)) {
-        await page.goto(`https://www.facebook.com${path}/`, {
-          waitUntil: 'domcontentloaded',
-          timeout: left(),
-        });
+        await waitForFacebookRead(
+          page,
+          () =>
+            page.goto(`https://www.facebook.com${path}/`, {
+              waitUntil: 'domcontentloaded',
+              timeout: left(),
+            }),
+          true,
+        );
       } else if (new URL(page.url()).pathname.replace(/\/$/, '') !== path) {
         const link = page.locator(`a[href="${href}"]`).first();
         if (!(await link.count())) continue;
-        await link.click({ timeout: left() });
-        await page.waitForURL(
-          (url) => url.pathname.replace(/\/$/, '') === path,
-          { timeout: left() },
+        await link.click({ timeout: Math.min(250, left()), noWaitAfter: true });
+        await waitForFacebookRead(page, () =>
+          page.waitForURL((url) => url.pathname.replace(/\/$/, '') === path, {
+            timeout: left(),
+          }),
         );
       }
-      await page.waitForFunction(
-        () =>
-          Array.from(
-            document.querySelectorAll('[role="log"] [data-message-id]'),
-          ).some(
-            (node) =>
-              node.getClientRects().length > 0 &&
-              !node.closest(
-                '[hidden],[aria-hidden="true"],[inert],[role="dialog"]',
-              ),
-          ),
-        undefined,
-        { timeout: left() },
+      await waitForFacebookRead(page, () =>
+        page.waitForFunction(
+          () =>
+            Array.from(
+              document.querySelectorAll('[role="log"] [data-message-id]'),
+            ).some(
+              (node) =>
+                node.getClientRects().length > 0 &&
+                !node.closest(
+                  '[hidden],[aria-hidden="true"],[inert],[role="dialog"]',
+                ),
+            ),
+          undefined,
+          { timeout: left() },
+        ),
       );
       const snapshot = await lastId();
       if (
@@ -512,14 +522,12 @@ export async function sweepThreads(
       const previous = seen.get(path);
       seen.set(path, id);
       log(
-        `sweep ${path.slice(-6)} last=${id.slice(-6)} prev=${(previous ?? '-').slice(-6)} ${Date.now() - startedAt}ms`,
+        `sweep changed=${previous !== id} elapsedMs=${Date.now() - startedAt}`,
       );
       if (previous !== id) changed.push(href);
-    } catch (error) {
+    } catch {
       // A chat that does not open in time is simply tried again next sweep.
-      log(
-        `sweep ${path.slice(-6)} failed ${error instanceof Error ? error.name : '?'} ${Date.now() - startedAt}ms`,
-      );
+      log(`sweep failed elapsedMs=${Date.now() - startedAt}`);
     }
   }
   return changed;
@@ -533,10 +541,13 @@ export async function focusThread(page: Page, href: string, budgetMs: number) {
     if (new URL(page.url()).pathname.replace(/\/$/, '') === path) return;
     const link = page.locator(`a[href="${href}"]`).first();
     if (!(await link.count())) return;
-    await link.click({ timeout: budgetMs });
-    await page.waitForURL((url) => url.pathname.replace(/\/$/, '') === path, {
-      timeout: budgetMs,
-    });
+    await waitForFacebookRead(page, async () => {});
+    await link.click({ timeout: Math.min(250, budgetMs), noWaitAfter: true });
+    await waitForFacebookRead(page, () =>
+      page.waitForURL((url) => url.pathname.replace(/\/$/, '') === path, {
+        timeout: budgetMs,
+      }),
+    );
   } catch {
     // The next sweep or send opens it again.
   }

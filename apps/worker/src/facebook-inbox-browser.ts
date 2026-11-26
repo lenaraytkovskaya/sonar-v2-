@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { waitForFacebookRead } from './facebook-hot-page.js';
 import {
   facebookMessagePriority,
   consumeFacebookMessagePriority,
@@ -591,10 +592,15 @@ export async function captureFacebookInbox(
     stage = 'navigation';
     navigationHttpStatus = null;
     return observed(async () => {
-      const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: Math.max(1, end - Date.now()),
-      });
+      const response = await waitForFacebookRead(
+        page,
+        () =>
+          page.goto(url, {
+            waitUntil: 'domcontentloaded',
+            timeout: Math.max(1, end - Date.now()),
+          }),
+        true,
+      );
       navigationHttpStatus = response?.status() ?? null;
       stage = 'http';
       if (response?.status() === 429)
@@ -605,7 +611,7 @@ export async function captureFacebookInbox(
       await assertSessionNegatives(page, 'facebook');
       await beforeRead();
       stage = 'restore';
-      await dismissRestore(page, end);
+      await dismissRestore(page, Math.min(end, Date.now() + 2000));
       stage = 'auth';
       await assertSession(Math.max(1, end - Date.now()));
     });
@@ -620,10 +626,12 @@ export async function captureFacebookInbox(
     })
     .first();
   try {
-    await list.waitFor({
-      state: 'visible',
-      timeout: Math.max(1, deadline - Date.now()),
-    });
+    await waitForFacebookRead(page, () =>
+      list.waitFor({
+        state: 'visible',
+        timeout: Math.max(1, deadline - Date.now()),
+      }),
+    );
   } catch {
     return {
       complete: false,
@@ -678,10 +686,15 @@ export async function captureFacebookInbox(
     };
     try {
       await navigate(url, end);
-      await page
-        .locator(`${logSelector} [data-message-id]`)
-        .first()
-        .waitFor({ state: 'visible', timeout: Math.max(1, end - Date.now()) });
+      await waitForFacebookRead(page, () =>
+        page
+          .locator(`${logSelector} [data-message-id]`)
+          .first()
+          .waitFor({
+            state: 'visible',
+            timeout: Math.max(1, end - Date.now()),
+          }),
+      );
       read = await readFacebookThread(
         page,
         ownId,
@@ -794,28 +807,37 @@ export async function captureFacebookHot(
         if (encrypted) {
           // A click inside the page leaves an encrypted chat on "loading
           // messages"; only a fresh load shows what arrived meanwhile.
-          await page.goto(
-            `https://www.facebook.com${path.replace(/\/$/, '')}/`,
-            {
-              waitUntil: 'domcontentloaded',
-              timeout: left(),
-            },
+          await waitForFacebookRead(
+            page,
+            () =>
+              page.goto(`https://www.facebook.com${path.replace(/\/$/, '')}/`, {
+                waitUntil: 'domcontentloaded',
+                timeout: left(),
+              }),
+            true,
           );
-          await dismissRestore(page, deadline);
+          await dismissRestore(page, Math.min(deadline, Date.now() + 2000));
         } else {
-          await link.click({ timeout: left() });
-          await dismissRestore(page, deadline);
-          await page.waitForURL((url) => same(url.pathname), {
-            timeout: left(),
+          await link.click({
+            timeout: Math.min(250, left()),
+            noWaitAfter: true,
           });
+          await dismissRestore(page, Math.min(deadline, Date.now() + 2000));
+          await waitForFacebookRead(page, () =>
+            page.waitForURL((url) => same(url.pathname), {
+              timeout: left(),
+            }),
+          );
         }
       }
       await assertSessionNegatives(page, 'facebook');
       await beforeRead();
-      await page
-        .locator(`${logSelector} [data-message-id]`)
-        .first()
-        .waitFor({ state: 'visible', timeout: left() });
+      await waitForFacebookRead(page, () =>
+        page
+          .locator(`${logSelector} [data-message-id]`)
+          .first()
+          .waitFor({ state: 'visible', timeout: left() }),
+      );
       const read = await readFacebookThread(
         page,
         ownId,

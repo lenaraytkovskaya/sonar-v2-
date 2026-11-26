@@ -261,7 +261,7 @@ export async function persistSocialInboxBatch(
     const {
       rows: [account],
     } = await c.query(
-      'select id from channel_accounts where id=$1 and channel=$2',
+      'select id,settings from channel_accounts where id=$1 and channel=$2',
       [accountId, network],
     );
     if (!account) throw new Error('Акаунт соцмережі не знайдено.');
@@ -304,6 +304,17 @@ export async function persistSocialInboxBatch(
       group.set(id, message.providerOrder);
       observations.set(conversationId, group);
     };
+    const resolveSendTask = async (id: string, externalMessageId: string) => {
+      // A stale queue job cannot claim a completed task or dispatch a sent row.
+      await c.query(
+        `update tasks set status='done',reason_code=null,reason_uk=null,finished_at=now(),
+         result=coalesce(result,'{}'::jsonb)||jsonb_build_object('messageId',$1::text,'externalMessageId',$2::text)
+         where type='message.send' and payload->>'messageId'=$1::text
+         and (status in ('queued','running','failed') or
+           (status='paused' and reason_code='social_delivery_uncertain'))`,
+        [id, externalMessageId],
+      );
+    };
     let created = 0;
     const conflicts: string[] = [];
     for (const message of messages) {
@@ -314,7 +325,7 @@ export async function persistSocialInboxBatch(
       const {
         rows: [prior],
       } = await c.query(
-        "select id,direction,social_meta,conversation_id from messages where channel='social' and account_id=$1 and external_message_id=$2 and social_meta->>'network'=$3",
+        "select id,direction,social_meta,conversation_id,first_attempt_at,body from messages where channel='social' and account_id=$1 and external_message_id=$2 and social_meta->>'network'=$3",
         [accountId, message.externalMessageId, network],
       );
       if (prior) {
@@ -329,7 +340,11 @@ export async function persistSocialInboxBatch(
           (prior.social_meta?.threadId &&
             prior.social_meta.threadId !== message.threadId) ||
           (prior.social_meta?.peerProfile &&
-            prior.social_meta.peerProfile !== message.peerProfile)
+            prior.social_meta.peerProfile !== message.peerProfile) ||
+          (network === 'facebook' &&
+            prior.first_attempt_at &&
+            prior.body.replace(/\s+/g, ' ').trim() !==
+              message.body.replace(/\s+/g, ' ').trim())
         ) {
           conflicts.push(prior.id);
           await c.query(
@@ -357,6 +372,30 @@ export async function persistSocialInboxBatch(
               message.peerProfile,
             ],
           );
+          if (
+            network === 'facebook' &&
+            message.direction === 'out' &&
+            prior.first_attempt_at
+          ) {
+            await c.query(
+              `update messages m set status=case when status in ('delivered','read') then status else 'sent' end,
+               sent_at=coalesce(sent_at,$2::timestamptz,first_attempt_at),
+               reason_uk=case when $3::boolean and (reason_uk=$4 or exists(select 1 from tasks t
+                 where t.type='message.send' and t.payload->>'messageId'=m.id::text
+                   and t.status='paused' and t.reason_code='social_delivery_uncertain' and t.reason_uk=m.reason_uk)) then null else reason_uk end,
+               needs_human=case when $3::boolean and (reason_uk=$4 or exists(select 1 from tasks t
+                 where t.type='message.send' and t.payload->>'messageId'=m.id::text
+                   and t.status='paused' and t.reason_code='social_delivery_uncertain' and t.reason_uk=m.reason_uk)) then false else needs_human end
+               where m.id=$1`,
+              [
+                prior.id,
+                message.occurredAt,
+                !prior.social_meta?.legacyConflictIds,
+                facebookDispatchReason,
+              ],
+            );
+            await resolveSendTask(prior.id, message.externalMessageId);
+          }
           observe(prior.conversation_id, prior.id, message);
           const occurredAt =
             message.occurredAt ?? prior.social_meta?.occurredAt ?? null;
@@ -481,12 +520,17 @@ export async function persistSocialInboxBatch(
         }
       }
       await guardBinding(conversation.id, message);
-      // Reconcile one marked attempt, including a locally proven ID-less dispatch.
-      // Only a provider date proves the bounded window; observation time does not.
+      // An unknown provider date requires a fresh ID, bounded observation and
+      // an explicitly uncertain task. An old cursor is never fresh evidence.
+      const cursor =
+        account.settings?.inboxSync?.threadCursors?.[message.threadId];
+      const previouslyObserved =
+        cursor?.lastMessageId === message.externalMessageId ||
+        cursor?.lastMessageIds?.includes(message.externalMessageId);
       if (
         network === 'facebook' &&
         message.direction === 'out' &&
-        message.occurredAt !== null &&
+        (message.occurredAt !== null || !previouslyObserved) &&
         messages.filter(
           (other) =>
             other.direction === 'out' &&
@@ -497,7 +541,13 @@ export async function persistSocialInboxBatch(
         ).length === 1
       ) {
         const { rows: matches } = await c.query(
-          `select m.id from messages m where conversation_id=$1 and account_id=$2
+          `select m.id,m.first_attempt_at between $4::timestamptz -
+             (select value::text::int from settings where key='social.inbox.reconcile_window_seconds') * interval '1 second'
+             and $4::timestamptz as observed_in_window,
+           exists(select 1 from tasks t where t.type='message.send'
+             and t.payload->>'messageId'=m.id::text and t.status='paused'
+             and t.reason_code='social_delivery_uncertain') as uncertain
+           from messages m where conversation_id=$1 and account_id=$2
            and channel='social' and direction='out' and external_message_id is null
            and (status in ('queued','failed') or (status='sent' and source='reply' and reason_uk=$5
              and exists(select 1 from activity_log l join tasks t on t.id::text=l.details->>'taskId'
@@ -506,18 +556,23 @@ export async function persistSocialInboxBatch(
                and l.details->>'messageId'=m.id::text and l.details->>'providerId'=m.provider_id
                and l.details @> '{"delivery":"unconfirmed","observation":{"inputExactMatch":true,"dispatchPerformed":true,"newOutgoing":true,"lateError":"none"}}'::jsonb)))
            and first_attempt_at is not null
-           and btrim(regexp_replace(body,'[[:space:]]+',' ','g'))=$3 and first_attempt_at between $4::timestamptz -
+           and btrim(regexp_replace(body,'[[:space:]]+',' ','g'))=$3 and (not $6::boolean or first_attempt_at between $4::timestamptz -
              (select value::text::int from settings where key='social.inbox.reconcile_window_seconds') * interval '1 second'
-             and $4::timestamptz + interval '1 minute' for update`,
+             and $4::timestamptz + interval '1 minute') for update`,
           [
             conversation.id,
             accountId,
             message.body.replace(/\s+/g, ' ').trim(),
-            message.occurredAt,
+            message.occurredAt ?? message.observedAt,
             facebookDispatchReason,
+            message.occurredAt !== null,
           ],
         );
-        if (matches.length === 1) {
+        if (
+          matches.length === 1 &&
+          (message.occurredAt !== null ||
+            (matches[0]!.uncertain && matches[0]!.observed_in_window))
+        ) {
           const id = matches[0]!.id;
           await c.query(
             `update messages set external_message_id=$2,status='sent',sent_at=coalesce($3::timestamptz,first_attempt_at),
@@ -529,17 +584,7 @@ export async function persistSocialInboxBatch(
               JSON.stringify({ ...message, network }),
             ],
           );
-          // Delivery proof resolves the CRM task too. Its stale pg-boss job is
-          // harmless: runTask claims only queued/running tasks, and sent messages
-          // also return before the sender is called.
-          await c.query(
-            `update tasks set status='done',reason_code=null,reason_uk=null,finished_at=now(),
-             result=coalesce(result,'{}'::jsonb)||jsonb_build_object('messageId',$1::text,'externalMessageId',$2::text)
-             where type='message.send' and payload->>'messageId'=$1::text
-             and (status in ('queued','running','failed') or
-               (status='paused' and reason_code='social_delivery_uncertain'))`,
-            [id, message.externalMessageId],
-          );
+          await resolveSendTask(id, message.externalMessageId);
           observe(conversation.id, id, message);
           continue;
         }

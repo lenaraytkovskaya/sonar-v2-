@@ -2889,6 +2889,9 @@ export function createSocialSendBrowser(
           ? stagedFailure('profile', 'unconfirmed')
           : failure('unavailable');
       let attempted = false;
+      const heldHot =
+        account.channel === 'facebook' ? getHotPage(account.id) : undefined;
+      if (heldHot) heldHot.pendingSends++;
       try {
         // A known chat with a live Messenger page needs no new page load. The
         // normal flow below stays the fallback until the first dispatch.
@@ -2964,6 +2967,7 @@ export function createSocialSendBrowser(
                     elapsedMs,
                     taskId,
                   ),
+                providerThreadId,
               );
             await navigateSocialPage(page, target.canonicalUrl, timeoutMs);
             await assertSocialSession(page, account.channel);
@@ -3031,6 +3035,8 @@ export function createSocialSendBrowser(
         if (attempted) throw failure('delivery_uncertain');
         if (error instanceof SocialSendError) throw error;
         throw failure('unavailable');
+      } finally {
+        if (heldHot) heldHot.pendingSends--;
       }
     },
     async close() {

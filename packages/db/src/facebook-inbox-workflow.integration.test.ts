@@ -3,7 +3,6 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import {
   encryptSocialCookies,
   socialProxyFingerprint,
-  facebookDispatchReason,
 } from '@sonar/core/social-session';
 import type { SocialInboxMessage } from '@sonar/core/social-inbox';
 const enabled = process.env.RUN_DB_TESTS === '1';
@@ -392,7 +391,7 @@ it.skipIf(!enabled)(
         () => 0,
         'social',
       ),
-    ).toMatchObject({ status: 'done', result: { delivery: 'unconfirmed' } });
+    ).toMatchObject({ status: 'done', result: { messageId: sent.id } });
     expect(sender).toHaveBeenCalledOnce();
     const chat = await inbound.getConversationChat(v);
     const incoming = chat.messages
@@ -413,7 +412,7 @@ it.skipIf(!enabled)(
     expect(
       rows.find((row) => row.external_message_id === 'provider-send')
         ?.reason_uk,
-    ).toBe(facebookDispatchReason);
+    ).toBeNull();
     expect(
       (
         await db.sonarPool.query(

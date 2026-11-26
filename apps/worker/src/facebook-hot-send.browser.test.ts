@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { socialTarget } from '@sonar/core';
@@ -116,6 +117,106 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           'read_receipt_not_observed; delivery_receipt_unavailable; new_outgoing_observed',
         );
         expect(input.captureFailure).not.toHaveBeenCalled();
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms a matching HTTP ACK without a DOM bubble after exactly one Enter', async () => {
+      const { context, hot, input } = await fixture(
+        false,
+        false,
+        `<script>
+        document.querySelector('[data-lexical-editor]').addEventListener('keydown', event => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault(); window.enters = (window.enters || 0) + 1;
+          fetch('/api/graphql/', { method: 'POST', body: JSON.stringify({ body: event.target.innerText, thread_id: '900000000000001', offline_threading_id: 'synthetic-client' }) });
+          document.querySelector('[role=log]').remove();
+        });</script>`,
+      );
+      await context.route('**/api/graphql/', (route) =>
+        route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              payload: JSON.stringify({
+                message: {
+                  mid: 'synthetic-provider-id',
+                  offline_threading_id: 'synthetic-client',
+                },
+              }),
+            },
+          }),
+        }),
+      );
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          outcome: 'facebook_network_confirmed',
+          externalMessageId: 'synthetic-provider-id',
+        });
+        expect(
+          await hot.page.evaluate(
+            () => (window as unknown as { enters: number }).enters,
+          ),
+        ).toBe(1);
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms an already-open socket ACK when the chat disappears after Enter', async () => {
+      const { context, hot, input } = await fixture(
+        false,
+        false,
+        `<script>
+        document.querySelector('[data-lexical-editor]').addEventListener('keydown', event => {
+          if (event.key !== 'Enter') return; event.preventDefault();
+          window.socketSend(); document.querySelector('[role=log]').remove();
+        });</script>`,
+      );
+      const socket = new EventEmitter();
+      Object.assign(socket, { url: () => 'wss://edge-chat.facebook.com/chat' });
+      (hot.page as unknown as EventEmitter).emit('websocket', socket);
+      await context.exposeBinding('socketSend', () => {
+        socket.emit('framesent', {
+          payload: JSON.stringify({
+            body: input.body,
+            sender_id: input.ownId,
+            thread_id: input.threadId,
+            offline_threading_id: 'socket-client',
+          }),
+        });
+        socket.emit('framereceived', {
+          payload: JSON.stringify({
+            data: {
+              mid: 'socket-provider',
+              offline_threading_id: 'socket-client',
+            },
+          }),
+        });
+      });
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          outcome: 'facebook_network_confirmed',
+          externalMessageId: 'socket-provider',
+        });
+        expect(input.beforeSend).toHaveBeenCalledOnce();
+      } finally {
+        await context.close();
+      }
+    });
+    it('confirms a genuine appended outgoing after the entire log is rerendered', async () => {
+      const { context, hot, input } = await fixture(
+        true,
+        false,
+        `<script>
+        document.querySelector('[data-lexical-editor]').addEventListener('keydown', () => setTimeout(() => {
+          const log = document.querySelector('[role=log]'); log.replaceWith(log.cloneNode(true));
+        }, 0));</script>`,
+      );
+      try {
+        expect(await sendFacebookHot(hot, input)).toMatchObject({
+          externalMessageId: '100000000000001@msgr.99',
+        });
       } finally {
         await context.close();
       }
