@@ -31,7 +31,7 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     await context.route('**/*', (route) =>
       route.fulfill({
         contentType: 'text/html',
-        body: '<div id="splash-screen">Instagram</div><script>setTimeout(() => { document.body.innerHTML = `<main><a href="/direct/inbox/">Ready</a></main>`; }, 180)</script>',
+        body: '<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10">Instagram</div><script>setTimeout(() => { document.body.innerHTML = `<main><a href="/direct/inbox/">Ready</a></main>`; }, 180)</script>',
       }),
     );
     const page = await context.newPage();

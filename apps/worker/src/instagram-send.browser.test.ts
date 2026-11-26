@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type Locator, type Page } from 'playwright';
 import { createSocialSendBrowser } from './social-send-browser.js';
 
 describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
@@ -34,6 +34,29 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
       let page: Page;
       context.on('page', (value) => {
         page = value;
+        if (options.directClickFailure || options.directClickBlocked) {
+          const locate = page.locator.bind(page);
+          const links = locate('nav a');
+          const click = links.click.bind(links);
+          vi.spyOn(links, 'click').mockImplementation(async (clickOptions) => {
+            await page.evaluate(() => {
+              document.body.insertAdjacentHTML(
+                'beforeend',
+                '<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10">Instagram</div>',
+              );
+            });
+            if (options.directClickBlocked) return click(clickOptions);
+            throw new Error(
+              'Element is not attached to the DOM https://private.invalid/account-id private text',
+            );
+          });
+          vi.spyOn(page, 'locator').mockImplementation(
+            (selector, locatorOptions) =>
+              selector.startsWith(':is(nav')
+                ? ({ filter: () => links } as unknown as Locator)
+                : locate(selector, locatorOptions),
+          );
+        }
       });
       const labels = {
         en: ['Turn on Notifications', 'Turn On', 'Not Now'],
@@ -128,6 +151,11 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           }
         }
         if (
+          options.directThreadRedirect &&
+          url.pathname === '/direct/t/fixture-thread/'
+        )
+          directBooted = true;
+        if (
           url.hostname === 'www.instagram.com' &&
           (url.pathname === '/' ||
             url.pathname === '/fixture_company/' ||
@@ -144,7 +172,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                   (request) => request === `${url.hostname}${url.pathname}`,
                 ).length === 1) ||
               (options.delayedSplash && !url.searchParams.has('loaded'))
-                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.failedScript ? '<script src="/failed-script"></script>' : ''}${options.stalledNavigation ? '<script defer src="/stalled-script"></script>' : ''}${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
+                ? `<main ${options.splashShell ? '' : 'hidden'}></main><div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>${options.failedScript ? '<script src="/failed-script"></script>' : ''}${options.stalledNavigation ? '<script defer src="/stalled-script"></script>' : ''}${options.delayedSplash ? '<script>setTimeout(() => location.replace("/fixture_company/?loaded=1"), 60)</script>' : ''}`
                 : options.capturedMenu
                   ? capturedMenu +
                     '<nav><a href="/direct/inbox/">Inbox</a></nav>'
@@ -170,7 +198,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           return route.fulfill({
             status: 200,
             contentType: 'text/html',
-            body: '<div id="splash-screen"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>',
+            body: '<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10"><div aria-label="Instagram logo">Instagram</div><p>from Meta</p></div>',
           });
         return route.fulfill({
           status: 404,
@@ -388,14 +416,20 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           timeoutMs: 180,
         });
         try {
-          await expect(f.send()).rejects.toMatchObject({
+          const error = await f.send().catch((error) => error);
+          expect(error).toMatchObject({
             stage: ['replaceNotifications', 'mutateNotifications'].includes(
               variant,
             )
-              ? 'navigation'
+              ? 'initial_wait'
               : 'messagebutton',
-            errorKind: 'timeout',
+            errorKind: ['replaceNotifications', 'mutateNotifications'].includes(
+              variant,
+            )
+              ? 'unconfirmed'
+              : 'timeout',
           });
+          expect(error.reasonUk).not.toContain('Unknown fixture heading');
           expect(f.events).toEqual([]);
           expect(f.mark).not.toHaveBeenCalled();
           expect(f.inputs).toEqual([]);
@@ -405,13 +439,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               stage: ['replaceNotifications', 'mutateNotifications'].includes(
                 variant,
               )
-                ? 'navigation'
+                ? 'initial_wait'
                 : 'messagebutton',
               dom: expect.objectContaining({
                 phase: ['replaceNotifications', 'mutateNotifications'].includes(
                   variant,
                 )
-                  ? 'navigation'
+                  ? 'initial_wait'
                   : 'messagebutton',
                 navigation: expect.objectContaining({
                   splash: false,
@@ -432,9 +466,17 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
               }),
             }),
           );
-          expect(JSON.stringify(f.persistFailureShot.mock.calls)).not.toContain(
-            'Unknown fixture heading',
-          );
+          // The failure DOM intentionally preserves visible headings; startup
+          // metadata only keeps the allowlisted heading classification.
+          expect(
+            JSON.stringify(
+              f.persistFailureShot.mock.calls.map(
+                ([, shot]) =>
+                  (shot.dom as { navigation?: unknown } | undefined)
+                    ?.navigation,
+              ),
+            ),
+          ).not.toContain('Unknown fixture heading');
         } finally {
           await f.close();
         }
@@ -537,13 +579,53 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         }
       },
     );
-    it.each([undefined, 'fixture-thread'])(
+    it.each([false, true])(
+      'preserves a Direct click failure through sending and failure capture (actionability blocked: %s)',
+      async (blocked) => {
+        const f = await fixture({
+          recoverViaHome: true,
+          directClickFailure: !blocked,
+          directClickBlocked: blocked,
+          timeoutMs: 120,
+        });
+        try {
+          const error = await f.send().catch((error) => error);
+          expect(error).toMatchObject({
+            stage: 'direct_click',
+            errorKind: blocked ? 'timeout' : 'unconfirmed',
+            startupErrorKind: blocked ? 'TimeoutError' : 'detached_element',
+          });
+          expect(error.screen).toBeUndefined();
+          expect(error.reasonUk).toContain('startupStage=direct_click');
+          expect(error.reasonUk).not.toMatch(/private|account-id|https:/);
+          expect(f.persistFailureShot).toHaveBeenCalledWith(
+            'send',
+            expect.objectContaining({
+              stage: 'direct_click',
+              jpeg: expect.stringMatching(/^\/9j\//),
+              dom: expect.objectContaining({ phase: 'direct_click' }),
+            }),
+          );
+          expect(f.mark).not.toHaveBeenCalled();
+          expect(f.events).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+    it.each([undefined, 'fixture-thread', 'redirect'])(
       'boots via the unique home Direct link and rechecks the original recipient (%s)',
       async (knownThreadId) => {
         const f = await fixture({
           recoverViaHome: true,
-          knownThreadId,
-          directConversation: Boolean(knownThreadId),
+          knownThreadId:
+            knownThreadId === 'redirect' ? undefined : knownThreadId,
+          directThreadRedirect: knownThreadId === 'redirect',
+          homeDirectLinks:
+            knownThreadId === 'redirect'
+              ? `<a href="/direct/inbox/" onclick="event.preventDefault();location.assign('/direct/t/fixture-thread/')">Messages</a>`
+              : undefined,
+          directConversation: knownThreadId === 'fixture-thread',
           timeoutMs: 250,
         });
         try {
@@ -554,8 +636,10 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           expect(home).toBeGreaterThan(0);
           expect(f.requests.slice(home, home + 3)).toEqual([
             'www.instagram.com/',
-            'www.instagram.com/direct/inbox/',
-            knownThreadId
+            knownThreadId === 'redirect'
+              ? 'www.instagram.com/direct/t/fixture-thread/'
+              : 'www.instagram.com/direct/inbox/',
+            knownThreadId === 'fixture-thread'
               ? 'www.instagram.com/direct/t/fixture-thread/'
               : 'www.instagram.com/fixture_company/',
           ]);

@@ -1,5 +1,6 @@
 import {
   chromium,
+  errors,
   type Browser,
   type BrowserContext,
   type Locator,
@@ -683,6 +684,59 @@ function isInstagramSplashTimeout(
     error.screen === 'splash'
   );
 }
+type InstagramStartupStage =
+  | 'initial_wait'
+  | 'direct_click'
+  | 'direct_url'
+  | 'resume_navigation'
+  | 'assert_recovery';
+class InstagramAppWaitTimeout extends Error {}
+function instagramStartupError(error: unknown, stage: InstagramStartupStage) {
+  if (error instanceof SocialSessionCheckError && 'stage' in error)
+    return error;
+  const kind =
+    error instanceof InstagramAppWaitTimeout ||
+    error instanceof errors.TimeoutError
+      ? 'TimeoutError'
+      : error instanceof TypeError
+        ? 'TypeError'
+        : instagramContextReplaced(error)
+          ? 'context_destroyed'
+          : error instanceof Error &&
+              /Target.*closed|page.*closed/i.test(error.message)
+            ? 'page_closed'
+            : error instanceof Error &&
+                /strict mode violation/i.test(error.message)
+              ? 'strict_mode'
+              : error instanceof Error &&
+                  /element.*(?:detached|not attached)/i.test(error.message)
+                ? 'detached_element'
+                : 'Error';
+  const safe =
+    error instanceof SocialSessionCheckError
+      ? error
+      : new SocialSessionCheckError(
+          kind === 'TimeoutError'
+            ? 'timeout'
+            : socialSessionCheckReason(error, 'browser'),
+        );
+  Object.assign(safe, {
+    stage,
+    errorKind: kind === 'TimeoutError' ? 'timeout' : 'unconfirmed',
+    startupErrorKind: kind,
+  });
+  safe.reasonUk += ` [startupStage=${stage}; startupError=${kind}]`;
+  safe.message = safe.reasonUk;
+  return safe;
+}
+function instagramContextReplaced(error: unknown) {
+  return (
+    error instanceof Error &&
+    /Execution context (?:was )?destroyed|Cannot find context with specified id|document (?:was )?(?:replaced|navigated)|most likely because of a navigation/i.test(
+      error.message,
+    )
+  );
+}
 async function recoverInstagramStartup(
   page: Page,
   original: URL,
@@ -691,6 +745,7 @@ async function recoverInstagramStartup(
 ) {
   // Initial startup only. Boot the normal home app, then enter Direct through
   // its own unique link. Never guess a recipient or run this after a dispatch.
+  let stage: InstagramStartupStage = 'initial_wait';
   let directResponse: Response | undefined;
   let restriction: SocialSessionCheckError | undefined;
   const observeDirect = (response: Response) => {
@@ -712,9 +767,13 @@ async function recoverInstagramStartup(
       );
   };
   const assertRecovery = async () => {
-    if (restriction) throw restriction;
-    await assertSocialSession(page, 'instagram', timeoutMs);
-    if (restriction) throw restriction;
+    try {
+      if (restriction) throw restriction;
+      await assertSocialSession(page, 'instagram', timeoutMs);
+      if (restriction) throw restriction;
+    } catch (error) {
+      throw instagramStartupError(error, 'assert_recovery');
+    }
   };
   page.on('response', observeDirect);
   try {
@@ -726,6 +785,7 @@ async function recoverInstagramStartup(
     if (response && response.status() >= 400) return response;
     await waitForInstagramApp(page, timeoutMs);
     await assertRecovery();
+    stage = 'direct_click';
     // The observed unlabelled rail groups these routes outside conversation UI.
     const rail =
       'div:not(main *, [role="main"] *):not(:has(main, [role="main"], [role="dialog"]))' +
@@ -758,17 +818,30 @@ async function recoverInstagramStartup(
       homeUrl.password
     )
       throw new SocialSessionCheckError('unknown_auth');
-    await Promise.all([
-      page.waitForURL(/^https:\/\/www\.instagram\.com\/direct\/inbox\/?$/, {
-        timeout: timeoutMs,
-        waitUntil: 'commit',
-      }),
-      links.click({ timeout: timeoutMs, noWaitAfter: true }),
-    ]);
+    // Observe redirects before clicking, but a failed action must keep its own
+    // phase even when the URL waiter reaches the same timeout first.
+    const directNavigation = page
+      .waitForURL(
+        (url) =>
+          url.origin === original.origin &&
+          !url.username &&
+          !url.password &&
+          url.pathname.startsWith('/direct/'),
+        { timeout: timeoutMs, waitUntil: 'commit' },
+      )
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await links.click({ timeout: timeoutMs, noWaitAfter: true });
+    stage = 'direct_url';
+    const directResult = await directNavigation;
+    if (!directResult.ok) throw directResult.error;
     if (directResponse && directResponse.status() >= 400) return directResponse;
     await waitForInstagramApp(page, timeoutMs);
     await assertRecovery();
     if (!/^\/direct\/inbox\/?$/.test(original.pathname)) {
+      stage = 'resume_navigation';
       const resumed = await navigateSocialPage(page, original.href, timeoutMs);
       if (resumed && resumed.status() >= 400) return resumed;
       await waitForInstagramApp(page, timeoutMs);
@@ -776,27 +849,54 @@ async function recoverInstagramStartup(
     }
     return;
   } catch (recoveryError) {
-    if (recoveryError instanceof SocialSessionCheckError) throw recoveryError;
     // A challenge can arrive while the Direct click/navigation is pending.
     try {
       await assertSessionNegatives(page, 'instagram');
     } catch (sessionError) {
-      if (sessionError instanceof SocialSessionCheckError) throw sessionError;
+      if (sessionError instanceof SocialSessionCheckError)
+        throw instagramStartupError(sessionError, 'assert_recovery');
     }
-    if (restriction) throw restriction;
-    const state = await page.evaluate(instagramLoadingState);
-    if (state.splash) throw instagramSplashTimeout(Date.now() - started, state);
-    throw recoveryError;
+    if (restriction)
+      throw instagramStartupError(restriction, 'assert_recovery');
+    const state = await page
+      .evaluate(instagramLoadingState)
+      .catch(() => undefined);
+    if (recoveryError instanceof InstagramAppWaitTimeout && state?.splash)
+      throw instagramSplashTimeout(Date.now() - started, state);
+    throw instagramStartupError(recoveryError, stage);
   } finally {
     page.off('response', observeDirect);
   }
 }
 async function waitForInstagramApp(page: Page, timeoutMs: number) {
-  await page.waitForFunction(
-    `(${instagramLoadingState.toString()})().ready`,
-    undefined,
-    { timeout: timeoutMs },
-  );
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await waitForInstagramAppDocument(page, deadline);
+      return;
+    } catch (error) {
+      if (!instagramContextReplaced(error)) throw error;
+      if (Date.now() >= deadline) throw new InstagramAppWaitTimeout();
+      // The replacement document gets only the remainder of the same wait.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(25, deadline - Date.now())),
+      );
+    }
+  }
+}
+async function waitForInstagramAppDocument(page: Page, deadline: number) {
+  const remaining = () => Math.max(1, deadline - Date.now());
+  try {
+    await page.waitForFunction(
+      `(${instagramLoadingState.toString()})().ready`,
+      undefined,
+      { timeout: remaining() },
+    );
+  } catch (error) {
+    if (error instanceof errors.TimeoutError)
+      throw new InstagramAppWaitTimeout();
+    throw error;
+  }
   const origin = new URL(page.url()).origin;
   if (!['https://www.instagram.com', 'https://instagram.com'].includes(origin))
     return;
@@ -806,7 +906,7 @@ async function waitForInstagramApp(page: Page, timeoutMs: number) {
     .filter({ visible: true });
   if ((await dialogs.count()) !== 1) return;
   const dialog = dialogs.first();
-  const original = await dialog.elementHandle();
+  const original = await dialog.elementHandle({ timeout: remaining() });
   if (!original) return;
   try {
     const heading = dialog
@@ -830,11 +930,11 @@ async function waitForInstagramApp(page: Page, timeoutMs: number) {
       (await dismiss.count()) !== 1
     )
       return;
-    const button = await dismiss.elementHandle();
+    const button = await dismiss.elementHandle({ timeout: remaining() });
     if (!button) return;
     try {
-      await button.hover({ timeout: timeoutMs });
-      await button.click({ trial: true, timeout: timeoutMs });
+      await button.hover({ timeout: remaining() });
+      await button.click({ trial: true, timeout: remaining() });
       // Revalidate and activate in one synchronous page task: neither a replaced
       // modal nor in-place heading/button mutations can inherit this approval.
       const activated = await original.evaluate((node, button) => {
@@ -892,7 +992,7 @@ async function waitForInstagramApp(page: Page, timeoutMs: number) {
         return true;
       }, button);
       if (!activated) throw new Error('Instagram notifications dialog changed');
-      await original.waitForElementState('hidden', { timeout: timeoutMs });
+      await original.waitForElementState('hidden', { timeout: remaining() });
     } finally {
       await button.dispose();
     }
@@ -910,12 +1010,15 @@ export async function waitForInstagramReady(
   if (typeof page.waitForFunction !== 'function') return;
   const started = Date.now();
   try {
-    // This browser predicate survives document replacement; no polling sleeps or
-    // reload may interrupt a delayed SPA startup.
+    // Document replacement can destroy Playwright's execution context. Retry
+    // readiness within one deadline without reloading or cancelling startup.
     await waitForInstagramApp(page, timeoutMs);
   } catch (error) {
-    const current = await page.evaluate(instagramLoadingState);
-    if (!current.splash) throw error;
+    const current = await page
+      .evaluate(instagramLoadingState)
+      .catch(() => undefined);
+    if (!(error instanceof InstagramAppWaitTimeout) || !current?.splash)
+      throw instagramStartupError(error, 'initial_wait');
     const original = new URL(page.url());
     if (
       options.recoverViaDirect === false ||
@@ -1724,6 +1827,8 @@ async function sendInstagram(
       splash.message = splash.reasonUk;
       throw Object.assign(splash, { screen: 'splash' });
     }
+    if (error instanceof SocialSessionCheckError && 'startupErrorKind' in error)
+      throw error;
     if (error instanceof SocialSessionCheckError) {
       const errorKind =
         error.reason === 'action_blocked'

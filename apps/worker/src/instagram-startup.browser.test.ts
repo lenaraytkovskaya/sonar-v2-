@@ -26,13 +26,13 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
     it.each([
       [
         'explicit splash',
-        '<main></main><div id="splash-screen">Instagram</div>',
+        '<main></main><div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10">Instagram</div>',
         true,
         false,
       ],
       [
         'nested splash',
-        '<main><div id="splash-screen"><h2>Instagram</h2></div></main>',
+        '<main><div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10"><h2>Instagram</h2></div></main>',
         true,
         false,
       ],
@@ -62,6 +62,30 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         '<div id="splash-screen">Instagram</div><nav><a href="/direct/inbox/">Messages</a></nav><main><h1>Ready</h1></main>',
         false,
         true,
+      ],
+      ...['display:none', 'opacity:0', 'width:0;height:0'].map((style) => [
+        `unpainted splash ${style}`,
+        `<div id="splash-screen" style="position:fixed;inset:0;${style}">Instagram</div>`,
+        false,
+        false,
+      ]),
+      [
+        'covered splash',
+        '<div id="splash-screen" style="position:fixed;inset:0"><div aria-label="Instagram logo" style="position:fixed;left:50%;top:50%;width:50px;height:50px">Instagram</div></div><div style="position:fixed;inset:0;background:white;z-index:5"></div>',
+        false,
+        false,
+      ],
+      [
+        'splash covering mounted app',
+        '<nav>Messages</nav><main>Loaded feed</main><div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10">Instagram</div>',
+        true,
+        false,
+      ],
+      [
+        'small stale splash',
+        '<div id="splash-screen">Instagram</div>',
+        false,
+        false,
       ],
       [
         'footer logo without app',
@@ -104,7 +128,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
           requests.push(route.request().url());
           return route.fulfill({
             contentType: 'text/html',
-            body: `<div id="splash-screen" aria-label="Instagram logo">Instagram</div>
+            body: `<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10" aria-label="Instagram logo">Instagram</div>
             <main hidden><a href="/direct/inbox/">Messages</a><h1>Ready profile</h1></main>
             <script>setTimeout(() => { document.querySelector('#splash-screen').remove(); document.querySelector('main').hidden = false; }, 70)</script>`,
           });
@@ -163,7 +187,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
                 ? '<main><nav><a hidden href="/direct/inbox/">Messages</a></nav></main><script>fetch("/api/graphql", {method: "POST"}).then(() => document.querySelector("a").hidden = false)</script>'
                 : homeVisited
                   ? '<main><nav><a href="/direct/inbox/">Messages</a></nav></main>'
-                  : '<div id="splash-screen" aria-label="Instagram logo">Instagram</div>',
+                  : '<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10" aria-label="Instagram logo">Instagram</div>',
           });
         });
         try {
@@ -204,7 +228,7 @@ describe.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
         requests.push(new URL(route.request().url()).pathname);
         return route.fulfill({
           contentType: 'text/html',
-          body: '<div id="splash-screen">Instagram</div>',
+          body: '<div id="splash-screen" style="position:fixed;inset:0;background:white;z-index:10">Instagram</div>',
         });
       });
       try {
