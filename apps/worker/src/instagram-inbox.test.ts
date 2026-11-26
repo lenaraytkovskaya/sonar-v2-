@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
-import type { Page, Response } from 'playwright';
+import { errors, type Page, type Response } from 'playwright';
 import type { SocialInboxBatch } from '@sonar/core/social-inbox';
 import { validateSocialInboxMessage } from '@sonar/core/social-inbox';
 import { SocialSessionCheckError } from '@sonar/core/social-session';
@@ -61,9 +61,7 @@ it('classifies an inbox navigation splash before reading or persisting messages'
     url: () => 'https://www.instagram.com/direct/inbox/',
     waitForFunction: vi
       .fn()
-      .mockRejectedValue(
-        Object.assign(new Error('timeout'), { name: 'TimeoutError' }),
-      ),
+      .mockRejectedValue(new errors.TimeoutError('timeout')),
     evaluate: vi.fn(async () => ({ splash: true })),
   };
   const persist = vi.fn();

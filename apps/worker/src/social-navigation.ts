@@ -22,9 +22,39 @@ export function instagramLoadingState() {
     getComputedStyle(node).visibility === 'visible';
   const anyVisible = (selector: string) =>
     Array.from(document.querySelectorAll(selector)).some(visible);
-  const splashElement = anyVisible(
-    '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
-  );
+  const onTop = (node: Element, x: number, y: number) => {
+    const top = document.elementFromPoint(x, y);
+    return top !== null && node.contains(top);
+  };
+  const painted = (node: Element) => {
+    for (
+      let parent: Element | null = node;
+      parent;
+      parent = parent.parentElement
+    ) {
+      const style = getComputedStyle(parent);
+      if (
+        style.display === 'none' ||
+        style.visibility !== 'visible' ||
+        Number(style.opacity) === 0
+      )
+        return false;
+    }
+    return visible(node);
+  };
+  const splashElement = Array.from(
+    document.querySelectorAll(
+      '#splash-screen, #splash-screen-container, [data-testid="splash-screen"]',
+    ),
+  ).some((node) => {
+    const rect = node.getBoundingClientRect();
+    return (
+      painted(node) &&
+      rect.width >= innerWidth * 0.8 &&
+      rect.height >= innerHeight * 0.8 &&
+      onTop(node, innerWidth / 2, innerHeight / 2)
+    );
+  });
   const logoSelector =
     '[aria-label="Instagram logo"], img[alt="Instagram"], svg[aria-label="Instagram"]';
   const logo = anyVisible(logoSelector);
@@ -95,22 +125,23 @@ export function instagramLoadingState() {
   const app = nav || direct || appMain || anyVisible('[role="feed"]');
   const centralLogo = Array.from(document.querySelectorAll(logoSelector)).some(
     (node) => {
-      if (!visible(node)) return false;
+      if (!painted(node)) return false;
       const rect = node.getBoundingClientRect();
       return (
         rect.width <= 300 &&
         rect.height <= 300 &&
+        onTop(node, rect.x + rect.width / 2, rect.y + rect.height / 2) &&
         Math.abs(rect.x + rect.width / 2 - innerWidth / 2) < innerWidth * 0.2 &&
         Math.abs(rect.y + rect.height / 2 - innerHeight / 2) < innerHeight * 0.2
       );
     },
   );
   const splash =
-    !app &&
     !login &&
     !challenge &&
     (splashElement ||
-      (centralLogo &&
+      (!app &&
+        centralLogo &&
         !dialog &&
         !marker(/^(?!(?:Instagram|from\s+meta)$).+/i)));
   const dialogHeading = Array.from(
