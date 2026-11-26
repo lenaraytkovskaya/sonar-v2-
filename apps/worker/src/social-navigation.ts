@@ -1,4 +1,37 @@
-import type { Page, Response } from 'playwright';
+import { errors, type Page, type Response } from 'playwright';
+
+// Instagram's CSP forbids string evaluation, which page.waitForFunction relies on.
+// page.evaluate goes through CDP and is not subject to the page CSP.
+const POLL_INTERVAL_MS = 250;
+export async function pollPage<Result>(
+  read: () => Promise<Result>,
+  timeoutMs: number,
+  accept: (result: Result) => boolean = Boolean,
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if (accept(await read())) return;
+    } catch (error) {
+      // A replaced document gets the rest of the same wait.
+      if (
+        !(error instanceof Error) ||
+        !/Execution context (?:was )?destroyed|Cannot find context with specified id|most likely because of a navigation/i.test(
+          error.message,
+        )
+      )
+        throw error;
+    }
+    const left = deadline - Date.now();
+    if (left <= 0)
+      throw new errors.TimeoutError(
+        `pollPage: timeout ${timeoutMs}ms exceeded`,
+      );
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(POLL_INTERVAL_MS, left)),
+    );
+  }
+}
 
 export const socialNavigationDiagnostics = new WeakMap<
   Page,
@@ -244,12 +277,14 @@ export async function navigateSocialPage(
             frame === page.mainFrame() && instagramUrl(frame.url()),
           timeout: timeoutMs,
         });
-      await page.waitForFunction(
+      await pollPage(
         () =>
-          /^(?:(www\.)?instagram\.com|ig\.me)$/.test(location.hostname) &&
-          document.readyState !== 'loading',
-        undefined,
-        { timeout: timeoutMs },
+          page.evaluate(
+            () =>
+              /^(?:(www\.)?instagram\.com|ig\.me)$/.test(location.hostname) &&
+              document.readyState !== 'loading',
+          ),
+        timeoutMs,
       );
       diagnostic.outcome = 'spa_interrupted';
       return committed;

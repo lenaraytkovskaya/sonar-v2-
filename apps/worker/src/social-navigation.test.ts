@@ -4,8 +4,32 @@ import { errors, type Page } from 'playwright';
 import { waitForInstagramReady } from './social-send-browser.js';
 import {
   navigateSocialPage,
+  pollPage,
   socialNavigationDiagnostics,
 } from './social-navigation.js';
+
+it('polls until accepted and survives a replaced document', async () => {
+  const read = vi
+    .fn<() => Promise<{ ready: boolean }>>()
+    .mockResolvedValueOnce({ ready: false })
+    .mockRejectedValueOnce(new Error('Execution context was destroyed'))
+    .mockResolvedValueOnce({ ready: true });
+  await pollPage(read, 5000, (state) => state.ready);
+  expect(read).toHaveBeenCalledTimes(3);
+});
+
+it('times out with a Playwright TimeoutError', async () => {
+  await expect(pollPage(async () => false, 30)).rejects.toBeInstanceOf(
+    errors.TimeoutError,
+  );
+});
+
+it('rethrows other evaluation errors such as a CSP EvalError', async () => {
+  const csp = new Error(
+    'EvalError: Evaluating a string as JavaScript violates CSP',
+  );
+  await expect(pollPage(() => Promise.reject(csp), 5000)).rejects.toBe(csp);
+});
 
 it.each([true, false])(
   'recovers ERR_ABORTED only after an observed Instagram main-frame replacement (%s)',
@@ -17,9 +41,9 @@ it.each([true, false])(
     });
     const page = Object.assign(emitter, {
       mainFrame: () => frame,
-      evaluate: vi.fn(),
+      evaluate: vi.fn(async () => true),
       waitForEvent,
-      waitForFunction: vi.fn(async () => {}),
+      waitForFunction: vi.fn(),
       goto: vi.fn(async () => {
         if (replacement) emitter.emit('framenavigated', frame);
         throw Error('net::ERR_ABORTED');
@@ -68,24 +92,22 @@ it('rejects an Instagram navigation timeout after a foreign redirect despite rea
 });
 
 it('retries a destroyed Instagram execution context within the same deadline', async () => {
-  const waitForFunction = vi
+  const evaluate = vi
     .fn()
     .mockRejectedValueOnce(
       new Error(
         'Execution context was destroyed, most likely because of a navigation',
       ),
     )
-    .mockResolvedValue(undefined);
+    .mockResolvedValue({ ready: true });
   const page = {
-    waitForFunction,
+    waitForFunction: vi.fn(),
+    evaluate,
     url: () => 'https://www.instagram.com/',
     locator: () => ({ filter: () => ({ count: async () => 0 }) }),
   } as unknown as Page;
   await expect(waitForInstagramReady(page, 200)).resolves.toBeUndefined();
-  expect(waitForFunction).toHaveBeenCalledTimes(2);
-  expect(waitForFunction.mock.calls[1]![2].timeout).toBeLessThan(
-    waitForFunction.mock.calls[0]![2].timeout,
-  );
+  expect(evaluate).toHaveBeenCalledTimes(2);
 });
 
 it.each([
@@ -98,8 +120,11 @@ it.each([
   'does not relabel arbitrary readiness errors as splash timeouts (%s)',
   async (error, kind) => {
     const page = {
-      waitForFunction: vi.fn().mockRejectedValue(error),
-      evaluate: async () => ({ splash: true }),
+      waitForFunction: vi.fn(),
+      evaluate: vi
+        .fn()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue({ splash: true }),
     } as unknown as Page;
     const result = await waitForInstagramReady(page, 100).catch(
       (error) => error,
@@ -117,11 +142,17 @@ it('does not renew the Instagram readiness deadline after repeated document navi
   vi.useFakeTimers();
   try {
     const start = Date.now();
+    let navigatedAtDeadline = false;
     const page = {
-      waitForFunction: vi
-        .fn()
-        .mockRejectedValue(new Error('document was navigated')),
-      evaluate: async () => ({ splash: true }),
+      waitForFunction: vi.fn(),
+      // Every readiness read hits a replaced document; only the final state read succeeds.
+      evaluate: async () => {
+        if (!navigatedAtDeadline) {
+          if (Date.now() - start >= 70) navigatedAtDeadline = true;
+          throw new Error('document was navigated');
+        }
+        return { splash: true, ready: false };
+      },
       url: () => 'https://www.instagram.com/',
     } as unknown as Page;
     const result = expect(
@@ -137,10 +168,8 @@ it('does not renew the Instagram readiness deadline after repeated document navi
 
 it('keeps a non-splash readiness timeout typed and staged', async () => {
   const page = {
-    waitForFunction: vi
-      .fn()
-      .mockRejectedValue(new errors.TimeoutError('private url')),
-    evaluate: async () => ({ splash: false }),
+    waitForFunction: vi.fn(),
+    evaluate: async () => ({ splash: false, ready: false }),
   } as unknown as Page;
   await expect(waitForInstagramReady(page, 100)).rejects.toMatchObject({
     stage: 'initial_wait',

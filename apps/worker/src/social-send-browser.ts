@@ -39,6 +39,7 @@ import { captureFailureDom } from './social-failure-dom.js';
 import {
   navigateSocialPage,
   instagramLoadingState,
+  pollPage,
   socialNavigationDiagnostics,
 } from './social-navigation.js';
 
@@ -897,10 +898,10 @@ async function waitForInstagramApp(page: Page, timeoutMs: number) {
 async function waitForInstagramAppDocument(page: Page, deadline: number) {
   const remaining = () => Math.max(1, deadline - Date.now());
   try {
-    await page.waitForFunction(
-      `(${instagramLoadingState.toString()})().ready`,
-      undefined,
-      { timeout: remaining() },
+    await pollPage(
+      () => page.evaluate(instagramLoadingState),
+      remaining(),
+      (state) => state.ready,
     );
   } catch (error) {
     if (error instanceof errors.TimeoutError)
@@ -1541,9 +1542,9 @@ async function sendInstagram(
           if (initial) throw await messageButtonFailure(initial, page, options);
           await trigger.click();
           try {
-            await page.waitForFunction(
-              (state) => state.inspect() !== 'pending',
-              snapshot,
+            await pollPage(
+              () => snapshot.evaluate((state) => state.inspect() !== 'pending'),
+              timeoutMs,
             );
           } catch {
             throw await messageButtonFailure('popup_missing', page, options);
@@ -1801,9 +1802,10 @@ async function sendInstagram(
         ownMessages
           .nth(count)
           .waitFor({ state: 'visible', timeout: timeoutMs }),
-        page.waitForFunction((state) => state.confirmed(), articles, {
-          timeout: timeoutMs,
-        }),
+        pollPage(
+          () => articles.evaluate((state) => state.confirmed()),
+          timeoutMs,
+        ),
       ]).catch((error: AggregateError) => {
         throw error.errors[0];
       });
