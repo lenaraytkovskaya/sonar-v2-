@@ -429,7 +429,10 @@ export async function captureInstagramInbox(
     await drain();
     return revision > previous;
   };
+  let navigationTimeLimit = false;
+  let navigationFailure = false;
   const navigate = async (url: string) => {
+    const continuation = capture.persisted > 0;
     scope = url === `${origin}/direct/requests/` ? 'requests' : 'primary';
     let stage: SocialSessionCheckDiagnostic['stage'] = 'navigation';
     try {
@@ -459,6 +462,16 @@ export async function captureInstagramInbox(
       }
       await checkSession('auth');
     } catch (error) {
+      navigationFailure = true;
+      navigationTimeLimit =
+        continuation &&
+        !invalid &&
+        stage === 'navigation' &&
+        Date.now() >= deadline &&
+        error instanceof Error &&
+        (error.name === 'TimeoutError' ||
+          (error instanceof SocialSessionCheckError &&
+            error.reason === 'timeout'));
       throw await diagnosed(error, stage);
     }
     await drain();
@@ -588,6 +601,11 @@ export async function captureInstagramInbox(
     };
   } catch (error) {
     await drain();
+    if (navigationTimeLimit) {
+      skipped.add('time_limit');
+      return { complete: false, skipped: skippedReasons() };
+    }
+    if (navigationFailure) throw error;
     if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
     if (!seenMailbox) skipped.add('no_verified_mailbox');
     return {

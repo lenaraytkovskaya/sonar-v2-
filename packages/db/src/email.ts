@@ -1547,6 +1547,20 @@ export async function sendEmailMessage(
             [m.conversation_id, threadId, account.id],
           );
         }
+        if (channel === 'social' && account.channel === 'instagram')
+          await tx.query(
+            // The message is already out: never let conversation_inbound_peer abort this transaction.
+            `update conversations v set peer_value=$2 where v.id=$1 and v.channel='social' and $2::text is not null
+              and nullif(v.peer_value,'') is null and (v.account_id is null or v.account_id=$3)
+              and (v.provider_thread_id is not null or v.account_id is null or not exists(
+                select 1 from conversations o where o.id<>v.id and o.channel='social' and o.account_id=v.account_id
+                  and o.peer_value=$2 and o.provider_thread_id is null and o.merged_into_id is null))`,
+            [
+              m.conversation_id,
+              socialTarget(m.to_value)?.canonicalUrl,
+              account.id,
+            ],
+          );
         if (readReceipt) {
           const read = await tx.query(
             `update messages m set status='read',reason_uk=null
@@ -1624,6 +1638,29 @@ export async function sendEmailMessage(
           )
             previousBodies.push(text);
     }
+    let providerThreadId = m.provider_thread_id ?? undefined;
+    if (channel === 'social' && account.channel === 'instagram') {
+      const { rows } = await sonarPool.query(
+        "select provider_id,to_value from messages where conversation_id=$1 and account_id=$2 and direction='out' and channel='social' and status in ('sent','delivered','read') and first_attempt_at is not null",
+        [m.conversation_id, account.id],
+      );
+      const urls = new Set(
+        rows
+          .filter(
+            (row) =>
+              socialTarget(row.to_value)?.canonicalUrl ===
+              socialTarget(m.to_value)?.canonicalUrl,
+          )
+          .map(
+            (row) =>
+              /^https:\/\/www\.instagram\.com\/direct\/t\/([A-Za-z0-9._:-]{1,200})\/?$/.exec(
+                row.provider_id ?? '',
+              )?.[1],
+          )
+          .filter(Boolean),
+      );
+      providerThreadId = urls.size === 1 ? [...urls][0] : undefined;
+    }
     try {
       const providerId =
         channel === 'telegram' ||
@@ -1636,7 +1673,7 @@ export async function sendEmailMessage(
                 ...account.settings,
                 countryCode: m.country_code,
                 network: account.channel,
-                providerThreadId: m.provider_thread_id ?? undefined,
+                providerThreadId,
               },
               ...(channel === 'social'
                 ? {

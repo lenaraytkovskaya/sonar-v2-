@@ -226,11 +226,18 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
         expect(
           (
             await sonarPool.query(
-              'select provider_thread_id from conversations where id=$1',
+              'select provider_thread_id,peer_value from conversations where id=$1',
               [conversationId],
             )
-          ).rows[0].provider_thread_id,
-        ).toBe('123');
+          ).rows[0],
+        ).toEqual({
+          provider_thread_id: '123',
+          peer_value: 'https://www.instagram.com/sonar_test/',
+        });
+        await sonarPool.query(
+          "update conversations set provider_thread_id='canonical-graphql',peer_value=null where id=$1",
+          [conversationId],
+        );
         await reset();
         const nextReply = await create();
         const knownThreadSender = vi.fn(async (_request, a) => {
@@ -242,6 +249,17 @@ it.skipIf(!enabled).each(['instagram', 'facebook'] as const)(
           status: 'done',
         });
         expect(knownThreadSender).toHaveBeenCalledOnce();
+        expect(
+          (
+            await sonarPool.query(
+              'select provider_thread_id,peer_value from conversations where id=$1',
+              [conversationId],
+            )
+          ).rows[0],
+        ).toEqual({
+          provider_thread_id: 'canonical-graphql',
+          peer_value: 'https://www.instagram.com/sonar_test/',
+        });
       }
       if (network === 'facebook') {
         await sonarPool.query(
