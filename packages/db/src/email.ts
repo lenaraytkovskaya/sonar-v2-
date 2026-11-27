@@ -1549,7 +1549,12 @@ export async function sendEmailMessage(
         }
         if (channel === 'social' && account.channel === 'instagram')
           await tx.query(
-            "update conversations set peer_value=$2 where id=$1 and channel='social' and nullif(peer_value,'') is null and (account_id is null or account_id=$3)",
+            // The message is already out: never let conversation_inbound_peer abort this transaction.
+            `update conversations v set peer_value=$2 where v.id=$1 and v.channel='social' and $2::text is not null
+              and nullif(v.peer_value,'') is null and (v.account_id is null or v.account_id=$3)
+              and (v.provider_thread_id is not null or v.account_id is null or not exists(
+                select 1 from conversations o where o.id<>v.id and o.channel='social' and o.account_id=v.account_id
+                  and o.peer_value=$2 and o.provider_thread_id is null and o.merged_into_id is null))`,
             [
               m.conversation_id,
               socialTarget(m.to_value)?.canonicalUrl,
