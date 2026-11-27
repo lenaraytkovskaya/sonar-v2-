@@ -20,6 +20,167 @@ export const emptySocialCheckpoint = (): SocialInboxCheckpoint => ({
   threadCursors: {},
 });
 
+/** A browser URL and GraphQL ID are different namespaces. Only the same
+ * account's sent history with a verified peer can authorize replacing the URL ID. */
+async function assertInstagramBinding(
+  c: PoolClient,
+  conversationId: string,
+  accountId: string,
+  peer: string,
+  threadId: string,
+) {
+  const fail = () => {
+    throw new Error(
+      'Не підтверджено акаунт або співрозмовника діалогу Instagram. Перевірте історію вручну.',
+    );
+  };
+  const matches = (value: unknown) => {
+    if (value === null || value === undefined || value === '') return false;
+    try {
+      if (
+        typeof value !== 'string' ||
+        canonicalSocialPeer('instagram', value) !== peer
+      )
+        fail();
+    } catch {
+      fail();
+    }
+    return true;
+  };
+  const {
+    rows: [v],
+  } = await c.query('select * from conversations where id=$1 for update', [
+    conversationId,
+  ]);
+  if (
+    !v ||
+    v.channel !== 'social' ||
+    v.merged_into_id ||
+    (v.account_id !== null && v.account_id !== accountId)
+  )
+    fail();
+  let accountProven = v.account_id === accountId,
+    peerProven = matches(v.peer_value),
+    sentProof = false;
+  const { rows: history } = await c.query(
+    `select m.*,exists(select 1 from activity_log l where l.action='message.reply.drafted' and l.user_id is null
+      and l.details->>'messageId'=m.id::text and ((l.entity_type='conversation' and l.entity_id=$1::text)
+      or (l.entity_type='company' and l.entity_id=$2::text))) as draft_receipt
+    ,exists(select 1 from activity_log l where l.action='message.reply.queued' and l.user_id=m.created_by
+      and l.details->>'messageId'=m.id::text and ((l.entity_type='conversation' and l.entity_id=$1::text)
+      or (l.entity_type='company' and l.entity_id=$2::text))) as manual_receipt
+    from messages m where m.conversation_id=$1::uuid for update`,
+    [conversationId, v.company_id],
+  );
+  const receivingProof =
+    v.account_id === accountId &&
+    v.provider_thread_id === threadId &&
+    matches(v.peer_value) &&
+    history.some(
+      (row) =>
+        row.account_id === accountId &&
+        row.direction === 'in' &&
+        row.external_message_id &&
+        row.social_meta?.network === 'instagram' &&
+        row.social_meta?.threadId === threadId,
+    );
+  const repairs: string[] = [],
+    browserIds = new Set<string>();
+  for (const row of history) {
+    const localDraft =
+      receivingProof &&
+      row.account_id === null &&
+      row.direction === 'out' &&
+      row.source === 'manual' &&
+      row.status === 'draft' &&
+      row.external_message_id === null &&
+      row.provider_id === null &&
+      /^reply\.draft:[0-9a-f-]{36}$/i.test(row.idempotency_key) &&
+      row.draft_receipt;
+    const localLog =
+      receivingProof &&
+      row.account_id === null &&
+      row.direction === 'out' &&
+      row.source === 'manual' &&
+      row.status === 'sent' &&
+      row.external_message_id === null &&
+      row.provider_id === null &&
+      row.first_attempt_at === null &&
+      row.created_by !== null &&
+      row.created_by === row.approved_by &&
+      row.idempotency_key.startsWith(`reply:${conversationId}:`) &&
+      row.manual_receipt;
+    if (
+      row.channel !== 'social' ||
+      (row.account_id !== accountId && !localDraft && !localLog)
+    )
+      fail();
+    if (localDraft) repairs.push(row.id);
+    accountProven = true;
+    const meta = row.social_meta;
+    if (meta !== null && (typeof meta !== 'object' || Array.isArray(meta)))
+      fail();
+    if (meta?.network !== undefined && meta.network !== 'instagram') fail();
+    const evidence = [
+      row.to_value,
+      meta?.peerProfile,
+      ...(row.direction === 'in' ? [meta?.senderProfile] : []),
+    ];
+    if (!evidence.map(matches).some(Boolean)) fail();
+    peerProven = true;
+    const browserId =
+      row.direction === 'out' &&
+      ['sent', 'delivered', 'read'].includes(row.status) &&
+      row.first_attempt_at
+        ? /^https:\/\/www\.instagram\.com\/direct\/t\/([A-Za-z0-9._:-]{1,200})\/?$/.exec(
+            row.provider_id ?? '',
+          )?.[1]
+        : undefined;
+    if (browserId) browserIds.add(browserId);
+    const sent = browserId !== undefined && browserId === v.provider_thread_id;
+    sentProof ||= sent;
+    if (
+      meta?.threadId !== undefined &&
+      meta.threadId !== threadId &&
+      !(sent && meta.threadId === v.provider_thread_id)
+    )
+      fail();
+  }
+  if (
+    browserIds.size > 1 ||
+    !accountProven ||
+    !peerProven ||
+    (v.provider_thread_id !== null &&
+      v.provider_thread_id !== threadId &&
+      !sentProof)
+  )
+    fail();
+  if (
+    (
+      await c.query(
+        "select id from conversations where channel='social' and account_id=$1 and provider_thread_id=$2 and id<>$3",
+        [accountId, threadId, conversationId],
+      )
+    ).rowCount
+  )
+    fail();
+  if (repairs.length)
+    await c.query(
+      'update messages set account_id=$2 where id=any($1::uuid[])',
+      [repairs, accountId],
+    );
+  await c.query(
+    'update conversations set account_id=$2,provider_thread_id=$3,peer_value=$4 where id=$1',
+    [conversationId, accountId, threadId, peer],
+  );
+  // Preserve the original browser provider_id as evidence; normalize only the
+  // validated sender metadata so subsequent captures use one canonical thread.
+  await c.query(
+    "update messages set social_meta=social_meta||jsonb_build_object('threadId',$2::text) where conversation_id=$1 and social_meta->>'threadId'=$3",
+    [conversationId, threadId, v.provider_thread_id],
+  );
+}
+
 /** Current contacts are routing hints, never proof that an old dialog belongs
  * to this account/peer. Every historical message must agree before any reuse. */
 export async function assertFacebookBinding(
@@ -265,29 +426,25 @@ export async function persistSocialInboxBatch(
       [accountId, network],
     );
     if (!account) throw new Error('Акаунт соцмережі не знайдено.');
-    if (network === 'facebook')
+    if (network === 'facebook' || network === 'instagram')
       await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
-        `facebook-inbox-order:${accountId}`,
+        `${network}-inbox-order:${accountId}`,
       ]);
     const checkedBindings = new Set<string>();
     const guardBinding = async (
       conversationId: string,
       message: (typeof messages)[number],
     ) => {
-      if (network !== 'facebook') return;
+      if (network !== 'facebook' && network !== 'instagram') return;
       const key = JSON.stringify([
         conversationId,
         message.peerProfile,
         message.threadId,
       ]);
       if (checkedBindings.has(key)) return;
-      await assertFacebookBinding(
-        c,
-        conversationId,
-        accountId,
-        message.peerProfile,
-        message.threadId,
-      );
+      await (
+        network === 'instagram' ? assertInstagramBinding : assertFacebookBinding
+      )(c, conversationId, accountId, message.peerProfile, message.threadId);
       checkedBindings.add(key);
     };
     const observations = new Map<string, Map<string, number>>();
@@ -337,11 +494,13 @@ export async function persistSocialInboxBatch(
         await guardBinding(prior.conversation_id, message);
         if (
           prior.direction !== message.direction ||
-          (prior.social_meta?.threadId &&
+          (network !== 'instagram' &&
+            prior.social_meta?.threadId &&
             prior.social_meta.threadId !== message.threadId) ||
-          (prior.social_meta?.peerProfile &&
+          (network !== 'instagram' &&
+            prior.social_meta?.peerProfile &&
             prior.social_meta.peerProfile !== message.peerProfile) ||
-          (network === 'facebook' &&
+          ((network === 'facebook' || network === 'instagram') &&
             prior.first_attempt_at &&
             prior.body.replace(/\s+/g, ' ').trim() !==
               message.body.replace(/\s+/g, ' ').trim())
@@ -373,7 +532,7 @@ export async function persistSocialInboxBatch(
             ],
           );
           if (
-            network === 'facebook' &&
+            (network === 'facebook' || network === 'instagram') &&
             message.direction === 'out' &&
             prior.first_attempt_at
           ) {
@@ -425,6 +584,7 @@ export async function persistSocialInboxBatch(
       let conversation = existing;
       if (
         network !== 'facebook' &&
+        network !== 'instagram' &&
         conversation &&
         canonicalSocialPeer(network, conversation.peer_value) !==
           message.peerProfile
@@ -462,18 +622,52 @@ export async function persistSocialInboxBatch(
               [companyId],
             )
           : { rows: [] };
-        const { rows: unbound } = await c.query(
-          `select v.* from conversations v where v.channel='social' and v.provider_thread_id is null
-          and (v.account_id=$1 or (v.account_id is null and exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1)))
-          and (v.peer_value=$2 or v.contact_id=any($3::uuid[]))
-          and ($4::boolean or not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is not null and m.account_id<>$1)) for update`,
-          [
-            accountId,
-            message.peerProfile,
-            candidates.map((contact) => contact.id),
-            network === 'facebook',
-          ],
-        );
+        const { rows: possibleBindings } =
+          network === 'instagram'
+            ? await c.query(
+                `select v.*,array(select m.to_value from messages m where m.conversation_id=v.id and m.direction='out') as binding_peers
+              from conversations v where v.channel='social' and v.merged_into_id is null
+              and (v.account_id=$1 or (v.account_id is null and exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1)))
+              and (v.peer_value=$2 or v.contact_id=any($3::uuid[]) or exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1 and m.direction='out'))`,
+                [
+                  accountId,
+                  message.peerProfile,
+                  candidates.map((contact) => contact.id),
+                ],
+              )
+            : await c.query(
+                `select v.* from conversations v where v.channel='social' and v.provider_thread_id is null
+              and (v.account_id=$1 or (v.account_id is null and exists(select 1 from messages m where m.conversation_id=v.id and m.account_id=$1)))
+              and (v.peer_value=$2 or v.contact_id=any($3::uuid[]))
+              and ($4::boolean or not exists(select 1 from messages m where m.conversation_id=v.id and m.account_id is not null and m.account_id<>$1)) for update`,
+                [
+                  accountId,
+                  message.peerProfile,
+                  candidates.map((contact) => contact.id),
+                  network === 'facebook',
+                ],
+              );
+        const unbound =
+          network !== 'instagram'
+            ? possibleBindings
+            : possibleBindings.filter(
+                (row) =>
+                  candidates.some((contact) => contact.id === row.contact_id) ||
+                  [row.peer_value, ...row.binding_peers].some((value) => {
+                    try {
+                      return (
+                        canonicalSocialPeer('instagram', value) ===
+                        message.peerProfile
+                      );
+                    } catch {
+                      return false;
+                    }
+                  }),
+              );
+        if (network === 'instagram' && unbound.length > 1)
+          throw new Error(
+            'Неоднозначна прив’язка діалогу Instagram. Перевірте історію вручну.',
+          );
         for (const row of unbound) await guardBinding(row.id, message);
         if (network === 'facebook' && unbound.length > 1)
           throw new Error(
@@ -528,7 +722,7 @@ export async function persistSocialInboxBatch(
         cursor?.lastMessageId === message.externalMessageId ||
         cursor?.lastMessageIds?.includes(message.externalMessageId);
       if (
-        network === 'facebook' &&
+        (network === 'facebook' || network === 'instagram') &&
         message.direction === 'out' &&
         (message.occurredAt !== null || !previouslyObserved) &&
         messages.filter(
@@ -549,7 +743,7 @@ export async function persistSocialInboxBatch(
              and t.reason_code='social_delivery_uncertain') as uncertain
            from messages m where conversation_id=$1 and account_id=$2
            and channel='social' and direction='out' and external_message_id is null
-           and (status in ('queued','failed') or (status='sent' and source='reply' and reason_uk=$5
+           and (status in ('queued','failed') or ($7::boolean and status in ('sent','delivered','read')) or (status='sent' and source='reply' and reason_uk=$5
              and exists(select 1 from activity_log l join tasks t on t.id::text=l.details->>'taskId'
                and t.type='message.send' and t.payload->>'messageId'=m.id::text
                where l.action='message.dispatched' and l.entity_type='company'
@@ -566,6 +760,7 @@ export async function persistSocialInboxBatch(
             message.occurredAt ?? message.observedAt,
             facebookDispatchReason,
             message.occurredAt !== null,
+            network === 'instagram',
           ],
         );
         if (
@@ -575,7 +770,7 @@ export async function persistSocialInboxBatch(
         ) {
           const id = matches[0]!.id;
           await c.query(
-            `update messages set external_message_id=$2,status='sent',sent_at=coalesce($3::timestamptz,first_attempt_at),
+            `update messages set external_message_id=$2,status=case when status in ('delivered','read') then status else 'sent' end,sent_at=coalesce($3::timestamptz,first_attempt_at),
              reason_uk=null,needs_human=false,social_meta=coalesce(social_meta,'{}'::jsonb)||$4::jsonb where id=$1`,
             [
               id,

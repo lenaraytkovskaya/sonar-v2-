@@ -437,6 +437,7 @@ export async function runSocialInboxSync(
     // lists) make a run "incomplete" for the UI but are not failures: they must
     // not push the next poll out with the failure back-off.
     const informationalSkips = new Set([
+      ...(account.channel === 'instagram' ? ['time_limit'] : []),
       'pagination_unverified',
       'archived_folder_unverified',
       'requests_empty_or_unverified',

@@ -1547,6 +1547,15 @@ export async function sendEmailMessage(
             [m.conversation_id, threadId, account.id],
           );
         }
+        if (channel === 'social' && account.channel === 'instagram')
+          await tx.query(
+            "update conversations set peer_value=$2 where id=$1 and channel='social' and nullif(peer_value,'') is null and (account_id is null or account_id=$3)",
+            [
+              m.conversation_id,
+              socialTarget(m.to_value)?.canonicalUrl,
+              account.id,
+            ],
+          );
         if (readReceipt) {
           const read = await tx.query(
             `update messages m set status='read',reason_uk=null
@@ -1624,6 +1633,29 @@ export async function sendEmailMessage(
           )
             previousBodies.push(text);
     }
+    let providerThreadId = m.provider_thread_id ?? undefined;
+    if (channel === 'social' && account.channel === 'instagram') {
+      const { rows } = await sonarPool.query(
+        "select provider_id,to_value from messages where conversation_id=$1 and account_id=$2 and direction='out' and channel='social' and status in ('sent','delivered','read') and first_attempt_at is not null",
+        [m.conversation_id, account.id],
+      );
+      const urls = new Set(
+        rows
+          .filter(
+            (row) =>
+              socialTarget(row.to_value)?.canonicalUrl ===
+              socialTarget(m.to_value)?.canonicalUrl,
+          )
+          .map(
+            (row) =>
+              /^https:\/\/www\.instagram\.com\/direct\/t\/([A-Za-z0-9._:-]{1,200})\/?$/.exec(
+                row.provider_id ?? '',
+              )?.[1],
+          )
+          .filter(Boolean),
+      );
+      providerThreadId = urls.size === 1 ? [...urls][0] : undefined;
+    }
     try {
       const providerId =
         channel === 'telegram' ||
@@ -1636,7 +1668,7 @@ export async function sendEmailMessage(
                 ...account.settings,
                 countryCode: m.country_code,
                 network: account.channel,
-                providerThreadId: m.provider_thread_id ?? undefined,
+                providerThreadId,
               },
               ...(channel === 'social'
                 ? {

@@ -1343,3 +1343,48 @@ it.skipIf(process.env.RUN_BROWSER_TESTS !== '1')(
   },
   10000,
 );
+
+it.each([false, true])(
+  'keeps navigation timeout failure unless a committed continuation exhausts the budget: %s',
+  async (committed) => {
+    const f = browser([fixture()]);
+    const goto = f.page.goto.getMockImplementation()!;
+    const now = vi.spyOn(Date, 'now');
+    f.page.goto.mockImplementation(async (url) => {
+      if (!committed || url.endsWith('/requests/')) {
+        now.mockReturnValue(Date.now() + 1000);
+        throw new errors.TimeoutError('navigation budget exhausted');
+      }
+      return goto(url);
+    });
+    try {
+      if (committed) {
+        expect(await f.run()).toMatchObject({
+          complete: false,
+          skipped: expect.arrayContaining([
+            'time_limit',
+            'general_folder_unsupported',
+          ]),
+        });
+        expect(f.batches).toHaveLength(1);
+      } else {
+        await expect(f.run()).rejects.toBeInstanceOf(errors.TimeoutError);
+        expect(f.batches).toHaveLength(0);
+      }
+      expect(f.page.off).toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+  },
+);
+it('does not soften an early continuation navigation timeout', async () => {
+  const f = browser([fixture()]);
+  const goto = f.page.goto.getMockImplementation()!;
+  f.page.goto.mockImplementation(async (url) => {
+    if (url.endsWith('/requests/'))
+      throw new errors.TimeoutError('early timeout');
+    return goto(url);
+  });
+  await expect(f.run()).rejects.toBeInstanceOf(errors.TimeoutError);
+  expect(f.batches).toHaveLength(1);
+});

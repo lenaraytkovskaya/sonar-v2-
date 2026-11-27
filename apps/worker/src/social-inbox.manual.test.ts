@@ -216,3 +216,62 @@ it.each([
     } else expect(update).toBeUndefined();
   },
 );
+
+it.each([
+  ['instagram', [], 1],
+  ['instagram', ['time_limit'], 0],
+  ['instagram', ['time_limit', 'group_unsupported'], 1],
+  ['facebook', ['time_limit'], 1],
+] as const)(
+  'keeps partial %s timeout health scoped to informational skips %j',
+  async (channel, skipped, failures) => {
+    query.mockReset().mockImplementation(async (sql: string) => ({
+      rows: sql.includes('pg_try_advisory_lock')
+        ? [{ locked: true }]
+        : sql.startsWith('select id,channel')
+          ? [
+              {
+                id: 'synthetic',
+                channel,
+                status: 'active',
+                settings: { sessionStatus: 'valid', inboxPollingEnabled: true },
+              },
+            ]
+          : sql.startsWith('select key,value')
+            ? Object.entries({
+                'social.inbox.enabled': true,
+                [`social.inbox.${channel}.enabled`]: true,
+                'social.inbox.poll_seconds': 60,
+                'social.inbox.daily_limit': 10,
+                'social.inbox.max_threads': 50,
+                'social.inbox.max_messages': 100,
+                'social.inbox.quiet_hours': '00:00-07:00',
+                'social.inbox.timezone': 'Europe/Kyiv',
+                'social.inbox.failure_backoff_base_seconds': 300,
+                'social.inbox.failure_backoff_max_seconds': 3600,
+              }).map(([key, value]) => ({ key, value }))
+            : [],
+    }));
+    expect(
+      await runSocialInboxSync(
+        { accountId: 'synthetic' },
+        {
+          sync: async () => {
+            if (!skipped.length) throw new SocialSessionCheckError('timeout');
+            return { complete: false, skipped: [...skipped] };
+          },
+        },
+        new Date('2026-11-27T12:00:00Z'),
+      ),
+    ).toMatchObject({ status: skipped.length ? 'done' : 'failed' });
+    const update = query.mock.calls
+      .filter(([sql]) =>
+        sql.includes("set settings=jsonb_set(settings,'{inboxSync}'"),
+      )
+      .at(-1);
+    expect(JSON.parse(update![1][1])).toMatchObject({
+      failureCount: failures,
+      complete: false,
+    });
+  },
+);

@@ -188,7 +188,21 @@ async function http(id: string, body?: object, expectedStatus?: number) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    const title = (
+      /<title>([^<]*)<\/title>/i.exec(text)?.[1] ?? 'non-JSON response'
+    )
+      .replace(/https?:\/\/\S+|(?:\/[^\s<>]+){2,}/g, '<path>')
+      .replace(/[\w-]{24,}/g, '<redacted>')
+      .slice(0, 200);
+    throw new Error(
+      `HTTP ${response.status}: ${response.headers.get('content-type')}; ${title}`,
+    );
+  }
   expect(response.status, JSON.stringify(data)).toBe(
     expectedStatus ??
       (body &&
@@ -1146,6 +1160,10 @@ it.skipIf(!enabled)(
       [socialAccount, user],
     );
     await db.sonarPool.query(
+      'update messages set account_id=$2 where conversation_id=$1',
+      [f.conversation, socialAccount],
+    );
+    await db.sonarPool.query(
       'update messages set account_id=$2,external_message_id=$3,social_meta=\'{"network":"instagram"}\' where id=$1',
       [f.outgoing, socialAccount, external],
     );
@@ -1371,6 +1389,18 @@ it
         ],
       );
     }
+    const before = (
+      await db.sonarPool.query(
+        'select account_id,provider_thread_id,peer_value from conversations where id=$1',
+        [f.conversation],
+      )
+    ).rows[0];
+    const checkpoint = (
+      await db.sonarPool.query(
+        'select settings from channel_accounts where id=$1',
+        [socialAccount],
+      )
+    ).rows[0].settings;
     const firstTime = (
       await db.sonarPool.query('select created_at from messages where id=$1', [
         f.incoming,
@@ -1420,9 +1450,11 @@ it
       const result = await rawQuery(sql, values);
       if (
         !held &&
-        ((sql.startsWith('update messages set') &&
-          sql.includes('social_meta=coalesce')) ||
-          sql.startsWith('update messages set needs_human'))
+        (mode !== 'bound'
+          ? sql === 'select id from conversations where id=$1 for update'
+          : (sql.startsWith('update messages set') &&
+              sql.includes('social_meta=coalesce')) ||
+            sql.startsWith('update messages set needs_human'))
       ) {
         held = true;
         await rawQuery("set local deadlock_timeout='100ms'");
@@ -1439,6 +1471,7 @@ it
         (error: unknown) => ({
           ok: false as const,
           code: (error as { code?: string }).code,
+          reason: (error as Error).message,
         }),
       );
     db.sonarPool.connect = rawConnect;
@@ -1485,13 +1518,62 @@ it
           http: response.status,
         }),
       );
-      expect(result).toMatchObject({ ok: true });
       expect(response.status).toBe(200);
+      if (mode !== 'bound') {
+        expect(result).toMatchObject({
+          ok: false,
+          reason: expect.stringMatching(/Перевірте історію вручну/),
+        });
+        expect(
+          (
+            await db.sonarPool.query(
+              'select account_id,provider_thread_id,peer_value from conversations where id=$1',
+              [f.conversation],
+            )
+          ).rows[0],
+        ).toEqual(before);
+        expect(
+          (
+            await db.sonarPool.query(
+              'select settings from channel_accounts where id=$1',
+              [socialAccount],
+            )
+          ).rows[0].settings,
+        ).toEqual(checkpoint);
+        expect(
+          (
+            await db.sonarPool.query(
+              'select id from messages where external_message_id=$1',
+              [addedExternal],
+            )
+          ).rows,
+        ).toEqual([]);
+        const prior = (
+          await db.sonarPool.query(
+            'select read_at,social_meta,needs_human,reason_uk from messages where id=$1',
+            [f.incoming],
+          )
+        ).rows[0];
+        expect(prior).toMatchObject({
+          read_at: expect.any(Date),
+          needs_human: false,
+          reason_uk: null,
+        });
+        expect(prior.social_meta).toEqual({
+          network: 'instagram',
+          ...(mode === 'identity-conflict'
+            ? { threadId: 'different-thread', peerProfile: peer }
+            : {}),
+        });
+        await expect(
+          inbox.persistSocialInboxBatch(socialAccount, 'instagram', batch),
+        ).rejects.toThrow(/Перевірте історію вручну/);
+        return;
+      }
+      expect(result).toMatchObject({ ok: true });
       if (!result.ok) throw new Error('Inbox persistence failed');
       expect(result.value.created).toBe(1);
-      expect(result.value.conflicts).toEqual(
-        mode === 'identity-conflict' ? [f.incoming] : [],
-      );
+      expect(result.value.conflicts).toEqual([]);
       const {
         rows: [prior],
       } = await db.sonarPool.query(
@@ -1500,8 +1582,6 @@ it
       );
       expect(prior.read_at).toEqual(expect.any(Date));
       expect(prior.external_message_id).toBe(external);
-      if (mode === 'identity-conflict')
-        expect(prior.social_meta.threadId).toBe('different-thread');
       const {
         rows: [added],
       } = await db.sonarPool.query(
@@ -1520,7 +1600,7 @@ it
             [f.conversation],
           )
         ).rows[0].provider_thread_id,
-      ).toBe(mode === 'occupied-thread' ? null : thread);
+      ).toBe(thread);
       expect(
         (await inbox.persistSocialInboxBatch(socialAccount, 'instagram', batch))
           .created,
